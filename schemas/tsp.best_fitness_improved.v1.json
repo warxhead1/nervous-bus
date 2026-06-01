@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tsp.best_fitness_improved.v1.json",
+  "title": "tsp.best_fitness_improved v1",
+  "description": "Emitted whenever a new all-time best fitness is recorded for the TSP kernel within an autobench run. Source: /autobench/tsp_kernel.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string", "const": "/autobench/tsp_kernel"},
+    "type": {"type": "string", "const": "tsp.best_fitness_improved.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["run_id", "generation", "prefix", "best_fitness", "improvement_delta", "island_id", "timestamp"],
+      "properties": {
+        "run_id": {"type": "string", "description": "ULID identifying the autobench run."},
+        "generation": {"type": "integer", "minimum": 0, "description": "Generation at which the new best was recorded."},
+        "prefix": {"type": "string", "const": "tsp", "description": "Kernel namespace."},
+        "best_fitness": {"type": "number", "description": "New all-time best fitness score for this run."},
+        "improvement_delta": {"type": "number", "description": "Absolute improvement over the previous all-time best (new - old). Always > 0."},
+        "island_id": {"type": "integer", "minimum": 0, "description": "Island that produced the new best program."},
+        "timestamp": {"type": "string", "format": "date-time", "description": "RFC3339 UTC timestamp when the improvement was detected."}
+      }
+    }
+  }
+}

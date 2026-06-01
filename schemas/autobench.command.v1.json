@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.command.v1.json",
+  "title": "autobench.command v1",
+  "description": "Control-plane commands sent to autobench to pause, resume, reconfigure, or manipulate an active run. Consumed by the autobench command handler. Source: /autobench/control.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.command.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["command_id", "action"],
+      "properties": {
+        "command_id": {
+          "type": "string",
+          "description": "ULID uniquely identifying this command invocation."
+        },
+        "action": {
+          "type": "string",
+          "enum": ["pause", "resume", "set_budget", "set_generations", "reset_island", "inject_candidate"],
+          "description": "The control action to perform."
+        },
+        "target_run_id": {
+          "type": ["string", "null"],
+          "description": "Optional. ULID of the specific run to target. Null or omitted means all currently active runs."
+        },
+        "params": {
+          "type": "object",
+          "description": "Optional. Action-specific parameters. set_budget: {max_requests: int, max_cost_usd: float}; set_generations: {target_generations: int}; reset_island: {island_id: int}.",
+          "properties": {
+            "max_requests": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "For set_budget: new maximum LLM request count."
+            },
+            "max_cost_usd": {
+              "type": "number",
+              "minimum": 0.0,
+              "description": "For set_budget: new cost cap in USD."
+            },
+            "target_generations": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "For set_generations: new target generation count."
+            },
+            "island_id": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "For reset_island: index of the island to reset."
+            }
+          },
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

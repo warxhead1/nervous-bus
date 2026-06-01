@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.rsi.completed.v1.json",
+  "title": "autobench.rsi.completed v1",
+  "description": "Emitted when an RSI run finishes (any termination reason). Summarises the full run outcome including score progression, convergence reason, and optional promotion status. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.rsi.completed.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["run_id", "final_score", "initial_score", "n_iterations_actual", "convergence_reason"],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "description": "ULID identifying the autobench run."
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Optional session grouping identifier."
+        },
+        "final_score": {
+          "type": "number",
+          "description": "Final aggregate benchmark score at the last completed iteration."
+        },
+        "initial_score": {
+          "type": "number",
+          "description": "Aggregate benchmark score measured at iteration 0 (baseline)."
+        },
+        "n_iterations_actual": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of RSI iterations actually completed."
+        },
+        "convergence_reason": {
+          "type": "string",
+          "enum": ["max_iters", "early_exit", "budget_halt", "converged"],
+          "description": "Why the run terminated. max_iters=hit iteration cap; early_exit=manual stop; budget_halt=cost/request budget exhausted; converged=improvement below threshold."
+        },
+        "total_cost_usd": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Optional. Total estimated cost in USD across all LLM calls for this run."
+        },
+        "promoted": {
+          "type": "boolean",
+          "description": "Optional. Whether the best harness from this run was promoted to the production slot."
+        },
+        "benchmark_source": {
+          "type": "string",
+          "description": "Optional. Identifier for the benchmark suite or dataset used (e.g. 'tsp-eil51', 'sdf-mixed')."
+        }
+      }
+    }
+  }
+}

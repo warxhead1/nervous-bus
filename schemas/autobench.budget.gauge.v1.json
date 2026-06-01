@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.budget.gauge.v1.json",
+  "title": "autobench.budget.gauge v1",
+  "description": "Periodic budget telemetry emitted once per generation per active run. Provides a live view of request consumption and estimated remaining runway without triggering warning thresholds. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.budget.gauge.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["run_id", "generation", "prefix", "requests_used", "timestamp"],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "description": "ULID identifying the autobench run."
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Current generation number at time of emission."
+        },
+        "prefix": {
+          "type": "string",
+          "description": "Kernel namespace this gauge covers (e.g. 'tsp', 'sdf', 'noise')."
+        },
+        "requests_used": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Cumulative LLM requests issued by this run so far."
+        },
+        "max_requests": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Optional. Configured maximum request budget. Null if uncapped."
+        },
+        "estimated_remaining_generations": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Optional. Estimated generations remaining at current request burn rate. Null if max_requests is uncapped or burn rate is zero."
+        },
+        "cost_dollars_used": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Optional. Estimated cumulative cost in USD at time of emission."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC3339 UTC timestamp when this gauge snapshot was taken."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.island.health.v1.json",
+  "title": "autobench.island.health v1",
+  "description": "Per-island health snapshot emitted once per generation. Tracks plateau depth, population size, and time since last reset to enable adaptive island-management policies. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.island.health.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["run_id", "generation", "prefix", "island_id", "best_fitness", "plateau_count", "population_size", "age_since_last_reset", "timestamp"],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "description": "ULID identifying the autobench run."
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Generation number at time of emission."
+        },
+        "prefix": {
+          "type": "string",
+          "description": "Kernel namespace this island belongs to (e.g. 'tsp', 'sdf', 'noise')."
+        },
+        "island_id": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based index of the island within the run."
+        },
+        "best_fitness": {
+          "type": "number",
+          "description": "Best fitness score in this island's population this generation."
+        },
+        "plateau_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of consecutive generations without improvement in best_fitness for this island."
+        },
+        "population_size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of live programs in this island's population."
+        },
+        "age_since_last_reset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Generations elapsed since this island was last reset. 0 means it was reset this generation."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC3339 UTC timestamp when this health snapshot was taken."
+        }
+      }
+    }
+  }
+}
