@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/sph.generation.completed.v1.json",
+  "title": "sph.generation.completed v1",
+  "description": "Emitted at the end of each SPH FunSearch generation. Source: /autobench/sph_kernel.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string", "const": "/autobench/sph_kernel"},
+    "type": {"type": "string", "const": "sph.generation.completed.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["run_id", "generation", "best_fitness", "best_island", "best_program_id", "island_summaries"],
+      "properties": {
+        "run_id": {"type": "string"},
+        "generation": {"type": "integer"},
+        "best_fitness": {"type": "number", "description": "Best approximation ratio this generation (higher = better, 1.0 = optimal)."},
+        "best_island": {"type": "integer"},
+        "best_program_id": {"type": "string"},
+        "mean_pop_fitness": {"type": "number"},
+        "gen_seconds": {"type": "number", "description": "Wall-clock seconds spent generating candidates this generation (concurrent LLM calls)."},
+        "eval_seconds": {"type": "number", "description": "Wall-clock seconds spent evaluating candidates this generation (serial sandbox runs)."},
+        "llm_requests": {"type": "integer", "description": "Cumulative LLM requests issued through this generation (MiniMax billing unit)."},
+        "fitness_std": {
+          "type": "number",
+          "description": "Population fitness standard deviation this generation — leading indicator of premature convergence."
+        },
+        "code_diversity": {
+          "type": "number",
+          "description": "Mean pairwise Jaccard code-token distance across all active programs (0=identical, 1=completely different)."
+        },
+        "island_summaries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "island": {"type": "integer"},
+              "best_fitness": {"type": "number"},
+              "best_program_id": {"type": "string"},
+              "population_size": {"type": "integer"}
+            }
+          }
+        }
+      }
+    }
+  }
+}

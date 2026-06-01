@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/phase.candidate.evaluated.v1.json",
+  "title": "phase.candidate.evaluated v1",
+  "description": "Emitted after each candidate program is evaluated against all instances. Source: /autobench/phase_kernel.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string", "const": "/autobench/phase_kernel"},
+    "type": {"type": "string", "const": "phase.candidate.evaluated.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["run_id", "program_id", "island", "generation", "source", "fitness", "instance_names"],
+      "properties": {
+        "run_id": {"type": "string"},
+        "program_id": {"type": "string"},
+        "island": {"type": "integer"},
+        "generation": {"type": "integer"},
+        "source": {"type": "string", "enum": ["llm", "mutated", "baseline", "migrated"]},
+        "fitness": {"type": "number"},
+        "fitness_variance": {"type": "number"},
+        "worst_fitness": {"type": "number"},
+        "instance_names": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "TSPLIB instance names evaluated for this candidate."
+        }
+      }
+    }
+  }
+}

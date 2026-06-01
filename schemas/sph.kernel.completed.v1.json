@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/sph.kernel.completed.v1.json",
+  "title": "sph.kernel.completed v1",
+  "description": "Emitted when the SPH FunSearch kernel finishes all generations. Source: /autobench/sph_kernel.",
+  "type": "object",
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/sph_kernel"
+    },
+    "type": {
+      "type": "string",
+      "const": "sph.kernel.completed.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "total_generations",
+        "best_program",
+        "history"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "total_generations": {
+          "type": "integer"
+        },
+        "stop_reason": {
+          "type": "string",
+          "description": "Why the run ended: a horizon (target_fitness/request budget/wall-clock/plateau) or the generation cap."
+        },
+        "llm_requests": {
+          "type": "integer",
+          "description": "Total LLM requests issued during the run (MiniMax billing unit)."
+        },
+        "best_program": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "fitness": {
+              "type": "number"
+            },
+            "island": {
+              "type": "integer"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "source": {
+              "type": "string"
+            },
+            "priority_code": {
+              "type": "string",
+              "description": "The C++ priority() function body — the evolved heuristic. Preserved here so the winning code survives if the results file is not persisted."
+            }
+          }
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "generation": {
+                "type": "integer"
+              },
+              "best_fitness": {
+                "type": "number",
+                "description": "Best eikonal-penalised fitness this generation."
+              },
+              "best_id": {
+                "type": "string"
+              },
+              "best_island": {
+                "type": "integer"
+              },
+              "mean_pop_fitness": {
+                "type": "number"
+              },
+              "gen_seconds": {
+                "type": "number"
+              },
+              "eval_seconds": {
+                "type": "number"
+              },
+              "llm_requests": {
+                "type": "integer"
+              },
+              "fitness_std": {
+                "type": "number",
+                "description": "StdDev of fitness across all island populations."
+              },
+              "code_diversity": {
+                "type": "number",
+                "description": "Mean pairwise Jaccard distance of code token sets (0=identical, 1=disjoint)."
+              },
+              "island_reset_fired": {
+                "type": "boolean",
+                "description": "True if island_reset() culled weak islands this generation."
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

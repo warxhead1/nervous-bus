@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "phase.plateau_hint v1",
+  "description": "Emitted when deer query returns strategic plateau advice that is injected into all island prompts.",
+  "type": "object",
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/phase_kernel"
+    },
+    "type": {
+      "type": "string",
+      "const": "phase.plateau_hint.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "generation",
+        "plateau_count",
+        "best_fitness",
+        "hint_preview"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "plateau_count": {
+          "type": "integer"
+        },
+        "best_fitness": {
+          "type": "number"
+        },
+        "hint_preview": {
+          "type": "string",
+          "description": "First 200 characters of the deer query response."
+        }
+      }
+    }
+  },
+  "$id": "nervous-bus/schemas/phase.plateau_hint.v1.json"
+}

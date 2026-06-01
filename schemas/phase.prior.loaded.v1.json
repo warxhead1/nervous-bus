@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/phase.prior.loaded.v1.json",
+  "title": "phase.prior.loaded v1",
+  "description": "Emitted by phase kernel when a consolidated prior is loaded at run initialisation. Source: /autobench/phase_kernel.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string", "const": "/autobench/phase_kernel"},
+    "type": {"type": "string", "const": "phase.prior.loaded.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["run_id", "kernel", "vectors_loaded", "prior_fitted"],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "description": "ULID identifying the kernel run that loaded the prior."
+        },
+        "kernel": {
+          "type": "string",
+          "description": "Kernel identifier (e.g. 'phase')."
+        },
+        "vectors_loaded": {
+          "type": "integer",
+          "description": "Number of T-vectors loaded from the consolidated prior.",
+          "minimum": 0
+        },
+        "prior_fitted": {
+          "type": "boolean",
+          "description": "True if a Gaussian was successfully fitted to the loaded T-vectors."
+        },
+        "prior_path": {
+          "type": "string",
+          "description": "Filesystem path of the loaded consolidated prior file."
+        }
+      }
+    }
+  }
+}

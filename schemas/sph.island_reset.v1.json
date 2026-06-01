@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "sph.island_reset v1",
+  "description": "Emitted by a FunSearch kernel when island_reset() fires at plateau midpoint. Bottom 40% of islands are culled and reseeded from scratch.",
+  "type": "object",
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/sph_kernel"
+    },
+    "type": {
+      "type": "string",
+      "const": "sph.island_reset.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "generation",
+        "n_islands_culled",
+        "pre_reset_best_fitness",
+        "plateau_count"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "n_islands_culled": {
+          "type": "integer",
+          "description": "Number of islands seeded from scratch (bottom 40% by fitness)."
+        },
+        "pre_reset_best_fitness": {
+          "type": "number",
+          "description": "Global best fitness just before culling."
+        },
+        "plateau_count": {
+          "type": "integer",
+          "description": "Consecutive non-improving generations when reset fired."
+        }
+      }
+    }
+  },
+  "$id": "nervous-bus/schemas/sph.island_reset.v1.json"
+}
