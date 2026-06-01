@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.audit.recommendation.snapshot.v1.json",
+  "title": "deer-flow.audit.recommendation.snapshot v1",
+  "description": "Lifecycle tracking for an auditor recommendation — covers the recommendation from pending through to actioned, dismissed, or expired. Distinct from deer-flow.audit.recommendation.v1 which carries the verdict payload itself: this snapshot tracks what happened after the verdict was delivered. Enables dashboards to show recommendation backlog and time-to-action. Source: /deer-flow/auditor.",
+  "type": "object",
+  "required": ["audit_id", "status", "issue", "severity"],
+  "properties": {
+    "audit_id": {
+      "type": "string",
+      "description": "Identifier for the audit run — matches audit_id in deer-flow.audit.recommendation.v1"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "actioned", "dismissed", "expired"],
+      "description": "Current disposition of the recommendation"
+    },
+    "issue": {
+      "type": "string",
+      "maxLength": 300,
+      "description": "Short description of the issue identified by the auditor"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low"],
+      "description": "Severity tier of the recommendation"
+    },
+    "remediation": {
+      "type": "string",
+      "description": "Concrete remediation action taken or proposed — present when status is actioned"
+    },
+    "target_cycle_id": {
+      "type": "string",
+      "description": "stack-tuner cycle_id this recommendation targets — enables joining with cycle events"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC — when the recommendation was first emitted"
+    },
+    "acted_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC — when status transitioned from pending"
+    }
+  }
+}

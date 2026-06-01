@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bus.beads.issue.v1",
+  "title": "Beads issue mutation event",
+  "description": "Emitted by hearth-loom whenever a beads issue is created, updated, or closed.",
+  "type": "object",
+  "required": ["bead_id", "project", "event_type", "timestamp"],
+  "properties": {
+    "bead_id":    { "type": "string", "description": "e.g. loom-abc123" },
+    "project":    { "type": "string", "description": "Absolute project path" },
+    "event_type": { "type": "string", "enum": ["created","updated","closed","noted","labeled","dispatched","claimed"] },
+    "timestamp":  { "type": "string", "format": "date-time" },
+    "patch":      { "type": "object", "description": "Fields that changed (status, labels, notes, etc.)" },
+    "actor":      { "type": "string", "description": "Who triggered: poller, loomie, human, command-bus" },
+    "correlation_id": { "type": "string", "description": "Echoes request_id from bus.beads.command.v1" }
+  }
+}

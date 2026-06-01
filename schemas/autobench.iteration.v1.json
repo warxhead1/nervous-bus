@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.iteration.v1.json",
+  "title": "autobench.iteration v1",
+  "description": "RSI iteration boundary signals — aggregate score plus verdict-count breakdown per iteration. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.iteration.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["session_id", "iteration", "harness_version", "status"],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the autobench run"
+        },
+        "iteration": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "RSI iteration number"
+        },
+        "harness_version": {
+          "type": "string",
+          "description": "Harness configuration version identifier"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["start", "complete"],
+          "description": "Iteration lifecycle status"
+        },
+        "aggregate_score": {
+          "type": "number",
+          "description": "Aggregate score across all cases for this iteration (set on complete)"
+        },
+        "verdict_counts": {
+          "type": "object",
+          "description": "Map of verdict letter (OK/WA/TLE/RE/CE/MLE) → count",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "improvement_delta": {
+          "type": ["object", "null"],
+          "description": "Delta vs previous iteration (score delta, verdict delta, etc.) or null if first iteration"
+        },
+        "advocate_id": {
+          "type": "string",
+          "description": "Optional. Identifies the advocate lineage in a multi-advocate population run (nervous-bus-6yut). Format: 'advocate-N'. Omitted on single-lineage runs for backward compatibility."
+        }
+      }
+    }
+  }
+}

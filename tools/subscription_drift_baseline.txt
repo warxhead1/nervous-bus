@@ -1,0 +1,131 @@
+# subscription_drift_baseline.txt
+#
+# WHAT THIS IS
+# ------------
+# A snapshot of KNOWN, EXPECTED subscribe-side drift. Every channel listed
+# here is a "subscribed-but-no-schema" finding that is downgraded from BLOCK
+# (exit 1) to WARN. The entries still PRINT in the coverage report — they are
+# visible and ratchetable, just non-fatal. Chip away over time by either
+# adding the missing schema or removing the dead subscription, then deleting
+# the line here.
+#
+# Format: one channel per line; `#` starts a comment; blank lines ignored.
+# (Same loader as the allowlist; difference is BLOCK->WARN downgrade vs full
+# exemption.)
+#
+# WHAT DOES *NOT* BELONG HERE
+# ---------------------------
+#  - Pure scanner false positives  -> subscription_coverage_allowlist.txt
+#  - GENUINE contract gaps (a real subscriber consuming a channel that simply
+#    has no schema and SHOULD)      -> leave OUT so they keep BLOCKing. See the
+#    "GENUINE FINDINGS" note at the bottom.
+#
+# SNAPSHOT
+# --------
+# Regenerated 2026-05-29 (post nested-worktree dedup fix) from:
+#   scan_subscribed_channels.py {deer-flow,hearth,hearth-loom,tachyonos}
+#   scan_emitted_channels.py    {deer-flow,hearth-loom}
+# The emitted scan only covers deer-flow + hearth-loom PRODUCERS. tachyonos
+# emits in TypeScript and hearth emits via `nervous publish` (shell) — neither
+# producer side is scanned by the existing emit tool yet — so their consumed
+# channels surface as no-schema even where a schema may be pending or the
+# producer is simply uncovered.
+
+# ─── tachyonos.* — TS producer not scanned for emits; schemas pending ────────
+# (consumed by tachyonos itself and by deer-flow trading_research)
+tachyonos.command.halt.v1
+tachyonos.command.parameter_update.v1
+tachyonos.command.research_ticker
+tachyonos.command.research_ticker.v1
+tachyonos.research.recommendation.v1
+tachyonos.risk.circuit_breaker_tripped.v1
+tachyonos.trade.approved.v1
+tachyonos.trade.rejected.v1
+
+# ─── deer-flow.run — hearth subscribes; NO deer-flow.run* schema exists ──────
+# Spec expected this as a dead-handler, but with zero matching schema it is
+# correctly the most-severe class (no contract at all). Baselined as known
+# drift; resolve by adding a schema or dropping the hearth subscription.
+deer-flow.run
+
+# ─── deer-flow consumer error/status channels — schemas pending ──────────────
+# deer-flow's own consumers subscribe to these error/checkpoint channels; the
+# producing code path has not had a schema registered yet.
+deer-flow.design_request.error.v1
+deer-flow.research.dispatch.error.v1
+deer-flow.trading_research.error.v1
+loomie.bead.checkpoint
+
+# ─── hearth-api (Rust) — emits via `nervous publish`, producer unscanned ─────
+hearth.kb.approved.v1
+
+# ─── hearth-loom INTERNAL CLI/session-backend strings (not nervous-bus) ──────
+# These are consumed inside hearth-loom session-backend normalizers and CLI
+# event handling (codex/gemini/opencode adapters, log/watch commands). They are
+# upstream agent-CLI event streams or internal pipeline strings, NOT nervous-bus
+# channels with schemas. Tracked here so they stay visible; they don't cross
+# the bus, so they will likely never get a schema and could later move to the
+# allowlist if confirmed permanently non-bus.
+assistant.message
+assistant.tool.call
+assistant.tool.result
+context.compacted
+item.command
+item.completed
+item.file_change
+item.message
+item.started
+item.updated
+message.created
+message.part.delta
+message.part.updated
+message.updated
+session.ended
+session.error
+session.idle
+session.status
+session.tool_call
+session.updated
+thread.started
+tool.result
+tool.use
+turn.completed
+turn.failed
+turn.started
+user.prompt
+permission.requested
+needs_eyes.ack
+server.connected
+
+# ─── hearth-loom bead/pipeline/CI lifecycle channels — schemas pending ───────
+# Genuine nervous-bus-shaped lifecycle channels consumed by hearth-loom; the
+# producer emits them via mechanisms not covered by the emit scan. Candidates
+# for real schemas later.
+bead.claimed
+bead.closed
+bead.polled
+bus.pr.state_changed.v1
+ci.failed
+ci.passed
+exec.ended
+gateway.activity.v1
+plan.done
+plan.failed
+plan.started
+pr.created
+pr.merged
+pr.opened
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GENUINE FINDINGS — intentionally NOT baselined:
+#
+#   bus.hearth.bead.changes.v1   (deer-flow:
+#       packages/harness/deerflow/evidence/bead_checkpoint_router.py)
+#     RESOLVED (2026-05-29, bead deer-flow-zu9f): schema added at
+#     schemas/bus.hearth.bead.changes.v1.json, so it is no longer a BLOCK.
+#     It now reports as a WARN dead-handler because NO producer emits it yet —
+#     the intended emitter (hearth-loom per-bead checkpoint markers) is not
+#     built. Tracked separately; do NOT baseline (the WARN is the truth: a real
+#     subscriber waiting on an unbuilt producer). Clears to healthy once the
+#     emitter ships.
+# ─────────────────────────────────────────────────────────────────────────────

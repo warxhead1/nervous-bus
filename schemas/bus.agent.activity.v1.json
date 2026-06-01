@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.agent.activity.v1.json",
+  "title": "bus.agent.activity v1",
+  "description": "Host-level agent activity stream — every tool call, tool return, and heartbeat from every Claude Code or Codex session on the host fires here. Produced by adapters/osc133/ (Claude Code) and home-automation Codex adapter. Lets us observe cross-project agent behavior and build efficiency metrics. Volume: ~5k events/hour on a busy host.",
+  "type": "object",
+  "required": ["ts", "event", "agent_kind", "session_id", "project"],
+  "properties": {
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp of the activity."
+    },
+    "event": {
+      "type": "string",
+      "enum": ["tool_call", "tool_return", "error", "heartbeat", "ended", "started", "permission_requested"],
+      "description": "What happened. tool_call is the dominant case. heartbeat is emitted by Codex agents on a periodic interval. ended fires when a Codex session terminates cleanly. started fires at agent session initialization. permission_requested fires when an agent requires user permission before proceeding."
+    },
+    "agent_kind": {
+      "type": "string",
+      "enum": ["host_claude_code", "host_codex"],
+      "description": "The host-side agent runtime kind. host_claude_code = Claude Code sessions; host_codex = Codex CLI agents (e.g. home-automation)."
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "ULID of the Claude Code session that produced this event. For host-level activity this is the host session ID; for subagents this is the shuttle session ID."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "ULID of the conversation/session context. For host sessions this equals agent_id; for subagents this is the shuttle conversation ULID."
+    },
+    "conversation_id": {
+      "type": "string",
+      "description": "ULID of the top-level conversation this activity belongs to."
+    },
+    "project": {
+      "type": "string",
+      "description": "The project name the agent was operating in when this event fired. Matches the repository directory name or 'main' for host-level operations."
+    },
+    "tool_name": {
+      "type": "string",
+      "description": "Name of the tool invoked (e.g. Bash, Read, Edit, Write, Agent). Null on tool_return and error events."
+    },
+    "tool_summary": {
+      "type": "string",
+      "description": "Truncated one-line summary of the tool call: a JSON object with 'command', 'file_path', 'description', or similar key describing what was invoked. Null on tool_return and error events."
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Absolute path of the working directory at time of the call. For subagents this will point into .claude/worktrees/<id>/."
+    },
+    "git_branch": {
+      "type": "string",
+      "description": "Name of the git branch the session was on when the tool was invoked. Only present on a subset of events."
+    },
+    "pane_id_qualified": {
+      "type": "string",
+      "description": "Zellij pane identifier in zellij:session:pane form (e.g. 'zellij:command-center:7'). Allows correlating activity to specific terminal panes."
+    },
+    "agent": {
+      "type": "string",
+      "enum": ["claude-code", "codex"],
+      "description": "Agent runtime identifier. 'claude-code' for Claude Code subagents; 'codex' for Codex CLI agents."
+    },
+    "source_kind": {
+      "type": "string",
+      "description": "Originating adapter kind (e.g. 'codex'). Mirrors agent for now; reserved for future adapter-level routing."
+    },
+    "display": {
+      "type": "string",
+      "description": "Zellij display name of the pane the subagent is running in (e.g. 'nervous-bus [.claude]'). Only present for subagent sessions in worktrees."
+    },
+    "worktree": {
+      "type": "string",
+      "description": "Absolute path of the worktree the subagent is operating in. Only present when the agent is a dispatched subagent running in a git worktree (not the host main working tree)."
+    },
+    "iter": {
+      "type": "integer",
+      "description": "Iteration number within the agent session. Present on a subset of events."
+    }
+  },
+  "additionalProperties": true
+}

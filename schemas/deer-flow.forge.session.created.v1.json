@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.forge.session.created.v1.json",
+  "title": "deer-flow.forge.session.created v1",
+  "description": "A Forge session was created (Anvil station, trial card stamped). Highest-volume forge.* channel: every bead picked up by a patron emits one of these. Producer: backend/packages/harness/deerflow/bus.py::emit_forge_session_created. CloudEvents subject is session_id. hypothesis_text is truncated to 500 chars by the producer.",
+  "type": "object",
+  "required": ["session_id", "bead_id", "patron", "station", "hypothesis_text", "project_name", "trial_card_mode"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "stable session UUID (matches CloudEvents subject)"
+    },
+    "bead_id": {
+      "type": "string",
+      "description": "beads id this session was opened for (e.g. deer-flow-ryj)"
+    },
+    "patron": {
+      "type": "string",
+      "description": "human or agent who created the session"
+    },
+    "station": {
+      "type": "string",
+      "description": "initial station — typically 'anvil' on create"
+    },
+    "hypothesis_text": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "the trial card's hypothesis (truncated by producer)"
+    },
+    "project_name": {
+      "type": "string",
+      "description": "target project the session is running against (e.g. tengine, nervous-bus)"
+    },
+    "trial_card_mode": {
+      "type": "string",
+      "description": "rendering mode for the trial card (e.g. image, html)"
+    }
+  }
+}

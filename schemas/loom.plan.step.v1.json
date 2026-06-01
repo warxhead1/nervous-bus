@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/loom.plan.step.v1.json",
+  "title": "loom.plan.step v1",
+  "description": "Published by hearth-loom as each bead in a plan starts, completes, or fails. Allows tracking plan progress against the saga.",
+  "type": "object",
+  "required": ["saga_id", "bead_id", "step_index", "step_total", "status"],
+  "properties": {
+    "saga_id": { "type": "string" },
+    "bead_id": { "type": "string" },
+    "step_index": { "type": "integer", "minimum": 1 },
+    "step_total": { "type": "integer", "minimum": 1 },
+    "status": {
+      "type": "string",
+      "enum": ["started", "completed", "failed", "rolled_back", "skipped"]
+    },
+    "loomie_id": { "type": "string", "description": "hearth-loom worker ID" },
+    "pr_url": { "type": "string" },
+    "failure_reason": { "type": "string" }
+  }
+}

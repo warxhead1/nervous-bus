@@ -1,0 +1,11 @@
+[Unit]
+Description=pattern pipeline health check (oneshot)
+After=redis.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/nervous-bus
+ExecStart=%h/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/pattern-watchdog/watchdog.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pattern-watchdog

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.command.design_request.v1.json",
+  "title": "hearth.command.design_request v1",
+  "description": "Design/visualization request from Android or hearth-api. Consumed by deer-flow DesignRequestBusConsumer which calls POST /api/forge/visualize and publishes hearth.design.generated.v1 on completion. Producer: hearth-api/routes/forge.rs::post_design_request. Consumer: deer-flow/backend/.../design_request_consumer.py::DesignRequestBusConsumer (subscribes to hearth.command.design_request.*).",
+  "type": "object",
+  "required": ["entity_key", "prompt", "callback_channel", "requester"],
+  "properties": {
+    "entity_key": {
+      "type": "string",
+      "description": "Required. What to visualize — e.g. a bead id like 'deer-flow-xf5' or any other addressable entity."
+    },
+    "prompt": {
+      "type": "string",
+      "description": "Required. Description passed to the image model for generation."
+    },
+    "callback_channel": {
+      "type": "string",
+      "description": "Required. nervous-bus channel where the result event will be published — always 'hearth.design.generated.v1'."
+    },
+    "requester": {
+      "type": "string",
+      "description": "Required. Identity of who initiated the request (e.g. 'android-app' or 'human:eric')."
+    },
+    "style_hint": {
+      "type": "string",
+      "description": "Optional rendering style passed to the image model (e.g. 'dark cyberpunk', 'blueprint', 'watercolor')."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Optional. If tying this request to an existing Forge session, the session UUID goes here."
+    }
+  }
+}

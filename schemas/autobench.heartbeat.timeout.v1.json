@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.heartbeat.timeout.v1.json",
+  "title": "autobench.heartbeat.timeout v1",
+  "description": "Fired by the autobench heartbeat monitor when a thread has not emitted any events within the expected interval. Source is deer-flow's heartbeat monitor. Fields thread_id and subject are redundant (subject carries the thread name, thread_id carries the ULID).",
+  "type": "object",
+  "required": ["thread_id", "timeout_at", "detected_at"],
+  "properties": {
+    "thread_id": {
+      "type": "string",
+      "description": "ULID or name of the thread that timed out."
+    },
+    "subject": {
+      "type": "string",
+      "description": "Human-readable thread identifier (e.g. 'noisy-thread')."
+    },
+    "timeout_at": {
+      "type": "number",
+      "description": "Timeout threshold in seconds that was exceeded."
+    },
+    "detected_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the timeout was detected."
+    }
+  },
+  "additionalProperties": true
+}

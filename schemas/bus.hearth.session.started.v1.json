@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth.session.started.v1.json",
+  "title": "bus.hearth.session.started v1",
+  "description": "Emitted by hearth-api's session_events module when a new tmux pane appears in the hearth-session cache for the first time. Fires once per session lifecycle; subsequent poll cycles with the same session_id do NOT re-emit. Used by the phone app to populate the session list.",
+  "type": "object",
+  "required": ["session_id", "provider", "project", "project_short", "tmux_pane", "started_at"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Unique session identifier (ULID or UUID) from hearth-session."
+    },
+    "provider": {
+      "type": "string",
+      "description": "Claude Code provider name (e.g. 'claude', 'claude-code')."
+    },
+    "project": {
+      "type": "string",
+      "description": "Absolute path of the project this session is running in."
+    },
+    "project_short": {
+      "type": "string",
+      "description": "Short project name derived from the project path (e.g. 'home-automation')."
+    },
+    "tmux_pane": {
+      "type": "string",
+      "description": "tmux pane ID that hosts this session (e.g. '%42')."
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the session was first observed."
+    }
+  }
+}

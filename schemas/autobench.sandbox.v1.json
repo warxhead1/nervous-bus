@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.sandbox.v1.json",
+  "title": "autobench.sandbox v1",
+  "description": "Per-case sandbox dispatch and completion signals. Lets a consumer see each case enter and exit its sandbox (gvisor / firecracker / cgroup). Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.sandbox.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["session_id", "case_id", "language", "sandbox_type", "status"],
+      "properties": {
+        "session_id": {"type": "string"},
+        "case_id": {
+          "type": "string",
+          "description": "Benchmark case identifier"
+        },
+        "language": {
+          "type": "string",
+          "description": "Programming language for this case (python, cpp, go, ...)"
+        },
+        "sandbox_type": {
+          "type": "string",
+          "description": "Sandbox backend (gvisor, firecracker, cgroup, none, ...)"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["dispatch", "complete"],
+          "description": "Sandbox lifecycle status"
+        },
+        "verdict": {
+          "type": "string",
+          "description": "Verdict on completion (OK/WA/TLE/RE/CE/MLE)"
+        },
+        "latency_ms": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Wall-clock latency in milliseconds (set on complete)"
+        },
+        "exit_code": {
+          "type": "integer",
+          "description": "Process exit code (set on complete)"
+        }
+      }
+    }
+  }
+}

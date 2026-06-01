@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.stack-tuner.stage.done.v1.json",
+  "title": "deer-flow.stack-tuner.stage.done v1",
+  "description": "A stack-tuner stage has finished. Carries token / cost / verdict for the stage. Per-cycle aggregate appears later in cycle.done; this event lets consumers stream stage-by-stage instead of waiting for the cycle to close. Compact form (source=/deer-flow) carries only cycle_id+stage+ok; full form (source=/deer-flow/stack-tuner) adds model + cost/score/error detail.",
+  "type": "object",
+  "required": ["cycle_id", "stage", "ok"],
+  "properties": {
+    "cycle_id": { "type": "string" },
+    "stage": { "type": "string" },
+    "model": { "type": "string", "description": "full form only" },
+    "ok": { "type": "boolean" },
+    "answer_len": { "type": ["integer", "null"], "minimum": 0 },
+    "tokens": { "type": ["integer", "null"], "minimum": 0 },
+    "cost_usd": { "type": "number", "minimum": 0 },
+    "elapsed_s": { "type": ["number", "null"], "minimum": 0 },
+    "verdict": { "type": ["string", "null"] },
+    "score": { "type": ["number", "null"] },
+    "lift": { "type": ["number", "null"] },
+    "n_probes": { "type": ["integer", "null"], "minimum": 0 },
+    "rejection_reasons": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "machine-readable reasons the stage's output was rejected (e.g. answer_len=186<200)"
+    },
+    "error": { "type": ["string", "null"], "description": "error message if ok=false" }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.forge.session.transitioned.v1.json",
+  "title": "deer-flow.forge.session.transitioned v1",
+  "description": "A Forge session changed station (forward-only per Forge spec §5). Producer: backend/packages/harness/deerflow/bus.py::emit_forge_session_transitioned. Subject is session_id. Stations form a DAG: anvil → crucible → quench → temper → ship.",
+  "type": "object",
+  "required": ["session_id", "from_station", "to_station", "bead_id", "patron"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "stable session UUID (matches CloudEvents subject)"
+    },
+    "from_station": {
+      "type": "string",
+      "description": "station the session left (e.g. anvil)"
+    },
+    "to_station": {
+      "type": "string",
+      "description": "station the session entered (e.g. crucible)"
+    },
+    "bead_id": {
+      "type": "string",
+      "description": "beads id this session was opened for"
+    },
+    "patron": {
+      "type": "string",
+      "description": "human or agent who triggered the transition"
+    }
+  }
+}

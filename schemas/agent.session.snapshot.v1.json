@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/agent.session.snapshot.v1.json",
+  "title": "agent.session.snapshot v1",
+  "description": "On-demand full state dump for a single registered session. Emitted in response to an agent.session.query.v1 request (or 'nervous session show <id>'). Distinct from heartbeat: heartbeats are periodic+small, snapshots are on-demand+complete. Federates onto pane_id_qualified (primary) and session_id (secondary).",
+  "type": "object",
+  "required": ["session_id", "ts"],
+  "additionalProperties": false,
+  "properties": {
+    "pane_id_qualified": {
+      "type": "string",
+      "description": "Primary durable key: 'zellij:<session_name>:<pane_id>' or 'tmux:<pane_id>'. Optional only because non-pane CLIs may not have it."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Secondary key. The CLI's native session identifier."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp at the moment the snapshot was captured."
+    },
+    "agent_type": {
+      "type": "string",
+      "enum": ["claude-code", "opencode", "codex", "gemini", "cursor", "unknown"],
+      "description": "Which coding CLI is running."
+    },
+    "project": {
+      "type": "string",
+      "description": "basename of cwd at snapshot time."
+    },
+    "model": {
+      "type": "string",
+      "description": "Model identifier currently in use, e.g. 'claude-opus-4-7'."
+    },
+    "transcript_path": {
+      "type": "string",
+      "description": "Absolute path to the Claude Code transcript JSONL (or equivalent durable handle for other CLIs). The most durable cross-resume key for Claude sessions specifically."
+    },
+    "focus_bead": {
+      "type": "string",
+      "description": "Current bead id claimed by the session, if any."
+    },
+    "current_phase": {
+      "type": "string",
+      "description": "Free-text phase label (e.g. 'planning', 'implementing')."
+    },
+    "collaboration_mode": {
+      "type": "string",
+      "enum": ["solo", "linked-peer", "linked-subordinate", "council-member"],
+      "description": "Current collaboration mode of this session."
+    },
+    "parent_main_session_id": {
+      "type": "string",
+      "description": "session_id of the linked 'main' anchor, if any."
+    },
+    "linked_siblings": {
+      "type": "array",
+      "description": "session_ids of currently-linked sibling sessions (peers + council members + subordinates).",
+      "items": { "type": "string" }
+    },
+    "epic_id": {
+      "type": "string",
+      "description": "Epic correlation id, if this session is part of an epic."
+    },
+    "subagents_in_flight": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Count of dispatched-but-not-finished subagents/loomies/Task tool calls."
+    },
+    "recent_tool_calls": {
+      "type": "array",
+      "description": "Last N tool names invoked (typically last 5).",
+      "items": { "type": "string" },
+      "maxItems": 5
+    },
+    "context_percent": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 100.0,
+      "description": "Fraction of model context window in use, as a percentage."
+    },
+    "healthy": {
+      "type": "boolean",
+      "description": "Whether the session is making forward progress."
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp at which the session was originally registered."
+    }
+  }
+}

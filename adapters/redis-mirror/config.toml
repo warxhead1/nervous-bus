@@ -1,0 +1,40 @@
+[channels]
+# mirror_all = true was the original mode (file-tail → Redis for all events).
+# Now that nervous publish XADDs directly to Redis, mirror_all is disabled to
+# prevent duplicates. Only channels whose publishers bypass the shell SDK
+# (tengine Rust pub, home-automation vision) or run inside systemd services that
+# lack a Python+redis install (hearth-api uses /usr/bin/python3 which has no
+# redis module) still need mirroring here. Those publishers write to debug.jsonl
+# successfully; this mirror picks them up and puts them into Redis Streams.
+mirror_all = false
+types = [
+    "tengine.",
+    "home-automation.vision.",
+    "home-automation.news.",
+    "deer-flow.research.dispatch.",
+]
+
+[redis]
+url = "redis://localhost:6379"
+# password = ""  # optional
+db = 0
+connect_timeout_s = 5.0
+
+[streams]
+# MAXLEN: trim to N entries when limit is reached
+# MINID: trim entries older than MINIDLE_MS milliseconds
+maxlen = 10000
+trim_strategy = "MAXLEN"
+min_idle_ms = 0
+universal_stream = "nbus:all"
+universal_stream_maxlen = 50000
+
+[offset_file]
+# Path to persist tail position for restart resilience.
+# The adapter survives redis restarts automatically via reconnect;
+# offset_file protects against nervous-bus log rotation.
+path = "~/.cache/nervous-bus/redis-mirror-offset.json"
+
+[metrics]
+# Log metrics (events/sec mirrored, dropped, redis errors) to stderr every N seconds.
+interval_s = 60.0

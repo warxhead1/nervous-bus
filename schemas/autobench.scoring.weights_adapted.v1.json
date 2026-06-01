@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "nervous-bus/schemas/autobench.scoring.weights_adapted.v1.json",
+  "title": "autobench.scoring.weights_adapted v1",
+  "description": "Emitted when SICA scoring weights are adapted based on convergence metrics",
+  "type": "object",
+  "required": ["weights", "score_variance", "score_velocity", "reason"],
+  "properties": {
+    "weights": {
+      "type": "object",
+      "description": "Renormalized SICA scoring weights used for this iteration",
+      "properties": {
+        "score": {"type": "number"},
+        "cost": {"type": "number"},
+        "time": {"type": "number"}
+      }
+    },
+    "score_variance": {
+      "type": "number",
+      "description": "Measured 2-sigma variance of score_delta over the lookback window"
+    },
+    "score_velocity": {
+      "type": "number",
+      "description": "Mean signed score_delta over the lookback window (positive = improving)"
+    },
+    "reason": {
+      "type": "string",
+      "description": "Why adaptation fired: plateau_detected | high_variance | early_iteration | budget_exhausted"
+    }
+  }
+}

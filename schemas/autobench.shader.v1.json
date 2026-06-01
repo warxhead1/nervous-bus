@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.shader.v1.json",
+  "title": "autobench.shader v1",
+  "description": "Per-case shader-benchmark result. Emitted after a GLSL/Slang fragment shader is compiled, rendered headless, and scored against a reference image via SSIM (and optionally LPIPS). Source: /autobench/shader.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.shader.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "verdict",
+        "ssim",
+        "lpips",
+        "render_time_ms",
+        "frame_path",
+        "reference_path",
+        "compile_log_excerpt"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "description": "Benchmark case identifier (e.g. shader_tier1.01_red_sphere_plane)"
+        },
+        "verdict": {
+          "type": "string",
+          "enum": ["OK", "VF", "WA", "CE", "RE", "TLE", "MLE"],
+          "description": "Verdict — VF means visual fidelity is below the OK SSIM threshold but above the WA floor."
+        },
+        "ssim": {
+          "type": "number",
+          "minimum": -1.0,
+          "maximum": 1.0,
+          "description": "Structural similarity index of the rendered frame against the reference."
+        },
+        "lpips": {
+          "type": ["number", "null"],
+          "description": "Optional LPIPS score; null if lpips package was unavailable."
+        },
+        "render_time_ms": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Wall-clock render time (GL command submission to ctx.finish) in ms."
+        },
+        "frame_path": {
+          "type": "string",
+          "description": "Filesystem path to the rendered PNG."
+        },
+        "reference_path": {
+          "type": "string",
+          "description": "Filesystem path to the reference PNG used for scoring."
+        },
+        "compile_log_excerpt": {
+          "type": "string",
+          "description": "First ~2KB of glslangValidator stdout+stderr (empty on clean compile)."
+        },
+        "viewport": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"type": "integer", "minimum": 1},
+          "description": "Render viewport [width, height]."
+        },
+        "language": {
+          "type": "string",
+          "enum": ["glsl", "slang"],
+          "description": "Shader language (slang reserved for future tiers)."
+        }
+      }
+    }
+  }
+}

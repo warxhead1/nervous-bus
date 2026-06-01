@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/loom.lifecycle.phase.v1.json",
+  "title": "loom.lifecycle.phase v1",
+  "description": "Agent-internal phase transitions during a loomie execution — what the agent inside the container is doing (e.g. exploring repo, implementing, committing). Distinct from loom.lifecycle.v1, which models the executor/container-level lifecycle (queued, container_init, agent_active, gates, complete). This event fires INSIDE the agent_active phase as the agent moves through its workflow. Source: /hearth-loom/agent.",
+  "type": "object",
+  "required": ["task_id", "execution_id", "project", "phase", "phase_at"],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "Bead id this task is executing"
+    },
+    "execution_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "UUID v4 — correlates to loom.lifecycle.v1 execution"
+    },
+    "project": {
+      "type": "string"
+    },
+    "phase": {
+      "type": "string",
+      "enum": ["exploring", "implementing", "committing", "quality_gate", "self_review", "creating_pr", "verify_ac"],
+      "description": "Agent's current workflow phase"
+    },
+    "previous_phase": {
+      "type": ["string", "null"],
+      "enum": ["exploring", "implementing", "committing", "quality_gate", "self_review", "creating_pr", "verify_ac", null],
+      "description": "Phase the agent transitioned from; null on first transition"
+    },
+    "phase_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC — when this phase began"
+    },
+    "title": {
+      "type": ["string", "null"],
+      "description": "Human-readable task title from the bead (truncated to 120 chars)"
+    }
+  }
+}

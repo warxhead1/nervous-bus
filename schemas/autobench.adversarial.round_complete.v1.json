@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.adversarial.round_complete.v1.json",
+  "title": "autobench.adversarial.round_complete v1",
+  "description": "Aggregate outcome of one Code-A1 / SAGE generate→solve→judge round. Emitted once per AdversarialDual.run_round call with verdict counts, failure-mode categories, and mean score. Drives the curriculum-closing loop: when failure_categories is non-empty, the worker fell into a trap and the case becomes drift-resistant evaluation data for the next RSI iteration.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.adversarial.round_complete.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "round_id",
+        "n_cases",
+        "verdict_counts",
+        "failure_categories",
+        "mean_score"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the autobench session that owns this round."
+        },
+        "round_id": {
+          "type": "string",
+          "description": "Round identifier (prefixed 'advr-' followed by a ULID)."
+        },
+        "n_cases": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of curveballs generated and solved in this round."
+        },
+        "verdict_counts": {
+          "type": "object",
+          "description": "Aggregate verdict histogram (e.g. {\"OK\": 3, \"WA\": 2}).",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "failure_categories": {
+          "type": "object",
+          "description": "Counts of failures by target_failure_mode. Only populated for steered cases the worker failed; an empty object means the worker handled every trap or no traps were steered.",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "mean_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Arithmetic mean of per-case p_score values in [0.0, 1.0]."
+        }
+      }
+    }
+  }
+}

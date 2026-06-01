@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.dashboard.v1.json",
+  "title": "bus.dashboard v1",
+  "description": "Aggregated bus state for cc-bus-dashboard. A consumer-side rollup of the live JSONL log into per-channel rates, top talkers, in-flight sagas, and alerts. Published periodically by the dashboard so other consumers (deer-flow, hearth-loom) can read snapshot state without re-aggregating.",
+  "type": "object",
+  "required": ["snapshot_at", "window_s", "channel_rates", "top_talkers"],
+  "properties": {
+    "snapshot_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC time the snapshot was taken"
+    },
+    "window_s": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Aggregation window in seconds (typically 60 for the rolling minute bucket)"
+    },
+    "channel_rates": {
+      "type": "array",
+      "description": "Per-channel event rates with sparkline buckets",
+      "items": {
+        "type": "object",
+        "required": ["channel", "rate_per_min", "buckets"],
+        "properties": {
+          "channel": { "type": "string" },
+          "rate_per_min": { "type": "number", "minimum": 0 },
+          "buckets": {
+            "type": "array",
+            "description": "Counts per bucket, oldest first; bucket width = window_s",
+            "items": { "type": "integer", "minimum": 0 },
+            "maxItems": 120
+          }
+        }
+      }
+    },
+    "top_talkers": {
+      "type": "array",
+      "description": "Top (project, channel) tuples by event count",
+      "items": {
+        "type": "object",
+        "required": ["project", "channel", "count"],
+        "properties": {
+          "project": { "type": "string" },
+          "channel": { "type": "string" },
+          "count": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "in_flight_sagas": {
+      "type": "array",
+      "description": "Sagas seen via saga_id field that have not yet emitted a terminal event",
+      "items": {
+        "type": "object",
+        "required": ["saga_id", "started_at", "n_steps"],
+        "properties": {
+          "saga_id": { "type": "string" },
+          "started_at": { "type": "string", "format": "date-time" },
+          "n_steps": { "type": "integer", "minimum": 1 },
+          "last_event_type": { "type": "string" },
+          "last_event_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "alerts": {
+      "type": "array",
+      "description": "High-signal events the dashboard surfaced for operator attention",
+      "items": {
+        "type": "object",
+        "required": ["severity", "message"],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["info", "warn", "error", "critical"]
+          },
+          "message": { "type": "string" },
+          "source_event_id": { "type": "string" },
+          "source_channel": { "type": "string" },
+          "first_seen_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "totals": {
+      "type": "object",
+      "description": "Cumulative counts since dashboard start",
+      "properties": {
+        "events_total": { "type": "integer", "minimum": 0 },
+        "dead_letters_total": { "type": "integer", "minimum": 0 },
+        "channels_seen": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

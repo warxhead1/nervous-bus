@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.remediation.applied.v1.json",
+  "title": "bus.remediation.applied v1",
+  "description": "Explicit remediation event — signals that a known alert kind was addressed by a known fix. Enables the dashboard to distinguish auto-decay 'stabilizing' (STAB) from explicit-remediation 'stabilizing' (STAB-FX) and tag regressions post-fix as louder than auto-decay regressions. Published by deer-improve after Tier-4 patches, by loomies on bead close, or manually via 'nervous publish bus.remediation.applied ...'.",
+  "type": "object",
+  "required": ["targets_pathology", "fix_summary", "applied_at", "applied_by"],
+  "properties": {
+    "targets_pathology": {
+      "type": "object",
+      "description": "Alert kind tuple + criteria this fix addresses. Matches AlertKind.kind_tuple fields.",
+      "properties": {
+        "kind": {
+          "type": "array",
+          "items": {},
+          "description": "Alert kind tuple elements (e.g. [\"dlq\", \"malformed_json\"] or [\"integrity.warn\", \"stage\", \"model\", \"issue\"])"
+        },
+        "failure_reason": {
+          "type": ["string", "null"],
+          "description": "bus.dead_letter failure_reason match — present when kind[0] == 'dlq'"
+        },
+        "stage": {
+          "type": ["string", "null"],
+          "description": "integrity.warn stage field match"
+        },
+        "model": {
+          "type": ["string", "null"],
+          "description": "integrity.warn model field match"
+        },
+        "issue": {
+          "type": ["string", "null"],
+          "description": "integrity.warn issue field match"
+        }
+      }
+    },
+    "fix_summary": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "Human-readable description of what was done"
+    },
+    "applied_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC — when the fix was applied"
+    },
+    "applied_by": {
+      "type": "string",
+      "description": "Agent ID or human name that applied the fix (e.g. loom-XXXX, human:eric)"
+    },
+    "expected_resolution_window_s": {
+      "type": "integer",
+      "minimum": 60,
+      "maximum": 86400,
+      "description": "Seconds after applied_at during which recurrence should NOT happen (if recurrence happens before this window closes, alert is marked regressed-FX)"
+    },
+    "rollback_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Optional deadline — if pathology is still active at this time, consider rollback/alert escalation"
+    },
+    "saga_id": {
+      "type": ["string", "null"],
+      "description": "bus.saga correlation ID if this remediation was part of a coordinated plan"
+    },
+    "bead_id": {
+      "type": ["string", "null"],
+      "description": "Bead ID if this remediation was filed as a bead"
+    }
+  }
+}

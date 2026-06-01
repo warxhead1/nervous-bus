@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.forge.session.council_linked.v1.json",
+  "title": "deer-flow.forge.session.council_linked v1",
+  "description": "A council deliberation was linked to a Forge session. Fires when PATCH /sessions/{id} sets council_deliberation_id OR when apply_council_verdict_to_session mirrors a verdict onto session.art. Producer: backend/packages/harness/deerflow/bus.py::emit_forge_session_council_linked. Subject is session_id. council_deliberation_id is truncated to 200 chars; verdict_score is rounded to 4 decimals or null.",
+  "type": "object",
+  "required": ["session_id", "passes_threshold"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "stable session UUID (matches CloudEvents subject)"
+    },
+    "council_deliberation_id": {
+      "type": ["string", "null"],
+      "maxLength": 200,
+      "description": "stable id of the linked council deliberation, or null if unset/cleared"
+    },
+    "verdict_score": {
+      "type": ["number", "null"],
+      "description": "council verdict score rounded to 4 decimals, or null when no verdict yet"
+    },
+    "passes_threshold": {
+      "type": "boolean",
+      "description": "whether the verdict_score meets the session's configured ship threshold"
+    }
+  }
+}

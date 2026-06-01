@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth.session.activity.v1.json",
+  "title": "bus.hearth.session.activity v1",
+  "description": "Emitted by hearth-api's session_events module when a session's last_activity advances or message count increases. Coalesced to at most one event per second per session_id to prevent bus flooding during bursts. Consumers use this to refresh per-session timestamps on the phone UI.",
+  "type": "object",
+  "required": ["session_id", "last_message_at", "msg_count_delta"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Unique session identifier."
+    },
+    "last_message_at": {
+      "type": "string",
+      "description": "ISO8601/RFC3339 timestamp of the most recent message in the session."
+    },
+    "msg_count_delta": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Change in message count since the last activity event."
+    }
+  }
+}

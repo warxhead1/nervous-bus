@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.subscribers.snapshot.v1.json",
+  "title": "bus.subscribers.snapshot v1",
+  "description": "Periodic snapshot of active plugin subscribers per channel. Published by the nervous-bus Zellij plugin every 30s so consumers (e.g. cc-bus-dashboard) can surface 'silent channel with active subscribers' alerts. This is a push-based alternative to the 'nervous subscribers' query command.",
+  "type": "object",
+  "required": ["channel", "plugin_ids"],
+  "properties": {
+    "channel": {
+      "type": "string",
+      "description": "Channel name that has subscribers"
+    },
+    "plugin_ids": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "description": "Zellij plugin IDs currently subscribed to this channel"
+    }
+  }
+}

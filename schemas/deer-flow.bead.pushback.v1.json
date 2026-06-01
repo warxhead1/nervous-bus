@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.bead.pushback.v1.json",
+  "title": "deer-flow.bead.pushback v1",
+  "description": "BeadEnricher produced pushback issues or clarifying questions for a bead. Downstream consumers (UIs, human reviewers) can use this to surface bead quality problems before work begins.",
+  "type": "object",
+  "required": ["bead_id", "n_issues", "issues", "n_questions", "questions"],
+  "properties": {
+    "bead_id": {
+      "type": "string"
+    },
+    "n_issues": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "severity", "message"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["vague_language", "scope_creep", "unstated_assumption", "missing_success_criteria", "high_complexity", "missing_info"]
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["high", "medium", "low"]
+          },
+          "message": {
+            "type": "string"
+          },
+          "suggestion": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "n_questions": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["question", "importance"],
+        "properties": {
+          "question": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "importance": {
+            "type": "string",
+            "enum": ["must_ask", "should_ask", "nice_to_have"]
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,3 @@
+[submodule "nervous-autobench"]
+	path = autobench
+	url = https://github.com/warxhead1/nervous-autobench.git

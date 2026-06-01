@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/funsearch.artifact.v1.json",
+  "title": "funsearch.artifact v1",
+  "description": "Emitted when a FunSearch kernel saves a visual artifact (rendered PNG) for a new best-fitness program. Enables cross-system knowledge sharing: TEngine can subscribe to ingest novel evolved SDFs, hearth-loom can file beads, deer-flow can summarize discoveries.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": { "type": "string", "const": "1.0" },
+    "id": { "type": "string" },
+    "source": { "type": "string", "description": "e.g. /autobench/sdf_kernel" },
+    "type": { "type": "string", "const": "funsearch.artifact.v1" },
+    "datacontenttype": { "type": "string", "const": "application/json" },
+    "time": { "type": "string", "format": "date-time" },
+    "data": {
+      "type": "object",
+      "required": ["kernel", "run_id", "generation", "fitness", "instance", "artifact_path"],
+      "properties": {
+        "kernel": { "type": "string", "description": "sdf | noise | tsp" },
+        "run_id": { "type": "string" },
+        "generation": { "type": "integer" },
+        "fitness": { "type": "number" },
+        "instance": { "type": "string", "description": "Benchmark instance name (e.g. 'gyroid')" },
+        "artifact_path": { "type": "string", "description": "Repo-relative path to rendered PNG" },
+        "render_type": {
+          "type": "string",
+          "enum": ["sdf_raymarch", "noise_render", "none"],
+          "description": "How the artifact was rendered"
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Domain-specific metadata: eikonal_score, spectral_beta, etc.",
+          "properties": {
+            "eikonal_score": { "type": ["number", "null"] },
+            "mean_grad_err": { "type": ["number", "null"] },
+            "spectral_beta": { "type": ["number", "null"] },
+            "topology_score": { "type": ["number", "null"] },
+            "code_length": { "type": "integer" },
+            "best_program_code": { "type": "string", "description": "First 500 chars of evolved code" }
+          }
+        }
+      }
+    }
+  }
+}

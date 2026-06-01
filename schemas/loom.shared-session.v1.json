@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/loom.shared-session.v1.json",
+  "title": "loom.shared-session v1",
+  "description": "Cross-shuttle observability events for shared-session workflows. Emitted by hearth-loom's shuttle supervisor to surface tool-call and sleeve events into the host-side bus. Source: /hearth-loom.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string", "const": "/hearth-loom"},
+    "type": {"type": "string", "const": "loom.shared-session.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["event", "execution_id", "session_id", "task_id", "ts"],
+      "properties": {
+        "event": {
+          "type": "string",
+          "enum": ["sleeve_completed", "tool_call_invoked", "tool_call_completed"],
+          "description": "Event discriminator"
+        },
+        "execution_id": {
+          "type": "string",
+          "description": "Execution identifier"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Shared-session identifier"
+        },
+        "task_id": {
+          "type": "string",
+          "description": "Task/bead identifier"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC3339 UTC timestamp"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["invoked", "completed"],
+          "description": "Tool call status; present for tool_call_* events"
+        },
+        "tool": {
+          "type": "string",
+          "description": "Tool name; present for tool_call_* events"
+        },
+        "output_bytes": {
+          "type": "integer",
+          "description": "Output size in bytes; present for sleeve_completed"
+        },
+        "repo_key": {
+          "type": "string",
+          "description": "Repository path key; present for sleeve_completed"
+        },
+        "shuttle_dir": {
+          "type": "string",
+          "description": "Shuttle working directory; present for sleeve_completed"
+        }
+      }
+    }
+  }
+}

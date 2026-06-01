@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.approval.requested.v1.json",
+  "title": "bus.tengine.approval.requested v1",
+  "description": "When: The orchestrator needs a human operator to approve a high-stakes action (e.g. a wave gate, a destructive bead, a promote decision). Source: /tengine. Emitted via the bus-emit CLI or Rust helper; consumers display pending approvals in dashboards or block pipeline progression until resolved.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.tengine.approval.requested.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["v", "source", "host", "kind", "summary"],
+      "properties": {
+        "v": {"type": "integer", "description": "Payload schema version, always 1."},
+        "source": {"type": "string", "description": "Emitting subsystem identifier, always 'tengine'."},
+        "host": {"type": "string", "description": "Hostname of the machine that generated this event."},
+        "kind": {"type": "string", "description": "Approval category or action type being requested, e.g. 'wave_gate', 'bead_force_push', 'promote'."},
+        "summary": {"type": "string", "description": "Human-readable description of what is being approved and why it requires manual intervention."},
+        "diff_preview_url": {"type": "string", "description": "Optional URL to a diff or comparison view that shows what would change if approved."},
+        "expires_at": {"type": "string", "description": "Optional RFC3339 timestamp after which this approval request becomes stale and should be rejected."},
+        "reply_to": {"type": "string", "description": "Optional return address or channel for the approver to send their decision (e.g. an email address or bus channel)."}
+      }
+    }
+  }
+}

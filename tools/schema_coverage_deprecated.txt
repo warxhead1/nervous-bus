@@ -1,0 +1,7 @@
+# schema_coverage_deprecated.txt — channels whose schemas are marked deprecated.
+#
+# Channels listed here are treated as MISSING by the coverage checker, even
+# if a schema file exists. The intent is to fail CI when a deprecated channel
+# is still being emitted.
+#
+# Format: one channel per line. Lines starting with `#` and blank lines ignored.

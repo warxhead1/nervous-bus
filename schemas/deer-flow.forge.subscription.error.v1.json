@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://nervous-bus/schemas/deer-flow.forge.subscription.error.v1.json",
+  "title": "ForgeSubscriptionError",
+  "description": "Emitted by deer-flow's ForgeBusConsumer when an inbound bead-lifecycle event cannot be processed. Surfaces parse failures, missing-correlation errors, and handler exceptions so operators (pulse dashboard, schema-coverage CI) can observe Forge handshake health. Backfilled 2026-05-17 — the emitter at deer-flow/backend/packages/harness/deerflow/bus.py:744 pre-existed without a schema, in violation of CLAUDE.md schema-first rule. Tracked: nervous-bus-cmug, deer-flow-mcyv.",
+  "type": "object",
+  "required": ["event_channel", "error_type", "message"],
+  "properties": {
+    "event_channel": {
+      "type": "string",
+      "description": "The bus channel of the inbound event that failed processing (e.g. 'bus.bead.lifecycle.v1', 'bus.bead.bench_completed.v1'). Provides the operator a direct pointer to the producer surface that drifted."
+    },
+    "bead_id": {
+      "type": ["string", "null"],
+      "description": "Bead identifier from the inbound event payload, if present. Null when the event couldn't be parsed far enough to extract a bead_id, OR when the inbound channel doesn't carry one."
+    },
+    "error_type": {
+      "type": "string",
+      "description": "Short machine-readable error class. Known values: 'parse_error' (envelope malformed), 'session_not_found' (no active Forge session for bead_id), 'handler_exception' (handler raised), plus any Python exception class name when the cause is a raised exception."
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable error detail, truncated to 500 chars by the emitter. Includes traceback context for handler exceptions."
+    }
+  },
+  "additionalProperties": false
+}

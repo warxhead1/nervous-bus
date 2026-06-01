@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.openrouter.credit_exhausted.v1.json",
+  "title": "deer-flow.openrouter.credit_exhausted v1",
+  "description": "OpenRouter quota/credit exhaustion detected by the LLM error-handling middleware. Signals role_router to invalidate its credit cache and group-quarantine paid OpenRouter models. PRODUCER NOTE: the live producer emits the channel name WITHOUT a `.v1` suffix (it ships as `deer-flow.openrouter.credit_exhausted`); this schema is filed against the canonical versioned name and validates the same data block. Tracked for cleanup in nervous-bus backfill bead. Producer: backend/packages/harness/deerflow/agents/middlewares/llm_error_handling_middleware.py. `detail` is truncated to 200 chars.",
+  "type": "object",
+  "required": ["detail", "source"],
+  "properties": {
+    "detail": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "error detail string surfaced by the upstream provider (truncated)"
+    },
+    "source": {
+      "type": "string",
+      "description": "emitter tag — currently always 'llm_error_handling_middleware'"
+    }
+  }
+}

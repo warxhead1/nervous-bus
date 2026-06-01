@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.curriculum.cycle.v1.json",
+  "title": "autobench.curriculum.cycle v1",
+  "description": "Summary of one daily curriculum-generation cycle. Emitted by autobench.curriculum.CurriculumAgent at the end of a cycle. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.curriculum.cycle.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["session_id", "cycle_id", "n_problems_generated", "n_problems_validated", "goals_summary", "date"],
+      "properties": {
+        "session_id": {"type": "string"},
+        "cycle_id": {"type": "string", "description": "ULID for this cycle"},
+        "n_problems_generated": {"type": "integer", "minimum": 0},
+        "n_problems_validated": {"type": "integer", "minimum": 0},
+        "n_problems_rejected": {"type": "integer", "minimum": 0},
+        "goals_summary": {
+          "type": "object",
+          "description": "Compact summary of CurriculumGoals (failure + mastery categories)",
+          "properties": {
+            "failure_categories": {"type": "array", "items": {"type": "string"}},
+            "mastery_categories": {"type": "array", "items": {"type": "string"}},
+            "n_sessions_analyzed": {"type": "integer", "minimum": 0}
+          }
+        },
+        "generator_model": {"type": "string"},
+        "date": {"type": "string", "description": "ISO date (YYYY-MM-DD)"}
+      }
+    }
+  }
+}

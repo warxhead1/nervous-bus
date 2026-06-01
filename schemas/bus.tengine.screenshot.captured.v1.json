@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.screenshot.captured.v1.json",
+  "type": "object",
+  "title": "bus.tengine.screenshot.captured.v1",
+  "description": "Emitted after a PNG write succeeds. Produced by tengine-nervous-bus-client emit_screenshot().",
+  "properties": {
+    "v": {
+      "type": "integer",
+      "const": 1,
+      "description": "Event schema version"
+    },
+    "source": {
+      "type": "string",
+      "const": "tengine",
+      "description": "Emitting subsystem"
+    },
+    "host": {
+      "type": "string",
+      "description": "Hostname of the emitting machine"
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Silo session identifier"
+    },
+    "silo": {
+      "type": "string",
+      "description": "Silo name"
+    },
+    "frame": {
+      "type": "integer",
+      "description": "GPU frame index at which screenshot was captured"
+    },
+    "path": {
+      "type": "string",
+      "description": "Absolute path to the screenshot PNG file"
+    },
+    "byte_size": {
+      "type": "integer",
+      "description": "Size of the PNG file in bytes"
+    }
+  },
+  "required": [
+    "v",
+    "source",
+    "host",
+    "session_id",
+    "silo",
+    "frame",
+    "path",
+    "byte_size"
+  ],
+  "additionalProperties": false
+}

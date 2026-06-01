@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.visual.regression.v1.json",
+  "title": "bus.tengine.visual.regression v1",
+  "description": "When: A SSIM comparison between a baseline screenshot and a current screenshot detects a regression. Source: /tengine. Emitted by the WT 558 ring drain; consumers trigger alerts or halt a pipeline when regression is detected.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.tengine.visual.regression.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["v", "source", "host", "baseline_path", "current_path", "ssim", "luminance_delta", "classification"],
+      "properties": {
+        "v": {"type": "integer", "description": "Payload schema version, always 1."},
+        "source": {"type": "string", "description": "Emitting subsystem identifier, always 'tengine'."},
+        "host": {"type": "string", "description": "Hostname of the machine that generated this event."},
+        "baseline_path": {"type": "string", "description": "Absolute filesystem path to the baseline (reference) screenshot PNG."},
+        "current_path": {"type": "string", "description": "Absolute filesystem path to the current screenshot PNG being compared."},
+        "ssim": {"type": "number", "description": "Structural Similarity Index score between baseline and current; 1.0 means identical, 0 means completely different."},
+        "luminance_delta": {"type": "number", "description": "Absolute difference in mean luminance between baseline and current; larger values indicate more severe visual change."},
+        "classification": {
+          "type": "string",
+          "enum": ["dark_patch", "contrast_spike", "nan", "clamp", "normal"],
+          "description": "Human-readable regression class: 'dark_patch' (unexpected dark region), 'contrast_spike' (sharp contrast change), 'nan' (rendering produced NaN values), 'clamp' (values were clamped), 'normal' (SSIM below threshold but no specific anomaly detected)."
+        }
+      }
+    }
+  }
+}

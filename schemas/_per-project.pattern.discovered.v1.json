@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "_per-project.pattern.discovered.v1",
+  "description": "Shared base schema. Concrete types: <project>.pattern.discovered.v1. Emitted by Tier 4 / deer-improve / telemetry analysis when a recurring pattern is detected. Typically results in a proposal bead with the proposed patch.",
+  "type": "object",
+  "required": ["project", "pattern_name", "evidence"],
+  "properties": {
+    "project":       { "type": "string" },
+    "pattern_name":  { "type": "string" },
+    "occurrences":   { "type": "integer", "minimum": 1 },
+    "evidence":      { "type": "array", "items": { "type": "string", "description": "telemetry refs / file:line / bead ids" } },
+    "proposed_patch": {
+      "type": "object",
+      "properties": {
+        "type":   { "type": "string", "enum": ["skill", "rule", "code"] },
+        "target_selector": { "type": "object" },
+        "content": { "type": "string" }
+      }
+    }
+  }
+}

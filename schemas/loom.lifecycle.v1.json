@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/loom.lifecycle.v1.json",
+  "title": "loom.lifecycle v1",
+  "description": "hearth-loom phase transitions + cost deltas + terminal disposition. One event per state transition (not a heartbeat). Distinction from agent.session: lifecycle = state changes; agent.session = heartbeats.",
+  "type": "object",
+  "required": ["task_id", "execution_id", "project", "phase", "phase_at"],
+  "properties": {
+    "task_id": { "type": "string" },
+    "execution_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "UUID v4"
+    },
+    "project": {
+      "type": "string",
+      "description": "Short name like 'nervous-bus', 'hearth-loom'"
+    },
+    "phase": {
+      "type": "string",
+      "enum": ["queued", "container_init", "agent_active", "gates", "complete", "failed", "cancelled", "timeout"]
+    },
+    "phase_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC — when this phase began"
+    },
+    "previous_phase": {
+      "type": ["string", "null"],
+      "enum": ["queued", "container_init", "agent_active", "gates", "complete", "failed", "cancelled", "timeout", null],
+      "description": "Nullable on first transition"
+    },
+    "title": { "type": "string" },
+    "container_name": { "type": "string" },
+    "tokens_input_delta": {
+      "type": "integer",
+      "description": "Input tokens consumed since previous lifecycle event"
+    },
+    "tokens_output_delta": {
+      "type": "integer",
+      "description": "Output tokens generated since previous lifecycle event"
+    },
+    "cost_delta_usd": {
+      "type": "number",
+      "description": "USD cost incurred since previous lifecycle event"
+    },
+    "kill_risk": {
+      "type": "string",
+      "enum": ["healthy", "ghost", "kill"]
+    },
+    "terminal_disposition": {
+      "type": "string",
+      "enum": ["merged", "pr_open", "ci_failed", "push_failed", "agent_error", "timeout", "cancelled", "abandoned"],
+      "description": "Only present when phase is terminal: complete, failed, cancelled, or timeout"
+    },
+    "pr_url": {
+      "type": "string",
+      "description": "Present when phase=complete and a PR was opened"
+    },
+    "error_summary": {
+      "type": "string",
+      "description": "Short error description for terminal failures"
+    },
+    "retry_of_task_id": {
+      "type": "string",
+      "description": "If this task is a retry of a prior failed task, the original task_id"
+    }
+  }
+}

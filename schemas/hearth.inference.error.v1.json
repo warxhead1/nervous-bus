@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.inference.error.v1.json",
+  "title": "hearth.inference.error v1",
+  "description": "Emitted by hearth-nbus when an LLM inference call fails or times out. Includes latency metadata to help distinguish network vs. model errors.",
+  "type": "object",
+  "required": ["model", "task", "latency_ms", "reason"],
+  "properties": {
+    "model": {
+      "type": "string",
+      "description": "Model identifier that failed (e.g. 'claude-opus-4-5', 'gpt-4o')."
+    },
+    "task": {
+      "type": "string",
+      "description": "Task description or intent class that was being attempted."
+    },
+    "latency_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Observed latency in milliseconds before the error occurred."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Error message or code returned by the inference layer."
+    }
+  }
+}

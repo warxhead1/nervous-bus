@@ -1,0 +1,15 @@
+[Unit]
+Description=Block Docker sandbox containers from reaching hearth services
+After=docker.service
+Requires=docker.service
+# Re-run on docker restart (Docker resets DOCKER-USER chain)
+BindsTo=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash /etc/docker-sandbox-isolation.rules
+ExecStop=/bin/true
+
+[Install]
+WantedBy=multi-user.target

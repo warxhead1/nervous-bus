@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.council.completed.v1.json",
+  "title": "deer-flow.council.completed v1",
+  "description": "All council agents reached verdicts and the council session is closed. Carry the aggregate cost and disagreement signal so dashboards can track council quality without re-fetching individual agent results.",
+  "type": "object",
+  "required": ["council_id", "verdict_summary", "cost_usd_total", "token_total", "disagreement_count"],
+  "properties": {
+    "council_id": {
+      "type": "string"
+    },
+    "verdict_summary": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "One-line summary of the final council verdict"
+    },
+    "cost_usd_total": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Sum of all agent costs in USD"
+    },
+    "token_total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Sum of input + output tokens across all agents"
+    },
+    "disagreement_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of agents whose verdict differed from the majority"
+    },
+    "agent_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "agent_name": { "type": "string" },
+          "verdict": { "type": "string" },
+          "cost_usd": { "type": "number" },
+          "tokens": { "type": "integer" },
+          "elapsed_s": { "type": "number" }
+        }
+      },
+      "description": "Per-agent summary (optional — omit for very large councils)"
+    }
+  }
+}

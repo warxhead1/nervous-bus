@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.semantic_cache.hit.v1.json",
+  "title": "deer-flow.semantic_cache.hit v1",
+  "description": "A semantic cache lookup returned a hit. Used to monitor retrieval efficiency and cache health.",
+  "type": "object",
+  "required": ["query_hash", "cache_key", "ttl_remaining_s", "age_s"],
+  "properties": {
+    "query_hash": {
+      "type": "string",
+      "description": "First 12 chars of the query embedding hash — avoids logging PII from long queries"
+    },
+    "cache_key": {
+      "type": "string",
+      "description": "First 12 chars of the cache entry key"
+    },
+    "ttl_remaining_s": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Seconds until this cache entry expires"
+    },
+    "age_s": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Seconds since this entry was written to the cache"
+    }
+  }
+}

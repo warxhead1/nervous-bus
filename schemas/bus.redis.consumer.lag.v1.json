@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.redis.consumer.lag.v1.json",
+  "title": "bus.redis.consumer.lag v1",
+  "description": "Consumer group position report — emitted by tachyonac-engine and any XREADGROUP subscriber on a heartbeat schedule. Lets ops dashboards detect stuck consumers, replay lag, and missed-event windows without querying Redis directly.",
+  "type": "object",
+  "required": ["consumer_group", "stream", "last_delivered_id"],
+  "properties": {
+    "consumer_group":     { "type": "string", "description": "Redis consumer group name" },
+    "consumer_name":      { "type": "string", "description": "Individual consumer name within the group" },
+    "stream":             { "type": "string", "description": "Redis stream key being consumed (e.g. 'nervous-bus')" },
+    "last_delivered_id":  { "type": "string", "description": "Stream ID of the last acknowledged message" },
+    "pending_count":      { "type": "integer", "minimum": 0, "description": "Messages delivered but not yet ACK'd (PEL size)" },
+    "lag":                { "type": "integer", "minimum": 0, "description": "Entries in stream not yet delivered to this group" },
+    "processed_total":    { "type": "integer", "minimum": 0, "description": "Total messages processed since group creation" },
+    "source":             { "type": "string", "description": "Service reporting this lag (e.g. 'tachyonac-engine')" }
+  }
+}

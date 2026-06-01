@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.composer.first_output.v1.json",
+  "type": "object",
+  "title": "bus.tengine.composer.first_output.v1",
+  "description": "Emitted once when ChunkMaterialParams first has non-default values. Produced by tengine-nervous-bus-client emit_composer_first_output().",
+  "properties": {
+    "v": {
+      "type": "integer",
+      "const": 1,
+      "description": "Event schema version"
+    },
+    "source": {
+      "type": "string",
+      "const": "tengine",
+      "description": "Emitting subsystem"
+    },
+    "host": {
+      "type": "string",
+      "description": "Hostname of the emitting machine"
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Silo session identifier"
+    },
+    "silo": {
+      "type": "string",
+      "description": "Silo name"
+    },
+    "frame": {
+      "type": "integer",
+      "description": "GPU frame index at which first output occurred"
+    },
+    "chunk_count": {
+      "type": "integer",
+      "description": "Number of chunks with non-default output"
+    }
+  },
+  "required": [
+    "v",
+    "source",
+    "host",
+    "session_id",
+    "silo",
+    "frame",
+    "chunk_count"
+  ],
+  "additionalProperties": false
+}

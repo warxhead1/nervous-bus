@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.improver.divergence.v1.json",
+  "title": "autobench.improver.divergence v1",
+  "description": "Per-iteration divergence between the LLM-proposed harness mutation and what the rule-based heuristic would have proposed for the same input. The antagonist's surprise detector. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.improver.divergence.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "iteration",
+        "llm_delta",
+        "heuristic_delta",
+        "divergent",
+        "divergence_summary"
+      ],
+      "properties": {
+        "session_id": {"type": "string"},
+        "iteration": {"type": "integer", "minimum": 0},
+        "llm_delta": {
+          "type": "object",
+          "description": "ImprovementDelta proposed by the active improver (LLM or rule-based).",
+          "additionalProperties": true
+        },
+        "heuristic_delta": {
+          "type": "object",
+          "description": "ImprovementDelta the rule-based heuristic would have proposed for the same input.",
+          "additionalProperties": true
+        },
+        "divergent": {
+          "type": "boolean",
+          "description": "True iff llm_delta and heuristic_delta disagree on any non-trivial field."
+        },
+        "divergence_summary": {
+          "type": "string",
+          "description": "Human-readable diff between the two deltas."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.cross_domain.evaluation.v1.json",
+  "title": "autobench.cross_domain.evaluation v1",
+  "description": "Emitted once per advocate per population cycle when the PopulationRunner evaluates the advocate against more than one benchmark domain. Records per-domain scores, the renormalized weights actually used, and the weighted-mean aggregate that downstream promotion (continuous.py) ranks by. Single-domain cycles do NOT emit this event — the legacy iteration.v1 + population.summary.v1 events remain the canonical record there. Phase 6 of the wire-pop epic — nervous-bus-qp91. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.cross_domain.evaluation.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "advocate_id",
+        "per_domain_scores",
+        "aggregate_score",
+        "weights"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "Bus session_id of the emitter. Typically the per-advocate session so consumers can correlate cross-domain results to that advocate's iteration events."
+        },
+        "advocate_id": {
+          "type": "string",
+          "description": "Stable advocate identifier (e.g. 'advocate-0')."
+        },
+        "cycle_id": {
+          "type": "string",
+          "description": "Optional ULID of the population cycle this evaluation belongs to."
+        },
+        "per_domain_scores": {
+          "type": "object",
+          "description": "Map of domain_name → score in [0, 1]. Keys correspond to BenchmarkDomain.name in the registry; the primary domain is the one RSI optimized against, secondary domains were evaluated against the final harness only.",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "aggregate_score": {
+          "type": "number",
+          "description": "Weighted mean of per_domain_scores using the renormalized weights below. The new figure of merit cross-run promotion ranks by."
+        },
+        "weights": {
+          "type": "object",
+          "description": "Map of domain_name → weight ACTUALLY USED at aggregation time (after renormalization across domains present in per_domain_scores). Sum is 1.0 for normalized weights or 0.0 for degenerate-weight defensive paths.",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "primary_domain": {
+          "type": "string",
+          "description": "Optional. Name of the domain RSI loop optimized against. Empty/absent when the cycle ran in legacy single-domain mode (no cross-domain event is emitted in that path)."
+        }
+      }
+    }
+  }
+}

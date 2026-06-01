@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.silo.started.v1.json",
+  "title": "tengine.silo.started v1",
+  "description": "Fires when a new silo session directory appears under ~/.tengine/sessions/silo_*/. Always pairs with a later tengine.silo.verify event for clean completions; absence of pair within window N indicates the silo crashed mid-run.",
+  "type": "object",
+  "required": ["silo", "session_id", "started_at"],
+  "properties": {
+    "silo": {
+      "type": "string",
+      "description": "Silo name parsed from the session dirname (e.g. 'racing', 'exploration'). Case preserved."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Full session-dir basename used as a stable correlation id (e.g. 'silo_Racing_20260503_103237_0025aa18'). Pair with verify event by exact match."
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp parsed from the dirname's date+time component."
+    },
+    "session_dir": {
+      "type": "string",
+      "description": "Absolute path to the session dir for downstream consumers that want the full artifact set."
+    }
+  }
+}

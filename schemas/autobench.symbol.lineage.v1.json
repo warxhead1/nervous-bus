@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.symbol.lineage.v1.json",
+  "title": "autobench.symbol.lineage v1",
+  "description": "Tracks symbol evolution across checkpoints. Mirrors Bitloops checkpoint_artefact_lineage.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": { "const": "1.0" },
+    "id": { "type": "string" },
+    "source": { "const": "/autobench" },
+    "type": { "const": "autobench.symbol.lineage.v1" },
+    "datacontenttype": { "const": "application/json" },
+    "time": { "format": "date-time" },
+    "data": {
+      "type": "object",
+      "required": ["repo_id", "session_id", "checkpoint_id", "lineage_kind", "source_symbol_id", "dest_symbol_id"],
+      "properties": {
+        "repo_id": { "type": "string" },
+        "session_id": { "type": "string" },
+        "checkpoint_id": { "type": "string" },
+        "lineage_kind": { "enum": ["refactor", "extract", "inline", "rename_derived", "copy"] },
+        "source_symbol_id": { "type": "string" },
+        "source_artefact_id": { "type": "string" },
+        "source_blob_sha": { "type": "string" },
+        "dest_symbol_id": { "type": "string" },
+        "dest_artefact_id": { "type": "string" },
+        "dest_blob_sha": { "type": "string" },
+        "commit_sha": { "type": "string" }
+      }
+    }
+  }
+}

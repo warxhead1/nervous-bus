@@ -1,0 +1,108 @@
+name: subscription-coverage
+
+# Subscribe-side schema-contract drift detector — the mirror of schema-coverage.yml
+# (which guards the EMIT side). This guards the CONSUME side: it flags when a repo
+# SUBSCRIBES to a channel that has no schema (BLOCK), subscribes to a channel nothing
+# emits (dead handler, WARN), or a schema nothing emits or subscribes to (orphan, WARN).
+#
+# Motivated by verified drift: hearth had 3 deer-flow handlers (cycle.snapshot,
+# council.session, run) keyed to event names deer-flow never emits.
+#
+# ROLLOUT: report-only. The checker auto-resolves tools/subscription_drift_baseline.txt
+# (known drift downgraded BLOCK->WARN) and tools/subscription_coverage_allowlist.txt
+# (scanner false positives). With --report-only it always exits 0; the signal is in the
+# job log. A follow-up bead flips this to a hard gate (drop --report-only) once the one
+# genuine live BLOCK (bus.hearth.bead.changes.v1) has a schema. Add --strict later to make
+# NEW dead handlers fail CI too (they are WARN by default).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  scan-consumers:
+    name: scan-consumers
+    runs-on: [self-hosted, linux, nervous-bus]
+    steps:
+      - name: Configure PATH and project dirs
+        run: |
+          echo "$HOME/.pyenv/shims" >> $GITHUB_PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          # Sibling repos exist on the self-hosted runner; read-only scanned.
+          # Steps below skip gracefully when dirs are absent (public CI, forks).
+          echo "DEER_FLOW_DIR=$HOME/projects/deer-flow/backend" >> $GITHUB_ENV
+          echo "HEARTH_DIR=$HOME/projects/home-automation/crates/hearth-api" >> $GITHUB_ENV
+          echo "HEARTH_LOOM_DIR=$HOME/projects/hearth-loom/main" >> $GITHUB_ENV
+      - uses: actions/checkout@v6
+        with:
+          clean: false
+
+      - name: Verify consumer directories exist
+        run: |
+          set -euo pipefail
+          for d in "$DEER_FLOW_DIR" "$HEARTH_DIR" "$HEARTH_LOOM_DIR"; do
+            if [ ! -d "$d" ]; then
+              echo "WARN: consumer dir not found: $d (skipping)" >&2
+            else
+              echo "OK: $d"
+            fi
+          done
+
+      - name: Scan subscribed channels (4 consumers)
+        run: |
+          set -euo pipefail
+          args=()
+          [ -d "$DEER_FLOW_DIR" ]   && args+=("deer-flow=$DEER_FLOW_DIR")
+          [ -d "$HEARTH_DIR" ]      && args+=("hearth=$HEARTH_DIR")
+          [ -d "$HEARTH_LOOM_DIR" ] && args+=("hearth-loom=$HEARTH_LOOM_DIR")
+          if [ ${#args[@]} -eq 0 ]; then
+            echo "No consumer trees available — emitting empty result."
+            echo "[]" > scan_subscribed_channels.json
+          else
+            python3 tools/scan_subscribed_channels.py "${args[@]}" \
+              > scan_subscribed_channels.json
+          fi
+          echo "--- subscribe scan (first 40 lines) ---"
+          head -40 scan_subscribed_channels.json
+
+      - name: Scan emitted channels (for the emitted universe)
+        run: |
+          set -euo pipefail
+          args=()
+          [ -d "$DEER_FLOW_DIR" ]   && args+=("deer-flow=$DEER_FLOW_DIR")
+          [ -d "$HEARTH_LOOM_DIR" ] && args+=("hearth-loom=$HEARTH_LOOM_DIR")
+          if [ ${#args[@]} -eq 0 ]; then
+            echo "[]" > scan_emitted_channels.json
+          else
+            python3 tools/scan_emitted_channels.py "${args[@]}" \
+              > scan_emitted_channels.json
+          fi
+
+      - name: Check subscription coverage (report-only on rollout)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python3 tools/check_subscription_coverage.py \
+            --input scan_subscribed_channels.json \
+            --emitted scan_emitted_channels.json \
+            --schemas schemas \
+            --allowlist tools/subscription_coverage_allowlist.txt \
+            --baseline tools/subscription_drift_baseline.txt \
+            --report-only \
+            | tee subscription-coverage-report.txt
+
+      - name: Upload scan artefact
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: subscription-coverage-report
+          path: |
+            scan_subscribed_channels.json
+            scan_emitted_channels.json
+            subscription-coverage-report.txt
+          if-no-files-found: warn
+          retention-days: 3

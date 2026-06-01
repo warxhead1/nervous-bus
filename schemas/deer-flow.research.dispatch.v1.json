@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.research.dispatch.v1.json",
+  "title": "deer-flow.research.dispatch v1",
+  "description": "Published by home-automation (or any project) to request a deer-flow research cycle. Consumed by deer-flow's ResearchDispatchConsumer which runs meta_probe and emits deer-flow.research.cycle.completed.v1.",
+  "type": "object",
+  "required": ["research_id", "question"],
+  "properties": {
+    "research_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Caller-assigned correlation ID. Echoed in the completed event so the caller can match results."
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Natural-language research question passed verbatim to meta_probe."
+    },
+    "question_class": {
+      "type": "string",
+      "enum": ["forensic", "design", "audit", "strategic", "general", "debug", "creative"],
+      "default": "forensic",
+      "description": "meta_probe question class — tunes critic weighting and auditor expectations."
+    },
+    "project_source": {
+      "type": "string",
+      "default": "unknown",
+      "description": "Identifier of the publishing project (e.g. 'home-automation'). Used for KB write path and telemetry."
+    },
+    "budget_usd": {
+      "type": "number",
+      "minimum": 0,
+      "default": 0.05,
+      "description": "Model cost budget for the cycle in USD."
+    },
+    "timeout_s": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 180,
+      "description": "Maximum wall-clock seconds to wait for cycle completion before emitting a timeout error."
+    },
+    "callback_channel": {
+      "type": ["string", "null"],
+      "description": "Optional extra nervous-bus channel to echo the completed event to, in addition to deer-flow.research.cycle.completed.v1."
+    }
+  },
+  "additionalProperties": false
+}

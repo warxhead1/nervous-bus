@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.integration.error.v1.json",
+  "title": "hearth.integration.error v1",
+  "description": "Emitted by hearth-nbus when an external integration (MQTT, Zigbee2MQTT, LG WebOS, etc.) returns an error. Consumers use this to update health dashboards and trigger alerting.",
+  "type": "object",
+  "required": ["integration", "reason", "recoverable"],
+  "properties": {
+    "integration": {
+      "type": "string",
+      "description": "Name of the integration that produced the error (e.g. 'mqtt', 'zigbee2mqtt', 'lg_webos')."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Human-readable error description from the integration layer."
+    },
+    "recoverable": {
+      "type": "boolean",
+      "description": "True if the integration is expected to recover on its own (e.g. transient network blip); false if manual intervention is needed."
+    }
+  }
+}

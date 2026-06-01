@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.forge.session.hypothesis_revised.v1.json",
+  "title": "deer-flow.forge.session.hypothesis_revised v1",
+  "description": "A Forge session's hypothesis was revised — the trial card was regenerated. Producer: backend/packages/harness/deerflow/bus.py::emit_forge_session_hypothesis_revised. Subject is session_id. hypothesis_text truncated to 500 chars; expected_metric_delta truncated to 200.",
+  "type": "object",
+  "required": ["session_id", "hypothesis_text", "expected_metric_delta", "bead_id", "trial_card_mode"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "stable session UUID (matches CloudEvents subject)"
+    },
+    "hypothesis_text": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "the revised hypothesis text (truncated by producer)"
+    },
+    "expected_metric_delta": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "what the patron expects to observe if the hypothesis holds — typically a shell-runnable check"
+    },
+    "bead_id": {
+      "type": "string",
+      "description": "beads id this session was opened for"
+    },
+    "trial_card_mode": {
+      "type": "string",
+      "description": "rendering mode for the regenerated trial card"
+    }
+  }
+}

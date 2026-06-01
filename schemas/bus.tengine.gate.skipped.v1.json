@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.gate.skipped.v1.json",
+  "title": "bus.tengine.gate.skipped v1",
+  "description": "When: An agent closes a bead without executing all six gates (e.g. tests, lint, build). Source: /tengine. Emitted as a compliance violation to alert operators that a bead may have been prematurely closed without meeting quality criteria.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.tengine.gate.skipped.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["v", "source", "host", "bead_id", "gate_number", "gate_name", "agent_name"],
+      "properties": {
+        "v": {"type": "integer", "description": "Payload schema version, always 1."},
+        "source": {"type": "string", "description": "Emitting subsystem identifier, always 'tengine'."},
+        "host": {"type": "string", "description": "Hostname of the machine that generated this event."},
+        "bead_id": {"type": "string", "description": "Bead identifier that was closed without completing all gates."},
+        "gate_number": {"type": "integer", "description": "Numeric identifier of the gate that was skipped (1-6)."},
+        "gate_name": {"type": "string", "description": "Human-readable name of the gate that was skipped, e.g. 'tests', 'lint', 'build'."},
+        "agent_name": {"type": "string", "description": "Name of the agent that closed the bead without passing all gates."}
+      }
+    }
+  }
+}

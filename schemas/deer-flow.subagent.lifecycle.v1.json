@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.subagent.lifecycle.v1.json",
+  "title": "deer-flow.subagent.lifecycle v1",
+  "description": "SubagentExecutor state machine transitions. Distinct from deer-flow.agent.thread.v1, which tracks top-level agent threads (Claude/Codex/etc); this channel tracks LangGraph SubagentExecutor children. PENDING state is intentionally not emitted (too transient). Source: /deer-flow/subagents.",
+  "type": "object",
+  "required": ["parent_thread_id", "subagent_id", "event"],
+  "properties": {
+    "parent_thread_id": {
+      "type": "string",
+      "description": "thread_id of the agent that dispatched this subagent (correlates to deer-flow.agent.thread.v1)"
+    },
+    "subagent_id": {
+      "type": "string",
+      "description": "Unique identifier for this subagent invocation; stable across the running → terminal transition"
+    },
+    "subagent_type": {
+      "type": ["string", "null"],
+      "description": "Subagent class/category if available"
+    },
+    "event": {
+      "type": "string",
+      "enum": ["running", "completed", "failed", "timed_out"],
+      "description": "State transition"
+    },
+    "duration_ms": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Wall-clock duration for terminal events (completed/failed/timed_out); null on running"
+    },
+    "error": {
+      "type": ["string", "null"],
+      "description": "Error message for failed events (truncated 500 chars); null otherwise"
+    }
+  }
+}

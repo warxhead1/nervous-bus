@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.bead.updated.v1.json",
+  "title": "bus.bead.updated v1",
+  "description": "DEPRECATED (2026-05-16, nervous-bus-immg): aspirational schema not emitted by any active producer. Metadata-change observability is provided by bd hooks directly into deer-flow; the canonical bead lifecycle bus stream is bus.bead.lifecycle.v1. Original description retained below for archival reference. — An existing bead's metadata changed — claim, status, priority, assignee, dependencies. Published by the nbd wrapper on `nbd update`. NOT fired for plain description-text edits; those are intentionally below the noise floor for this channel. The freeform `change` field is the legacy single-string descriptor the wrapper has always emitted; consumers should prefer the structured `previous_*` / `new_*` fields when present and fall back to parsing `change` otherwise.",
+  "deprecated": true,
+  "type": "object",
+  "required": ["bead_id", "project", "change"],
+  "properties": {
+    "bead_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Cross-project bead id (e.g. tengine-9k2x, loom-78wk, nervous-bus-58m)"
+    },
+    "project": {
+      "type": "string",
+      "description": "Which project's .beads/ this bead lives in (e.g. nervous-bus, hearth-loom, tengine, deer-flow). Permissive to allow new projects without a schema bump."
+    },
+    "change": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "Short change descriptor. Wrapper conventions: 'claimed' for --claim, 'status:<value>' for --status=<value>, 'updated' for any other --<flag>. Consumers SHOULD prefer the structured fields below when set."
+    },
+    "previous_status": {
+      "type": ["string", "null"],
+      "description": "Status before the change (open|in_progress|blocked|closed). Null when the change is not a status transition."
+    },
+    "new_status": {
+      "type": ["string", "null"],
+      "description": "Status after the change. Null when not a status transition."
+    },
+    "previous_assignee": {
+      "type": ["string", "null"],
+      "description": "Assignee before the change. Null when not an assignment/claim event."
+    },
+    "new_assignee": {
+      "type": ["string", "null"],
+      "description": "Assignee after the change. For --claim events, this is the caller."
+    },
+    "previous_priority": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "maximum": 4,
+      "description": "Priority before the change. Null when not a priority change."
+    },
+    "new_priority": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "maximum": 4,
+      "description": "Priority after the change. Null when not a priority change."
+    },
+    "changed_by": {
+      "type": "string",
+      "description": "Who made the change: 'human:<name>' or 'agent:<system>:<worker>'. Matches the filer convention in bus.bead.created."
+    },
+    "saga_id": {
+      "type": "string",
+      "description": "Multi-bead plan correlation root (from bus.saga). Present when the update is part of a coordinated plan."
+    }
+  }
+}

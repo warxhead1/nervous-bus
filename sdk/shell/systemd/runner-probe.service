@@ -1,0 +1,10 @@
+[Unit]
+Description=runner-probe — poll GitHub self-hosted runner status and emit loom.runner events
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/eric/projects/nervous-bus/sdk/shell/runner-probe
+Environment="GITHUB_TOKEN=%u"
+Environment="REDIS_URL=redis://localhost:6379"

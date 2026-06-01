@@ -1,0 +1,28 @@
+# subscription_coverage_allowlist.txt
+#
+# Channels listed here are EXEMPT from all subscription-drift classes
+# (no-schema BLOCK, dead-handler WARN, orphan WARN). Use this ONLY for scanner
+# false positives — string compares / literals that look like channels but are
+# not nervous-bus channels at all.
+#
+# Format: one channel per line; `#` starts a comment; blank lines ignored.
+# (Same loader/format as schema_coverage_allowlist.txt.)
+#
+# Genuine missing-schema / dead-handler drift goes in
+# subscription_drift_baseline.txt instead (BLOCK->WARN, stays visible and
+# ratchetable), NOT here. Real contract gaps go nowhere — they BLOCK.
+#
+# Regenerated 2026-05-29 from the post-nested-worktree-fix live run.
+
+# ─── Scanner false positives (NOT real nervous-bus channels) ─────────────────
+# Reverse-DNS app identifier from a Rust `==` string compare in hearth.
+com.disney.disneyplus
+# Single-word internal markers caught by broad hearth `==` / `starts_with`.
+ai_fallback
+jarvis
+reflex
+processor
+tengine-
+# Broad test-only glob / a function-path literal inside deer-flow test files.
+test
+deerflow.bus.emit_agent_message_event

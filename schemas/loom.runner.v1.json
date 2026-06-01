@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/loom.runner.v1.json",
+  "title": "loom.runner v1",
+  "description": "GitHub self-hosted runner liveness events. Emitted by runner-probe on state transitions (online→offline, offline→online, idle→busy). Diff-only emission: only fires when runner status actually changes, keeping the channel quiet in steady state.",
+  "type": "object",
+  "required": ["runner_name", "repo", "status", "event"],
+  "properties": {
+    "runner_name": {
+      "type": "string",
+      "description": "GitHub Actions runner name as registered in the repo settings"
+    },
+    "repo": {
+      "type": "string",
+      "description": "Full repo slug (owner/name) this runner belongs to"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["online", "offline", "busy", "idle"],
+      "description": "Current runner status from GitHub Actions API"
+    },
+    "event": {
+      "type": "string",
+      "enum": ["online", "offline", "busy", "idle"],
+      "description": "State transition that triggered this event"
+    },
+    "labels": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "GitHub runner labels (e.g. self-hosted, Linux, X64)"
+    },
+    "last_seen": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC — when runner was last seen in the expected state"
+    },
+    "os": {
+      "type": "string",
+      "description": "Runner OS (e.g. linux, macos, windows)"
+    },
+    "architecture": {
+      "type": "string",
+      "description": "Runner architecture (e.g. x64, arm64)"
+    }
+  }
+}

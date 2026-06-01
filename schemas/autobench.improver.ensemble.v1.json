@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.improver.ensemble.v1.json",
+  "title": "autobench.improver.ensemble v1",
+  "description": "Per-iteration record of a multi-improver ensemble step (nervous-bus-9xd, wire-pop Phase 6). When the active improver is 'minimax_ensemble', SelfImprovingHarness fans out N anonymous improver calls per iteration and aggregates their proposed deltas — either by majority vote on field changes (Strategy A) or by running each delta forward and keeping the best-by-score arm (Strategy B). This event captures the N per-instance delta summaries plus the aggregator's vote outcome so the operator can see dissent and best-arm selection in real time. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.improver.ensemble.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "iteration",
+        "strategy",
+        "n_instances",
+        "instances",
+        "vote_outcome"
+      ],
+      "properties": {
+        "session_id": {"type": "string"},
+        "iteration": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Iteration number of the RSI loop in which the ensemble fan-out occurred."
+        },
+        "strategy": {
+          "type": "string",
+          "enum": ["vote", "parallel"],
+          "description": "Aggregation strategy used. 'vote' = majority vote on field deltas (cheap, default). 'parallel' = run each delta forward, keep best-by-score arm."
+        },
+        "n_instances": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of improver instances fanned out this iteration. Typically 3."
+        },
+        "instances": {
+          "type": "array",
+          "description": "Per-instance delta summary, one entry per improver call. Index matches fan-out order.",
+          "items": {
+            "type": "object",
+            "required": ["instance_idx", "delta_summary"],
+            "properties": {
+              "instance_idx": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Zero-based index of this improver instance in the fan-out."
+              },
+              "delta_summary": {
+                "type": "object",
+                "description": "Compact ImprovementDelta fingerprint for this instance — enough to see what was proposed without dumping the full prompt/response. Free-form to tolerate schema drift on ImprovementDelta.",
+                "additionalProperties": true
+              },
+              "score": {
+                "type": ["number", "null"],
+                "description": "Strategy 'parallel' only: the aggregate_score this arm produced on its forward eval. Null in strategy 'vote'."
+              },
+              "selected": {
+                "type": "boolean",
+                "description": "True iff this instance's delta was kept by the aggregator (parallel best-arm) OR its proposed values won every contested field vote."
+              }
+            }
+          }
+        },
+        "vote_outcome": {
+          "type": "object",
+          "description": "Aggregator's per-field decision. For 'vote': maps each ImprovementDelta field to the winning value summary + tie info. For 'parallel': records the selected instance_idx and the arm scores.",
+          "additionalProperties": true,
+          "properties": {
+            "selected_instance_idx": {
+              "type": ["integer", "null"],
+              "description": "Strategy 'parallel' only: index of the winning arm. Null in strategy 'vote'."
+            },
+            "selected_score": {
+              "type": ["number", "null"],
+              "description": "Strategy 'parallel' only: score of the winning arm."
+            },
+            "field_votes": {
+              "type": "object",
+              "description": "Strategy 'vote' only: per-field tally summary (which value won and by what margin). Free-form.",
+              "additionalProperties": true
+            },
+            "ties_broken": {
+              "type": "array",
+              "description": "List of field names where the vote was tied and the tie-break heuristic fired.",
+              "items": {"type": "string"}
+            }
+          }
+        }
+      }
+    }
+  }
+}

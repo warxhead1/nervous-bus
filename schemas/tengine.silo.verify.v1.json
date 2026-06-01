@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.silo.verify.v1.json",
+  "title": "tengine.silo.verify v1",
+  "description": "Fires when verification_report.json appears in a silo session dir — the run completed cleanly. Subset of the full report (which can be 100KB+); session_dir holds the full artifact set for deep-dives.",
+  "type": "object",
+  "required": ["silo", "session_id", "success", "message"],
+  "properties": {
+    "silo": { "type": "string" },
+    "session_id": { "type": "string" },
+    "session_dir": { "type": "string" },
+    "success": {
+      "type": "boolean",
+      "description": "verification.success from the report — overall pass/fail."
+    },
+    "message": {
+      "type": "string",
+      "description": "verification.message — one-line human summary (e.g. '6 PASS, 3 FAIL, 1 WARN (Avg: 12.0 FPS)')."
+    },
+    "frames_rendered": { "type": "integer", "minimum": 0 },
+    "frames_requested": { "type": "integer", "minimum": 0 },
+    "avg_fps": { "type": "number" },
+    "instant_fps": { "type": "number" },
+    "min_fps": { "type": "number" },
+    "max_fps": { "type": "number" },
+    "anomaly_count": { "type": "integer", "minimum": 0 },
+    "top_anomaly_codes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 5,
+      "description": "First N anomaly codes from analysis.anomalies (truncated; full list in session_dir)."
+    },
+    "analysis_status": { "type": "string" },
+    "fps_critical": { "type": "boolean" },
+    "fps_warning": { "type": "boolean" }
+  }
+}

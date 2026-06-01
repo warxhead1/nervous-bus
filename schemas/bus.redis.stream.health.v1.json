@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.redis.stream.health.v1.json",
+  "title": "bus.redis.stream.health v1",
+  "description": "Periodic Redis Streams health metrics emitted by redis-mirror adapter (configurable interval, default 60s). Lets dashboards and alerting track stream size, trim pressure, and mirror throughput without polling Redis directly.",
+  "type": "object",
+  "required": ["mirrored_total", "dropped_total", "redis_errors", "interval_s"],
+  "properties": {
+    "mirrored_total":  { "type": "integer", "minimum": 0, "description": "Events successfully XADD'd to Redis since last restart" },
+    "dropped_total":   { "type": "integer", "minimum": 0, "description": "Events skipped (no matching channel prefix)" },
+    "redis_errors":    { "type": "integer", "minimum": 0, "description": "XADD failures (connection errors, WRONGTYPE, etc.)" },
+    "dead_lettered":   { "type": "integer", "minimum": 0, "description": "Events dead-lettered due to schema violations" },
+    "interval_s":      { "type": "number", "description": "Reporting interval in seconds" },
+    "streams": {
+      "type": "array",
+      "description": "Per-stream stats sampled at report time",
+      "items": {
+        "type": "object",
+        "required": ["stream", "length"],
+        "properties": {
+          "stream":      { "type": "string", "description": "Redis stream key (e.g. 'nbus:bus.notify.v1')" },
+          "length":      { "type": "integer", "minimum": 0, "description": "Current XLEN (entries in stream)" },
+          "trimmed":     { "type": "integer", "minimum": 0, "description": "Entries trimmed since last report" },
+          "oldest_ms":   { "type": "integer", "description": "Age of oldest entry in milliseconds" }
+        }
+      }
+    },
+    "universal_stream_length": { "type": "integer", "minimum": 0, "description": "XLEN of nbus:all fan-in stream" },
+    "offset_file":             { "type": "string", "description": "Path to the tail-offset persistence file" }
+  }
+}

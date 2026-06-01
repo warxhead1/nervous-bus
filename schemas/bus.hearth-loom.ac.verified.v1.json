@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth-loom.ac.verified.v1.json",
+  "title": "bus.hearth-loom.ac.verified v1",
+  "description": "One acceptance-criterion verification result from hearth-loom's exec runner. Emitted per AC index as each command exits. Source: /hearth-loom.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string", "const": "/hearth-loom"},
+    "type": {"type": "string", "const": "bus.hearth-loom.ac.verified.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["bead_id", "exec_id", "ac_index", "ac_text", "command", "exit_code", "duration_ms", "ts"],
+      "properties": {
+        "bead_id": {
+          "type": "string",
+          "description": "Bead identifier (e.g. nervous-bus-6kwv)"
+        },
+        "exec_id": {
+          "type": "string",
+          "description": "Execution identifier"
+        },
+        "ac_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based index of the acceptance criterion"
+        },
+        "ac_text": {
+          "type": "string",
+          "description": "The AC text being verified"
+        },
+        "command": {
+          "type": "string",
+          "description": "The shell command executed to verify this AC"
+        },
+        "exit_code": {
+          "type": "integer",
+          "description": "Shell exit code of the verification command"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Execution time in milliseconds"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC3339 UTC timestamp of verification"
+        },
+        "stdout": {
+          "type": "string",
+          "description": "Stdout captured from the verification command; present when available"
+        },
+        "working_dir": {
+          "type": "string",
+          "description": "Working directory the command ran in; present when available"
+        }
+      }
+    }
+  }
+}

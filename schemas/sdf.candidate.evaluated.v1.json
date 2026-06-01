@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/sdf.candidate.evaluated.v1.json",
+  "title": "sdf.candidate.evaluated v1",
+  "description": "Emitted for every SDF candidate that scores fitness > 0. Fitness is eikonal-penalised: (1/(1+MSE)) * exp(-0.5*mean_grad_err). Source: /autobench/sdf_kernel.",
+  "type": "object",
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/sdf_kernel"
+    },
+    "type": {
+      "type": "string",
+      "const": "sdf.candidate.evaluated.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "generation",
+        "candidate_id",
+        "island",
+        "fitness"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "candidate_id": {
+          "type": "string"
+        },
+        "island": {
+          "type": "integer"
+        },
+        "fitness": {
+          "type": "number",
+          "description": "Eikonal-penalised fitness (1/(1+MSE))*exp(-0.5*grad_err). 0=failure, 1.0=perfect."
+        },
+        "fitness_variance": {
+          "type": "number",
+          "description": "Variance across the N benchmark instances."
+        },
+        "worst_fitness": {
+          "type": "number",
+          "description": "Minimum fitness across instances (worst case instance)."
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "llm",
+            "baseline",
+            "mutated",
+            "migrated"
+          ]
+        },
+        "code_length": {
+          "type": "integer",
+          "description": "Character count of the evolved sdf() function."
+        },
+        "computation_time_ms": {
+          "type": "number"
+        },
+        "eikonal_score": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "exp(-0.5*mean_grad_err) \u2014 1.0 = perfect eikonal validity, approaches 0 as gradient deviates from 1."
+        },
+        "mean_grad_err": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Mean |\u2207sdf(p)| - 1| across sampled points. 0 = perfect eikonal field. Used to diagnose raymarcher usability."
+        },
+        "mean_mse": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Raw MSE before eikonal penalty, averaged across instances."
+        },
+        "topology_score": {
+          "type": ["number", "null"],
+          "description": "Gaussian topology membership score: calibrated oracle measuring SDF topological complexity."
+        },
+        "sign_change_density": {
+          "type": ["number", "null"],
+          "description": "Measured sign_change_density on 24^3 grid: fraction of adjacent voxel pairs with opposite SDF signs."
+        }
+      }
+    }
+  }
+}

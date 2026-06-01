@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.bead.filed.v1.json",
+  "title": "deer-flow.bead.filed v1",
+  "description": "Bead creation broadcast from the gateway beads router. Fires on the success exit of create_bead; failed creations do not emit. Distinct from deer-flow.bead.enrichment.complete.v1 (post-enrichment) and bus.bead.created.v1 (file-watcher-based) — this is the request-handler boundary signal. Source: /deer-flow/gateway.",
+  "type": "object",
+  "required": ["bead_id", "type", "priority"],
+  "properties": {
+    "thread_id": {
+      "type": ["string", "null"],
+      "description": "thread_id of the source agent that filed the bead; null when filed by a human via API"
+    },
+    "bead_id": {
+      "type": "string",
+      "description": "Cross-project bead id (e.g. deer-flow-9k2x, nervous-bus-5o8)"
+    },
+    "target_repo": {
+      "type": ["string", "null"],
+      "description": "Repo the bead is filed against; null for same-repo as deer-flow"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["task", "bug", "feature", "epic"],
+      "description": "Bead type"
+    },
+    "priority": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4,
+      "description": "P0 (critical) through P4 (backlog)"
+    },
+    "title": {
+      "type": ["string", "null"],
+      "description": "Bead title (truncated 200 chars)"
+    },
+    "acceptance_summary": {
+      "type": ["string", "null"],
+      "description": "First 200 chars of acceptance criteria; full AC stays in bead DB"
+    }
+  }
+}

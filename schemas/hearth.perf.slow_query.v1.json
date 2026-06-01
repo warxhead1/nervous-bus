@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.perf.slow_query.v1.json",
+  "title": "hearth.perf.slow_query v1",
+  "description": "Emitted by hearth-api when a database query exceeds the slow-statement threshold (currently 1s). Produced from SQLx's log_slow_statements hook or from explicit instrumentation around expensive window-function queries. Used to surface DB hotspots to the Grafana sysmap dashboard without requiring log scraping.",
+  "type": "object",
+  "required": ["query_summary", "elapsed_ms", "endpoint", "ts"],
+  "additionalProperties": false,
+  "properties": {
+    "query_summary": {
+      "type": "string",
+      "description": "First 120 chars of the SQL statement or a human-readable label (e.g. 'get_recent_tech_news_balanced')."
+    },
+    "elapsed_ms": {
+      "type": "number",
+      "description": "Observed query execution time in milliseconds."
+    },
+    "endpoint": {
+      "type": "string",
+      "description": "HTTP method + path that triggered the query, e.g. 'GET /api/news/digest'. Empty string if triggered from a background task."
+    },
+    "rows_returned": {
+      "type": "integer",
+      "description": "Number of rows returned by the query. Helps distinguish slow-but-small from slow-and-large result sets."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the slow query completed."
+    },
+    "table": {
+      "type": "string",
+      "description": "Primary table name extracted from the query, if determinable. Optional."
+    }
+  }
+}

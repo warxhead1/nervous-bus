@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth.session.ended.v1.json",
+  "title": "bus.hearth.session.ended v1",
+  "description": "Emitted by hearth-api's session_events module when a previously tracked session disappears from the hearth-session cache (tmux pane gone). Only emitted for sessions that previously emitted a 'started' event — phantom sessions that came and went without a pane are silently dropped. Consumers use this to remove the session from the phone list.",
+  "type": "object",
+  "required": ["session_id", "ended_at", "exit_reason"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Unique session identifier."
+    },
+    "ended_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the session was detected as gone."
+    },
+    "exit_reason": {
+      "type": "string",
+      "description": "Why the session ended (e.g. 'pane_gone', 'timeout')."
+    }
+  }
+}

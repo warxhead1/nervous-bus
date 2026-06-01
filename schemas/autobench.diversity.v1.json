@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.diversity.v1.json",
+  "title": "autobench.diversity v1",
+  "description": "SACS diversity tracker snapshot per RSI iteration. Fingerprint is a 23-dim structural vector of the iteration's ImprovementDelta (which fields changed, in which direction). Penalty is the MAP term subtracted from adjusted_utility for convergence checks. Source: /autobench. See autobench/research/diversity_penalty_2026.md and autobench/diversity.py.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.diversity.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["session_id", "iteration", "fingerprint", "penalty", "diversity_score", "memory_size"],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the autobench run"
+        },
+        "iteration": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "RSI iteration number this snapshot belongs to"
+        },
+        "fingerprint": {
+          "type": "array",
+          "description": "23-dim structural fingerprint of the iteration's ImprovementDelta",
+          "minItems": 23,
+          "maxItems": 23,
+          "items": {"type": "number"}
+        },
+        "penalty": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "SACS MAP penalty applied to adjusted_utility for this iteration"
+        },
+        "diversity_score": {
+          "type": "number",
+          "description": "1.0 = fully diverse, 0.0 = fully redundant. Computed as 1 - mean pairwise SACS over the memory bank"
+        },
+        "memory_size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of deltas currently in the rolling memory bank"
+        }
+      }
+    }
+  }
+}

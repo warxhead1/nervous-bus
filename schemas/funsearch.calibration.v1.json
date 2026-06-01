@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/funsearch.calibration.v1.json",
+  "title": "funsearch.calibration v1",
+  "description": "Emitted by oracle_calibration.py after calibration completes for a domain. Source: /autobench/oracle_calibration.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string", "const": "/autobench/oracle_calibration"},
+    "type": {"type": "string", "const": "funsearch.calibration.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["domain", "measured_params", "calibration_path"],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "description": "The kernel domain being calibrated (e.g. 'noise', 'sdf', 'tsp')."
+        },
+        "measured_params": {
+          "type": "object",
+          "description": "Empirically measured parameters keyed by instance name or metric name.",
+          "additionalProperties": true
+        },
+        "within_between_ratios": {
+          "type": "object",
+          "description": "Discriminability ratios (within-class vs between-class variance) for each measured parameter.",
+          "additionalProperties": {"type": "number"}
+        },
+        "calibration_path": {
+          "type": "string",
+          "description": "Filesystem path where the calibration data was saved."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.session.client_connected.v1.json",
+  "title": "tengine.session.client_connected v1",
+  "description": "An IPC client connected to the silo socket. Producer: tengine silo_tester via the registry handle SESSION_CLIENT_CONNECTED in crates/tengine-dgc-hal/src/silo/shadergen_handlers/event_registry.rs. CloudEvents subject is 'session_{session_id}'. Emitted before the client identifies itself with an agent_id (see tengine.session.client_identified).",
+  "type": "object",
+  "required": ["client_idx", "session_id", "connected_frame", "occupancy"],
+  "properties": {
+    "client_idx": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "slot index of this client in the silo's connection table"
+    },
+    "session_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "monotonic per-silo client session counter; mirrored in the CloudEvents subject as 'session_{n}'"
+    },
+    "connected_frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index when the connection was accepted"
+    },
+    "occupancy": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "number of clients currently connected to the silo socket after this connect"
+    }
+  }
+}

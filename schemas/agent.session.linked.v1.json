@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/agent.session.linked.v1.json",
+  "title": "agent.session.linked v1",
+  "description": "Declares a sibling/peer/subordinate/council relationship between two existing sessions. Emitted by a freshly-spawned session's SessionStart hook when AGENT_PARENT_SESSION_ID is set, OR by 'nervous session link' for manual post-hoc linking. Carries the human-initiated guarantee via 'spawned_by': the chain MUST terminate at null (a human invocation). Schema validates the shape; publisher-layer validation enforces the chain-terminates-at-null property by walking ancestors.",
+  "type": "object",
+  "required": ["main_session_id", "sibling_session_id", "role", "mode", "linked_at"],
+  "additionalProperties": false,
+  "properties": {
+    "pane_id_qualified": {
+      "type": "string",
+      "description": "Primary durable key for the sibling (newly-linked) session: 'zellij:<session_name>:<pane_id>' or 'tmux:<pane_id>'. Optional only because non-pane CLIs may lack it."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Secondary key for the sibling session. Alias of sibling_session_id, included for consistency with the other agent.session.* schemas."
+    },
+    "main_session_id": {
+      "type": "string",
+      "description": "session_id of the 'main' anchor session this link attaches to."
+    },
+    "sibling_session_id": {
+      "type": "string",
+      "description": "session_id of the newly-linked session (the one emitting this event)."
+    },
+    "role": {
+      "type": "string",
+      "enum": ["peer", "subordinate", "council_member"],
+      "description": "Relationship of sibling to main."
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["linked-peer", "linked-subordinate", "council-member"],
+      "description": "Collaboration mode. 1:1 mapping to role, kept as a separate field so consumers don't have to translate."
+    },
+    "linked_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp at which the link was established."
+    },
+    "spawned_by": {
+      "type": ["string", "null"],
+      "description": "Human-initiated guarantee: null indicates a human-invoked spawn (the chain terminator); a session_id indicates another session helped spawn this one. The full ancestor chain MUST terminate at null — publishers walk ancestors and reject loops or daemon-spawned chains. Schema permits both shapes; chain-termination is enforced at the publisher layer."
+    },
+    "epic_id": {
+      "type": "string",
+      "description": "Optional epic correlation id (see agent.epic.<id>.spec.v1). Set when this link is part of a multi-sibling epic."
+    },
+    "project_pair": {
+      "type": "string",
+      "description": "Optional cross-project hint, e.g. 'nervous-bus<->tengine'. Convention only; consumers MAY parse but SHOULD NOT rely on the format."
+    }
+  }
+}

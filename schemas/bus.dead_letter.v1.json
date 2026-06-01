@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.dead_letter.v1.json",
+  "title": "bus.dead_letter v1",
+  "description": "An event that could not be routed or parsed. Published to bus.dead_letter instead of being silently dropped. Enables visibility into LLM-generated payload drift and replay after correction.",
+  "type": "object",
+  "required": ["original_type", "failure_reason", "original_payload_excerpt"],
+  "properties": {
+    "original_type": {
+      "type": "string",
+      "description": "The type field from the failed event, or 'UNKNOWN' if unparseable"
+    },
+    "failure_reason": {
+      "type": "string",
+      "enum": ["malformed_json", "missing_required_field", "unknown_channel", "payload_too_large", "schema_violation", "delivery_failed"],
+      "description": "Why the event was dead-lettered"
+    },
+    "original_payload_excerpt": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "First 500 chars of the raw payload for debugging"
+    },
+    "schema_violation_detail": {
+      "type": "string",
+      "description": "Specific validation error message if failure_reason=schema_violation"
+    },
+    "original_source": { "type": "string" },
+    "retry_count": { "type": "integer", "minimum": 0, "default": 0 }
+  }
+}

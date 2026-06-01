@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.saga.v1.json",
+  "title": "bus.saga v1",
+  "description": "Correlation envelope for multi-bead plans (migrations, feature campaigns, etc). Attach saga_id to every child event so hearth-loom and deer-flow can track a coordinated campaign as a unit. The saga event itself fires at plan creation; child events carry saga_id in their data.",
+  "type": "object",
+  "required": ["saga_id", "title", "project", "bead_count", "created_by"],
+  "properties": {
+    "saga_id": {
+      "type": "string",
+      "description": "Stable ULID assigned at plan creation. All child beads and lifecycle events reference this."
+    },
+    "title": { "type": "string", "maxLength": 200 },
+    "project": { "type": "string", "description": "Primary project this saga targets" },
+    "bead_count": { "type": "integer", "minimum": 1, "description": "Total beads in the plan" },
+    "phase_count": { "type": "integer", "minimum": 1 },
+    "created_by": { "type": "string", "description": "human:<name> or agent:<system>" },
+    "status": {
+      "type": "string",
+      "enum": ["planned", "executing", "paused", "completed", "rolled_back"],
+      "default": "planned"
+    },
+    "description_excerpt": { "type": "string", "maxLength": 500 }
+  }
+}

@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.result.v1.json",
+  "title": "autobench.result v1",
+  "description": "Verdict-level signals from autobench evaluator. Emitted after each benchmark case execution. Source: /autobench/evaluator.",
+  "type": "object",
+  "required": ["id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "ULID — unique identifier for this event"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/evaluator",
+      "description": "Source URI — always /autobench/evaluator for this channel"
+    },
+    "type": {
+      "type": "string",
+      "const": "autobench.result.v1",
+      "description": "Event type — CloudEvents-lite type field"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json",
+      "description": "Content type of the data field"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the result was recorded"
+    },
+    "data": {
+      "type": "object",
+      "required": ["problem_id", "verdict", "p_score", "p_cost", "p_time", "harness_version", "benchmark_name", "iteration"],
+      "properties": {
+        "problem_id": {
+          "type": "string",
+          "description": "Unique identifier for the benchmark case (e.g., case id from BenchmarkCase)"
+        },
+        "verdict": {
+          "type": "string",
+          "enum": ["CE", "RE", "TLE", "MLE", "WA", "OK"],
+          "description": "Execution verdict: CE=Compilation Error, RE=Runtime Error, TLE=Time Limit Exceeded, MLE=Memory Limit Exceeded, WA=Wrong Answer, OK=Correct"
+        },
+        "p_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Normalized score [0.0, 1.0] — 1.0 means correct answer"
+        },
+        "p_cost": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Normalized cost [0.0, 1.0] — 1.0 means cheapest"
+        },
+        "p_time": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Normalized time [0.0, 1.0] — 1.0 means fastest within budget"
+        },
+        "harness_version": {
+          "type": "string",
+          "description": "Version identifier for the harness configuration used"
+        },
+        "benchmark_name": {
+          "type": "string",
+          "description": "Name of the benchmark suite this case belongs to"
+        },
+        "iteration": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "RSI iteration number if running self-improvement loop, else 0"
+        },
+        "latency_ms": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Wall-clock latency in milliseconds for this case"
+        },
+        "tokens_used": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of tokens consumed during generation"
+        },
+        "cost_dollars": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Actual cost in dollars for this case"
+        },
+        "error": {
+          "type": "string",
+          "description": "Error message or traceback if verdict is CE, RE, or WA"
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Arbitrary extra data from the harness result"
+        }
+      }
+    }
+  }
+}

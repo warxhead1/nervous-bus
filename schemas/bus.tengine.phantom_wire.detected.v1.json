@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.phantom_wire.detected.v1.json",
+  "title": "bus.tengine.phantom_wire.detected v1",
+  "description": "When: The tengine-reflect detect.sh script finds a function with a docstring claiming to be called by a consumer, but grep cannot find any actual call site. Source: /tengine. Indicates a stale or invented API contract that should be cleaned up.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.tengine.phantom_wire.detected.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["v", "source", "host", "file", "line", "docstring", "claimed_consumer", "grep_evidence"],
+      "properties": {
+        "v": {"type": "integer", "description": "Payload schema version, always 1."},
+        "source": {"type": "string", "description": "Emitting subsystem identifier, always 'tengine'."},
+        "host": {"type": "string", "description": "Hostname of the machine that generated this event."},
+        "file": {"type": "string", "description": "Absolute path to the source file containing the phantom wire function."},
+        "line": {"type": "integer", "description": "Line number in the file where the docstring claiming the consumer relationship appears."},
+        "docstring": {"type": "string", "description": "The docstring content that makes the claim about being called by a specific consumer."},
+        "claimed_consumer": {"type": "string", "description": "The consumer name that the docstring claims calls this function; the consumer that cannot be verified by grep."},
+        "grep_evidence": {"type": "string", "description": "The grep command and its output used to try to find a real call site; empty if grep found nothing."}
+      }
+    }
+  }
+}

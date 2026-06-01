@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.worker.v1.json",
+  "title": "autobench.worker v1",
+  "description": "Worker-agent call event — emitted once per benchmark case when MiniMaxWorker (or any compatible worker) generates code from a prompt. Closes the no-op generate_fn gap so downstream consumers can attribute token cost and latency to the code-generation step (distinct from autobench.improver.v1, which scopes the harness-mutation step). Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.worker.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "case_id",
+        "model",
+        "prompt_tokens",
+        "completion_tokens",
+        "cost_usd",
+        "latency_ms",
+        "code_preview"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID identifying the autobench run"
+        },
+        "case_id": {
+          "type": "string",
+          "description": "Benchmark case identifier (may be empty for ad-hoc calls)"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model that produced the code (e.g. MiniMax-M2.7, or a 'primary+fallback (both failed)' string)"
+        },
+        "prompt_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Prompt-token count from the successful HTTP response"
+        },
+        "completion_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Completion-token count from the successful HTTP response"
+        },
+        "cost_usd": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Estimated USD cost using MiniMax public pricing"
+        },
+        "latency_ms": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Wall-clock latency from generate() start to return"
+        },
+        "code_preview": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "First 512 characters of the extracted code (markdown fences already stripped)"
+        },
+        "error": {
+          "type": "string",
+          "description": "Set only when both primary and fallback model failed; describes the cause"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.bead.pr_opened.v1.json",
+  "title": "bus.bead.pr_opened v1",
+  "description": "DEPRECATED (2026-05-16, nervous-bus-immg): superseded by bus.bead.lifecycle.v1 with event_type='pr_opened'. Left in place for historical reference; no producer emits this channel.",
+  "deprecated": true,
+  "type": "object",
+  "required": ["bead_id", "project", "pr_url", "worker"],
+  "properties": {
+    "bead_id": { "type": "string" },
+    "project": { "type": "string" },
+    "pr_url": { "type": "string", "format": "uri" },
+    "pr_number": { "type": "integer" },
+    "branch": { "type": "string" },
+    "worker": {
+      "type": "string",
+      "description": "e.g. 'hearth-loom:worker-3', 'human:eric'"
+    },
+    "files_changed": {
+      "type": "integer",
+      "description": "Number of files in the PR diff"
+    },
+    "lines_added": { "type": "integer" },
+    "lines_removed": { "type": "integer" },
+    "ci_status": {
+      "type": "string",
+      "enum": ["pending", "running", "passed", "failed", "unknown"]
+    }
+  }
+}

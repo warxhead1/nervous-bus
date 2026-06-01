@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.worker.queue_pressure.v1.json",
+  "title": "autobench.worker.queue_pressure v1",
+  "description": "Rolling tokens/second rate signal for the MiniMax worker agent. Fires when the worker's recent throughput drops below half of its established baseline OR when the latest call's latency exceeds twice the mean of the rolling window. Helps an operator distinguish MiniMax queue pressure / cold-start cost from model-side reasoning length so a stalled benchmark can be diagnosed without crawling the worker.v1 stream by hand. Debounced to at most one event every 30 seconds. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.worker.queue_pressure.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "model",
+        "current_rate_tps",
+        "baseline_tps",
+        "deviation_factor",
+        "recent_timeouts_count",
+        "latest_latency_ms",
+        "window_size"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID identifying the autobench run"
+        },
+        "model": {
+          "type": "string",
+          "description": "Worker primary model (e.g. MiniMax-M2.7) — NOT the model that produced the latest call (which may have been a fallback)"
+        },
+        "current_rate_tps": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Tokens-per-second of the most recently completed call (completion_tokens / (latency_ms/1000))"
+        },
+        "baseline_tps": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Median tokens/sec of the first three successful calls in this session"
+        },
+        "deviation_factor": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "current_rate_tps / baseline_tps. Pressure is implicated when this is < 0.5"
+        },
+        "recent_timeouts_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of ReadTimeout / TransportError retries observed in the last 10 calls (across both primary and fallback attempts)"
+        },
+        "latest_latency_ms": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Wall-clock latency of the just-completed call that triggered the signal"
+        },
+        "window_size": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of (timestamp, tps) samples currently held in the rolling window"
+        }
+      }
+    }
+  }
+}

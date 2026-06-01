@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/agent.session.v1.json",
+  "title": "agent.session v1",
+  "description": "Coding agent session lifecycle. Published by the shadow-binary wrapper when any coding agent starts or stops in a pane. Enables the command-center live agent map and deer-flow cross-agent context routing.",
+  "type": "object",
+  "required": ["agent", "event", "project"],
+  "properties": {
+    "agent": {
+      "type": "string",
+      "enum": ["claude-code", "opencode", "codex", "gemini", "cursor", "unknown"]
+    },
+    "event": {
+      "type": "string",
+      "enum": ["started", "stopped", "ended", "model_changed", "context_loaded"]
+    },
+    "project": { "type": "string", "description": "basename of cwd" },
+    "model": { "type": "string", "description": "e.g. claude-sonnet-4-6, gpt-4o" },
+    "pane_id": { "type": "string", "description": "ZELLIJ_PANE_ID if in zellij" },
+    "session_id": { "type": "string", "description": "zellij session name if available" },
+    "saga_id": { "type": "string", "description": "if working a specific plan" },
+    "context_fingerprint": {
+      "type": "string",
+      "description": "SHA8 of CLAUDE.md + last 5 commit hashes — enables context continuity across agent switches"
+    }
+  }
+}

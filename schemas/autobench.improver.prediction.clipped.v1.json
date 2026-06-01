@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.improver.prediction.clipped.v1.json",
+  "title": "autobench.improver.prediction.clipped v1",
+  "description": "AHE prediction-feasibility clipping event. Emitted (nervous-bus-8d1d) when the improver proposed verdict-count deltas exceeding the headroom available in the next iteration's case budget — e.g. 'CE: -12' when only 4 CE cases existed. The harness clips each predicted delta to [-prior, num_cases - prior] before persisting via autobench.improver.prediction.v1; this event records the BEFORE state plus the per-verdict clip reasons so the calibration ledger can identify guaranteed-refute predictions. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.improver.prediction.clipped.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["session_id", "iteration", "clip_reasons", "original_verdict_changes", "clipped_verdict_changes"],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the autobench run"
+        },
+        "iteration": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "RSI iteration in which the prediction was emitted (about iteration+1)"
+        },
+        "clip_reasons": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "One human-readable string per delta that was clipped, e.g. 'CE: clipped -12 → -4 (prior=4, min headroom=-4)'"
+        },
+        "original_verdict_changes": {
+          "type": "object",
+          "description": "Verdict deltas as proposed by the improver (pre-clip)",
+          "additionalProperties": {"type": "integer"}
+        },
+        "clipped_verdict_changes": {
+          "type": "object",
+          "description": "Verdict deltas after feasibility clipping (what actually got persisted)",
+          "additionalProperties": {"type": "integer"}
+        },
+        "original_confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Improver's self-reported confidence on the pre-clip prediction"
+        }
+      }
+    }
+  }
+}

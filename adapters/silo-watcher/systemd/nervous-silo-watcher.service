@@ -1,0 +1,17 @@
+[Unit]
+Description=nervous-bus silo-watcher — fs-tail tengine session dirs, emit silo lifecycle to bus
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 %h/projects/nervous-bus/adapters/silo-watcher/watcher.py
+Restart=on-failure
+RestartSec=5
+Environment=NERVOUS_SOURCE=/silo-watcher
+# nervous publish writes to ~/.cache/nervous-bus/debug.jsonl; ensure it exists.
+# silo-watcher writes its own offset file under ~/.cache/nervous-bus/.
+ReadWritePaths=%h/.cache/nervous-bus
+
+[Install]
+WantedBy=default.target

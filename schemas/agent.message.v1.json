@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/agent.message.v1.json",
+  "title": "agent.message v1",
+  "description": "Agent-to-agent message routed through nervous-bus. Used by the /peer skill (Claude Code → Claude Code) AND by hearth-loom loomies for cross-container coordination. Receivers MAY publish agent.message.ack with the same id once the message is consumed.",
+  "type": "object",
+  "required": ["from", "to", "kind", "body"],
+  "properties": {
+    "from": {
+      "type": "object",
+      "required": ["agent", "session_id"],
+      "properties": {
+        "agent":         { "type": "string", "description": "claude-code | opencode | claude | loomie" },
+        "session_id":    { "type": "string" },
+        "project":       { "type": "string" },
+        "pane_id":       { "type": "string" }
+      }
+    },
+    "to": {
+      "type": "object",
+      "description": "Recipient address. Either session_id (1:1) or project (broadcast to any agent active in that project) or agent kind. At least one of session_id/project/agent must be set.",
+      "properties": {
+        "session_id":    { "type": "string" },
+        "project":       { "type": "string" },
+        "agent":         { "type": "string" }
+      }
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["text", "share_artifact", "request_help", "share_research", "ack", "broadcast"],
+      "description": "Discriminator for receiver-side handling. text=plain message; share_artifact=file/cycle/PR ref; request_help=open question with optional context; share_research=deer-flow cycle id + summary; ack=receipt confirmation"
+    },
+    "body": {
+      "type": "string",
+      "description": "Free-form text body. For non-text kinds, body is the human-readable summary (the structured payload goes in 'attachment')",
+      "maxLength": 8000
+    },
+    "attachment": {
+      "type": "object",
+      "description": "Optional structured payload — interpretation depends on kind",
+      "properties": {
+        "kind":          { "type": "string" },
+        "ref":           { "type": "string", "description": "URI/ID/path to the artifact (e.g. cycle_id, PR url, file path, bead_id)" },
+        "summary":       { "type": "string" },
+        "extra":         { "type": "object" }
+      }
+    },
+    "reply_to": {
+      "type": "string",
+      "description": "id of the agent.message this is replying to (threading)"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Optional TTL — receivers SHOULD ignore messages past this time"
+    }
+  }
+}

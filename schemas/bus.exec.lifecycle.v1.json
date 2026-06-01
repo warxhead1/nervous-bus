@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.exec.lifecycle.v1.json",
+  "title": "bus.exec.lifecycle v1",
+  "description": "Per-execution state transitions: queued -> container_init -> agent_active -> gates -> complete/failed. One event per phase change. Distinct from loom.lifecycle (bead-level) and bus.bead.lifecycle (bead status changes). Source: /hearth-loom.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string", "const": "/hearth-loom"},
+    "type": {"type": "string", "const": "bus.exec.lifecycle.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["exec_id", "bead_id", "new_phase", "ts"],
+      "properties": {
+        "exec_id": {
+          "type": "string",
+          "description": "Execution UUID"
+        },
+        "bead_id": {
+          "type": "string",
+          "description": "Bead identifier (e.g. deer-flow-56l)"
+        },
+        "new_phase": {
+          "type": "string",
+          "enum": ["queued", "container_init", "agent_active", "gates", "complete", "failed", "cancelled", "timeout"],
+          "description": "The phase entered by this transition"
+        },
+        "prev_phase": {
+          "type": ["string", "null"],
+          "enum": ["queued", "container_init", "agent_active", "gates", "complete", "failed", "cancelled", "timeout", null],
+          "description": "Previous phase; null on the first transition"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC3339 UTC timestamp of this transition"
+        }
+      }
+    }
+  }
+}

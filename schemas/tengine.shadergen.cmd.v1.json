@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.shadergen.cmd.v1.json",
+  "title": "tengine.shadergen.cmd v1",
+  "description": "Per-command outcome from the shadergen REPL. Producer: tengine silo_tester via the registry handle SHADERGEN_CMD in crates/tengine-dgc-hal/src/silo/shadergen_handlers/event_registry.rs. The producer suppresses the high-volume 'step', 'run', and 'read' commands so consumers see only state-affecting commands.",
+  "type": "object",
+  "required": ["cmd", "ok"],
+  "properties": {
+    "cmd": {
+      "type": "string",
+      "description": "shadergen command name as parsed by the REPL (e.g. 'race', 'load', 'screenshot')"
+    },
+    "ok": {
+      "type": "boolean",
+      "description": "true if the command completed without error; false otherwise"
+    }
+  }
+}

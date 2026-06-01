@@ -1,0 +1,20 @@
+[Unit]
+Description=nervous-bus pattern bundler — nbus:all + nbus:logs → nbus:bundles
+After=network-online.target redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/nervous-bus/adapters/pattern-bundler
+# Pyenv 3.11.13 used — system Python 3.14 lacks redis package. Keep in sync with .python-version.
+ExecStart=%h/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/pattern-bundler/bundler.py
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pattern-bundler
+TimeoutStopSec=10
+ReadWritePaths=%h/.cache/nervous-bus
+
+[Install]
+WantedBy=default.target

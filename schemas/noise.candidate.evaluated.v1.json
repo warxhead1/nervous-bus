@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/noise.candidate.evaluated.v1.json",
+  "title": "noise.candidate.evaluated v1",
+  "description": "Emitted for every noise candidate that scores fitness > 0. Fitness is SSIM against the target instance reference render. Source: /autobench/noise_kernel.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": { "type": "string", "const": "1.0" },
+    "id": { "type": "string" },
+    "source": { "type": "string", "const": "/autobench/noise_kernel" },
+    "type": { "type": "string", "const": "noise.candidate.evaluated.v1" },
+    "datacontenttype": { "type": "string", "const": "application/json" },
+    "time": { "type": "string", "format": "date-time" },
+    "data": {
+      "type": "object",
+      "required": ["run_id", "generation", "candidate_id", "island", "fitness"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "generation": { "type": "integer" },
+        "candidate_id": { "type": "string" },
+        "island": { "type": "integer" },
+        "fitness": { "type": "number", "description": "SSIM against target instance reference render. 0=failure, 1.0=pixel-perfect. Note: single-instance evaluation only; multi-instance SSIM has arithmetic ceiling at (1+sum_pairwise_ssim)/N." },
+        "fitness_variance": { "type": "number" },
+        "worst_fitness": { "type": "number" },
+        "source": { "type": "string", "enum": ["llm", "baseline", "mutated", "migrated"] },
+        "code_length": { "type": "integer", "description": "Character count of the evolved noise() function." },
+        "computation_time_ms": { "type": "number" },
+        "spectral_beta": {
+          "type": ["number", "null"],
+          "description": "RAPS power-law exponent beta estimated from the rendered image spectrum."
+        },
+        "harmonic_ratio": {
+          "type": ["number", "null"],
+          "description": "Ratio of harmonic-peak power to total power in the RAPS spectrum."
+        },
+        "raps_fitness": {
+          "type": ["number", "null"],
+          "description": "RAPS spectral oracle score: Gaussian membership in calibrated (beta, harmonic_ratio) class."
+        },
+        "ssim_fallback": {
+          "type": ["number", "null"],
+          "description": "SSIM score used as fallback if spectral oracle fails or is unavailable."
+        }
+      }
+    }
+  }
+}

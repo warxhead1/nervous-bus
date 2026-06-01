@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.shadergen.sync.v1.json",
+  "title": "tengine.shadergen.sync v1",
+  "description": "TSDL/constants hot-reload completed (Phase B/C live update). Producer: tengine silo_tester via the registry handle SHADERGEN_SYNC in crates/tengine-dgc-hal/src/silo/shadergen_handlers/event_registry.rs. CloudEvents subject is 'frame_{frame}'. Emitted after each hot-reload pass so subscribers can refresh cached state without polling.",
+  "type": "object",
+  "required": [
+    "frame",
+    "hot_reload_version",
+    "constants_version",
+    "constants_changed",
+    "new_wt_count",
+    "new_wt_ids",
+    "reload_status"
+  ],
+  "properties": {
+    "frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index when the reload completed"
+    },
+    "hot_reload_version": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "monotonic counter for TSDL hot-reload generations"
+    },
+    "constants_version": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "monotonic counter for constants-table generations"
+    },
+    "constants_changed": {
+      "type": "boolean",
+      "description": "true if the constants table changed in this reload pass"
+    },
+    "new_wt_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "number of new working-tape entries introduced by this reload"
+    },
+    "new_wt_ids": {
+      "type": "array",
+      "description": "ids of newly added working-tape entries; length equals new_wt_count",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "reload_status": {
+      "type": "string",
+      "description": "outcome of the reload pass (e.g. 'ok', 'partial', 'error:<reason>')"
+    }
+  }
+}

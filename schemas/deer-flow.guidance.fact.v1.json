@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.guidance.fact.v1.json",
+  "title": "deer-flow.guidance.fact v1",
+  "description": "A guidance fact produced by the deer-flow stack-tuner or council engine. Emitted whenever the system generates actionable guidance (a decision, risk alert, constraint, verification, or pattern note) so that downstream consumers (e.g. the evidence ledger, claim registry) can record it with full provenance. Source: /deer-flow.",
+  "type": "object",
+  "required": ["guidance_id", "category", "kind", "guidance", "evidence_excerpt", "confidence", "value_score"],
+  "properties": {
+    "guidance_id": {
+      "type": "string",
+      "description": "Stable identifier for this guidance fact — correlates with EDD claim registry entries"
+    },
+    "category": {
+      "type": "string",
+      "enum": ["DECISION", "RISK", "CONSTRAINT", "VERIFICATION", "PATTERN", "CONTEXT"],
+      "description": "Guidance category that determines which EDD claim this fact maps to (e.g. RISK→edd-claim-004)"
+    },
+    "kind": {
+      "type": "string",
+      "description": "Snake-case kind string identifying the specific guidance pattern (e.g. loop_force_stop, rate_limit_exceeded)"
+    },
+    "guidance": {
+      "type": "string",
+      "description": "Actionable guidance text — what the model should do differently or why a concern was flagged"
+    },
+    "evidence_excerpt": {
+      "type": "string",
+      "description": "Verbatim snippet from source (audit, thread, council deliberation) that motivated this guidance"
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["HIGH", "MEDIUM", "LOW"],
+      "description": "Guidance confidence level — used to weight EDD claim strength"
+    },
+    "value_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Computed quality score (0–1) — higher means the guidance is more grounded and actionable"
+    },
+    "tool_kind": {
+      "type": ["string", "null"],
+      "description": "Name of the tool or hook involved in the decision (e.g. council_dispatch, stack_tuner, loom_dispatch)"
+    },
+    "session_id": {
+      "type": ["string", "null"],
+      "description": "Optional thread/run correlation key — present when the guidance arose from a specific agent session"
+    },
+    "model": {
+      "type": ["string", "null"],
+      "description": "Model identifier active when this guidance was generated (e.g. MiniMax-M2.7)"
+    }
+  }
+}

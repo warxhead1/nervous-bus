@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/loom.lifecycle.retry.v1.json",
+  "title": "loom.lifecycle.retry v1",
+  "description": "hearth-loom retry-related signals — retry triggered, gate failed, acceptance criteria evidence passed/failed. Captures WHY a task is retrying or being evaluated for completion. Useful for: detecting flaky gates, identifying beads with unstable AC, measuring retry distribution per gate. Source: /hearth-loom/lifecycle.",
+  "type": "object",
+  "required": ["task_id", "execution_id", "project", "event"],
+  "properties": {
+    "task_id": {
+      "type": "string"
+    },
+    "execution_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "project": {
+      "type": "string"
+    },
+    "event": {
+      "type": "string",
+      "enum": ["retry_triggered", "gate_failed", "ac_evidence_passed", "ac_evidence_failed"],
+      "description": "Which retry-related signal fired"
+    },
+    "gate_name": {
+      "type": ["string", "null"],
+      "description": "Quality gate identifier for gate_failed events (e.g. 'tests', 'lint', 'build'); null for non-gate events"
+    },
+    "ac_criterion": {
+      "type": ["string", "null"],
+      "description": "Specific AC line being evaluated for ac_evidence_* events (truncated 200 chars); null otherwise"
+    },
+    "reason": {
+      "type": ["string", "null"],
+      "description": "Short failure or trigger reason (truncated 200 chars)"
+    },
+    "attempt": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "Attempt number for retry_triggered (1-indexed); null for non-retry events"
+    }
+  }
+}

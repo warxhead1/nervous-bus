@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth.approval.responded.v1.json",
+  "title": "bus.hearth.approval.responded v1",
+  "description": "Emitted by hearth-api's reactor route when the Android app fires the Approve/Reject button for a non-permission correlation_id (variant votes, wave gates, council picks, etc.). For permission correlation_ids the flow routes through permission_publisher which handles keystroke injection and emits the permission.responded event instead.",
+  "type": "object",
+  "required": ["correlation_id", "decision", "responded_at"],
+  "properties": {
+    "correlation_id": {
+      "type": "string",
+      "description": "Opaque correlation token that links this response to the original approval card on the phone."
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["approve", "reject"],
+      "description": "The user's choice."
+    },
+    "note": {
+      "type": "string",
+      "description": "Optional feedback text supplied when rejecting with a note."
+    },
+    "responded_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the reactor received the response."
+    }
+  }
+}

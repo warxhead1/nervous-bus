@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth.dispatch.requested.v1.json",
+  "title": "bus.hearth.dispatch.requested v1",
+  "description": "Emitted by hearth-api's reactor when the Android app triggers a dispatch preset from the curated buttons list. The preset describes a project, command, and args; the actual dispatch is performed by a listener on the originating host (hearth-loom or tengine).",
+  "type": "object",
+  "required": ["preset_id", "label", "project", "command", "args", "requested_at"],
+  "properties": {
+    "preset_id": {
+      "type": "string",
+      "description": "Unique identifier of the dispatch preset (e.g. 'tengine.racing.200frames')."
+    },
+    "label": {
+      "type": "string",
+      "description": "Human-readable label shown on the preset button (e.g. 'Run racing 200 frames')."
+    },
+    "project": {
+      "type": "string",
+      "description": "Project name the preset targets (e.g. 'tengine', 'hearth-loom', 'deer-flow')."
+    },
+    "command": {
+      "type": "string",
+      "description": "Executable to run (e.g. 'cargo', 'bd', 'hearth-loom', 'deer')."
+    },
+    "args": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Static argument list baked into the preset."
+    },
+    "user_args": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional per-invocation arguments supplied by the user at dispatch time."
+    },
+    "requested_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the dispatch was requested."
+    }
+  }
+}

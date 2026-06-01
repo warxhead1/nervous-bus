@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.metaprobe.cycle.v1.json",
+  "title": "deer-flow.metaprobe.cycle v1",
+  "description": "Compact rollup of a stack-tuner cycle for cross-cycle aggregation and trend analysis. Emitted alongside cycle.done; carries only the verdict-level signal (no per-stage detail) so dashboards can plot cycle outcomes cheaply. Two emitter sources: /deer-flow (minimal: cycle_id+verdict+score+cost) and /deer-flow/stack-tuner (adds question_class+lift+n_stages).",
+  "type": "object",
+  "required": ["cycle_id", "verdict"],
+  "properties": {
+    "cycle_id": { "type": "string" },
+    "verdict": {
+      "type": "string",
+      "description": "terminal verdict for the cycle (e.g. lift_observed, retry_bulk_recommended, bulk_failed)"
+    },
+    "n_stages": { "type": "integer", "minimum": 0, "description": "rich form only" },
+    "question_class": { "type": ["string", "null"] },
+    "score": { "type": ["number", "null"] },
+    "lift": { "type": ["number", "null"], "description": "delta over baseline" },
+    "cumulative_cost_usd": { "type": "number", "minimum": 0 }
+  }
+}

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nervous-bus-exporter"
+version = "0.1.0"
+description = "Prometheus exporter for nervous-bus debug.jsonl events (bead nervous-bus-qy8n)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "nervous-bus" }]
+dependencies = [
+    "prometheus_client>=0.17",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+nbus-exporter = "adapters.exporter.prometheus_exporter:main"
+
+[tool.setuptools]
+packages = []
+py-modules = []

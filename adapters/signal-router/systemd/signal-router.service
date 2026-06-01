@@ -1,0 +1,18 @@
+[Unit]
+Description=nervous-bus signal router — pattern signals → annotations/drafts/beads
+After=network-online.target redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/nervous-bus/adapters/signal-router
+ExecStart=/home/eric/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/signal-router/router.py
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=signal-router
+ReadWritePaths=%h/.cache/nervous-bus
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.sandbox.result.v1.json",
+  "title": "deer-flow.sandbox.result v1",
+  "description": "Verdict-level signals from deer-flow sandbox execution. Emitted after each sandbox case execution with the result verdict, latency, and output. Source: /deer-flow/sandbox.",
+  "type": "object",
+  "required": ["id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "ULID — unique identifier for this event"
+    },
+    "source": {
+      "type": "string",
+      "const": "/deer-flow/sandbox",
+      "description": "Source URI — always /deer-flow/sandbox for this channel"
+    },
+    "type": {
+      "type": "string",
+      "const": "deer-flow.sandbox.result.v1",
+      "description": "Event type — CloudEvents-lite type field"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json",
+      "description": "Content type of the data field"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the result was recorded"
+    },
+    "data": {
+      "type": "object",
+      "required": ["thread_id", "case_id", "verdict", "latency_ms", "exit_code"],
+      "properties": {
+        "thread_id": {
+          "type": "string",
+          "description": "Correlates to deer-flow.agent.thread.v1 event"
+        },
+        "case_id": {
+          "type": "string",
+          "description": "Unique identifier for the sandbox case. Use 'bash' for direct bash executions, or extract from tool context"
+        },
+        "verdict": {
+          "type": "string",
+          "enum": ["CE", "RE", "TLE", "MLE", "WA", "OK"],
+          "description": "Execution verdict: CE=Compilation Error, RE=Runtime Error, TLE=Time Limit Exceeded, MLE=Memory Limit Exceeded, WA=Wrong Answer, OK=Correct"
+        },
+        "latency_ms": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Wall-clock latency in milliseconds for this case"
+        },
+        "exit_code": {
+          "type": "integer",
+          "description": "Process exit code returned by the sandbox execution"
+        },
+        "stderr": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Standard error output from the execution (truncated to 500 chars)"
+        },
+        "stdout": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Standard output from the execution (truncated to 1000 chars)"
+        }
+      }
+    }
+  }
+}

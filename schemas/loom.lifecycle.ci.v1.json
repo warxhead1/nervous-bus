@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/loom.lifecycle.ci.v1.json",
+  "title": "loom.lifecycle.ci v1",
+  "description": "hearth-loom CI run outcome — EventCIPassed / EventCIFailed from the internal LifecycleEvent bus. Fires per CI run (typically post-push, pre-merge). Distinct from loom.lifecycle.pr.v1's ci_failed event, which fires only at PR-level transitions; this channel captures every CI run including non-PR ones (push-on-branch, retries). Source: /hearth-loom/prwatch.",
+  "type": "object",
+  "required": ["task_id", "execution_id", "project", "status"],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "Bead id this task is executing (e.g. nervous-bus-5o8)"
+    },
+    "execution_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "UUID v4 — correlates to loom.lifecycle.v1 execution"
+    },
+    "project": {
+      "type": "string",
+      "description": "Short repo name (e.g. nervous-bus, deer-flow)"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["passed", "failed"],
+      "description": "CI run terminal status"
+    },
+    "duration_seconds": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "description": "Wall-clock seconds for the CI run; null if unknown at emit time"
+    },
+    "run_url": {
+      "type": ["string", "null"],
+      "description": "Link to the CI run (e.g. GitHub Actions workflow run URL)"
+    },
+    "commit_sha": {
+      "type": ["string", "null"],
+      "description": "Commit SHA the CI ran against"
+    },
+    "pr_number": {
+      "type": ["integer", "null"],
+      "description": "PR number if the CI run is associated with a PR; null for branch/push runs"
+    },
+    "failure_summary": {
+      "type": ["string", "null"],
+      "description": "Short failure description for status=failed (truncated to 200 chars); null on pass"
+    }
+  }
+}

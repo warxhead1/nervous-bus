@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.session.fps_drop.v1.json",
+  "title": "tengine.session.fps_drop v1",
+  "description": "Threshold-crossing event from tengine silo_tester: current FPS is materially below the silo's baseline. Distinct from the continuous tengine.session.frame stream — fired only when a regression is detected, so consumers can alert without subscribing to the full frame stream.",
+  "type": "object",
+  "required": ["silo", "fps", "baseline"],
+  "properties": {
+    "silo": { "type": "string", "description": "tengine silo identifier (e.g. racing, fluid)" },
+    "fps": { "type": "number", "minimum": 0, "description": "currently observed FPS" },
+    "baseline": { "type": "number", "minimum": 0, "description": "expected FPS for this silo" }
+  }
+}

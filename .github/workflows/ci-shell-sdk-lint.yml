@@ -1,0 +1,55 @@
+name: Shell SDK Lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sdk/shell/**'
+      - 'adapters/**'
+      - '.github/workflows/ci-shell-sdk-lint.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'sdk/shell/**'
+      - 'adapters/**'
+      - '.github/workflows/ci-shell-sdk-lint.yml'
+
+jobs:
+  shell-sdk-lint:
+    name: shell-sdk-lint
+    runs-on: [self-hosted, linux, nervous-bus]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          clean: false
+
+      - name: Ensure shellcheck is available
+        run: |
+          # The runner's job PATH is leaner than the user's interactive shell,
+          # so use python3 -m pip and resolve shellcheck via full path.
+          if [ ! -x "$HOME/.local/bin/shellcheck" ]; then
+            python3 -m pip install --user --quiet shellcheck-py
+          fi
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/shellcheck" --version
+
+      - name: Lint all shell scripts under sdk/ and adapters/
+        run: |
+          set -euo pipefail
+          # Glob-walk so new scripts are picked up automatically.
+          # Uses heuristic: any file under sdk/shell/ or adapters/ that has a
+          # shebang naming bash/sh, OR has a .sh extension.
+          mapfile -t files < <(
+            find sdk/shell adapters -type f \( -name "*.sh" -o ! -name "*.*" \) 2>/dev/null \
+              | while read -r f; do
+                  if [[ "$f" == *.sh ]] || head -1 "$f" 2>/dev/null | grep -qE '^#!/.*(bash|sh)\b'; then
+                    echo "$f"
+                  fi
+                done
+          )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No shell scripts found"; exit 0
+          fi
+          printf "Linting %d files:\n" "${#files[@]}"
+          printf "  %s\n" "${files[@]}"
+          "$HOME/.local/bin/shellcheck" -S warning "${files[@]}"

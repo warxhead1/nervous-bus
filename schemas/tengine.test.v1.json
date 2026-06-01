@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.test.v1.json",
+  "type": "object",
+  "title": "tengine.test.v1",
+  "description": "Smoke-test event used during nervous-bus integration testing. Not a production channel.",
+  "properties": {
+    "test": {
+      "type": "boolean",
+      "description": "Presence indicates a test payload"
+    }
+  },
+  "additionalProperties": true
+}

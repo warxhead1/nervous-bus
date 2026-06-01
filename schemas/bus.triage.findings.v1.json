@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.triage.findings.v1.json",
+  "title": "bus.triage.findings v1",
+  "description": "Triage engine signal emitted when a failure pattern or anomaly is detected. Carries diagnosis, recommended action, and evidence. Source: /hearth-loom.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string", "const": "/hearth-loom"},
+    "type": {"type": "string", "const": "bus.triage.findings"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["signal_name", "task_id", "severity", "diagnosis", "action", "evidence", "bead_filed", "outcome", "detected_at"],
+      "properties": {
+        "signal_name": {
+          "type": "string",
+          "description": "Identifier for the signal type (e.g. trailer_failure_pattern)"
+        },
+        "task_id": {
+          "type": "string",
+          "description": "Task identifier (e.g. task:loom-9bvcw)"
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "critical"],
+          "description": "Severity level of the finding"
+        },
+        "diagnosis": {
+          "type": "string",
+          "description": "Human-readable description of the detected pattern"
+        },
+        "action": {
+          "type": "string",
+          "description": "Recommended remediation action (shell command or next step)"
+        },
+        "evidence": {
+          "type": "string",
+          "description": "Raw evidence string with counts, windows, and class info"
+        },
+        "bead_filed": {
+          "type": "string",
+          "description": "Bead ID filed as a result of this finding"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": ["filed"],
+          "description": "What happened with the finding (currently only 'filed')"
+        },
+        "detected_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC3339 UTC timestamp when the pattern was detected"
+        }
+      }
+    }
+  }
+}

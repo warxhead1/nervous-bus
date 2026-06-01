@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.screenshot.luminance.v1.json",
+  "title": "bus.tengine.screenshot.luminance v1",
+  "description": "When: After a screenshot PNG is written, luminance statistics are computed and emitted as a summary. Source: /tengine. Consumers use this to detect rendering anomalies (all-black frames, luminance spikes) and feed visual regression pipelines.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.tengine.screenshot.luminance.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["v", "source", "host", "session_id", "silo", "frame", "path", "mean_lum", "p05_lum", "p95_lum", "all_black"],
+      "properties": {
+        "v": {"type": "integer", "description": "Payload schema version, always 1."},
+        "source": {"type": "string", "description": "Emitting subsystem identifier, always 'tengine'."},
+        "host": {"type": "string", "description": "Hostname of the machine that generated this event."},
+        "session_id": {"type": "string", "description": "Tengine session identifier for correlation with other session events."},
+        "silo": {"type": "string", "description": "Silo name that produced this screenshot."},
+        "frame": {"type": "integer", "description": "Frame counter at which this screenshot was captured."},
+        "path": {"type": "string", "description": "Absolute filesystem path to the screenshot PNG file."},
+        "mean_lum": {"type": "number", "description": "Mean luminance of all pixels in the screenshot, normalized to [0, 1]."},
+        "p05_lum": {"type": "number", "description": "5th percentile luminance; useful for detecting dark patches."},
+        "p95_lum": {"type": "number", "description": "95th percentile luminance; useful for detecting bright spikes."},
+        "all_black": {"type": "boolean", "description": "True when mean_lum is below the threshold and the frame is effectively black, indicating a rendering failure."}
+      }
+    }
+  }
+}

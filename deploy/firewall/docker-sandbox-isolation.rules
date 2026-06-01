@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Block Docker bridge networks from reaching host hearth services.
+# Applied to DOCKER-USER chain (container→external) AND INPUT chain (container→host).
+# Run by: systemd unit docker-sandbox-isolation.service (after docker.service)
+#
+# NOTE on chain selection:
+#   DOCKER-USER (FORWARD) handles container↔container and container→external traffic.
+#   INPUT chain handles container→host traffic directly (e.g. sandbox → 172.17.0.1).
+#   UFW has broad ACCEPT rules in ufw-user-input for these ports; we insert DROP rules
+#   at the top of INPUT to precede them.
+set -euo pipefail
+
+# Ports to protect on the host
+HEARTH_API=8420    # hearth-api: home automation control (lights, locks, devices)
+HEARTH_LOOM=5908   # hearth-loom: agent dispatch (loomie orchestration)
+
+# ── DOCKER-USER (FORWARD chain) ──────────────────────────────────────────────
+# Blocks container→external routing through docker0.
+# Insert at position 1 so these DROPs run before any ACCEPTs.
+# Check first whether the rules already exist (idempotency).
+iptables -C DOCKER-USER -s 172.17.0.0/16 -p tcp --dport "$HEARTH_LOOM" -j DROP 2>/dev/null || \
+    iptables -I DOCKER-USER 1 -s 172.17.0.0/16 -p tcp --dport "$HEARTH_LOOM" -j DROP \
+        -m comment --comment "sandbox-isolation: block → hearth-loom"
+
+iptables -C DOCKER-USER -s 172.17.0.0/16 -p tcp --dport "$HEARTH_API" -j DROP 2>/dev/null || \
+    iptables -I DOCKER-USER 1 -s 172.17.0.0/16 -p tcp --dport "$HEARTH_API" -j DROP \
+        -m comment --comment "sandbox-isolation: block → hearth-api"
+
+# ── INPUT chain ──────────────────────────────────────────────────────────────
+# Blocks container→host traffic (172.17.0.1 gateway) reaching hearth services.
+# UFW opens these ports broadly; our DROP at position 1 precedes UFW chains.
+iptables -C INPUT -s 172.17.0.0/16 -p tcp --dport "$HEARTH_LOOM" -j DROP 2>/dev/null || \
+    iptables -I INPUT 1 -s 172.17.0.0/16 -p tcp --dport "$HEARTH_LOOM" -j DROP \
+        -m comment --comment "sandbox-isolation: block → hearth-loom"
+
+iptables -C INPUT -s 172.17.0.0/16 -p tcp --dport "$HEARTH_API" -j DROP 2>/dev/null || \
+    iptables -I INPUT 1 -s 172.17.0.0/16 -p tcp --dport "$HEARTH_API" -j DROP \
+        -m comment --comment "sandbox-isolation: block → hearth-api"

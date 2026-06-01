@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth.bead.changes.v1.json",
+  "title": "bus.hearth.bead.changes v1",
+  "description": "Bead checkpoint delta: the set of files and symbols that changed for a bead between two content hashes. Intended emitter: hearth-loom (per-bead checkpoint markers) — NOT YET IMPLEMENTED as of 2026-05-29; this schema codifies the contract ahead of the producer. Consumer: deer-flow BeadCheckpointRouter (packages/harness/deerflow/evidence/bead_checkpoint_router.py), which ingests it into the evidence ledger / SymbolLineageTracker. Validated against event['data'] (flat data-payload schema). Kept permissive (additionalProperties:true, minimal required) so the future producer can add fields without dead-lettering.",
+  "type": "object",
+  "required": ["bead_id"],
+  "properties": {
+    "bead_id": {
+      "type": "string",
+      "description": "Bead identifier the checkpoint belongs to (e.g. 'deer-flow-zu9f')."
+    },
+    "before_hash": {
+      "type": "string",
+      "description": "Content hash before the checkpoint. Optional; consumer defaults to empty string."
+    },
+    "after_hash": {
+      "type": "string",
+      "description": "Content hash after the checkpoint. Optional; consumer defaults to empty string."
+    },
+    "changed_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Paths of files that changed in this checkpoint."
+    },
+    "changed_symbols": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Fully-qualified symbol names that changed in this checkpoint."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC time of the checkpoint. Optional; consumer defaults to now()."
+    }
+  },
+  "additionalProperties": true
+}

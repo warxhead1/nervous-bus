@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "nervous-bus/schemas/autobench.improver.convergence.threshold_adapted.v1.json",
+  "title": "autobench.improver.convergence.threshold_adapted v1",
+  "description": "Emitted when the improver convergence threshold is adapted during an autobench run",
+  "type": "object",
+  "required": ["effective_threshold", "velocity", "variance", "iterations_used"],
+  "properties": {
+    "effective_threshold": {"type": "number"},
+    "velocity": {"type": "number"},
+    "variance": {"type": "number"},
+    "iterations_used": {"type": "integer"}
+  }
+}

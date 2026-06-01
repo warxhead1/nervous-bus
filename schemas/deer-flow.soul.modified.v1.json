@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.soul.modified.v1.json",
+  "title": "deer-flow.soul.modified v1",
+  "description": "An agent's SOUL.md was created, updated, or reverted. Enables SOUL.md drift tracking, council realignment detection, and audit trails of agent identity evolution. Consumed by the weekly drift report and by any human who wants to review agent identity changes.",
+  "type": "object",
+  "required": ["agent_name", "change_type", "lines_changed", "sha_before", "sha_after"],
+  "properties": {
+    "agent_name": {
+      "type": "string",
+      "description": "Agent directory name (e.g. research-advisor-hy3)"
+    },
+    "change_type": {
+      "type": "string",
+      "enum": ["created", "updated", "reverted"]
+    },
+    "lines_changed": {
+      "type": "integer",
+      "description": "Absolute value of lines added minus lines removed (positive = net growth)"
+    },
+    "sha_before": {
+      "type": "string",
+      "maxLength": 12,
+      "description": "First 12 chars of the git SHA before the change (000… if new file)"
+    },
+    "sha_after": {
+      "type": "string",
+      "maxLength": 12,
+      "description": "First 12 chars of the git SHA after the change (000… if deleted)"
+    }
+  }
+}

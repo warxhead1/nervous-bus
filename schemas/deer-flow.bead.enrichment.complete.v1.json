@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.bead.enrichment.complete.v1.json",
+  "title": "deer-flow.bead.enrichment.complete v1",
+  "description": "BeadEnricher finished analysing a bead. Useful for pipeline latency monitoring, enrichment throughput dashboards, and detecting beads that stall in enrichment.",
+  "type": "object",
+  "required": ["bead_id", "bead_key_hash", "enrichment_ms", "verdict"],
+  "properties": {
+    "bead_id": {
+      "type": "string",
+      "description": "Cross-project bead id (e.g. deer-flow-9k2x)"
+    },
+    "bead_key_hash": {
+      "type": "string",
+      "description": "First 12 chars of the bead cache key hash — used to correlate with cache hit/miss events"
+    },
+    "enrichment_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Wall-clock milliseconds spent in BeadEnricher.analyze_bead()"
+    },
+    "n_pages_found": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of wiki/graph pages found as relevant to this bead"
+    },
+    "n_pushback_issues": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of pushback issues raised (vague language, scope creep, unstated assumptions)"
+    },
+    "n_clarifying_questions": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of clarifying questions generated"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["well_defined", "needs_pushback", "high_risk"],
+      "description": "Overall bead quality verdict"
+    }
+  }
+}

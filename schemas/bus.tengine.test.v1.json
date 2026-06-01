@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.test.v1.json",
+  "type": "object",
+  "title": "bus.tengine.test.v1",
+  "description": "Smoke-test event emitted by nb_emit binary and ad-hoc tests. Not a production channel.",
+  "properties": {
+    "test": {
+      "type": "boolean",
+      "description": "Presence indicates a test payload"
+    },
+    "from": {
+      "type": "string",
+      "description": "Emitter identifier"
+    },
+    "hello": {
+      "type": "string",
+      "description": "Optional hello string"
+    },
+    "ts": {
+      "type": "string",
+      "description": "Optional timestamp"
+    }
+  },
+  "additionalProperties": true
+}

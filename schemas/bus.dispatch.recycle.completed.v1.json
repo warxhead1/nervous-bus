@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.dispatch.recycle.completed.v1.json",
+  "title": "bus.dispatch.recycle.completed v1",
+  "description": "A task that was recycled (re-dispatched after failure/retry) has completed its re-execution. Emitted by hearth-loom's recycle dispatch loop when a recycled execution finishes with a terminal disposition. Source: /hearth-loom.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string", "const": "/hearth-loom"},
+    "type": {"type": "string", "const": "bus.dispatch.recycle.completed.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["execution_id", "task_id", "project_path", "consecutive_recycles", "disposition"],
+      "properties": {
+        "execution_id": {
+          "type": "string",
+          "description": "UUID of the (recycled) execution that completed"
+        },
+        "task_id": {
+          "type": "string",
+          "description": "Bead/task identifier (e.g. loom-xxx)"
+        },
+        "project_path": {
+          "type": "string",
+          "description": "Absolute path to the project directory"
+        },
+        "consecutive_recycles": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of consecutive recycle attempts that led to this execution"
+        },
+        "disposition": {
+          "type": "string",
+          "enum": ["abandoned", "merged", "pr_open", "ci_failed", "agent_error", "timeout"],
+          "description": "Terminal outcome of the recycled execution"
+        }
+      }
+    }
+  }
+}

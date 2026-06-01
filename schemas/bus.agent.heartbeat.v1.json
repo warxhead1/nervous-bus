@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.agent.heartbeat.v1.json",
+  "title": "bus.agent.heartbeat v1",
+  "description": "Periodic liveness signal from a running agent session. Emitted by Codex CLI agents on a fixed interval (typically 30s). Distinct from bus.agent.activity.v1 which carries tool-level events. Producers should migrate to this schema; bus.agent.activity heartbeat enum is a backward-compat alias.",
+  "type": "object",
+  "required": ["ts", "agent", "session_id", "project"],
+  "properties": {
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp of the heartbeat."
+    },
+    "agent": {
+      "type": "string",
+      "enum": ["claude-code", "codex"],
+      "description": "Agent runtime identifier."
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "ULID of the agent session."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "ULID of the conversation/session context."
+    },
+    "project": {
+      "type": "string",
+      "description": "Project name (repository basename or 'main')."
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Working directory at time of heartbeat."
+    },
+    "interval_s": {
+      "type": "number",
+      "description": "Nominal heartbeat interval in seconds. Used to detect missed beats."
+    },
+    "memory_mb": {
+      "type": "number",
+      "description": "Agent process RSS in MB at time of heartbeat."
+    },
+    "cpu_pct": {
+      "type": "number",
+      "description": "Agent process CPU% at time of heartbeat (0-100)."
+    },
+    "iter": {
+      "type": "integer",
+      "description": "Iteration count within the session."
+    },
+    "context_pct": {
+      "type": "number",
+      "description": "Context window utilization 0-100."
+    }
+  },
+  "additionalProperties": true
+}

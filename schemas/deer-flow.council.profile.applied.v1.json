@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.council.profile.applied.v1.json",
+  "title": "deer-flow.council.profile.applied v1",
+  "description": "A council deliberation began with a resolved profile binding. Emitted exactly once at the start of profile-mode deliberation so SSE subscribers and stack-tuner can correlate downstream persona completions with the active profile. Producer: backend/packages/harness/deerflow/bus.py::emit_council_profile_applied. Subject is deliberation_id.",
+  "type": "object",
+  "required": ["deliberation_id", "profile_id", "personas", "merger", "fallbacks_used"],
+  "properties": {
+    "deliberation_id": {
+      "type": "string",
+      "description": "stable deliberation id (matches CloudEvents subject)"
+    },
+    "profile_id": {
+      "type": "string",
+      "description": "resolved profile name (e.g. 'default', 'fast', 'cheap')"
+    },
+    "personas": {
+      "type": "object",
+      "description": "persona-name → model-name mapping for this run",
+      "additionalProperties": { "type": "string" }
+    },
+    "merger": {
+      "type": "string",
+      "description": "model the merger will use to synthesize the final answer"
+    },
+    "fallbacks_used": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "fallback model names already in play at start (typically empty; populated when a prior attempt 429'd)"
+    }
+  }
+}

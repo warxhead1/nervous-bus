@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""cc-news-headlines — push-based news pane for command-center bus tab.
+
+Subscribes to Redis Streams (nbus:home-automation.news.article.v1) via XREAD
+BLOCK for zero-latency push delivery. Backfills last 50 entries on startup.
+
+Layout: vertical Table with columns [time, source, score, title]
+  - Color title by tag/category
+  - Dim summaries below relevance threshold
+  - OSC 8 hyperlinks on title (terminals that support it)
+
+Usage:
+  cc-news-headlines                        # defaults
+  cc-news-headlines --min-tier 2            # classification_tier threshold
+  cc-news-headlines --min-score 0.6        # relevance_score threshold
+  cc-news-headlines --limit 50             # backfill count
+
+Env:
+  REDIS_URL   Redis connection URL (default: redis://localhost:6379)
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+try:
+    import redis
+except ImportError:
+    redis = None
+
+from rich.console import Console
+from rich.table import Table
+from rich.text import Text
+
+STREAM_KEY = "nbus:home-automation.news.article.v1"
+DEFAULT_MIN_TIER = 2
+DEFAULT_MIN_SCORE = 0.6
+DEFAULT_LIMIT = 50
+
+CONSOLE = Console()
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="cc-news-headlines — push-based news pane")
+    p.add_argument("--min-tier", type=int, default=DEFAULT_MIN_TIER,
+                   help=f"minimum classification_tier (default: {DEFAULT_MIN_TIER})")
+    p.add_argument("--min-score", type=float, default=DEFAULT_MIN_SCORE,
+                   help=f"minimum relevance_score (default: {DEFAULT_MIN_SCORE})")
+    p.add_argument("--limit", type=int, default=DEFAULT_LIMIT,
+                   help=f"backfill count on startup (default: {DEFAULT_LIMIT})")
+    return p.parse_args()
+
+
+def make_redis() -> Optional[redis.Redis]:
+    if redis is None:
+        return None
+    try:
+        url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        r = redis.Redis.from_url(url, decode_responses=True,
+                                  socket_timeout=5.0, socket_connect_timeout=5.0)
+        r.ping()
+        return r
+    except Exception as e:
+        print(f"[yellow]redis unavailable: {e}[/yellow]", file=sys.stderr)
+        return None
+
+
+TAG_COLORS = {
+    "tech":     "cyan",
+    "science":  "green",
+    "world":    "blue",
+    "business": "yellow",
+    "politics": "magenta",
+    "sports":   "bright_green",
+    "entertainment": "bright_cyan",
+    "health":   "bright_red",
+    "default":  "white",
+}
+
+
+def tag_color(tag: str) -> str:
+    t = tag.lower().split()[0] if tag else ""
+    return TAG_COLORS.get(t, TAG_COLORS["default"])
+
+
+def format_row(entry: dict, min_tier: int, min_score: float) -> Optional[Text]:
+    try:
+        data = entry.get("data", "{}")
+        import json
+        article = json.loads(data)
+    except Exception:
+        return None
+
+    tier = article.get("classification_tier", 0)
+    score = article.get("relevance_score", 0.0)
+    if tier < min_tier and score < min_score:
+        return None
+
+    ts = article.get("published_at", "")
+    if ts:
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            ts = dt.strftime("%H:%M")
+        except Exception:
+            pass
+
+    source = article.get("source", "?")[:10]
+    score_str = f"{score:.1f}"
+    title = article.get("title", "?")
+    url = article.get("url", "")
+    tags = article.get("tags", [])
+    tag = tags[0] if tags else ""
+    color = tag_color(tag)
+
+    title_text = Text(title)
+    if url:
+        osc8 = f"\033]8;;{url}\033\\{title}\033]8;;\033\\"
+        title_text = Text.from_markup(osc8)
+    title_text.stylize(color)
+
+    return Text.assemble(
+        Text(ts, style="dim"),
+        "  ",
+        Text(source, style="dim"),
+        "  ",
+        Text(score_str, style="bright_green" if score >= 0.8 else "yellow"),
+        "  ",
+        title_text,
+    )
+
+
+def render_table(rows: list[Text], min_tier: int, min_score: float, r: Optional[redis.Redis]) -> Table:
+    table = Table.grid(padding=(0, 1), expand=True)
+    table.add_column("entry", ratio=1, no_wrap=False, overflow="ellipsis")
+
+    for row in rows[-30:]:
+        table.add_row(row)
+
+    return table
+
+
+def backfill(r: redis.Redis, limit: int) -> list[dict]:
+    entries = []
+    try:
+        raw = r.xrevrange(STREAM_KEY, "+", "-", count=limit)
+        for eid, fields in raw:
+            entries.append({"id": eid, "data": fields.get("_raw", "{}")})
+    except Exception as e:
+        print(f"[dim]backfill error: {e}[/dim]", file=sys.stderr)
+    return entries
+
+
+def main() -> int:
+    args = parse_args()
+
+    # Retry forever rather than exit: when zellij respawns us we'd loop
+    # at 3s anyway; doing it in-process keeps the pane visible with a
+    # status message instead of flashing the restart banner.
+    r = make_redis()
+    retry_delay = 5
+    while r is None:
+        CONSOLE.print(f"[yellow]no redis — retrying in {retry_delay}s[/yellow]")
+        time.sleep(retry_delay)
+        r = make_redis()
+
+    entries = backfill(r, args.limit)
+    CONSOLE.print(f"[dim]backfill: {len(entries)} entries[/dim]")
+
+    rows: list[Text] = []
+    for entry in entries:
+        row = format_row(entry, args.min_tier, args.min_score)
+        if row:
+            rows.append(row)
+
+    CONSOLE.print(f"[dim]showing {len(rows)} headlines (tier>={args.min_tier} or score>={args.min_score})[/dim]")
+    CONSOLE.print()
+
+    table = render_table(rows, args.min_tier, args.min_score, r)
+    CONSOLE.print(table)
+
+    CONSOLE.print("\n[dim]waiting for new headlines... (Ctrl+C to quit)[/dim]")
+    # Track high-water-mark stream ID so xread doesn't re-replay backfill
+    # on every iteration. Start with "$" so we only get entries that
+    # arrive after we begin watching (backfill already covered history).
+    last_id: str = "$"
+    try:
+        while True:
+            try:
+                if r is None:
+                    CONSOLE.print("[yellow]no redis — retrying in 5s[/yellow]")
+                    time.sleep(5)
+                    r = make_redis()
+                    continue
+                result = r.xread({STREAM_KEY: last_id}, count=10, block=1000)
+                for stream, messages in result:
+                    for eid, fields in messages:
+                        entry = {"id": eid, "data": fields.get("_raw", "{}")}
+                        row = format_row(entry, args.min_tier, args.min_score)
+                        if row:
+                            rows.append(row)
+                            CONSOLE.print(row)
+                        # Advance cursor regardless of whether row passed
+                        # the filter — we must not re-see this entry.
+                        last_id = eid
+            except redis.ConnectionError:
+                CONSOLE.print("[yellow]redis disconnected — reconnecting...[/yellow]")
+                time.sleep(2)
+                r = make_redis()
+                # Don't break — keep retrying. make_redis returns None on
+                # failure; the top-of-loop handles that.
+    except KeyboardInterrupt:
+        pass
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

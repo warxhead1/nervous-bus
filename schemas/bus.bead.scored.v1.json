@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.bead.scored.v1.json",
+  "title": "bus.bead.scored v1",
+  "description": "DEPRECATED (2026-05-16, nervous-bus-immg): aspirational schema not emitted by any producer. Executor-selection scoring will likely re-land as a derived signal off bus.bead.lifecycle.v1 (pr_merged + falsified events) plus bus.bead.bench_completed.v1; no consumer currently subscribes to this channel.",
+  "deprecated": true,
+  "type": "object",
+  "required": ["bead_id", "project", "score", "executor"],
+  "properties": {
+    "bead_id": { "type": "string" },
+    "project": { "type": "string" },
+    "executor": {
+      "type": "string",
+      "enum": ["claude-code", "opencode", "codex", "gemini", "anthropic", "openrouter", "human"]
+    },
+    "score": {
+      "type": "number",
+      "minimum": -1.0,
+      "maximum": 1.0,
+      "description": "+1=merged cleanly, 0=merged with revisions, -1=reverted or reopened"
+    },
+    "signal": {
+      "type": "string",
+      "enum": ["pr_merged", "pr_reverted", "bead_reopened", "ci_failed_3x", "quality_gate_failed", "human_review_score"],
+      "description": "What event triggered this score"
+    },
+    "time_to_close_hours": { "type": "number" },
+    "pr_url": { "type": "string" },
+    "saga_id": { "type": "string" }
+  }
+}

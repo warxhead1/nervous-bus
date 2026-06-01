@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "kb.artifact.linked.v1",
+  "title": "KB Artifact Linked",
+  "description": "Emitted by `kb link <plan> --session <id>` when a session artifact is associated with a plan entry. Enables downstream consumers (deer-flow, hearth-loom) to track which sessions contributed evidence to which plans.",
+  "type": "object",
+  "required": ["entry_id", "artifact_uri", "artifact_type"],
+  "properties": {
+    "entry_id":      { "type": "string", "format": "uuid", "description": "UUID v7 of the vault plan entry" },
+    "artifact_uri":  { "type": "string", "description": "URI of the linked artifact, e.g. tengine-session://<dir>, bd://<bead_id>" },
+    "artifact_type": { "type": "string", "enum": ["session", "bead", "deer-flow-thread", "manual"], "description": "Kind of artifact linked" },
+    "session":       { "type": "string", "description": "Session identifier (bare ID, not URI) — populated when artifact_type=session" },
+    "wave":          { "type": "string", "description": "Optional wave label (e.g. 'W1-A') for linking to a specific dispatch wave" },
+    "project":       { "type": "string", "description": "Project namespace of the plan entry" }
+  }
+}

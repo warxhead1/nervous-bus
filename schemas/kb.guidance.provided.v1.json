@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "kb.guidance.provided.v1",
+  "title": "KB Guidance Provided",
+  "description": "Emitted by `kb check <query>` when the vault is queried for coverage confidence. The escalate field is the dynamic cadence signal: false = coast on vault knowledge; true = spawn deer-flow research. Enables tracking of how often Claude defers to vault vs escalates to deep research.",
+  "type": "object",
+  "required": ["query", "confidence", "escalate"],
+  "properties": {
+    "query":       { "type": "string", "description": "Natural-language question that was checked" },
+    "project":     { "type": "string" },
+    "confidence":  { "type": "number", "minimum": 0, "maximum": 1, "description": "Weighted vault coverage score" },
+    "escalate":    { "type": "boolean", "description": "true = vault coverage insufficient, escalate to research" },
+    "match_count": { "type": "integer", "minimum": 0, "description": "Vault entries that matched the query" }
+  }
+}

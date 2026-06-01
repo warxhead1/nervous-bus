@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.silo.verification.v1.json",
+  "type": "object",
+  "title": "bus.tengine.silo.verification.v1",
+  "description": "Emitted in verify() after computing the verification result. Produced by tengine-nervous-bus-client emit_silo_verification().",
+  "properties": {
+    "v": {
+      "type": "integer",
+      "const": 1,
+      "description": "Event schema version"
+    },
+    "source": {
+      "type": "string",
+      "const": "tengine",
+      "description": "Emitting subsystem"
+    },
+    "host": {
+      "type": "string",
+      "description": "Hostname of the emitting machine"
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Silo session identifier"
+    },
+    "silo": {
+      "type": "string",
+      "description": "Silo name"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail"
+      ],
+      "description": "Verification outcome"
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Verification-specific metrics (varies by silo type)",
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "v",
+    "source",
+    "host",
+    "session_id",
+    "silo",
+    "status",
+    "metrics"
+  ],
+  "additionalProperties": false
+}

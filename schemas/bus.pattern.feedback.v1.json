@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.pattern.feedback.v1.json",
+  "title": "bus.pattern.feedback v1",
+  "description": "Human verdict on a draft bead created from a bus.pattern.signal during calibration mode. Consumed by the signal-router to update per-signal-type trust counters.",
+  "type": "object",
+  "required": ["signal_id", "verdict"],
+  "properties": {
+    "signal_id":     {"type": "string"},
+    "draft_bead_id": {"type": ["string", "null"]},
+    "verdict":       {"type": "string", "enum": ["accept", "reject", "modify"]},
+    "notes":         {"type": ["string", "null"], "maxLength": 500}
+  }
+}

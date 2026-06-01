@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.audit.recommendation.v1.json",
+  "title": "deer-flow.audit.recommendation v1",
+  "description": "Auditor's verdict and remediation recommendations for a stack-tuner cycle. Two intentional shapes are emitted: the compact form (source=/deer-flow) carries only cycle_id + action + pathology for cross-cycle aggregation; the full form (source=/deer-flow/stack-tuner) carries the rich audit detail. Either is valid — consumers should branch on presence of `summary` to detect the rich form.",
+  "type": "object",
+  "required": ["cycle_id"],
+  "properties": {
+    "cycle_id": { "type": "string", "description": "stack-tuner cycle this audit belongs to (matches subject)" },
+    "audit_id": { "type": "string", "description": "unique id for this audit run; usually <cycle_id>-audit or <ts>-auditor (optional — omitted by some early-stage publishers)" },
+    "recommended_action": {
+      "type": "string",
+      "description": "rich-form action token (e.g. flag_for_human, auto_fix, adjust_soul, retry, rerun_with_tweak, ignore)"
+    },
+    "action": {
+      "type": "string",
+      "description": "compact-form action — same semantic role as recommended_action, used by /deer-flow source"
+    },
+    "pathology": {
+      "type": "string",
+      "description": "compact-form pathology tag identifying the failure pattern (e.g. trivial_task_economy_conflict)"
+    },
+    "summary": { "type": "string", "description": "1-2 sentence narrative — present in rich form only" },
+    "question_class": { "type": ["string", "null"] },
+    "auto_fix_command": { "type": ["string", "null"], "description": "shell command to execute when recommended_action=auto_fix" },
+    "recommendations": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "concrete actionable remediation suggestions"
+    },
+    "tech_anomaly_count": { "type": "integer", "minimum": 0 },
+    "linguistic_lowest": {
+      "type": ["object", "null"],
+      "description": "weakest linguistic dimension flagged by the auditor",
+      "properties": {
+        "dim": { "type": "string" },
+        "score": { "type": "number" },
+        "reason": { "type": "string" }
+      }
+    }
+  }
+}

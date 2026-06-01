@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "kb.review.approved.v1",
+  "title": "KB Review Approved",
+  "description": "Emitted by `kb review approve <id>` when a human reviewer accepts a proposed vault entry. Triggers confidence boost in the scoring model.",
+  "type": "object",
+  "required": ["entry_id", "reviewed_by", "reviewed_at"],
+  "properties": {
+    "entry_id":    { "type": "string", "format": "uuid" },
+    "title":       { "type": "string", "maxLength": 200 },
+    "project":     { "type": "string" },
+    "reviewed_by": { "type": "string" },
+    "reviewed_at": { "type": "string", "format": "date-time" },
+    "note":        { "type": "string", "maxLength": 500 }
+  }
+}

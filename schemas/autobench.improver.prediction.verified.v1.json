@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.improver.prediction.verified.v1.json",
+  "title": "autobench.improver.prediction.verified v1",
+  "description": "Verification of a previously-emitted autobench.improver.prediction.v1 against the actual outcome of the next iteration. Closes the AHE falsifiable-contract loop. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.improver.prediction.verified.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["session_id", "iteration", "predicted", "actual_score_delta", "actual_verdict_class_changes", "score_delta_error", "verdict_match_ratio", "outcome_label", "confidence_calibration"],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the autobench run (matches the prediction event)"
+        },
+        "iteration": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "RSI iteration whose actuals are being compared against the prediction (i.e. the iteration AFTER the one that produced the prediction)"
+        },
+        "predicted": {
+          "type": "object",
+          "description": "The original Prediction payload that is being verified",
+          "required": ["predicted_score_delta", "predicted_verdict_class_changes", "confidence", "rationale"],
+          "properties": {
+            "predicted_score_delta": {"type": "number"},
+            "predicted_verdict_class_changes": {
+              "type": "object",
+              "additionalProperties": {"type": "integer"}
+            },
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "rationale": {"type": "string"}
+          }
+        },
+        "actual_score_delta": {
+          "type": "number",
+          "description": "Observed change in aggregate_score"
+        },
+        "actual_verdict_class_changes": {
+          "type": "object",
+          "description": "Observed signed verdict-count deltas",
+          "additionalProperties": {"type": "integer"}
+        },
+        "score_delta_error": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "|predicted - actual| in score units"
+        },
+        "verdict_match_ratio": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Fraction of predicted verdict shifts whose sign matched the actual sign"
+        },
+        "outcome_label": {
+          "type": "string",
+          "enum": ["confirmed", "partial", "refuted"],
+          "description": "Classification of the prediction outcome"
+        },
+        "confidence_calibration": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Gap between stated confidence and observed accuracy; 0.0 = perfectly calibrated"
+        },
+        "contested_score_multiplier": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Downweight for contested cases (dissent_ratio > 0.4). Computed as 1 - dissent_ratio so disputed cases count less toward confirming the prediction. 1.0 when the pool was disabled or no dissent data was available."
+        }
+      }
+    }
+  }
+}

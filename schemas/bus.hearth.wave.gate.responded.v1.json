@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth.wave.gate.responded.v1.json",
+  "title": "bus.hearth.wave.gate.responded v1",
+  "description": "Emitted by hearth-api's reactor when the Android app responds to a wave gate prompt (advance or reopen). Wave gates pause the session until the human explicitly authorizes the next step.",
+  "type": "object",
+  "required": ["wave_name", "action", "responded_at"],
+  "properties": {
+    "wave_name": {
+      "type": "string",
+      "description": "Name of the wave whose gate is being responded to."
+    },
+    "action": {
+      "type": "string",
+      "enum": ["advance", "reopen"],
+      "description": "Whether to advance to the next wave or reopen a previously closed one."
+    },
+    "note": {
+      "type": "string",
+      "description": "Optional free-text note attached to the response."
+    },
+    "responded_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the wave gate response was recorded."
+    }
+  }
+}

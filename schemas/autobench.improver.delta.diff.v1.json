@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.improver.delta.diff.v1.json",
+  "title": "autobench.improver.delta.diff v1",
+  "description": "Human-readable before/after diff of the harness applied at the iter N → N+1 boundary. Emitted after the improver runs and the new harness is computed. ``iteration`` is the new iteration this delta produces (i.e. the iteration that will run with the AFTER harness). Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.improver.delta.diff.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "iteration",
+        "system_prompt_diff",
+        "tool_surface_diff",
+        "rollout_protocol_change",
+        "context_manager_change",
+        "budget_changes",
+        "no_change"
+      ],
+      "properties": {
+        "session_id": {"type": "string"},
+        "iteration": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The iteration number that will run under the AFTER harness."
+        },
+        "system_prompt_diff": {
+          "type": "string",
+          "description": "Unified diff (difflib.unified_diff, 3 lines of context) of the system_prompt change. Empty string when unchanged."
+        },
+        "tool_surface_diff": {
+          "type": "string",
+          "description": "Unified diff of the tool_surface change. Empty string when unchanged."
+        },
+        "rollout_protocol_change": {
+          "description": "Object {before, after} when changed; null otherwise.",
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "required": ["before", "after"],
+              "properties": {
+                "before": {"type": ["string", "null"]},
+                "after": {"type": ["string", "null"]}
+              }
+            }
+          ]
+        },
+        "context_manager_change": {
+          "description": "Object {before, after} when changed; null otherwise.",
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "required": ["before", "after"],
+              "properties": {
+                "before": {"type": ["string", "null"]},
+                "after": {"type": ["string", "null"]}
+              }
+            }
+          ]
+        },
+        "budget_changes": {
+          "type": "object",
+          "description": "Map of budget-key → {before, after} for keys whose value changed. Empty when no budget keys changed.",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["before", "after"],
+            "properties": {
+              "before": {},
+              "after": {}
+            }
+          }
+        },
+        "no_change": {
+          "type": "boolean",
+          "description": "True iff nothing changed across any tracked field."
+        }
+      }
+    }
+  }
+}

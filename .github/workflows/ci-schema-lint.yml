@@ -1,0 +1,98 @@
+name: Schema Lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'schemas/**'
+      - 'tools/*.py'
+      - 'tools/*.txt'
+      - '.github/workflows/ci-schema-lint.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'schemas/**'
+      - 'tools/*.py'
+      - 'tools/*.txt'
+      - '.github/workflows/ci-schema-lint.yml'
+
+jobs:
+  schema-lint:
+    name: schema-lint
+    runs-on: [self-hosted, linux, nervous-bus]
+    steps:
+      - name: Configure PATH
+        run: |
+          echo "$HOME/.pyenv/shims" >> $GITHUB_PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - uses: actions/checkout@v6
+        with:
+          clean: false
+
+      - name: Validate JSON schemas
+        run: |
+          set -euo pipefail
+          for f in schemas/*.json; do
+            python3 -c "import json,sys; json.load(open('$f'))" || { echo "INVALID JSON: $f"; exit 1; }
+            echo "OK: $f"
+          done
+
+      - name: Verify schema naming convention
+        run: |
+          set -euo pipefail
+          for f in schemas/*.json; do
+            base=$(basename "$f")
+            [[ "$base" == _* ]] && continue
+            if ! [[ "$base" =~ ^[a-z][a-z0-9._-]+\.v[0-9]+\.json$ ]]; then
+              echo "BAD NAME: $base (must match <channel>.v<N>.json)"
+              exit 1
+            fi
+            echo "OK: $base"
+          done
+
+      - name: Verify required schema fields
+        run: |
+          set -euo pipefail
+          for f in schemas/*.json; do
+            [[ "$(basename $f)" == _* ]] && continue
+            python3 - "$f" <<'EOF'
+          import json, sys
+          s = json.load(open(sys.argv[1]))
+          missing = [k for k in ("$id","title","description") if k not in s]
+          if missing:
+              print(f"MISSING in {sys.argv[1]}: {missing}")
+              sys.exit(1)
+          print(f"OK: {sys.argv[1]}")
+          EOF
+          done
+
+      - name: Ensure jsonschema is available
+        run: |
+          # PATH is set at job-level to prefer pyenv (which ships pip).
+          which python3
+          python3 --version
+          if ! python3 -c "import jsonschema" 2>/dev/null; then
+            python3 -m pip install --user --quiet jsonschema
+          fi
+          python3 -c "import importlib.metadata as m; print('jsonschema', m.version('jsonschema'))"
+
+      - name: Validate schemas as JSON Schema 2020-12
+        run: |
+          set -euo pipefail
+          python3 - <<'EOF'
+          import json, sys, glob
+          from jsonschema import Draft202012Validator
+          fails = []
+          for f in sorted(glob.glob("schemas/*.json")):
+              if f.split("/")[-1].startswith("_"):
+                  continue
+              try:
+                  s = json.load(open(f))
+                  Draft202012Validator.check_schema(s)
+                  print(f"OK: {f}")
+              except Exception as e:
+                  print(f"INVALID SCHEMA: {f}: {e}")
+                  fails.append(f)
+          if fails:
+              sys.exit(f"\n{len(fails)} invalid schema(s)")
+          EOF

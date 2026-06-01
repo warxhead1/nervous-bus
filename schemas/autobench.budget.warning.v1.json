@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.budget.warning.v1.json",
+  "title": "autobench.budget.warning v1",
+  "description": "Budget guard threshold-crossing events. Emitted at 50%, 80%, 100% of either the cost or wall-time budget. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.budget.warning.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "fraction_used",
+        "current_cost_usd",
+        "max_cost_usd",
+        "action"
+      ],
+      "properties": {
+        "session_id": {"type": "string"},
+        "fraction_used": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Larger of (current_cost / max_cost) and (elapsed_wall / max_wall). Range [0, +inf)."
+        },
+        "current_cost_usd": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Cumulative cost in USD across all improver calls accounted to this session."
+        },
+        "max_cost_usd": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Cost budget cap in USD."
+        },
+        "elapsed_wall_seconds": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Elapsed wall-clock seconds since the guard was created."
+        },
+        "max_wall_seconds": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Wall-time budget cap in seconds."
+        },
+        "threshold": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Which threshold tripped this warning (0.5, 0.8, or 1.0)."
+        },
+        "action": {
+          "type": "string",
+          "enum": ["warning", "halt"],
+          "description": "What the guard did. 'warning' for 50/80% notifications; 'halt' for 100%+ (also when on_exceed is 'halt')."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Human-readable explanation, e.g. 'cost 1.02 USD exceeds cap 1.00 USD'."
+        }
+      }
+    }
+  }
+}

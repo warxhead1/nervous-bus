@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.tool.call.v1.json",
+  "title": "deer-flow.tool.call v1",
+  "description": "Per-tool-call lifecycle event emitted by deer-flow's ToolMetricsMiddleware. Three events per call share the same tool_call_id: one started, then either completed or errored. Emit site: deer-flow/backend/packages/harness/deerflow/bus.py:287 (emit_tool_call_event). Source: /deer-flow/harness.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "deer-flow.tool.call.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "subject": {"type": "string", "description": "Typically the thread_id, used as CloudEvent subject for partitioning"},
+    "data": {
+      "type": "object",
+      "required": ["thread_id", "run_id", "tool_call_id", "tool_name", "agent_name", "event_type"],
+      "properties": {
+        "thread_id": {"type": ["string", "null"], "description": "LangGraph thread ID"},
+        "run_id": {"type": ["string", "null"], "description": "Gateway runtime run ID"},
+        "tool_call_id": {"type": ["string", "null"], "description": "Shared across the started → completed/errored event triple for one call"},
+        "tool_name": {"type": "string", "description": "Name of the tool being invoked"},
+        "agent_name": {"type": "string", "description": "Agent identifier; 'unknown' when not supplied"},
+        "event_type": {
+          "type": "string",
+          "enum": ["started", "completed", "errored"],
+          "description": "Lifecycle phase of this event"
+        },
+        "args_preview": {"type": "string", "description": "Stringified preview of tool arguments; emitted only when available"},
+        "result_preview": {"type": "string", "description": "Stringified preview of the tool result; emitted only when available"},
+        "error_detail": {"type": "string", "description": "Error message; emitted only on errored events"},
+        "elapsed_ms": {"type": "number", "minimum": 0, "description": "Wall-clock duration of the tool call in ms, rounded to 1 decimal; emitted on completed/errored"},
+        "started_at": {"type": "string", "format": "date-time", "description": "RFC3339 timestamp the call started; emitted when available"}
+      }
+    }
+  }
+}

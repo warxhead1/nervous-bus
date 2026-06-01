@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.cycle.report.v1.json",
+  "title": "autobench.cycle.report v1",
+  "description": "Outbound distilled report emitted at the end of every autobench cycle (triggered or operator-launched). Carries the cycle outcome (summary), folded patterns (top failure modes, successful deltas, dissent hotspots, lineage diversity, cross-domain score), and cost roll-up. correlation_id matches the matching autobench.cycle.requested.v1 when the cycle was triggered; operator-launched cycles use cycle_id itself for self-correlation. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.cycle.report.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "correlation_id",
+        "cycle_id",
+        "domain",
+        "requested_by",
+        "started_at",
+        "completed_at",
+        "ts",
+        "summary",
+        "patterns",
+        "cost"
+      ],
+      "properties": {
+        "correlation_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ULID matching the autobench.cycle.requested.v1 that triggered this cycle. For operator-launched cycles this equals cycle_id (self-correlated)."
+        },
+        "cycle_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ULID identifying the population cycle this report folds. Distinct from any per-advocate session_id."
+        },
+        "domain": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Primary benchmark domain RSI optimized against. Mirrors the requesting event's domain when triggered."
+        },
+        "requested_by": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Producer identity (echoed from the triggering event). 'operator' when no trigger fired."
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC3339 UTC timestamp when the cycle began (typically the PopulationResult.cycle_started_at)."
+        },
+        "completed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC3339 UTC timestamp when the cycle finished."
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Envelope-consistency mirror of completed_at."
+        },
+        "bead_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional. Tracker bead this cycle was attributed to (echoed from the triggering event)."
+        },
+        "summary": {
+          "type": "object",
+          "required": [
+            "n_advocates",
+            "n_iterations",
+            "n_cases",
+            "promoted",
+            "aggregate_score_best",
+            "aggregate_score_baseline",
+            "ahe_outcomes"
+          ],
+          "properties": {
+            "n_advocates": {"type": "integer", "minimum": 0},
+            "n_iterations": {"type": "integer", "minimum": 0, "description": "Total iterations completed summed across all advocates."},
+            "n_cases": {"type": "integer", "minimum": 0, "description": "Number of benchmark cases used this cycle."},
+            "promoted": {"type": "boolean", "description": "True iff the cross-run promotion decision accepted a candidate."},
+            "promoted_advocate_id": {"type": "string"},
+            "aggregate_score_best": {"type": "number", "description": "Highest aggregate_score reached by any advocate this cycle."},
+            "aggregate_score_baseline": {"type": "number", "description": "Pre-cycle canonical baseline score (when known)."},
+            "ahe_outcomes": {
+              "type": "object",
+              "required": ["confirmed", "partial", "refuted", "refuted_live", "none"],
+              "properties": {
+                "confirmed": {"type": "integer", "minimum": 0},
+                "partial": {"type": "integer", "minimum": 0},
+                "refuted": {"type": "integer", "minimum": 0},
+                "refuted_live": {"type": "integer", "minimum": 0},
+                "none": {"type": "integer", "minimum": 0}
+              }
+            }
+          }
+        },
+        "patterns": {
+          "type": "object",
+          "required": [
+            "top_failure_modes",
+            "successful_deltas",
+            "dissent_hotspots",
+            "lineage_diversity",
+            "cross_domain_score"
+          ],
+          "properties": {
+            "top_failure_modes": {
+              "type": "array",
+              "description": "Top-5 (verdict|failure_pattern) clusters ranked by count.",
+              "items": {
+                "type": "object",
+                "required": ["failure_mode", "count", "fraction"],
+                "properties": {
+                  "failure_mode": {"type": "string"},
+                  "count": {"type": "integer", "minimum": 0},
+                  "fraction": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+                }
+              }
+            },
+            "successful_deltas": {
+              "type": "array",
+              "description": "Improver deltas whose subsequent prediction verification outcome_label == 'confirmed'.",
+              "items": {
+                "type": "object",
+                "required": ["field", "delta_summary", "score_delta"],
+                "properties": {
+                  "field": {"type": "string"},
+                  "delta_summary": {"type": "string"},
+                  "score_delta": {"type": "number"}
+                }
+              }
+            },
+            "dissent_hotspots": {
+              "type": "array",
+              "description": "Top-10 cases with judge-pool dissent_ratio > 0.4.",
+              "items": {
+                "type": "object",
+                "required": ["case_id", "dissent_ratio", "verdict_distribution"],
+                "properties": {
+                  "case_id": {"type": "string"},
+                  "dissent_ratio": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                  "verdict_distribution": {
+                    "type": "object",
+                    "additionalProperties": {"type": "integer", "minimum": 0}
+                  }
+                }
+              }
+            },
+            "lineage_diversity": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "description": "Mean pairwise SACS distance across advocates this cycle (0 = fully convergent, 1 = fully divergent)."
+            },
+            "cross_domain_score": {
+              "type": "object",
+              "additionalProperties": {"type": "number"},
+              "description": "Domain name -> mean aggregate score across advocates at cycle end."
+            },
+            "notes": {
+              "type": "string",
+              "description": "Optional freeform context (e.g. trigger validation failure annotations)."
+            }
+          }
+        },
+        "cost": {
+          "type": "object",
+          "required": ["worker_calls", "improver_calls", "judge_calls", "total_requests"],
+          "properties": {
+            "worker_calls": {"type": "integer", "minimum": 0},
+            "improver_calls": {"type": "integer", "minimum": 0},
+            "judge_calls": {"type": "integer", "minimum": 0},
+            "total_requests": {"type": "integer", "minimum": 0, "description": "Sum across worker + improver + judge call counts."}
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.notify.v1.json",
+  "title": "bus.notify v1",
+  "description": "Producer-agnostic notification channel — the headline that goes to a phone lock-screen, a discord channel, an ntfy topic, or a peer Claude session. Producers emit; hearth (home-automation) is the canonical consumer and routes to actual transports per `channels`. The bus carries the message, not the delivery — consumers decide which transports they actually wire (MQTT for phone, discord webhook, ntfy POST, session://<peer-id> for CCM). `summary` is hard-capped at 140 chars so it fits on a lock-screen; `body` is the longer detail for transports that support it (discord, ntfy). `correlation_id` is the ULID of the upstream event/cycle/PR so a phone tap can deep-link back; `source_event_type` records the upstream channel name for traceability without bloating the schema. `dedup_key` lets consumers collapse a flood of identical notifies into one. No transport is required — a notify with `channels:['session://eric-pane-3']` is just as valid as one with `channels:['phone','discord']`.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.notify.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["priority", "channels", "summary", "source_project", "ts"],
+      "properties": {
+        "priority": {
+          "type": "string",
+          "enum": ["info", "warn", "critical"],
+          "description": "Severity. Consumers may filter on this — e.g. only `critical` notifies route to phone, everything else stays in discord/session."
+        },
+        "channels": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^(phone|discord|ntfy|session(://[A-Za-z0-9._:-]+)?)$",
+            "description": "Transport identifier. `phone`, `discord`, `ntfy` are the named transports. `session://<peer-id>` addresses a specific Claude Code session by its peer id (see sdk/shell/nervous peer)."
+          },
+          "description": "Ordered list of transports the producer requests. Consumers fan out to the ones they have wired; unwired transports are logged-and-dropped (not fatal)."
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140,
+          "description": "Headline that fits on a lock-screen notification. Producers should write this as a complete sentence — no leading project tag, no trailing ellipsis."
+        },
+        "source_project": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "description": "Lowercase identifier of the project that emitted this notify (e.g. `hearth-loom`, `nervous-bus`, `autobench`, `deer-flow`). Used by consumers for routing and dedup scoping."
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC3339 UTC timestamp when the notify was produced. Mirrors the envelope `time` for consumers reading the flat data payload."
+        },
+        "correlation_id": {
+          "type": "string",
+          "minLength": 26,
+          "maxLength": 26,
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+          "description": "Optional ULID of the upstream event/cycle/PR/bead. A phone tap on the notification deep-links back to whatever this id resolves to in the consumer's persistence layer."
+        },
+        "body": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Optional longer detail. Transports that support multi-line bodies (discord embed, ntfy markdown) render this; lock-screen transports show only `summary`."
+        },
+        "deep_link": {
+          "type": "string",
+          "format": "uri",
+          "description": "Optional URI — GitHub PR URL, dugout URL, deer-flow gateway path, etc. The actionable target for a tap-back from the phone."
+        },
+        "source_event_type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional upstream bus channel name that triggered this notify (e.g. `autobench.cycle.report.v1`, `loom.lifecycle.pr.v1`). For traceability — consumers can correlate notifies with the original event stream."
+        },
+        "dedup_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Optional opaque key. Consumers MAY collapse multiple notifies sharing this key into a single delivered notification (e.g. coalesce repeated CI failure pings)."
+        }
+      }
+    }
+  }
+}

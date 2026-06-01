@@ -1,0 +1,21 @@
+[Unit]
+Description=nervous-bus log normalizer — Docker/journald/kernel → nbus:logs
+After=network-online.target redis.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/nervous-bus/adapters/log-normalizer
+# Pyenv 3.11.13 used because system Python 3.14 lacks the redis package.
+# Update this path if upgrading pyenv version — keep .python-version in sync.
+ExecStart=%h/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/log-normalizer/log_normalizer.py
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=log-normalizer
+ReadWritePaths=%h/.cache/nervous-bus
+
+[Install]
+WantedBy=default.target

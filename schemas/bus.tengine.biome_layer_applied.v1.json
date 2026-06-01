@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.biome_layer_applied.v1.json",
+  "title": "bus.tengine.biome_layer_applied v1",
+  "description": "When: A biome layer is applied to the terrain fossil silo during shadergen session initialization. Source: /tengine.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.tengine.biome_layer_applied.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["v", "source", "host", "silo", "signal", "last_frame", "stderr_tail", "nvidia_tdr", "vk_error_code"],
+      "properties": {
+        "v": {"type": "integer", "description": "Payload schema version, always 1."},
+        "source": {"type": "string", "description": "Emitting subsystem identifier, always 'tengine'."},
+        "host": {"type": "string", "description": "Hostname of the machine that generated this event."},
+        "silo": {"type": "string", "description": "Silo identifier this event originates from."},
+        "signal": {"type": "string", "description": "Panic signal or error code that triggered the crash."},
+        "last_frame": {"type": "integer", "description": "Frame counter at time of crash; last successfully rendered frame before failure."},
+        "stderr_tail": {"type": "array", "items": {"type": "string"}, "description": "Last 20 lines of stderr or log output captured at crash time, providing context for debugging."},
+        "nvidia_tdr": {"type": "boolean", "description": "True when the crash was triggered by NVIDIA Timeout Detection and Recovery; indicates a GPU hardware timeout rather than a software error."},
+        "vk_error_code": {"type": "integer", "description": "Vulkan error code returned by the driver at time of crash; 0 means no Vulkan error was recorded."}
+      }
+    }
+  }
+}

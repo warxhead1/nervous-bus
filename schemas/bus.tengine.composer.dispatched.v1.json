@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.composer.dispatched.v1.json",
+  "type": "object",
+  "title": "bus.tengine.composer.dispatched.v1",
+  "description": "Emitted each frame the composer_4pass WT runs (throttled to 1Hz by caller). Produced by tengine-nervous-bus-client emit_composer_dispatched().",
+  "properties": {
+    "v": {
+      "type": "integer",
+      "const": 1,
+      "description": "Event schema version"
+    },
+    "source": {
+      "type": "string",
+      "const": "tengine",
+      "description": "Emitting subsystem"
+    },
+    "host": {
+      "type": "string",
+      "description": "Hostname of the emitting machine"
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Silo session identifier"
+    },
+    "silo": {
+      "type": "string",
+      "description": "Silo name"
+    },
+    "frame": {
+      "type": "integer",
+      "description": "GPU frame index"
+    },
+    "chunk_count": {
+      "type": "integer",
+      "description": "Number of chunks dispatched in this frame"
+    }
+  },
+  "required": [
+    "v",
+    "source",
+    "host",
+    "session_id",
+    "silo",
+    "frame",
+    "chunk_count"
+  ],
+  "additionalProperties": false
+}

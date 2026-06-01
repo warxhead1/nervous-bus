@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.research.cycle.started.v1.json",
+  "title": "deer-flow.research.cycle.started v1",
+  "description": "Emitted by deer-flow's ResearchDispatchConsumer (packages/harness/deerflow/research_dispatch/consumer.py) immediately after a research cycle subprocess (meta_probe.py) is spawned. Paired with deer-flow.research.cycle.completed.v1. Consumed by hearth to open a live 'cycle' session card. Validated against event['data']. Permissive (additionalProperties:true).",
+  "type": "object",
+  "required": ["research_id", "cycle_id"],
+  "properties": {
+    "research_id": {
+      "type": "string",
+      "description": "Identifier for the research request (CloudEvents subject)."
+    },
+    "cycle_id": {
+      "type": "string",
+      "description": "Cycle identifier, format YYYYMMDDTHHMMSSz-<hex>."
+    },
+    "pid": {
+      "type": "integer",
+      "description": "OS process id of the spawned meta_probe.py cycle subprocess."
+    },
+    "project_source": {
+      "type": "string",
+      "description": "Originating project/source that requested the cycle."
+    }
+  },
+  "additionalProperties": true
+}

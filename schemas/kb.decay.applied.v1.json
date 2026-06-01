@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "kb.decay.applied.v1",
+  "title": "KB Decay Applied",
+  "description": "Emitted by `kb decay` when time-based confidence decay is applied to vault entries. Skipped in --dry-run mode. Enables dashboards to track vault health over time.",
+  "type": "object",
+  "required": ["count"],
+  "properties": {
+    "count":     { "type": "integer", "minimum": 0, "description": "Number of entries whose confidence was reduced" },
+    "project":   { "type": "string", "description": "Project filter applied, or null for all projects" },
+    "decay_rate":{ "type": "number",  "description": "Decay rate applied (fraction per day)" },
+    "dry_run":   { "type": "boolean", "description": "Always false when this event fires; dry-run runs do not emit" }
+  }
+}

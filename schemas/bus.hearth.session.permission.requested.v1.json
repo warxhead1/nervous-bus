@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth.session.permission.requested.v1.json",
+  "title": "bus.hearth.session.permission.requested v1",
+  "description": "Emitted by hearth-session's permission_publisher when a Claude Code permission prompt is detected on a tmux pane. Published with a 300-second TTL and 10-second dedup window. The Android app renders an Approve/Deny card and fires a push notification; the response is routed back to the correct tmux pane via correlation_id. Auto-mode sessions (permission_mode=acceptEdits|bypassPermissions) are never published.",
+  "type": "object",
+  "required": ["correlation_id", "session_id", "pane_id", "project", "project_short", "tool_summary", "prompt_text", "options", "deep_link", "ts", "expires_at"],
+  "properties": {
+    "correlation_id": {
+      "type": "string",
+      "description": "UUID v4 token that identifies this permission prompt; the Android app echoes it back on approval/denial so hearth-api can route the keystroke to the correct pane."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "ULID of the hearth-session this prompt belongs to."
+    },
+    "pane_id": {
+      "type": "string",
+      "description": "tmux pane ID the prompt appeared in (e.g. '%42')."
+    },
+    "project": {
+      "type": "string",
+      "description": "Absolute path of the project this session is running in."
+    },
+    "project_short": {
+      "type": "string",
+      "description": "Short project name derived from the project path."
+    },
+    "tool_summary": {
+      "type": "string",
+      "maxLength": 120,
+      "description": "Truncated one-line description of the tool being gated (first line of tool description, max 120 chars)."
+    },
+    "prompt_text": {
+      "type": "string",
+      "maxLength": 600,
+      "description": "Full prompt text up to 600 characters, used as the card body on the phone UI."
+    },
+    "options": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Option labels from the Claude Code permission prompt (e.g. ['Yes', 'Yes, and don't ask again for this session', 'No'])."
+    },
+    "deep_link": {
+      "type": "string",
+      "format": "uri",
+      "description": "session:// URI that links directly to this session in the app."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when this event was published."
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp after which the phone should auto-dismiss this card."
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.council.started.v1.json",
+  "title": "deer-flow.council.started v1",
+  "description": "A deer-query council has been dispatched. Fires at the moment agents are launched, before any results are available. Enables live council UIs and cost tracking from the start of a debate.",
+  "type": "object",
+  "required": ["council_id", "n_agents", "question_preview", "mode"],
+  "properties": {
+    "council_id": {
+      "type": "string",
+      "description": "Unique council run identifier (ULID-style timestamp-id)"
+    },
+    "n_agents": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of council agents dispatched"
+    },
+    "question_preview": {
+      "type": "string",
+      "maxLength": 80,
+      "description": "First 80 chars of the question — safe to log without PII risk"
+    },
+    "agent_names": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Model/agent identifiers for each dispatched agent"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["free", "genius_tiebreak"],
+      "description": "free = free model council; genius_tiebreak = deepseek-v4-pro tiebreaker fired"
+    }
+  }
+}

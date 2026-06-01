@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth.tengine.silo.requested.v1.json",
+  "title": "bus.hearth.tengine.silo.requested v1",
+  "description": "Fired when hearth (home-automation) requests a specific tengine silo to be loaded. Source is hearth-phone. This is a control-plane event used to request sandbox environments for testing. Only 1 event observed in 4 days — likely a test/integration event rather than production.",
+  "type": "object",
+  "required": ["silo", "source", "requested_at"],
+  "properties": {
+    "silo": {
+      "type": "string",
+      "description": "Name of the requested silo/environment (e.g. 'nonexistent_silo_for_test')."
+    },
+    "source": {
+      "type": "string",
+      "description": "Hearth component that requested the silo (e.g. 'hearth-phone')."
+    },
+    "requested_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp of the request."
+    },
+    "args": {
+      "type": "array",
+      "description": "Arguments passed to the silo request. Observed as empty in production."
+    },
+    "pid": {
+      "type": "integer",
+      "description": "Process ID of the requesting hearth process."
+    },
+    "log_path": {
+      "type": "string",
+      "description": "Path to the log file for this silo request."
+    },
+    "v": {
+      "type": "integer",
+      "description": "Schema version marker. Currently 1."
+    }
+  },
+  "additionalProperties": true
+}

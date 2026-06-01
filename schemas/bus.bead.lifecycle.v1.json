@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.bead.lifecycle.v1.json",
+  "title": "bus.bead.lifecycle v1",
+  "description": "Composite lifecycle stream for beads — every bead-relevant transition flows here keyed by `event_type`. Producer is hearth-loom (internal/bus/publisher.go); consumers include deer-flow Forge (which dispatches by event_type). Bench results have a richer payload and live on a sibling channel `bus.bead.bench_completed.v1` rather than here. The 15 enumerated event_types cover both internal worker lifecycle (dispatched, container_died, startup_reset, rescued_wip, pickup_analysis_complete, ac_self_verified, scope_divergence, bead_closed, bead_failed) and external Forge-facing PR/CI events (pr_opened, pr_merged, checks_passed, lint_passed, tests_passed, falsified). Payload is event_type-specific; sub-schemas are enumerated under properties.payload.oneOf for the Forge-facing events. Producer event_types may attach free-form payloads.",
+  "type": "object",
+  "required": ["bead_id", "task_id", "event_type", "ts", "project"],
+  "properties": {
+    "bead_id": {
+      "type": "string",
+      "description": "Cross-project bead id (e.g. nervous-bus-immg, loom-78wk). Pattern is permissive to allow legacy ids."
+    },
+    "task_id": {
+      "type": "string",
+      "description": "hearth-loom task/dispatch id correlating this event to a specific shuttle run (e.g. 'af899084996493906'). Distinct from bead_id because a single bead may be retried under multiple task_ids."
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "dispatched",
+        "container_died",
+        "startup_reset",
+        "rescued_wip",
+        "pickup_analysis_complete",
+        "ac_self_verified",
+        "scope_divergence",
+        "bead_closed",
+        "bead_failed",
+        "pr_opened",
+        "pr_merged",
+        "checks_passed",
+        "lint_passed",
+        "tests_passed",
+        "falsified"
+      ],
+      "description": "Discriminator for which transition this event represents. Consumers dispatch on this field."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp of when the transition occurred."
+    },
+    "attempt_id": {
+      "type": "string",
+      "description": "Per-dispatch attempt key correlating this event to a specific execution attempt. Empty for pre-dispatch events."
+    },
+    "correlation_id": {
+      "type": "string",
+      "description": "Optional correlation key for tracing cross-service request chains (e.g. bus.beads.command.v1 request_id)."
+    },
+    "actor": {
+      "type": "string",
+      "description": "Who triggered this transition: poller, dispatcher, loomie, autoloom, human, command-bus."
+    },
+    "project": {
+      "type": "string",
+      "description": "Absolute project path for the bead (e.g. /home/user/projects/hearth-loom/main)."
+    },
+    "payload": {
+      "description": "Event-specific data. For Forge-facing event_types (pr_opened, pr_merged, checks_passed, lint_passed, tests_passed, falsified) the structure is documented via the anyOf sub-schemas below; for producer-internal lifecycle event_types the payload is free-form (the open object case at the end of anyOf accepts anything). anyOf rather than oneOf is intentional: a well-formed pr_opened payload satisfies BOTH the pr_opened branch and the free-form branch, and we don't want to reject it for being too well-formed.",
+      "type": "object",
+      "anyOf": [
+        {
+          "type": "object",
+          "description": "pr_opened payload",
+          "required": ["bead_id", "pr_number", "pr_url", "opened_at"],
+          "properties": {
+            "bead_id": { "type": "string" },
+            "pr_number": { "type": "integer", "minimum": 1 },
+            "pr_url": { "type": "string", "format": "uri" },
+            "opened_at": { "type": "string", "format": "date-time" }
+          }
+        },
+        {
+          "type": "object",
+          "description": "pr_merged payload",
+          "required": ["bead_id", "pr_number", "merge_sha", "merged_at"],
+          "properties": {
+            "bead_id": { "type": "string" },
+            "pr_number": { "type": "integer", "minimum": 1 },
+            "merge_sha": { "type": "string", "minLength": 7, "maxLength": 40 },
+            "merged_at": { "type": "string", "format": "date-time" }
+          }
+        },
+        {
+          "type": "object",
+          "description": "checks_passed payload",
+          "required": ["bead_id", "pr_number", "check_name", "passed"],
+          "properties": {
+            "bead_id": { "type": "string" },
+            "pr_number": { "type": "integer", "minimum": 1 },
+            "check_name": { "type": "string" },
+            "passed": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "description": "lint_passed payload",
+          "required": ["bead_id", "linter", "passed"],
+          "properties": {
+            "bead_id": { "type": "string" },
+            "linter": {
+              "type": "string",
+              "description": "Linter identifier (e.g. ruff, eslint, golangci-lint, clippy)."
+            },
+            "passed": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "description": "tests_passed payload",
+          "required": ["bead_id", "framework", "test_count", "passed"],
+          "properties": {
+            "bead_id": { "type": "string" },
+            "framework": {
+              "type": "string",
+              "description": "Test framework (e.g. pytest, go-test, vitest, cargo-test)."
+            },
+            "test_count": { "type": "integer", "minimum": 0 },
+            "passed": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "description": "falsified payload",
+          "required": ["bead_id", "cause_of_death", "falsified_at"],
+          "properties": {
+            "bead_id": { "type": "string" },
+            "cause_of_death": {
+              "type": "string",
+              "description": "Short tag for why the bead is being abandoned (e.g. 'ci_failed_3x', 'merge_conflict', 'human_reject')."
+            },
+            "falsified_at": { "type": "string", "format": "date-time" }
+          }
+        },
+        {
+          "type": "object",
+          "description": "Free-form fallback for producer-internal event_types (dispatched, container_died, startup_reset, rescued_wip, pickup_analysis_complete, ac_self_verified, scope_divergence, bead_closed, bead_failed). No constraints — producer may add fields without a schema bump."
+        }
+      ]
+    }
+  },
+  "additionalProperties": true
+}

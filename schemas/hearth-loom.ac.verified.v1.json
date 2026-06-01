@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth-loom.ac.verified.v1.json",
+  "title": "hearth-loom.ac.verified v1",
+  "description": "Emitted once per acceptance-criteria bullet executed during a hearth-loom loomie run. Captures the extracted bash command, its exit code, captured stdout/stderr (truncated to 4096 chars with a [...truncated] marker when over the cap), wall-clock duration, and bullet provenance (bead_id, exec_id, ac_index, ac_text). Foundation for closing the phantom-AC-passes gap (sibling epic hearth-loom-loom-o4cc5): once these events flow, downstream consumers can populate AcceptanceYAML, enforce the merge gate on actual evidence, and surface per-bullet exit codes to reviewers. Pure observability — gate semantics live elsewhere. Source: /hearth-loom/executor.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "hearth-loom.ac.verified.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "bead_id",
+        "exec_id",
+        "ac_index",
+        "ac_text",
+        "command",
+        "exit_code",
+        "duration_ms",
+        "ts"
+      ],
+      "properties": {
+        "bead_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Bead id this acceptance criterion was verified for (e.g. nervous-bus-6kwv)"
+        },
+        "exec_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loomie execution identifier — correlates to loom.lifecycle.v1 execution_id"
+        },
+        "ac_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based index of this acceptance bullet within the bead's AC list"
+        },
+        "ac_text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "Prose AC bullet text (truncated to 500 chars)"
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Bash command extracted from the AC bullet (truncated to 1000 chars)"
+        },
+        "exit_code": {
+          "type": "integer",
+          "description": "Process exit code of the bash command. 0 = pass; non-zero = fail"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Wall-clock duration of the command in milliseconds"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC3339 UTC timestamp at command completion"
+        },
+        "stdout": {
+          "type": "string",
+          "maxLength": 4096,
+          "description": "Captured stdout, truncated to 4096 chars. Includes a [...truncated] suffix when the underlying output exceeded the cap."
+        },
+        "stderr": {
+          "type": "string",
+          "maxLength": 4096,
+          "description": "Captured stderr, truncated to 4096 chars. Includes a [...truncated] suffix when the underlying output exceeded the cap."
+        },
+        "working_dir": {
+          "type": "string",
+          "description": "Working directory the command ran in (typically /shuttle for loomie executions)"
+        },
+        "correlation_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional ULID linking this verification to a producer-triggered subagent request"
+        }
+      }
+    }
+  }
+}

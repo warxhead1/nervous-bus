@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "_per-project.research.finding.v1",
+  "description": "Shared base schema. Concrete types: <project>.research.finding.v1. Emitted by deer-flow or other researchers when a finding is relevant to one or more projects. Auto-routed into advisory beads for matching projects; explicit subscription required to route into running-loomie inboxes.",
+  "type": "object",
+  "required": ["source_project", "summary", "affected_projects"],
+  "properties": {
+    "source_project":    { "type": "string", "description": "Project that produced the finding" },
+    "summary":           { "type": "string" },
+    "details":           { "type": "string", "description": "Optional longer body" },
+    "affected_projects": { "type": "array", "items": { "type": "string" } },
+    "affected_files":    { "type": "array", "items": { "type": "string", "description": "Glob patterns" } },
+    "confidence":        { "type": "number", "minimum": 0, "maximum": 1 },
+    "citations":         { "type": "array", "items": { "type": "string" } }
+  }
+}

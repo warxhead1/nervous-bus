@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# probe — pull-based bus snapshot for the current project.
+#
+# Filter: events whose source URI contains the current project basename
+# (so /home/eric/projects/nervous-bus shows /nervous-bus, /claude-code/nervous-bus,
+#  and any cross-project event with .source mentioning nervous-bus).
+#
+# Usage:
+#   probe                       # last 10 events, last 5min, current project
+#   probe loom.coord            # filter by channel-glob
+#   probe --since 1h            # widen window
+#   probe --limit 25            # more rows
+#   probe --any                 # disable project filter (cross-cutting view)
+#   probe --json                # emit raw JSONL (for piping into jq/agent)
+#
+# Designed to fit ~200 tokens of agent context per call. Empty result
+# returns "(no recent events)" (exit 0) — never errors out.
+
+set -uo pipefail
+
+LOG="${NERVOUS_LOG:-$HOME/.cache/nervous-bus/debug.jsonl}"
+SINCE="5m"
+LIMIT=10
+CHAN_GLOB=""
+ANY=0
+JSON=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --since) SINCE="${2:?--since requires duration}"; shift 2 ;;
+        --limit) LIMIT="${2:?--limit requires N}"; shift 2 ;;
+        --any)   ANY=1; shift ;;
+        --json)  JSON=1; shift ;;
+        --log)   LOG="${2:?--log requires path}"; shift 2 ;;
+        -h|--help)
+            sed -n '2,17p' "$0" | sed 's/^# *//'
+            exit 0
+            ;;
+        --*)     echo "unknown flag: $1" >&2; exit 2 ;;
+        *)       CHAN_GLOB="$1"; shift ;;
+    esac
+done
+
+if [[ ! -f "$LOG" ]]; then
+    echo "(no bus log at $LOG)"
+    exit 0
+fi
+
+# Parse --since duration into seconds (integer).
+to_seconds() {
+    local v="$1" n unit
+    n="${v//[^0-9]/}"
+    unit="${v//[0-9]/}"
+    case "$unit" in
+        s|"")  echo "$n" ;;
+        m)     echo $((n * 60)) ;;
+        h)     echo $((n * 3600)) ;;
+        d)     echo $((n * 86400)) ;;
+        *)     echo "bad --since: $v (use 30s, 5m, 1h, 2d)" >&2; exit 2 ;;
+    esac
+}
+SINCE_S=$(to_seconds "$SINCE")
+
+PROJECT="$(basename "$PWD")"
+[[ "$ANY" == 1 ]] && PROJECT=""
+
+LOG="$LOG" SINCE_S="$SINCE_S" LIMIT="$LIMIT" CHAN_GLOB="$CHAN_GLOB" \
+PROJECT="$PROJECT" JSON="$JSON" \
+python3 <<'PYEOF'
+import json, os, sys, time, fnmatch
+from datetime import datetime
+from pathlib import Path
+
+log     = Path(os.environ['LOG'])
+since_s = int(os.environ['SINCE_S'])
+limit   = int(os.environ['LIMIT'])
+glob    = os.environ['CHAN_GLOB']
+project = os.environ['PROJECT']
+as_json = os.environ['JSON'] == '1'
+
+def parse_ts(s):
+    try: return datetime.fromisoformat(s.replace('Z','+00:00')).timestamp()
+    except Exception: return 0.0
+
+now = time.time()
+cutoff = now - since_s
+
+# Tail-read the log (last ~2MB is plenty for 5m-1h windows).
+try:
+    with log.open('r', encoding='utf-8', errors='replace') as f:
+        f.seek(0, 2); end = f.tell()
+        f.seek(max(0, end - 2_000_000))
+        f.readline()
+        rows = []
+        for line in f:
+            line = line.strip()
+            if not line: continue
+            try: e = json.loads(line)
+            except Exception: continue
+            ts = parse_ts(e.get('time',''))
+            if ts < cutoff: continue
+            chan = e.get('type','')
+            if glob and not fnmatch.fnmatch(chan, f"*{glob}*"): continue
+            src = e.get('source','')
+            if project and project not in src and project not in chan: continue
+            rows.append((ts, e))
+except FileNotFoundError:
+    print("(no bus log)"); sys.exit(0)
+
+if not rows:
+    print("(no recent events)" if not as_json else "")
+    sys.exit(0)
+
+# Dedupe by (chan, source, normalized data) — keep newest per cluster.
+seen = {}
+for ts, e in rows:
+    data_key = json.dumps(e.get('data') or {}, sort_keys=True)[:80]
+    key = (e.get('type',''), e.get('source',''), data_key)
+    if key not in seen or seen[key][0] < ts:
+        seen[key] = (ts, e)
+
+deduped = sorted(seen.values(), key=lambda x: -x[0])[:limit]
+
+if as_json:
+    for _ts, e in deduped:
+        print(json.dumps(e, separators=(',',':')))
+    sys.exit(0)
+
+# Compact 4-col table: ts | channel | source | summary.
+def hms(ts):
+    d = datetime.fromtimestamp(ts)
+    return d.strftime('%H:%M:%S')
+
+def summarize(e):
+    d = e.get('data') or {}
+    if not isinstance(d, dict): return ''
+    bits = []
+    for k in ('phase','event','task_id','bead_id','msg','project','session_id'):
+        v = d.get(k)
+        if v is None: continue
+        s = str(v)
+        if len(s) > 22: s = s[:21] + '…'
+        bits.append(f"{k}={s}")
+        if len(bits) >= 2: break
+    return ' '.join(bits)
+
+print(f"{'time':<8} {'channel':<28} {'source':<22} summary")
+for ts, e in deduped:
+    chan = e.get('type','')[:28]
+    src  = e.get('source','')[:22]
+    print(f"{hms(ts):<8} {chan:<28} {src:<22} {summarize(e)}")
+print(f"({len(deduped)}/{len(rows)} events; --any for cross-project, --since 1h to widen)")
+PYEOF

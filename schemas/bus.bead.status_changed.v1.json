@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.bead.status_changed.v1.json",
+  "title": "bus.bead.status_changed v1",
+  "description": "Emitted by hearth-nbus whenever a bead's status changes in hearth's internal tracking. Consumers (including deer-flow) use this to keep their bead state mirrors up to date.",
+  "type": "object",
+  "required": ["bead_id", "project", "status", "action"],
+  "properties": {
+    "bead_id": {
+      "type": "string",
+      "description": "Bead identifier (e.g. 'loom-01ARZ3NDEKTSV4RRFFQ69G5FAV')."
+    },
+    "project": {
+      "type": "string",
+      "description": "Project the bead belongs to (e.g. 'hearth-loom', 'deer-flow')."
+    },
+    "status": {
+      "type": "string",
+      "description": "New status value (e.g. 'open', 'in_progress', 'done', 'closed')."
+    },
+    "action": {
+      "type": "string",
+      "description": "Action that triggered the change (e.g. 'create', 'update', 'claim', 'close')."
+    }
+  }
+}

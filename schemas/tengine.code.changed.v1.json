@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.code.changed.v1.json",
+  "title": "tengine.code.changed v1",
+  "description": "A file in the tengine repo changed. Emitted by post-commit / pre-push hooks. Lightweight signal so cross-repo consumers can invalidate caches or kick CI without polling.",
+  "type": "object",
+  "required": ["file"],
+  "properties": {
+    "file": { "type": "string", "description": "repo-relative path of the changed file" },
+    "commit": { "type": "string", "description": "git commit sha or marker (e.g. 'smoke' for hook tests)" }
+  }
+}

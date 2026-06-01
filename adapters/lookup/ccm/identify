@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# adapters/lookup/ccm/identify — resolve session/pane identity to rich metadata
+# via hearth-loom's CCM v2 REST API at http://localhost:5908.
+#
+# CCM v2 uses pane_id as the primary key (zellij:<session_name>:<pane_n> for
+# zellij-tracked sessions, docker:hearth-loom-agent-<id> for loomies). This
+# adapter accepts a pane_id directly (preferred) or a session_id (UUID,
+# correlates via opencode_session_id).
+#
+# Usage:
+#   adapters/lookup/ccm/identify <pane_id>          (preferred)
+#   adapters/lookup/ccm/identify <session_uuid>     (best-effort match via opencode_session_id)
+#
+# Output: one normalized JSON object on stdout, ALWAYS — even when not found.
+# Exit:   0 on success (including not-found / unreachable);
+#         non-zero only on adapter bug.
+
+set -uo pipefail
+
+KEY="${1:-}"
+if [[ -z "$KEY" ]]; then
+    echo '{"key":"","found":false,"source":"ccm","error":"no key supplied (pane_id or session_id)"}'
+    exit 0
+fi
+
+CCM_BASE="${CCM_BASE:-http://localhost:5908}"
+TIMEOUT="${CCM_TIMEOUT:-3}"
+
+# CCM v2 doesn't expose /sessions/<id> — fetch the full list and filter.
+# Cheap for typical N (<100). Cache adapter-side via the consumer if needed.
+RAW=$(curl -s --max-time "$TIMEOUT" "$CCM_BASE/api/v2/ccm/sessions" 2>/dev/null)
+if [[ -z "$RAW" ]]; then
+    jq -nc --arg k "$KEY" \
+        '{key:$k, found:false, source:"ccm", error:"ccm v2 unreachable at '"$CCM_BASE"'"}'
+    exit 0
+fi
+
+# Lookup priority:
+#   1. exact pane_id match
+#   2. opencode_session_id match (loomies)
+#   3. execution_id match
+SESSION=$(printf '%s' "$RAW" | jq -c --arg k "$KEY" '
+    .sessions
+    | (map(select(.pane_id == $k))             | first) //
+      (map(select(.opencode_session_id == $k)) | first) //
+      (map(select(.execution_id == $k))        | first) //
+      null
+' 2>/dev/null)
+
+if [[ -z "$SESSION" || "$SESSION" == "null" ]]; then
+    jq -nc --arg k "$KEY" '{key:$k, found:false, source:"ccm"}'
+    exit 0
+fi
+
+# Normalize CCM v2 fields to the adapter contract. CCM v2 doesn't have
+# branch/cost/context_percent (those live in claudecode-side telemetry CCM
+# doesn't surface yet) — those slots stay null and a future hearth-api
+# adapter can fill them in via merge.
+printf '%s' "$SESSION" | jq -c --arg k "$KEY" '
+    {
+        key:                  $k,
+        found:                true,
+        source:               "ccm",
+        pane_id:              .pane_id,
+        slug:                 (.slug // null),
+        agent_type:           (.agent_type // null),
+        provider:             (
+                                if (.agent_type // "") == "claudecode" then "claude-code"
+                                elif (.agent_type // "") == "opencode" then "opencode"
+                                else (.agent_type // null)
+                                end
+                              ),
+        source_kind:          (.source // null),
+        state:                (.state // null),
+        task_id:              (.task_id // null),
+        execution_id:         (.execution_id // null),
+        opencode_session_id:  (.opencode_session_id // null),
+        title:                (.title // null),
+        message_count:        (.message_count // 0),
+        started_at:           (.started_at // null),
+        last_activity_at:     (.last_activity_at // null)
+    }
+    | with_entries(select(.value != null and .value != ""))
+'

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.improver.reasoning.v1.json",
+  "title": "autobench.improver.reasoning v1",
+  "description": "Improver deliberation capture — verbatim prompt, raw LLM response, parsed delta, and parse status for every improver call. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.improver.reasoning.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "iteration",
+        "model",
+        "prompt",
+        "raw_response",
+        "parsed_delta",
+        "parse_status",
+        "latency_ms"
+      ],
+      "properties": {
+        "session_id": {"type": "string"},
+        "iteration": {"type": "integer", "minimum": 0},
+        "model": {
+          "type": "string",
+          "description": "Improver model identifier (e.g. minimax-m2.7, anthropic-sonnet-4, rule_based)"
+        },
+        "prompt": {
+          "type": "string",
+          "description": "The diagnosis prompt sent to the model (verbatim)."
+        },
+        "raw_response": {
+          "type": "string",
+          "description": "Verbatim model output. For rule-based: 'matched strategy: <name>'."
+        },
+        "parsed_delta": {
+          "type": "object",
+          "description": "ImprovementDelta fields as parsed from the response.",
+          "additionalProperties": true
+        },
+        "parse_status": {
+          "type": "string",
+          "enum": ["ok", "fell_back_to_rule_based", "no_change"],
+          "description": "Outcome of parsing the model output."
+        },
+        "fallback_reason": {
+          "type": "string",
+          "description": "Why we fell back (HTTP error, parse error, etc.)."
+        },
+        "latency_ms": {"type": "number", "minimum": 0.0},
+        "cost_dollars": {"type": "number", "minimum": 0.0}
+      }
+    }
+  }
+}

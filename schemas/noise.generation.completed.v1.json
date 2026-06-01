@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/noise.generation.completed.v1.json",
+  "title": "noise.generation.completed v1",
+  "description": "Emitted at the end of each noise FunSearch generation. Source: /autobench/noise_kernel. Fitness is SSIM against a reference render of the target noise type. Single-instance evaluation (multi-instance has arithmetic ceiling at mean_pairwise_ssim).",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": { "type": "string", "const": "1.0" },
+    "id": { "type": "string" },
+    "source": { "type": "string", "const": "/autobench/noise_kernel" },
+    "type": { "type": "string", "const": "noise.generation.completed.v1" },
+    "datacontenttype": { "type": "string", "const": "application/json" },
+    "time": { "type": "string", "format": "date-time" },
+    "data": {
+      "type": "object",
+      "required": ["run_id", "generation", "best_fitness", "best_island", "mean_pop_fitness", "llm_requests"],
+      "properties": {
+        "run_id": { "type": "string", "description": "ULID run identifier." },
+        "generation": { "type": "integer" },
+        "best_fitness": {
+          "type": "number",
+          "description": "Best SSIM against the target noise instance reference render. 1.0 = pixel-perfect match. Note: ceiling at ~(1+sum_pairwise_ssim)/N if multiple instances are used."
+        },
+        "best_island": { "type": "integer" },
+        "mean_pop_fitness": { "type": "number" },
+        "gen_seconds": { "type": "number" },
+        "eval_seconds": { "type": "number" },
+        "llm_requests": { "type": "integer" },
+        "fitness_std": { "type": "number" },
+        "code_diversity": { "type": "number" },
+        "island_reset_fired": { "type": "boolean" }
+      }
+    }
+  }
+}

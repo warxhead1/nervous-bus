@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.bridge.path_verified.v1.json",
+  "type": "object",
+  "title": "bus.tengine.bridge.path_verified.v1",
+  "description": "Emitted when a heightmap-mapped check passes (hm_mapped=true). Produced by tengine-nervous-bus-client emit_bridge_path_verified().",
+  "properties": {
+    "v": {
+      "type": "integer",
+      "const": 1,
+      "description": "Event schema version"
+    },
+    "source": {
+      "type": "string",
+      "const": "tengine",
+      "description": "Emitting subsystem"
+    },
+    "host": {
+      "type": "string",
+      "description": "Hostname of the emitting machine"
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Silo session identifier"
+    },
+    "silo": {
+      "type": "string",
+      "description": "Silo name (e.g. TerrainFossil)"
+    },
+    "source_slot": {
+      "type": "integer",
+      "description": "Source resource slot index"
+    },
+    "dest_slot": {
+      "type": "integer",
+      "description": "Destination resource slot index"
+    },
+    "probe_coord": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 2,
+      "maxItems": 2,
+      "description": "[x, y] probe coordinate in terrain space"
+    },
+    "probe_value": {
+      "type": "number",
+      "description": "Height value read at probe coordinate"
+    }
+  },
+  "required": [
+    "v",
+    "source",
+    "host",
+    "session_id",
+    "silo",
+    "source_slot",
+    "dest_slot",
+    "probe_coord",
+    "probe_value"
+  ],
+  "additionalProperties": false
+}

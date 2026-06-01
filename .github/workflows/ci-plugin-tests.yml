@@ -1,0 +1,49 @@
+name: Plugin Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugin/**'
+      - '.github/workflows/ci-plugin-tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'plugin/**'
+      - '.github/workflows/ci-plugin-tests.yml'
+
+jobs:
+  plugin-tests:
+    name: plugin-tests
+    runs-on: [self-hosted, linux, nervous-bus]
+    steps:
+      - name: Configure PATH
+        run: |
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - uses: actions/checkout@v6
+        with:
+          clean: false
+
+      - name: Install wasm32-wasip1 target
+        run: rustup target add wasm32-wasip1
+
+      - name: cargo fmt --check
+        working-directory: plugin
+        run: cargo fmt --check
+
+      - name: cargo clippy (deny warnings)
+        working-directory: plugin
+        run: cargo clippy --no-deps --all-targets --locked -- -D warnings
+
+      - name: Run tests (native)
+        working-directory: plugin
+        run: cargo test --locked
+
+      - name: Build WASM release artifact
+        working-directory: plugin
+        run: cargo build --target wasm32-wasip1 --release --locked
+
+      - name: Check Cargo.lock is up to date
+        working-directory: plugin
+        run: git diff --exit-code Cargo.lock

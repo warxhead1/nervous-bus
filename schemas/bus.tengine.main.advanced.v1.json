@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.main.advanced.v1.json",
+  "type": "object",
+  "title": "bus.tengine.main.advanced.v1",
+  "description": "Emitted by auto_refresh_worktrees.sh when the main branch advances. Produced by tengine-nervous-bus-client emit_main_advanced().",
+  "properties": {
+    "v": {
+      "type": "integer",
+      "const": 1,
+      "description": "Event schema version"
+    },
+    "source": {
+      "type": "string",
+      "const": "tengine",
+      "description": "Emitting subsystem"
+    },
+    "host": {
+      "type": "string",
+      "description": "Hostname of the emitting machine"
+    },
+    "sha": {
+      "type": "string",
+      "description": "Git SHA of the new main branch HEAD"
+    },
+    "refreshed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of worktree agent IDs that were refreshed"
+    },
+    "conflicted": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of worktree agent IDs that had merge conflicts"
+    },
+    "clean_count": {
+      "type": "integer",
+      "description": "Number of worktrees that were already clean (no action needed)"
+    }
+  },
+  "required": [
+    "v",
+    "source",
+    "host",
+    "sha",
+    "refreshed",
+    "conflicted",
+    "clean_count"
+  ],
+  "additionalProperties": false
+}

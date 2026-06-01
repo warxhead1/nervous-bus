@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://nervous-bus/schemas/codeforces_problem.v1.json",
+  "title": "CodeforcesProblem",
+  "description": "Ingested CodeForces problem record for LCB-style evaluation",
+  "type": "object",
+  "required": ["cf_id", "contest_id", "index", "title", "statement", "difficulty"],
+  "properties": {
+    "cf_id": {
+      "type": "string",
+      "description": "Codeforces native ID e.g. '1234A' — unique across all CF problems"
+    },
+    "contest_id": {
+      "type": "integer",
+      "description": "Codeforces contest number"
+    },
+    "index": {
+      "type": "string",
+      "description": "Letter index within contest e.g. 'A', 'B', 'C'"
+    },
+    "title": {
+      "type": "string",
+      "description": "Problem title as shown on Codeforces"
+    },
+    "statement": {
+      "type": "string",
+      "description": "Plain text problem statement (HTML stripped)"
+    },
+    "input_format": {
+      "type": "string",
+      "description": "Specification of input format"
+    },
+    "output_format": {
+      "type": "string",
+      "description": "Specification of expected output"
+    },
+    "difficulty": {
+      "type": "string",
+      "enum": ["easy", "medium", "hard"],
+      "description": "Mapped from Codeforces rating: <1200 easy, 1200-1999 medium, >=2000 hard"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "CF problem tags e.g. ['dp', 'graphs', 'math']"
+    },
+    "sample_tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "input":  { "type": "string" },
+          "output": { "type": "string" }
+        },
+        "required": ["input", "output"]
+      },
+      "description": "Sample test cases for local validation"
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "cf_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Canonical Codeforces problem URL"
+        },
+        "rating": {
+          "type": "integer",
+          "description": "Codeforces rating (CF rating of problem, if assigned)"
+        },
+        "solved_by": {
+          "type": "integer",
+          "description": "Number of users who solved this problem"
+        },
+        "scraped_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp of when this problem was ingested"
+        }
+      }
+    }
+  }
+}

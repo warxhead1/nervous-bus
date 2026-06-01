@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.bead.closed.v1.json",
+  "title": "bus.bead.closed v1",
+  "description": "DEPRECATED (2026-05-16, nervous-bus-immg): superseded by bus.bead.lifecycle.v1 with event_type='bead_closed'. Left in place for historical reference; no producer emits this channel.",
+  "deprecated": true,
+  "type": "object",
+  "required": ["bead_id", "project"],
+  "properties": {
+    "bead_id": { "type": "string" },
+    "project": { "type": "string" },
+    "reason": { "type": "string", "maxLength": 300 },
+    "outcome": {
+      "type": "string",
+      "enum": ["completed", "cancelled", "superseded", "wont_fix", "duplicate"]
+    },
+    "saga_id": { "type": "string" },
+    "pr_url": { "type": "string" },
+    "closed_by": { "type": "string", "description": "human:<name> or agent:hearth-loom:<worker>" }
+  }
+}

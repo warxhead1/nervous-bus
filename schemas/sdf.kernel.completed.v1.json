@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/sdf.kernel.completed.v1.json",
+  "title": "sdf.kernel.completed v1",
+  "description": "Emitted when the SDF FunSearch kernel finishes all generations. Source: /autobench/sdf_kernel.",
+  "type": "object",
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/sdf_kernel"
+    },
+    "type": {
+      "type": "string",
+      "const": "sdf.kernel.completed.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "total_generations",
+        "best_program",
+        "history"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "total_generations": {
+          "type": "integer"
+        },
+        "stop_reason": {
+          "type": "string",
+          "description": "Why the run ended: a horizon (target_fitness/request budget/wall-clock/plateau) or the generation cap."
+        },
+        "llm_requests": {
+          "type": "integer",
+          "description": "Total LLM requests issued during the run (MiniMax billing unit is requests, not dollars)."
+        },
+        "best_program": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "fitness": {
+              "type": "number",
+              "description": "Eikonal-penalised fitness: (1/(1+MSE)) * exp(-0.5*mean_grad_err). 1.0 = perfect eikonal-valid SDF."
+            },
+            "island": {
+              "type": "integer"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "source": {
+              "type": "string",
+              "description": "Origin of this program: 'llm', 'baseline', 'mutated', or 'migrated'."
+            },
+            "sdf_code": {
+              "type": "string",
+              "description": "The C++ sdf(x,y,z) function body \u2014 the evolved shader primitive. Preserved here so the winning code survives if the results file is not persisted."
+            },
+            "eikonal_score": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "description": "Eikonal validity score of best program. 1.0 = perfect, <0.5 = likely unusable in raymarcher."
+            },
+            "mean_grad_err": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "description": "Mean |\u2207sdf| - 1| of best program."
+            }
+          }
+        },
+        "history": {
+          "type": "array",
+          "description": "Per-generation fitness progression.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "generation": {
+                "type": "integer"
+              },
+              "best_fitness": {
+                "type": "number",
+                "description": "Best eikonal-penalised fitness this generation."
+              },
+              "best_id": {
+                "type": "string"
+              },
+              "best_island": {
+                "type": "integer"
+              },
+              "mean_pop_fitness": {
+                "type": "number"
+              },
+              "gen_seconds": {
+                "type": "number"
+              },
+              "eval_seconds": {
+                "type": "number"
+              },
+              "llm_requests": {
+                "type": "integer"
+              },
+              "fitness_std": {
+                "type": "number",
+                "description": "StdDev of fitness across all island populations."
+              },
+              "code_diversity": {
+                "type": "number",
+                "description": "Mean pairwise Jaccard distance of code token sets (0=identical, 1=disjoint)."
+              },
+              "island_reset_fired": {
+                "type": "boolean",
+                "description": "True if island_reset() culled weak islands this generation."
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

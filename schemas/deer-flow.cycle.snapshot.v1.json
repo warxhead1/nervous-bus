@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.cycle.snapshot.v1.json",
+  "title": "deer-flow.cycle.snapshot v1",
+  "description": "Point-in-time renderable view of a stack-tuner cycle. Fires on status transitions (started, in_progress after each stage, completed, failed, cancelled) so dashboards can show live progress without waiting for cycle.done. Complements deer-flow.stack-tuner.cycle.done.v1 (terminal) and deer-flow.metaprobe.cycle.v1 (rollup). Source: /deer-flow/stack-tuner.",
+  "type": "object",
+  "required": ["cycle_id", "status", "question_class"],
+  "properties": {
+    "cycle_id": {
+      "type": "string",
+      "description": "Unique cycle identifier — matches cycle.start subject and all stage.* events"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["started", "in_progress", "completed", "failed", "cancelled"],
+      "description": "Current lifecycle status at the moment of this snapshot"
+    },
+    "question_class": {
+      "type": ["string", "null"],
+      "description": "Router classification of the question (trivial, general, strategic, surgical)"
+    },
+    "question": {
+      "type": "string",
+      "description": "First 200 chars of the question being explored"
+    },
+    "verdict": {
+      "type": ["string", "null"],
+      "description": "Terminal verdict when status is completed or failed; null while in_progress"
+    },
+    "score": {
+      "type": ["number", "null"],
+      "description": "Current best score — may update as stages complete"
+    },
+    "lift": {
+      "type": ["number", "null"],
+      "description": "Score delta over pre-cycle baseline — null until at least one stage scores"
+    },
+    "wall_elapsed_s": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Seconds elapsed since cycle start at snapshot time"
+    },
+    "cumulative_cost_usd": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Accumulated model cost in USD at snapshot time"
+    },
+    "stage_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total stages planned for this cycle"
+    },
+    "stages_completed": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Stages that have finished (ok or error) at snapshot time"
+    },
+    "error": {
+      "type": ["string", "null"],
+      "description": "Error summary when status is failed; null otherwise"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC — when this cycle began"
+    }
+  }
+}

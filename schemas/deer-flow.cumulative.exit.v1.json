@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.cumulative.exit.v1.json",
+  "title": "deer-flow.cumulative.exit v1",
+  "description": "Cumulative-synthesis middleware force-exited an agent thread — count reached the EXIT threshold and the agent was jumped to 'end'. Producer: backend/packages/harness/deerflow/agents/middlewares/cumulative_synthesis_middleware.py. PRODUCER NOTE: live producer emits unversioned channel name `deer-flow.cumulative.exit`; this schema is filed against the canonical versioned name and validates the same data block.",
+  "type": "object",
+  "required": ["thread_id", "count", "mode", "threshold"],
+  "properties": {
+    "thread_id": {
+      "type": "string",
+      "description": "LangGraph thread id that just exited"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "cumulative count at the moment of force-exit"
+    },
+    "mode": {
+      "type": "string",
+      "description": "cumulative-tracking mode (e.g. 'all', 'discovery')"
+    },
+    "threshold": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "configured exit-threshold value"
+    }
+  }
+}

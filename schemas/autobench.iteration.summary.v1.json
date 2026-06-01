@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.iteration.summary.v1.json",
+  "title": "autobench.iteration.summary v1",
+  "description": "Rollup emitted at completion of each RSI iteration. Consumers (pulse dashboard, continuous.py surprise digest, deer-flow analytics) previously had to recompute aggregate_score, pass_rate, verdict_distribution and cost from the raw autobench.case.result.v1 stream — this channel publishes the rollup that the server already computed in evaluator.BenchmarkResult so downstream consumers don't have to. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.iteration.summary.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "iteration",
+        "aggregate_score",
+        "pass_rate",
+        "total_latency_ms",
+        "total_cost_usd",
+        "total_tokens",
+        "verdict_distribution",
+        "num_cases",
+        "harness_version",
+        "ce_rate",
+        "ok_rate"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the autobench run; correlates with case.result events"
+        },
+        "iteration": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "RSI iteration number this summary describes"
+        },
+        "aggregate_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "SICA utility score in [0.0, 1.0]: 0.5*score + 0.25*(1-cost) + 0.25*(1-time)"
+        },
+        "pass_rate": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Fraction of cases with verdict==OK"
+        },
+        "total_latency_ms": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Sum of per-case wall-clock latency in milliseconds"
+        },
+        "total_cost_usd": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Sum of worker-call USD cost for this iteration. 0.0 when worker-call cost rollup is not threaded through (see nervous-bus follow-up for cost plumbing)."
+        },
+        "total_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sum of prompt+completion tokens across worker calls in this iteration. 0 when worker-call token rollup is not threaded through."
+        },
+        "verdict_distribution": {
+          "type": "object",
+          "description": "Histogram mapping verdict string (OK/WA/TLE/RE/CE/MLE/VF/RV/RD/RT) to count",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "num_cases": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of benchmark cases evaluated this iteration"
+        },
+        "harness_version": {
+          "type": "string",
+          "description": "Harness version tag for the iteration (e.g. 'v3')"
+        },
+        "ce_rate": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Fraction of cases with verdict==CE (compilation error)"
+        },
+        "ok_rate": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Fraction of cases with verdict==OK (synonym for pass_rate; included for explicit access from consumers that key on verdict rates)"
+        }
+      }
+    }
+  }
+}

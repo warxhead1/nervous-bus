@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.voice.intent.v1.json",
+  "title": "hearth.voice.intent v1",
+  "description": "Voice intent classification event from Hearth's wake-word → classify → dispatch pipeline. Published after classification so Android Jarvis screen can show real-time feedback that a command was heard and classified. Low-frequency, high-value signal for mobile.",
+  "type": "object",
+  "required": ["session_id", "raw_text", "intent_class", "confidence", "model_used", "dispatch_target", "latency_ms"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Unique session identifier for the voice command context"
+    },
+    "raw_text": {
+      "type": "string",
+      "description": "The raw transcribed text from the voice input"
+    },
+    "intent_class": {
+      "type": "string",
+      "description": "The classified intent category (e.g. device_command, media_command, hardware_query, general, unknown)"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Classification confidence score 0.0-1.0"
+    },
+    "model_used": {
+      "type": "string",
+      "description": "The model that performed the classification (e.g. ollama/mistral-nemo, minimax/m2-7b)"
+    },
+    "dispatch_target": {
+      "type": "string",
+      "description": "The target service or handler the intent was dispatched to"
+    },
+    "latency_ms": {
+      "type": "number",
+      "description": "End-to-end latency from wake-word detection to dispatch decision in milliseconds"
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.kb.article.saved.v1.json",
+  "title": "hearth.kb.article.saved v1",
+  "description": "Fired by hearth-api after a deer-flow research cycle result is persisted to the KB YAML store at ~/projects/kb/home-automation/. Android subscribes via nbus SSE to update the knowledge chunk counter and show a snackbar. Producer: hearth-api/nbus_consumer.rs::handle_research_cycle_completed (after successful tokio::fs::write). Consumer: Android app (KnowledgeScreen live counter, snackbar notification).",
+  "type": "object",
+  "required": ["research_id", "cycle_id", "kb_path", "source"],
+  "properties": {
+    "research_id": {
+      "type": "string",
+      "description": "Required. Stable identifier for the research task that produced this article."
+    },
+    "cycle_id": {
+      "type": "string",
+      "description": "Required. Identifier for the specific research cycle whose result was persisted."
+    },
+    "kb_path": {
+      "type": "string",
+      "description": "Required. Absolute path on disk where the YAML article was written (e.g. /home/user/projects/kb/home-automation/some-topic.yaml)."
+    },
+    "source": {
+      "type": "string",
+      "description": "Required. The nervous-bus event that triggered this write — always 'deer-flow.research.cycle.completed.v1'."
+    },
+    "title": {
+      "type": "string",
+      "description": "Optional. The original research question, used as snackbar text on Android."
+    },
+    "chunk_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Optional. Number of KB chunks written in this save operation — typically 1."
+    }
+  }
+}

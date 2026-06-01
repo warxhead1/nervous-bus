@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/agent.session.heartbeat.v1.json",
+  "title": "agent.session.heartbeat v1",
+  "description": "Periodic liveness signal from a registered coding-agent session. Emitted on every Nth tool call OR every 60s (whichever first; cadence per-CLI in SKILL.md). Federates onto pane_id_qualified (primary, durable) and session_id (secondary, Claude-specific). Source: per-CLI session bridge (claude-session-bridge, opencode-session-bridge, etc.).",
+  "type": "object",
+  "required": ["session_id", "ts", "healthy", "agent_type"],
+  "additionalProperties": false,
+  "properties": {
+    "pane_id_qualified": {
+      "type": "string",
+      "description": "Primary durable key: 'zellij:<session_name>:<pane_id>' or 'tmux:<pane_id>'. Survives compaction and Claude session_id changes. Optional only because non-pane CLIs may not have it; producers SHOULD set it whenever a tmux/zellij pane exists."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Secondary key. Claude Code transcript session_id, or the CLI's native session identifier."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp at the moment the heartbeat was emitted."
+    },
+    "healthy": {
+      "type": "boolean",
+      "description": "True if the agent is making forward progress (no stuck loops, no crashed subagents, recent tool activity). False signals the session is alive but degraded."
+    },
+    "agent_type": {
+      "type": "string",
+      "enum": ["claude-code", "opencode", "codex", "gemini", "cursor", "unknown"],
+      "description": "Which coding CLI is running. Matches agent.session.v1 'agent' enum."
+    },
+    "focus_bead": {
+      "type": "string",
+      "description": "Current bead id the session is working (e.g. 'nervous-bus-ql7g'). Null/absent if no bead claimed."
+    },
+    "current_phase": {
+      "type": "string",
+      "description": "Free-text phase label (e.g. 'planning', 'implementing', 'reviewing', 'awaiting-human')."
+    },
+    "subagents_in_flight": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Count of dispatched-but-not-finished subagents/loomies/Task tool calls."
+    },
+    "recent_tool_calls": {
+      "type": "array",
+      "description": "Last N tool names invoked (typically last 5). Names only, no arguments — keeps the bus event small.",
+      "items": { "type": "string" },
+      "maxItems": 5
+    },
+    "context_percent": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 100.0,
+      "description": "Fraction of the model's context window currently used, as a percentage. 0 if unknown."
+    },
+    "parent_main_session_id": {
+      "type": "string",
+      "description": "If this session is linked (peer/subordinate/council-member), the session_id of the 'main' anchor session. Null/absent for solo sessions."
+    }
+  }
+}

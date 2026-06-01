@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.frame.metrics.v1.json",
+  "title": "tengine.frame.metrics v1",
+  "description": "Per-frame batch metrics parsed from verification_report.json. Emitted once per frame batch when verification completes — enables GPU silo sparklines and anomaly breakdown without subscribing to the full continuous frame stream.",
+  "type": "object",
+  "required": ["silo", "session_id", "frame_index", "frame_time_ms", "gpu_utilization_pct", "memory_bandwidth_gbps", "top_shader", "anomaly_codes"],
+  "properties": {
+    "silo": {
+      "type": "string",
+      "description": "tengine silo identifier (e.g. 'racing', 'exploration')."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Full session-dir basename (e.g. 'silo_Racing_20260503_103237_0025aa18')."
+    },
+    "frame_index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Zero-based frame batch index within the session."
+    },
+    "frame_time_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Average wall-time per frame in milliseconds for this batch."
+    },
+    "gpu_utilization_pct": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "GPU utilization percentage during this frame batch."
+    },
+    "memory_bandwidth_gbps": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Effective memory bandwidth in GB/s for this frame batch."
+    },
+    "top_shader": {
+      "type": "string",
+      "description": "Name of the most expensive shader in this batch by GPU time."
+    },
+    "anomaly_codes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Anomaly codes detected in this frame batch (e.g. ['HIGH_LAT', 'MEM_THROTTLE'])."
+    }
+  }
+}

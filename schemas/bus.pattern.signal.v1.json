@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.pattern.signal.v1.json",
+  "title": "bus.pattern.signal v1",
+  "description": "A pattern signal produced by the deer-flow pattern consumer after LLM analysis of a bundle. Routed by the signal-router into dashboard annotations, draft beads, or auto-filed beads based on confidence tier.",
+  "type": "object",
+  "required": ["signal_id", "signal_type", "severity", "confidence", "channels", "description"],
+  "properties": {
+    "signal_id":    {"type": "string", "description": "ULID"},
+    "signal_type":  {"type": "string", "enum": ["anomaly","pattern","correlation","silence","recovery"]},
+    "severity":     {"type": "string", "enum": ["info","warn","alert","critical"]},
+    "confidence":   {"type": "number", "minimum": 0, "maximum": 1},
+    "channels":     {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "description":  {"type": "string", "description": "One-paragraph deer-flow narrative"},
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "bundle_ids":      {"type": "array", "items": {"type": "string"}},
+        "deviation_sigma": {"type": ["number", "null"]},
+        "time_range": {
+          "type": "object",
+          "properties": {
+            "start": {"type": "string", "format": "date-time"},
+            "end":   {"type": "string", "format": "date-time"}
+          }
+        }
+      }
+    },
+    "recommended_action": {"type": ["string", "null"]},
+    "project_hint": {
+      "type": ["string", "null"],
+      "enum": ["tengine","hearth-loom","hearth","deer-flow","tachyonos","nervous-bus", null]
+    }
+  }
+}

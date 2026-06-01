@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.voice.pipeline.v1.json",
+  "title": "hearth.voice.pipeline v1",
+  "description": "Emitted by hearth-nbus after the voice intent pipeline processes an audio snippet. Includes routing and latency so consumers can detect anomalies in the voice path.",
+  "type": "object",
+  "required": ["intent_class", "latency_ms", "routed_to", "success"],
+  "properties": {
+    "intent_class": {
+      "type": "string",
+      "description": "Classified intent from the voice pipeline (e.g. 'device_control', 'query', 'chat')."
+    },
+    "latency_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total pipeline latency in milliseconds from audio snippet to intent result."
+    },
+    "routed_to": {
+      "type": "string",
+      "description": "Target component or agent the intent was routed to for execution."
+    },
+    "success": {
+      "type": "boolean",
+      "description": "True if the pipeline completed without error; false if the routing or execution failed."
+    }
+  }
+}

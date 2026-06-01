@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.session.start.v1.json",
+  "title": "tengine.session.start v1",
+  "description": "Fires at silo bind, before the first frame. Producer: tengine silo_tester via the registry handle SESSION_START in crates/tengine-dgc-hal/src/silo/shadergen_handlers/event_registry.rs. Marks the boundary between session-dir creation and the first GPU frame; consumers should pair with a later tengine.session.stop on the same source URI.",
+  "type": "object",
+  "required": ["silo", "session_dir", "sock"],
+  "properties": {
+    "silo": {
+      "type": "string",
+      "description": "silo identifier as configured (e.g. 'Racing', 'Fluid'). Case is preserved from the silo config."
+    },
+    "session_dir": {
+      "type": "string",
+      "description": "absolute path to the session directory under ~/.tengine/sessions/silo_*/. Basename of this path matches the session_id used in tengine.silo.started."
+    },
+    "sock": {
+      "type": "string",
+      "description": "absolute path to the silo's IPC unix-domain socket; clients connect here to drive the shadergen REPL."
+    }
+  }
+}

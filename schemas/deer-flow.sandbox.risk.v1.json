@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.sandbox.risk.v1.json",
+  "title": "deer-flow.sandbox.risk v1",
+  "description": "Sandbox audit classification per command. SandboxAuditMiddleware tags every shell command with a risk level and optionally blocks. This event surfaces the full classification stream (including low-risk) so security monitors, DLP systems, and behavior dashboards can subscribe. Source: /deer-flow/middlewares.",
+  "type": "object",
+  "required": ["thread_id", "command", "risk_level", "action"],
+  "properties": {
+    "thread_id": {
+      "type": "string",
+      "description": "Correlates to deer-flow.agent.thread.v1 event"
+    },
+    "command": {
+      "type": "string",
+      "description": "Command string (truncated to 200 chars)"
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": ["high", "medium", "low"],
+      "description": "Risk classification from the audit middleware"
+    },
+    "matched_rule": {
+      "type": ["string", "null"],
+      "description": "Identifier of the rule that fired (e.g. 'destructive_filesystem', 'permissive_chmod'); null when no rule matched"
+    },
+    "action": {
+      "type": "string",
+      "enum": ["blocked", "allowed", "warned"],
+      "description": "Middleware decision: blocked (refused), allowed (permitted, no flag), warned (permitted with flag)"
+    },
+    "reason": {
+      "type": ["string", "null"],
+      "description": "Short explanation when action=blocked or warned (truncated 200 chars)"
+    }
+  }
+}

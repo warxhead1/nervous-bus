@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.agent.lifecycle.v1.json",
+  "title": "bus.tengine.agent.lifecycle v1",
+  "description": "When: An agent working on a bead transitions between lifecycle phases (dispatched, reading, editing, building, verifying, done, stuck). Source: /tengine. Emitted by the orchestrator on each phase change so consumers can track agent progress and detect stalls.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.tengine.agent.lifecycle.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["v", "source", "host", "agent_name", "bead_id", "role", "phase", "elapsed_sec"],
+      "properties": {
+        "v": {"type": "integer", "description": "Payload schema version, always 1."},
+        "source": {"type": "string", "description": "Emitting subsystem identifier, always 'tengine'."},
+        "host": {"type": "string", "description": "Hostname of the machine that generated this event."},
+        "agent_name": {"type": "string", "description": "Name of the agent that transitioned phase, e.g. 'loomie-1' or 'researcher'."},
+        "bead_id": {"type": "string", "description": "Bead identifier the agent is currently working on."},
+        "role": {"type": "string", "description": "Role the agent is playing in this session, e.g. 'loomie', 'researcher', 'tester'."},
+        "phase": {
+          "type": "string",
+          "enum": ["dispatched", "reading", "editing", "building", "verifying", "done", "stuck"],
+          "description": "Current lifecycle phase: 'dispatched' (task assigned), 'reading' (parsing context), 'editing' (writing code), 'building' (compiling/running), 'verifying' (running checks), 'done' (completed successfully), 'stuck' (no progress despite attempts)."
+        },
+        "wt_path": {"type": "string", "description": "Optional absolute path to the worktree directory the agent is working in."},
+        "elapsed_sec": {"type": "integer", "description": "Wall-clock seconds elapsed since the agent was dispatched to this bead."},
+        "parent_session_id": {"type": "string", "description": "Optional parent session identifier for nested agent runs."}
+      }
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/loom.plan.v1.json",
+  "title": "loom.plan v1",
+  "description": "A coordinated multi-bead execution plan filed by the human+AI planning layer. Carries the saga_id that links all child beads. Published when a plan is accepted for execution.",
+  "type": "object",
+  "required": ["saga_id", "plan_title", "bead_ids", "project"],
+  "properties": {
+    "saga_id": { "type": "string", "description": "Matches bus.saga.saga_id" },
+    "plan_title": { "type": "string", "maxLength": 200 },
+    "project": { "type": "string" },
+    "bead_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Ordered list of bead IDs in this plan (execution order implied)"
+    },
+    "phase_groups": {
+      "type": "array",
+      "description": "Optional grouping of bead_ids into parallel phases",
+      "items": {
+        "type": "object",
+        "properties": {
+          "phase": { "type": "integer" },
+          "bead_ids": { "type": "array", "items": { "type": "string" } },
+          "depends_on_phase": { "type": "integer" }
+        }
+      }
+    },
+    "created_by": { "type": "string" },
+    "executor_hint": {
+      "type": "string",
+      "enum": ["claude-code", "opencode", "openrouter", "anthropic", "auto"],
+      "default": "auto"
+    }
+  }
+}

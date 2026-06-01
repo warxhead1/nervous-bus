@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.intrinsic.marker.v1.json",
+  "title": "bus.intrinsic.marker v1",
+  "description": "Ecosystem health and lifecycle marker. Published by any project at structurally significant moments — cycle start/complete, build, test, deploy, error spikes, resource breaches, and quality signals. Consumers (sysmap, deer-flow auditor, hearth dashboard) use these to track project health without parsing raw lifecycle events. `project` is the canonical project slug (e.g. 'hearth', 'hearth-loom', 'deer-flow'). `marker_type` is the event kind; `phase` is the human-readable workflow stage. `linked_id` ties the marker to its parent artifact (bead, session, commit, cycle). `outcome` is only required on terminal markers (cycle.complete, build.complete, etc.). Resource costs are optional and carry only the incremental cost for this marker's work unit.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {
+      "type": "string",
+      "description": "Originating project source URI (e.g. '/hearth-loom', '/deer-flow', '/nervous-bus')."
+    },
+    "type": {"type": "string", "const": "bus.intrinsic.marker.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["project", "marker_type", "phase", "linked_id", "ts"],
+      "properties": {
+        "project": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "description": "Canonical project slug (e.g. 'hearth', 'hearth-loom', 'deer-flow', 'tengine', 'nervous-bus', 'autobench'). Must match the sysmap KNOWN_PROJECTS slug or a registered project slug."
+        },
+        "marker_type": {
+          "type": "string",
+          "enum": [
+            "agent.cycle.start",
+            "agent.cycle.complete",
+            "build.complete",
+            "test.run",
+            "deploy.complete",
+            "error.spike",
+            "resource.breach",
+            "quality.signal"
+          ],
+          "description": "Category of marker. 'agent.cycle.start' and 'agent.cycle.complete' bracket a unit of agent work (bead, research cycle, council). 'build.complete' fires after a successful or failed build. 'test.run' after a CI or local test pass/fail. 'deploy.complete' when a service or binary is deployed. 'error.spike' when error rate crosses a threshold. 'resource.breach' when CPU/memory/GPU exceeds contract. 'quality.signal' for AC-pass, score improvements, or degradations."
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "planning",
+            "coding",
+            "testing",
+            "gates",
+            "deploy",
+            "recycle"
+          ],
+          "description": "Workflow stage the project is in at the time of this marker. 'planning' — design/triage. 'coding' — active agent edits. 'testing' — unit/integration/AC checks. 'gates' — PR review + CI gating. 'deploy' — binary push / service restart. 'recycle' — post-deploy observation, issue filing, next cycle preparation."
+        },
+        "linked_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The artifact this marker is anchored to: bead_id (e.g. 'hearth-vkm4'), session_id (ULID), commit SHA (40 hex chars), or cycle_id. Allows consumers to join markers back to the originating event chain."
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC3339 UTC timestamp when the marker was produced. Mirrors the envelope 'time' field for consumers reading the flat data payload."
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Optional elapsed time in milliseconds from the paired start marker to this marker. Present on terminal markers (cycle.complete, build.complete, test.run, deploy.complete) when the start was also marked."
+        },
+        "outcome": {
+          "type": "string",
+          "enum": ["accepted", "rework", "reverted", "failed", "partial"],
+          "description": "Terminal disposition of the work unit. Required on terminal marker_types (agent.cycle.complete, build.complete, test.run, deploy.complete). 'accepted' — work merged and deployed. 'rework' — sent back for iteration. 'reverted' — merged then reverted. 'failed' — hard failure, no merge. 'partial' — partial completion (some tests/stages passed)."
+        },
+        "quality_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Optional normalized quality score [0.0, 1.0] at the time of this marker. For agent cycles: AC pass rate or deer-flow score_after. For builds/tests: pass fraction. Consumers use this to build project health trends."
+        },
+        "resource_cost": {
+          "type": "object",
+          "description": "Optional incremental resource consumption for this work unit. Omit fields that are not applicable.",
+          "properties": {
+            "tokens": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "LLM tokens consumed (input + output combined) during this work unit."
+            },
+            "compute_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Wall-clock CPU time in milliseconds consumed by non-GPU compute during this work unit."
+            },
+            "gpu_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "GPU compute time in milliseconds during this work unit. For inference and training jobs."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,1330 @@
+#!/usr/bin/env python3
+"""cc-bus-dashboard — btop-class immersive view of nervous-bus traffic.
+
+Tabs (press key to switch):
+  1  bus     — channel rates, top talkers, live stream, alerts  (default)
+  2  sysmap  — containers, runners, GPU, host vitals grouped by project
+  3  agents  — active Claude Code / opencode sessions
+  4  loomies — hearth-loom agent state
+
+Source: tail-follow ~/.cache/nervous-bus/debug.jsonl with inode-rotation
+detect so log rotation doesn't strand the dashboard.
+
+Architecture: pure consumer (plugin-as-router rule). No plugin changes.
+Aggregation in-process via deque/Counter. No persistence.
+
+Usage:
+  cc-bus-dashboard                       # default settings
+  cc-bus-dashboard --tick 2.0            # repaint every 2s instead of 1.5s
+  cc-bus-dashboard --log /path/to.jsonl  # different source log
+  cc-bus-dashboard --max-history 1800    # ring of last 1800 events for stream
+  cc-bus-dashboard --tab 2               # start on sysmap tab
+"""
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import json
+import os
+import select
+import sys
+import termios
+import threading
+import time
+import tty
+from collections import Counter, defaultdict, deque
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Deque, Dict, List, Optional, Tuple
+
+try:
+    import redis as _redis_mod
+except ImportError:
+    _redis_mod = None  # type: ignore[assignment]
+
+# ── sysmap tab integration ────────────────────────────────────────────────────
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import cc_sysmap as _cc_sysmap
+    _sysmap_state  = _cc_sysmap.SysmapState()
+    _sysmap_poller = _cc_sysmap._Poller(_sysmap_state)
+    _sysmap_poller.start()
+    HAS_SYSMAP = True
+except Exception:
+    HAS_SYSMAP = False
+    _sysmap_state = None  # type: ignore[assignment]
+
+from rich.align import Align
+from rich.console import Console, Group
+from rich.layout import Layout
+from rich.live import Live
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+
+
+# ─── constants ─────────────────────────────────────────────────────────────
+SPARK = "▁▂▃▄▅▆▇█"  # 8 levels, btop-style
+DEFAULT_LOG = Path.home() / ".cache" / "nervous-bus" / "debug.jsonl"
+BUCKET_SECONDS = 60          # 1-minute aggregation buckets
+NUM_BUCKETS = 60             # 60 buckets = last hour
+MAX_STREAM = 30              # show last N events in stream panel
+MAX_TOP_TALKERS = 8          # top N (project, channel) tuples
+# High-frequency market/signal channels that get their own display tier.
+# They're shown first but don't crowd out lower-volume ops channels.
+_MARKET_PREFIXES: tuple = ("tachyonos.",)
+SAGA_STALE_S = 600           # dim sagas idle longer than this (default 10m)
+SAGA_KILL_S  = 1800          # remove sagas idle longer than this (default 30m)
+SAGA_REQUIRE_START = True    # only OPEN sagas on .start / .cycle.start events
+                             #  (prevents *.audit.recommendation et al. from
+                             #   creating zombies that never terminate)
+
+# Silent-channel detection (nervous-bus-tk3): default schemas dir is the
+# repo's schemas/ folder relative to this script. Override via --schemas.
+DEFAULT_SCHEMAS_DIR = Path(__file__).resolve().parent.parent.parent / "schemas"
+
+# Alert decay tuning (Layer 1 of nervous-bus-w1h)
+ALERT_WINDOW_S    = 3600     # rolling counter window for fail/success ratio
+ALERT_RESOLVED_S  = 600      # silence period after last failure to call 'resolved'
+ALERT_SEV_DIM     = 0.10     # severity below this = dim/collapse to resolved
+ALERT_SEV_LOUD    = 0.30     # severity above this = active/loud
+
+# Channel-family colors (consistent with cc-bus-feed)
+def channel_color(chan: str) -> str:
+    if chan.startswith("bus.bead."):        return "green"
+    if chan.startswith("loom.lifecycle."):  return "magenta"
+    if chan.startswith("loom.plan."):       return "magenta"
+    if chan.startswith("loom.coord."):      return "magenta"
+    if chan.startswith("loom.runner."):     return "magenta"
+    if chan.startswith("agent.session"):    return "cyan"
+    if chan.startswith("bus.agent."):       return "cyan"
+    if chan.startswith("tengine."):         return "yellow"
+    if chan.startswith("bus.tengine."):     return "yellow"
+    if chan.startswith("hearth."):          return "blue"
+    if chan.startswith("bus.hearth."):      return "blue"
+    if chan == "bus.dead_letter":           return "red"
+    if chan.startswith("deer-flow."):       return "bright_blue"
+    if chan.startswith("shell."):           return "bright_cyan"
+    if chan.startswith("tachyonos."):       return "bright_magenta"
+    if chan.startswith("autobench."):       return "magenta"
+    return "dim"
+
+
+def _esc_is_alt_sequence(poll_fn, read_fn, *, poll_timeout: float = 0.05,
+                          drain_bytes: int = 8) -> bool:
+    """Decide whether a just-read ESC byte is part of an Alt+X / CSI escape.
+
+    Called immediately after reading a `\\x1b` byte from a raw-mode stdin.
+    If a follow-up byte arrives within ``poll_timeout`` seconds, this is an
+    Alt+X or CSI sequence — drain up to ``drain_bytes`` more bytes and
+    return True (caller should NOT quit). If no follow-up arrives, ESC was
+    pressed alone — return False (caller should quit).
+
+    ``poll_fn(timeout)`` returns True iff at least one byte is readable
+    within ``timeout`` seconds. ``read_fn(n)`` reads up to n bytes
+    (best-effort). Pure function — no globals, no I/O setup. Designed to
+    be unit-tested with simple lambdas / Mock objects.
+    """
+    if not poll_fn(poll_timeout):
+        return False  # bare ESC → quit
+    try:
+        read_fn(drain_bytes)
+    except OSError:
+        pass
+    return True  # Alt/CSI sequence → swallow
+
+
+def _matches_glob(text: str, glob: str) -> bool:
+    """Return True if text matches glob pattern (fnmatch-style). Empty glob = always match."""
+    if not glob:
+        return True
+    return fnmatch.fnmatch(text, glob)
+
+
+# Family rollup keys for the rates panel — group noisy sub-channels
+def channel_family(chan: str) -> str:
+    for prefix in (
+        "agent.session",
+        "deer-flow.stack-tuner",
+        "deer-flow.metaprobe",
+        "deer-flow.audit",
+        "loom.lifecycle",
+        "loom.plan",
+        "loom.coord",
+        "loom.runner",
+        "bus.bead",
+        "tengine.session",
+        "tengine.code",
+        "hearth.device",
+        "hearth.router",
+        "shell.command",
+    ):
+        if chan.startswith(prefix):
+            return prefix
+    if chan == "bus.dead_letter":
+        return "bus.dead_letter"
+    return chan
+
+
+# ─── alert kinds (decay + balance against post-fix successes) ──────────────
+@dataclass
+class AlertKind:
+    """One distinct alert *kind* (not per-event). Tracks rolling failure +
+    success-sibling counts so a fix that lands silences the alert without
+    needing an explicit remediation event (Layer 1 of nervous-bus-w1h).
+    Also tracks explicit remediation via bus.remediation.applied (gck)."""
+    kind_tuple: Tuple[str, ...]
+    severity_default: str               # 'warn' | 'error'
+    label: str
+    failures: Deque[float] = field(default_factory=lambda: deque(maxlen=500))
+    successes: Deque[float] = field(default_factory=lambda: deque(maxlen=500))
+    last_failure_ts: float = 0.0
+    last_failure_msg: str = ""
+    first_seen_ts: float = field(default_factory=time.time)
+    last_was_regression: bool = False
+    remediation_applied_at: float = 0.0   # epoch seconds — set when bus.remediation.applied fires
+    remediation_window_s: int = 0         # expected_resolution_window_s from remediation event
+
+    def severity(self, now: float) -> float:
+        cutoff = now - ALERT_WINDOW_S
+        f = sum(1 for t in self.failures if t >= cutoff)
+        s = sum(1 for t in self.successes if t >= cutoff)
+        return f / max(1, f + s)
+
+    def status(self, now: float) -> str:
+        sev = self.severity(now)
+        age = now - self.last_failure_ts if self.last_failure_ts else 1e9
+        if sev >= ALERT_SEV_LOUD:
+            return "regressed_fx" if (self.remediation_applied_at > 0 and now - self.remediation_applied_at < self.remediation_window_s) else ("regressed" if self.last_was_regression else "active")
+        if sev < ALERT_SEV_DIM and age > ALERT_RESOLVED_S:
+            return "resolved"
+        if age < ALERT_RESOLVED_S and sev < ALERT_SEV_LOUD:
+            return "stabilizing_fx" if (self.remediation_applied_at > 0 and now - self.remediation_applied_at < self.remediation_window_s) else "stabilizing"
+        return "active"
+
+
+def derive_alert_kind(chan: str, data: dict) -> Optional[Tuple[Tuple, str, str]]:
+    """If this event IS an alert, return (kind_tuple, severity_default, label).
+    Otherwise None."""
+    if chan == "bus.dead_letter":
+        reason = data.get("failure_reason", "unknown")
+        original = data.get("original_type", "?")
+        return (("dlq", reason),
+                "error",
+                f"DLQ {reason} ← {original}")
+    if chan.endswith("integrity.warn"):
+        # Multi-field fallback for upstream-naming variation (3be folded in)
+        issue = (data.get("issue") or data.get("signal")
+                 or data.get("kind") or data.get("metric") or "unknown")
+        stage = data.get("stage", "")
+        model = data.get("model", "")
+        kind_tuple = ("integrity.warn", stage, model, issue)
+        label = f"integrity {issue}"
+        if stage:
+            label += f" @ {stage}"
+        if model:
+            label += f" ({model})"
+        return (kind_tuple, "warn", label)
+    return None
+
+
+def matches_success(kind: AlertKind, chan: str, data: dict) -> bool:
+    """Does this non-alert event count as a success-sibling for `kind`,
+    silencing it via the rolling ratio?"""
+    kt = kind.kind_tuple
+    if kt[0] == "dlq":
+        # Any successful publish on the original_type channel offsets this DLQ
+        # entry's weight. We don't have a reliable original_type→success map,
+        # so use the cheaper proxy: any non-DLQ event period.
+        return chan != "bus.dead_letter"
+    if kt[0] == "integrity.warn":
+        _, stage, model, _ = kt
+        # A successful stage.done for the SAME (stage, model) is concrete proof
+        # the kind that was failing now isn't.
+        if chan.endswith("stage.done") and data.get("ok", True):
+            d_stage = data.get("stage", "")
+            d_model = data.get("model", "")
+            return d_stage == stage and d_model == model
+    return False
+
+
+class ThresholdStore:
+    """Reads pattern:thresholds:{channel} from Redis; falls back to defaults."""
+    _DEFAULT = {"warn_sigma": 2.0, "alert_sigma": 3.0}
+
+    def __init__(self) -> None:
+        self._thresholds: dict[str, dict] = {}
+        self._r: Optional[object] = None
+        self._last_refresh = 0.0
+        try:
+            if _redis_mod is None:
+                return
+            self._r = _redis_mod.Redis.from_url(
+                "redis://localhost:6379", decode_responses=True,
+                socket_timeout=1.0, socket_connect_timeout=1.0,
+            )
+            self._r.ping()
+        except Exception:
+            self._r = None
+
+    def refresh(self) -> None:
+        if not self._r:
+            return
+        now = time.time()
+        if now - self._last_refresh < 60:
+            return
+        self._last_refresh = now
+        try:
+            keys = self._r.keys("pattern:thresholds:*")
+            for key in keys:
+                ch = key.removeprefix("pattern:thresholds:")
+                raw = self._r.hgetall(key)
+                self._thresholds[ch] = {
+                    "warn_sigma": float(raw.get("warn_sigma", 2.0)),
+                    "alert_sigma": float(raw.get("alert_sigma", 3.0)),
+                }
+        except Exception:
+            pass
+
+    def warn_sigma(self, channel: str) -> float:
+        return self._thresholds.get(channel, self._DEFAULT)["warn_sigma"]
+
+    def alert_sigma(self, channel: str) -> float:
+        return self._thresholds.get(channel, self._DEFAULT)["alert_sigma"]
+
+
+# ─── state ─────────────────────────────────────────────────────────────────
+@dataclass
+class State:
+    log_path: Path
+    fp: Optional[object] = None
+    inode: Optional[int] = None
+
+    started_at: float = field(default_factory=time.time)
+    events_total: int = 0
+    dead_letters_total: int = 0
+
+    # rolling per-family bucket counts; outer dict family → deque[60]
+    buckets: Dict[str, Deque[int]] = field(default_factory=dict)
+    last_bucket_epoch: int = 0
+
+    # live event stream
+    stream: Deque[dict] = field(default_factory=lambda: deque(maxlen=MAX_STREAM))
+
+    # top talkers
+    talkers: Counter = field(default_factory=Counter)
+
+    # in-flight sagas: saga_id → {started_at, n_steps, last_event_type, last_event_at}
+    sagas: Dict[str, dict] = field(default_factory=dict)
+
+    # silent-channel detection (nervous-bus-tk3)
+    expected_channels: set = field(default_factory=set)  # from schemas/
+    seen_channels:     set = field(default_factory=set)  # ever observed in log
+
+    # alerts ring (raw stream, last N events for the bottom sub-table)
+    alerts: Deque[dict] = field(default_factory=lambda: deque(maxlen=20))
+
+    # alert kinds (grouped, status-aware) — primary alert view
+    alert_kinds: Dict[Tuple, AlertKind] = field(default_factory=dict)
+
+    # cumulative per-channel total
+    chan_total: Counter = field(default_factory=Counter)
+
+    # adaptive alert thresholds from Redis (pattern:thresholds:*)
+    thresholds: ThresholdStore = field(default_factory=ThresholdStore)
+
+    # Redis connection for pattern:annotations (panel_signals)
+    _redis: Optional[Any] = field(default=None, init=False, repr=False)
+
+    # per-channel fan-out latency tracking (channel → deque of microsecond deltas)
+    # used to compute p50/p95 in the rates panel.
+    chan_latencies: Dict[str, Deque[int]] = field(default_factory=dict)
+
+    # explicit remediation registry: (kind_tuple,) → applied_at + window_s
+    remediations: Dict[Tuple, dict] = field(default_factory=dict)
+
+    # m9d: interactive filter/drill-down state
+    filter_glob: str = ""           # glob pattern for / filter
+    drill_channel: Optional[str] = None  # channel being drilled into (1-9 key)
+    muted_channels: set = field(default_factory=set)
+    zoom_idx: int = 1                # 0=5min, 1=1h (default), 2=24h
+    BUCKET_SECONDS: int = 60        # current bucket size (runtime-tunable for zoom)
+    NUM_BUCKETS: int = 60            # fixed at 60 buckets
+
+    # kwu: per-channel subscriber counts from bus.subscribers.snapshot
+    chan_subscribers: Dict[str, int] = field(default_factory=dict)
+
+    # deprecated field removed — keep for dataclass API compat
+    _reserved: Optional[Any] = field(default=None, init=False, repr=False)
+
+    def ensure_buckets(self, family: str) -> Deque[int]:
+        if family not in self.buckets:
+            self.buckets[family] = deque([0] * NUM_BUCKETS, maxlen=NUM_BUCKETS)
+        return self.buckets[family]
+
+    def roll_buckets_to(self, now_epoch: int) -> None:
+        """Advance bucket window if we've crossed bucket boundaries."""
+        cur_bucket = now_epoch // BUCKET_SECONDS
+        if self.last_bucket_epoch == 0:
+            self.last_bucket_epoch = cur_bucket
+            return
+        steps = cur_bucket - self.last_bucket_epoch
+        if steps <= 0:
+            return
+        steps = min(steps, NUM_BUCKETS)
+        for _ in range(steps):
+            for fam in list(self.buckets):
+                self.buckets[fam].append(0)
+        self.last_bucket_epoch = cur_bucket
+
+
+# ─── log tailing with inode-rotation detect ────────────────────────────────
+def open_log(state: State) -> None:
+    if state.fp is not None:
+        try: state.fp.close()
+        except Exception: pass
+    if not state.log_path.exists():
+        state.fp = None
+        state.inode = None
+        return
+    state.fp = state.log_path.open("r", encoding="utf-8", errors="replace")
+    state.fp.seek(0, os.SEEK_END)  # tail-follow from current end
+    state.inode = state.log_path.stat().st_ino
+
+
+def check_rotation(state: State) -> None:
+    """Reopen if file was rotated (inode changed) or shrank (truncated)."""
+    if not state.log_path.exists():
+        if state.fp is not None:
+            state.fp.close()
+            state.fp = None
+        return
+    st = state.log_path.stat()
+    if state.fp is None or st.st_ino != state.inode:
+        # fresh file or rotated — reopen but seek to BEGINNING (we missed nothing
+        # because we just opened it). For inode change mid-run, also start fresh.
+        if state.fp is not None:
+            try: state.fp.close()
+            except Exception: pass
+        state.fp = state.log_path.open("r", encoding="utf-8", errors="replace")
+        state.inode = st.st_ino
+        return
+    # truncation: position past end means file got smaller
+    if state.fp.tell() > st.st_size:
+        state.fp.seek(0)
+
+
+def read_new_lines(state: State) -> List[str]:
+    if state.fp is None:
+        open_log(state)
+        return []
+    check_rotation(state)
+    if state.fp is None:
+        return []
+    out: List[str] = []
+    while True:
+        line = state.fp.readline()
+        if not line:
+            break
+        line = line.strip()
+        if line:
+            out.append(line)
+    return out
+
+
+# ─── ingestion ─────────────────────────────────────────────────────────────
+def _event_epoch(e: dict) -> int:
+    t = e.get("time") or ""
+    if not t:
+        return 0
+    try:
+        return int(datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp())
+    except Exception:
+        return 0
+
+
+def _project_label(e: dict) -> str:
+    # data.project is the semantically meaningful project the event is *about*.
+    # Fall back to source basename only when it is missing, empty, or 'unknown'
+    # (loomies emit 'unknown' until nervous-bus-l8u lands upstream).
+    data = e.get("data") or {}
+    proj = data.get("project") if isinstance(data, dict) else None
+    if proj and proj != "unknown":
+        return str(proj)
+    return (e.get("source") or "").lstrip("/").split("/")[0] or "?"
+
+
+def ingest_event(state: State, raw: str, *, historical: bool = False) -> None:
+    try:
+        e = json.loads(raw)
+    except Exception:
+        return
+    chan = e.get("type") or "unknown"
+    src = _project_label(e)
+    family = channel_family(chan)
+
+    state.events_total += 1
+    state.chan_total[chan] += 1
+    state.talkers[(src, family)] += 1
+    state.seen_channels.add(chan)
+
+    # ── latency tracking (noj): data._bus.received_at is epoch microseconds ──
+    data = e.get("data") or {}
+    if isinstance(data, dict):
+        bus = data.get("_bus", {})
+        if isinstance(bus, dict):
+            received_at = bus.get("received_at")
+            if received_at is not None:
+                try:
+                    rec_us = int(received_at)
+                    now_us = int(time.time() * 1_000_000)
+                    latency_us = max(0, now_us - rec_us)
+                    latencies = state.chan_latencies.setdefault(chan, deque(maxlen=200))
+                    latencies.append(latency_us)
+                except (ValueError, TypeError):
+                    pass
+            # delivered_at stamps the SSE fan-out; track it too for p50/p95
+            delivered_at = bus.get("delivered_at")
+            if delivered_at is not None:
+                try:
+                    del_us = int(delivered_at)
+                    now_us = int(time.time() * 1_000_000)
+                    fanout_us = max(0, del_us - rec_us) if received_at else 0
+                    latencies = state.chan_latencies.setdefault(chan, deque(maxlen=200))
+                    latencies.append(fanout_us)
+                except (ValueError, TypeError):
+                    pass
+
+    # ── kwu: subscriber snapshot tracking ─────────────────────────────────────
+    if chan == "bus.subscribers.snapshot":
+        subs_data = data if isinstance(data, dict) else {}
+        for ch, ids_val in subs_data.items():
+            if isinstance(ids_val, list):
+                state.chan_subscribers[str(ch)] = len(ids_val)
+
+    # ── explicit remediation registry (gck): stamp AlertKind state ──────────────
+    if chan == "bus.remediation.applied":
+        kt_data = data.get("targets_pathology", {}).get("kind")
+        if kt_data:
+            kind_tuple = tuple(kt_data) if isinstance(kt_data, list) else (kt_data,)
+            applied_at_str = data.get("applied_at", "")
+            try:
+                import datetime
+                rem_applied_ts = datetime.datetime.fromisoformat(applied_at_str.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                rem_applied_ts = time.time()
+            rem_window_s = int(data.get("expected_resolution_window_s", 600) or 600)
+            state.remediations[kind_tuple] = {
+                "applied_at": applied_at_str,
+                "window_s": rem_window_s,
+                "fix_summary": data.get("fix_summary", ""),
+                "applied_by": data.get("applied_by", ""),
+            }
+            # Propagate remediation into matching AlertKind so status() reflects it
+            if kind_tuple in state.alert_kinds:
+                ak = state.alert_kinds[kind_tuple]
+                ak.remediation_applied_at = rem_applied_ts
+                ak.remediation_window_s = rem_window_s
+
+    # bucket count — if historical, place the event in its actual time bucket
+    # so the sparklines reflect real history rather than a single big spike.
+    bucket = state.ensure_buckets(family)
+    if historical:
+        ev_epoch = _event_epoch(e)
+        if ev_epoch:
+            now_bucket = int(time.time()) // BUCKET_SECONDS
+            ev_bucket = ev_epoch // BUCKET_SECONDS
+            offset = now_bucket - ev_bucket  # 0=current, NUM_BUCKETS-1=oldest
+            if 0 <= offset < NUM_BUCKETS:
+                idx = (NUM_BUCKETS - 1) - offset
+                bucket[idx] += 1
+    else:
+        state.roll_buckets_to(int(time.time()))
+        bucket[-1] += 1
+
+    state.stream.append(e)
+
+    # ── alerts: kind-grouped tracking with rolling success/failure decay ──
+    #
+    # Two-tier write path:
+    #   1. If this event IS an alert, upsert the AlertKind, append failure ts,
+    #      mark as regression if we'd previously declared this kind 'resolved'.
+    #   2. Otherwise, scan known alert kinds and credit any whose success-sibling
+    #      predicate matches THIS event (e.g. stage.done with same stage+model
+    #      counts as a success against an integrity.warn alert kind).
+    data = e.get("data") or {}
+    now_ts = time.time() if not historical else (_event_epoch(e) or time.time())
+    derived = derive_alert_kind(chan, data)
+    if derived is not None:
+        kind_tuple, sev_default, label = derived
+        kind = state.alert_kinds.get(kind_tuple)
+        if kind is None:
+            kind = AlertKind(
+                kind_tuple=kind_tuple,
+                severity_default=sev_default,
+                label=label,
+            )
+            state.alert_kinds[kind_tuple] = kind
+        # mark regression if this kind had been resolved before this failure
+        if kind.last_failure_ts and kind.status(now_ts) == "resolved":
+            kind.last_was_regression = True
+        kind.failures.append(now_ts)
+        kind.last_failure_ts = now_ts
+        kind.last_failure_msg = label
+        if chan == "bus.dead_letter":
+            state.dead_letters_total += 1
+        # also append to raw stream for the bottom sub-table
+        state.alerts.append({
+            "severity": sev_default,
+            "msg": label,
+            "src_id": e.get("id", ""),
+            "ts": e.get("time", ""),
+        })
+    else:
+        # success-sibling credit for any alert kinds matching this event
+        for kind in state.alert_kinds.values():
+            if matches_success(kind, chan, data):
+                kind.successes.append(now_ts)
+                # crossing into low-severity territory clears regression flag
+                if kind.last_was_regression and kind.severity(now_ts) < ALERT_SEV_DIM:
+                    kind.last_was_regression = False
+
+    # saga tracking
+    data = e.get("data") or {}
+    saga_id = data.get("saga_id") or data.get("cycle_id")
+    if saga_id:
+        s = state.sagas.get(saga_id)
+        if s is None:
+            # Only OPEN a saga on an explicit start event (prevents
+            # audit.recommendation/.cycle and other mid-flight events with
+            # cycle_id from creating zombies that never terminate).
+            is_start = (chan.endswith(".start")
+                        or chan.endswith(".cycle.start")
+                        or chan.endswith(".opened")
+                        or chan.endswith(".created"))
+            if SAGA_REQUIRE_START and not is_start:
+                pass  # ignore — saga must be explicitly opened
+            else:
+                state.sagas[saga_id] = {
+                    "started_at": e.get("time",""),
+                    "n_steps": 1,
+                    "last_event_type": chan,
+                    "last_event_at": e.get("time",""),
+                    "last_event_ts": time.time(),
+                }
+        else:
+            s["n_steps"] += 1
+            s["last_event_type"] = chan
+            s["last_event_at"] = e.get("time","")
+            s["last_event_ts"] = time.time()
+        # terminal events close the saga (any of: explicit .done/.closed,
+        # .pr_opened, or the metaprobe.cycle terminal that fires once-per-cycle)
+        if (chan.endswith(".cycle.done")
+                or chan.endswith(".closed")
+                or chan.endswith(".pr_opened")
+                or chan == "deer-flow.metaprobe.cycle"):
+            state.sagas.pop(saga_id, None)
+
+    # Age-out: drop sagas idle past SAGA_KILL_S. Cheap O(N), N is small.
+    if state.sagas:
+        now_ts = time.time()
+        dead = [sid for sid, s in state.sagas.items()
+                if (now_ts - s["last_event_ts"]) > SAGA_KILL_S]
+        for sid in dead:
+            state.sagas.pop(sid, None)
+
+
+# ─── silent-channel detection (nervous-bus-tk3) ───────────────────────────
+def load_expected_channels(schemas_dir: Path) -> set:
+    """Derive expected channel names from schemas/*.v*.json filenames.
+    Strips the .v<n>.json suffix; '.start'/'.done'/'.opened'/'.closed' lifecycle
+    suffixes are kept as separate channels (a schema for the family is enough
+    to count any of its lifecycle variants as 'covered'). Internal dashboard
+    schemas (bus.dashboard, bus.saga, bus.redis-mirror.config) are excluded —
+    they're config artifacts, not bus events that publishers emit.
+    """
+    if not schemas_dir.exists():
+        return set()
+    expected = set()
+    EXCLUDE_PREFIXES = ("bus.dashboard", "bus.saga", "bus.redis-mirror")
+    import re
+    for f in schemas_dir.glob("*.v*.json"):
+        name = f.stem  # e.g. agent.session.v1
+        chan = re.sub(r"\.v\d+$", "", name)
+        if any(chan.startswith(p) for p in EXCLUDE_PREFIXES):
+            continue
+        expected.add(chan)
+    return expected
+
+
+# ─── rendering ─────────────────────────────────────────────────────────────
+def sparkline(buckets: Deque[int], width: int = 24) -> Text:
+    pts = list(buckets)[-width:]
+    if not pts or max(pts) == 0:
+        return Text("─" * width, style="dim")
+    peak = max(pts)
+    out = Text()
+    for v in pts:
+        if v == 0:
+            out.append("▁", style="dim")
+        else:
+            idx = min(7, max(0, int((v / peak) * 7)))
+            # heat-style coloring: low=green, mid=yellow, high=red
+            style = "green" if idx < 3 else ("yellow" if idx < 6 else "bright_red")
+            out.append(SPARK[idx], style=style)
+    return out
+
+
+def panel_rates(state: State) -> Panel:
+    table = Table.grid(padding=(0, 1), expand=True)
+    table.add_column("channel", ratio=3, no_wrap=True, overflow="ellipsis")
+    table.add_column("spark",   ratio=2)
+    table.add_column("rate",    width=8,  justify="right")
+    table.add_column("p50/p95", width=12, justify="right")
+    table.add_column("total",   width=7,  justify="right")
+
+    def latency_str(chan: str) -> str:
+        lats = state.chan_latencies.get(chan)
+        if not lats or len(lats) < 3:
+            return ""
+        sorted_lats = sorted(lats)
+        n = len(sorted_lats)
+        p50 = sorted_lats[n // 2]
+        p95 = sorted_lats[int(n * 0.95)]
+        if p50 >= 1000:
+            return f"{p50/1000:.0f}ms/{p95/1000:.0f}ms"
+        return f"{p50}µs/{p95}µs"
+
+    def _tier_sep(label: str, summary: str = "") -> None:
+        table.add_row(
+            Text.assemble(Text("── ", style="dim"), Text(label, style="bold")),
+            Text(""),
+            Text(summary, style="dim"),
+            Text(""),
+            Text(""),
+        )
+
+    def _add_row(fam: str, buf, recent: int, total: int, rate: float) -> None:
+        col = channel_color(fam)
+        display = fam if len(fam) <= 35 else fam[:32] + "…"
+        lat_str = latency_str(fam)
+        table.add_row(
+            Text(display, style=col),
+            sparkline(buf),
+            Text(f"{rate:>4.1f}/m", style="bold" if recent else "dim"),
+            Text(lat_str, style="cyan" if lat_str else "dim"),
+            Text(str(total), style="dim"),
+        )
+
+    # Build all rows, sorted by recency then volume
+    rows = []
+    for fam, buf in state.buckets.items():
+        if not _matches_glob(fam, state.filter_glob):
+            continue
+        recent = sum(list(buf)[-5:])
+        total  = sum(buf)
+        rate   = total / max(1, len(buf))
+        rows.append((fam, buf, recent, total, rate))
+    rows.sort(key=lambda r: (-r[2], -r[3]))
+
+    if not rows:
+        table.add_row(Text("(no events yet)", style="dim"), "", "", "", "")
+        return Panel(table, title="[bold]channel rates[/]  [dim](last 60m)[/]",
+                     border_style="cyan", padding=(0, 1))
+
+    # Tier split: market (high-freq signal data) / ops / dlq
+    market_rows = [r for r in rows if any(r[0].startswith(p) for p in _MARKET_PREFIXES)]
+    dlq_rows    = [r for r in rows if r[0] == "bus.dead_letter"]
+    ops_rows    = [r for r in rows if r not in market_rows and r not in dlq_rows]
+
+    # ── 📈 market tier ──────────────────────────────────────────────────────
+    if market_rows:
+        m_rate   = sum(r[4] for r in market_rows)
+        m_recent = any(r[2] > 0 for r in market_rows)
+        _tier_sep("📈 market", f"{m_rate:.0f}/m" if m_recent else "quiet")
+        for row in market_rows:
+            _add_row(*row)
+
+    # ── ⚙  ops tier ─────────────────────────────────────────────────────────
+    if ops_rows:
+        o_rate = sum(r[4] for r in ops_rows)
+        _tier_sep("⚙  ops", f"{o_rate:.1f}/m")
+        for row in ops_rows[:10]:
+            _add_row(*row)
+        if len(ops_rows) > 10:
+            table.add_row(
+                Text(f"  +{len(ops_rows)-10} more channels", style="dim italic"),
+                Text(""), Text(""), Text(""), Text(""),
+            )
+
+    # ── ☠  dlq tier — use alert_kinds for richer status ─────────────────────
+    now = time.time()
+    dlq_kinds = sorted(
+        [ak for ak in state.alert_kinds.values() if ak.kind_tuple[0] == "dlq"],
+        key=lambda k: -k.last_failure_ts,
+    )
+    if dlq_kinds or dlq_rows:
+        total_dlq = state.dead_letters_total
+        _tier_sep("☠  dlq", f"{total_dlq} total" if total_dlq else "")
+        if dlq_kinds:
+            for ak in dlq_kinds[:6]:
+                status = ak.status(now)
+                color = (
+                    "bright_red" if status in ("active", "regressed", "regressed_fx")
+                    else ("yellow" if status.startswith("stabilizing") else "dim")
+                )
+                n_recent = sum(1 for t in ak.failures if now - t < 3600)
+                age_s    = now - ak.last_failure_ts
+                age_str  = (f"{int(age_s//60)}m" if age_s >= 60 else f"{int(age_s)}s") + " ago"
+                label    = ak.label[:40] if len(ak.label) <= 40 else ak.label[:37] + "…"
+                table.add_row(
+                    Text(label, style=color),
+                    Text(""),
+                    Text(f"{n_recent}/h", style=color),
+                    Text(age_str, style="dim"),
+                    Text(str(len(ak.failures)), style="dim"),
+                )
+        else:
+            for row in dlq_rows:
+                _add_row(*row)
+
+    n_chans = len(rows)
+    return Panel(table, title=f"[bold]channel rates[/]  [dim](last 60m · {n_chans} chans)[/]",
+                 border_style="cyan", padding=(0, 1))
+
+
+def panel_talkers(state: State) -> Panel:
+    table = Table.grid(padding=(0, 1), expand=True)
+    table.add_column("count", justify="right")
+    table.add_column("project")
+    table.add_column("channel")
+
+    if not state.talkers:
+        table.add_row(Text("(no talkers yet)", style="dim"), "", "")
+    for (proj, chan), n in state.talkers.most_common(MAX_TOP_TALKERS):
+        col = channel_color(chan)
+        # heat the count by relative magnitude
+        max_n = state.talkers.most_common(1)[0][1] if state.talkers else 1
+        rel = n / max(1, max_n)
+        n_style = "bright_red" if rel > 0.8 else ("yellow" if rel > 0.4 else "green")
+        table.add_row(
+            Text(str(n), style=f"bold {n_style}"),
+            Text(proj, style="bright_white"),
+            Text(chan, style=col),
+        )
+    return Panel(table, title="[bold]top talkers[/]  [dim](project × channel)[/]",
+                 border_style="magenta", padding=(0, 1))
+
+
+_MAX_MARKET_IN_STREAM = 4   # cap tachyonos slots in the stream default view
+
+def panel_stream(state: State) -> Panel:
+    table = Table.grid(padding=(0, 1), expand=True)
+    table.add_column("ts",      width=8)
+    table.add_column("channel", width=22, no_wrap=True, overflow="ellipsis")
+    table.add_column("source",  width=10, no_wrap=True)
+    table.add_column("summary", overflow="ellipsis", no_wrap=True, ratio=1)
+
+    if not state.stream:
+        table.add_row(Text("waiting for events…", style="dim"), "", "", "")
+        return Panel(table, title="[bold]live stream[/]  [dim](last 30 events)[/]",
+                     border_style="green", padding=(0, 1))
+
+    all_events = list(state.stream)
+
+    if state.filter_glob:
+        display = [e for e in all_events if _matches_glob(e.get("type", "?"), state.filter_glob)]
+    else:
+        # Balance: ops events fill most slots; market gets a small capped slice
+        def _is_market(e: dict) -> bool:
+            return any(e.get("type", "").startswith(p) for p in _MARKET_PREFIXES)
+        ops    = [e for e in all_events if not _is_market(e)]
+        market = [e for e in all_events if _is_market(e)]
+        n_mkt  = min(_MAX_MARKET_IN_STREAM, len(market))
+        n_ops  = min(MAX_STREAM - n_mkt, len(ops))
+        display = sorted(ops[-n_ops:] + market[-n_mkt:], key=lambda e: e.get("time", ""))
+
+    for e in display:
+        chan = e.get("type", "?")
+        col  = channel_color(chan)
+        t    = (e.get("time", "") or "")[11:19]
+        src  = _project_label(e)[:10]
+        summary = _summarize(chan, e.get("data") or {})
+        table.add_row(
+            Text(t, style="dim"),
+            Text(chan, style=col),
+            Text(src, style="dim"),
+            Text(summary),
+        )
+    mkt_count = sum(1 for e in all_events if any(e.get("type","").startswith(p) for p in _MARKET_PREFIXES))
+    title_suffix = f"  [dim](+{mkt_count} market)[/]" if mkt_count and not state.filter_glob else ""
+    return Panel(table, title=f"[bold]live stream[/]  [dim](last 30 events)[/]{title_suffix}",
+                 border_style="green", padding=(0, 1))
+
+
+def _summarize(chan: str, data: dict) -> str:
+    if not isinstance(data, dict):
+        return str(data)[:60]
+    interesting = [
+        "bead_id", "fps", "event", "signal", "failure_reason", "agent",
+        "score", "pr_url", "project", "verdict", "stage",
+    ]
+    parts = []
+    for k in interesting:
+        v = data.get(k)
+        if v in (None, "", "unknown"):
+            continue
+        sv = str(v)
+        if len(sv) > 30:
+            sv = sv[:30] + "…"
+        parts.append(f"{k}={sv}")
+        if len(parts) >= 3:
+            break
+    return "  ".join(parts)
+
+
+def panel_alerts(state: State) -> Panel:
+    parts = []
+
+    # in-flight sagas (top of pane)
+    if state.sagas:
+        sag_table = Table.grid(padding=(0, 1), expand=True)
+        sag_table.add_column("saga", overflow="ellipsis", no_wrap=True)
+        sag_table.add_column("steps", justify="right")
+        sag_table.add_column("age",   justify="right")
+        sag_table.add_column("last",  overflow="ellipsis", no_wrap=True)
+        now = time.time()
+        sag_rows = sorted(state.sagas.items(),
+                          key=lambda kv: -kv[1]["last_event_ts"])[:6]
+        for sid, s in sag_rows:
+            age = int(now - s["last_event_ts"])
+            age_str = f"{age}s" if age < 60 else f"{age//60}m"
+            stale = age > SAGA_STALE_S
+            style = "dim" if stale else "white"
+            sag_table.add_row(
+                Text(sid[:14], style="green" if not stale else "dim"),
+                Text(str(s["n_steps"]), style=style),
+                Text(age_str, style="bright_red" if stale else style),
+                Text(s["last_event_type"], style=channel_color(s["last_event_type"])),
+            )
+        parts.append(Panel(sag_table, title="[bold]in-flight sagas[/]",
+                           border_style="bright_blue", padding=(0, 1)))
+    else:
+        parts.append(Panel(Text("(no sagas in flight)", style="dim"),
+                           title="[bold]in-flight sagas[/]", border_style="dim",
+                           padding=(0, 1)))
+
+    # alert kinds (grouped, status-aware) — primary view.
+    # Layout: status+age FIRST so they're never clipped at narrow widths,
+    # kind label LAST with ellipsis. Counts collapsed into the label.
+    now = time.time()
+    al_table = Table.grid(padding=(0, 1), expand=True)
+    al_table.add_column("status_age", width=12, no_wrap=True)
+    al_table.add_column("kind",        overflow="ellipsis", no_wrap=True)
+
+    if state.alert_kinds:
+        ordered = sorted(
+            state.alert_kinds.values(),
+            key=lambda k: (
+                {"regressed": 0, "active": 1, "stabilizing": 2, "resolved": 3}
+                .get(k.status(now), 4),
+                -k.last_failure_ts,
+            ),
+        )
+        visible = []
+        resolved_overflow = 0
+        for k in ordered:
+            st = k.status(now)
+            if st == "resolved" and len(visible) >= 6:
+                resolved_overflow += 1
+                continue
+            visible.append(k)
+
+        status_styles = {
+            "regressed":      ("REGR",  "bright_red"),
+            "regressed_fx":   ("REGR-FX","bright_red bold"),
+            "active":         ("ACT ",  "yellow"),
+            "stabilizing":    ("STAB",  "cyan"),
+            "stabilizing_fx": ("STAB-FX","cyan bold"),
+            "resolved":       ("RES ",  "dim"),
+        }
+        for k in visible:
+            st = k.status(now)
+            st_label, st_color = status_styles.get(st, ("?   ", "dim"))
+            cutoff = now - ALERT_WINDOW_S
+            f = sum(1 for t in k.failures if t >= cutoff)
+            s = sum(1 for t in k.successes if t >= cutoff)
+            age = int(now - k.last_failure_ts) if k.last_failure_ts else 0
+            age_str = f"{age}s" if age < 60 else (f"{age//60}m" if age < 3600 else f"{age//3600}h")
+            row_style = "dim" if st == "resolved" else ""
+            # status_age cell: badge + age in a single fixed-width cell
+            sa = Text()
+            sa.append(st_label, style=f"bold {st_color}")
+            sa.append(f" {age_str:>4}", style=row_style or "dim")
+            label_with_counts = f"{k.label}  [f={f} s={s}]"
+            al_table.add_row(
+                sa,
+                Text(label_with_counts, style=row_style or "white"),
+            )
+        if resolved_overflow:
+            al_table.add_row(
+                Text("…", style="dim"),
+                Text(f"+{resolved_overflow} more resolved", style="dim italic"),
+            )
+    else:
+        al_table.add_row(
+            Text("CLN     -", style="bold green"),
+            Text("clean — no alert kinds", style="green"),
+        )
+    parts.append(Panel(al_table, title="[bold]alerts[/]  [dim](decay=ratio)[/]",
+                       border_style="red", padding=(0, 1)))
+
+    # Silent-channel detection (nervous-bus-tk3) — channels with a schema
+    # but never observed in the dashboard's lifetime. A schema for "X" is
+    # satisfied by either an "X" or "X.v<n>" channel actually being emitted
+    # (publishers vary in whether they include the version suffix in the
+    # channel name; both are legitimate).
+    if state.expected_channels:
+        import re
+        seen_stripped = {re.sub(r"\.v\d+$", "", c) for c in state.seen_channels}
+        silent = sorted(state.expected_channels - state.seen_channels - seen_stripped)
+        sc_table = Table.grid(padding=(0, 1), expand=True)
+        sc_table.add_column("channel", overflow="ellipsis", no_wrap=True)
+        sc_table.add_column("subs", justify="right", style="dim")
+        if silent:
+            for chan in silent[:8]:
+                n_subs = state.chan_subscribers.get(chan, 0)
+                subs_str = f"[{n_subs}]" if n_subs > 0 else ""
+                warn = "yellow" if n_subs > 0 else "dim"
+                sc_table.add_row(Text(chan, style=warn), Text(subs_str, style="dim"))
+            if len(silent) > 8:
+                sc_table.add_row(Text(f"+{len(silent)-8} more", style="dim italic"))
+            title = f"[bold]silent channels[/]  [dim]({len(silent)}/{len(state.expected_channels)})[/]"
+            border = "yellow"
+        else:
+            sc_table.add_row(Text("all schema'd channels active",
+                                  style="green"))
+            title = f"[bold]silent channels[/]  [dim](0/{len(state.expected_channels)})[/]"
+            border = "dim"
+        parts.append(Panel(sc_table, title=title, border_style=border,
+                           padding=(0, 1)))
+
+    return Panel(Group(*parts), border_style="dim", padding=0,
+                 title="[bold]signals[/]")
+
+
+def panel_footer(state: State, tick_s: float, current_tab: int = 1) -> Panel:
+    uptime = int(time.time() - state.started_at)
+    up_str = f"{uptime//3600}h{(uptime%3600)//60:02d}m" if uptime >= 3600 else f"{uptime//60:02d}m{uptime%60:02d}s"
+
+    TABS = [(1, "bus"), (2, "sysmap"), (3, "agents"), (4, "loomies")]
+    tab_text = Text()
+    for num, name in TABS:
+        if num == current_tab:
+            tab_text.append(f"  [{num}] ", style="dim")
+            tab_text.append(name, style="bold blue")
+            tab_text.append(" ●", style="bold blue")
+        else:
+            tab_text.append(f"  [{num}] {name}", style="dim")
+    tab_text.append("   │  [q] quit   │  ", style="dim")
+
+    stats = Text()
+    stats.append(f"ev {state.events_total}  ", style="dim")
+    stats.append(f"ch {len(state.chan_total)}  ", style="dim")
+    stats.append(f"DLQ {state.dead_letters_total}  ",
+                 style="bright_red" if state.dead_letters_total else "dim")
+    stats.append(f"tick {tick_s:.1f}s  up {up_str}", style="dim")
+
+    return Panel(Text.assemble(tab_text, stats), border_style="dim", padding=(0, 1))
+
+
+def _cluster_annotations(anns: list[dict], window_s: int = 300) -> list[list[dict]]:
+    if not anns:
+        return []
+    clusters: list[list[dict]] = []
+    current: list[dict] = [anns[0]]
+    current_end_ts = current[0].get("ts", 0)
+    for ann in anns[1:]:
+        ann_ts = ann.get("ts", 0)
+        if current_end_ts - ann_ts <= window_s:
+            current.append(ann)
+            current_end_ts = ann_ts
+        else:
+            clusters.append(current)
+            current = [ann]
+            current_end_ts = ann_ts
+    clusters.append(current)
+    return clusters
+
+
+def panel_signals(state: "State") -> Panel:
+    """Read pattern:annotations from Redis, show 6 most recent signals with temporal clustering."""
+    t = Table.grid(padding=(0, 1))
+    t.add_column(width=10)
+    t.add_column(width=9)
+    t.add_column(width=5)
+    t.add_column()
+
+    _STYPE_COLORS = {
+        "anomaly":     "bright_red",
+        "pattern":     "yellow",
+        "correlation": "cyan",
+        "silence":     "magenta",
+        "recovery":    "green",
+    }
+    _SEV_COLORS = {"info": "dim", "warn": "yellow", "alert": "bright_red", "critical": "red bold"}
+
+    annotations: list[dict] = []
+    if state._redis is not None:
+        try:
+            raw_map = state._redis.hgetall("pattern:annotations")
+            for v in raw_map.values():
+                try:
+                    annotations.append(json.loads(v))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    clusters: list[list[dict]] = []
+    if not annotations:
+        t.add_row(Text("no signals yet", style="dim italic"), Text(""), Text(""), Text(""))
+    else:
+        # apply filter_glob to channel names in annotations
+        fg = state.filter_glob
+        if fg:
+            annotations = [a for a in annotations
+                           if any(_matches_glob(c, fg) for c in (a.get("channels") or []))]
+        if not annotations:
+            t.add_row(Text("(no signals match filter)", style="dim italic"), Text(""), Text(""), Text(""))
+        else:
+            annotations.sort(key=lambda x: x.get("ts", 0), reverse=True)
+            clusters = _cluster_annotations(annotations, window_s=300)
+
+        rows_needed = 0
+        cluster_entries: list[tuple[list[dict], int]] = []
+        for cluster in clusters:
+            size = len(cluster)
+            if size > 1:
+                rows_for_cluster = 2 + min(size, max(0, 6 - rows_needed - 2))
+            else:
+                rows_for_cluster = min(size, max(0, 6 - rows_needed))
+            if rows_needed >= 6:
+                break
+            if rows_for_cluster > 0:
+                cluster_entries.append((cluster, rows_for_cluster))
+                rows_needed += rows_for_cluster
+
+        for cluster, alloc in cluster_entries:
+            if len(cluster) > 1:
+                t.add_row(
+                    Text(f"  .-- {len(cluster)} signals --.", style="dim"),
+                    Text(""), Text(""), Text(""),
+                )
+            for ann in cluster[:alloc - (2 if len(cluster) > 1 else 0)]:
+                stype = ann.get("signal_type", "?")
+                conf  = float(ann.get("confidence", 0))
+                ch    = (ann.get("channels") or ["?"])[0].split(".")[-1][:10]
+                desc  = (ann.get("description") or "")[:60]
+                sev   = ann.get("severity", "info")
+                bar   = "█" * int(conf * 5) + "░" * (5 - int(conf * 5))
+                t.add_row(
+                    Text(ch,    style="dim"),
+                    Text(stype, style=_STYPE_COLORS.get(stype, "white")),
+                    Text(bar,   style=_SEV_COLORS.get(sev, "white")),
+                    Text(desc,  style="dim"),
+                )
+            if len(cluster) > 1:
+                t.add_row(Text("  `--", style="dim"), Text(""), Text(""), Text(""))
+
+    return Panel(t, title="[bold]signals[/]  [dim](pattern:annotations)[/]",
+                 border_style="dim", padding=(0, 1))
+
+
+def build_layout(state: State, tick_s: float, current_tab: int = 1) -> Layout:
+    # Tab 2 — sysmap: delegate entirely to cc_sysmap renderer
+    if current_tab == 2 and HAS_SYSMAP:
+        sm_layout = _cc_sysmap.build_sysmap_layout(_sysmap_state, tick_s)
+        # Patch the sysmap footer with the shared tab bar
+        footer = panel_footer(state, tick_s, current_tab)
+        try:
+            sm_layout["footer"].update(footer)
+        except Exception:
+            pass
+        return sm_layout
+
+    # Tabs 1 / 3 / 4 — bus view (agents+loomies not yet embedded, fall through to bus)
+    layout = Layout()
+    layout.split_column(
+        Layout(name="body", ratio=1),
+        Layout(name="footer", size=3),
+    )
+    layout["body"].split_row(
+        Layout(name="left", ratio=3),
+        Layout(name="right", ratio=2),
+    )
+    layout["body"]["left"].split_column(
+        Layout(panel_rates(state),  name="rates", ratio=1),
+        Layout(panel_stream(state), name="stream", ratio=1),
+    )
+    layout["body"]["right"].split_column(
+        Layout(panel_talkers(state),  name="talkers",  ratio=2),
+        Layout(panel_alerts(state),   name="alerts",   ratio=2),
+        Layout(panel_signals(state),  name="signals",  ratio=1),
+    )
+    layout["footer"].update(panel_footer(state, tick_s, current_tab))
+    return layout
+
+
+# ─── main loop ─────────────────────────────────────────────────────────────
+def main() -> int:
+    global SAGA_STALE_S, SAGA_KILL_S, SAGA_REQUIRE_START
+    p = argparse.ArgumentParser(description="cc-bus-dashboard — immersive nervous-bus view")
+    p.add_argument("--log", type=Path, default=DEFAULT_LOG,
+                   help=f"path to JSONL log (default: {DEFAULT_LOG})")
+    p.add_argument("--tick", type=float, default=1.5,
+                   help="repaint interval in seconds (default: 1.5)")
+    p.add_argument("--max-history", type=int, default=2000,
+                   help="bootstrap from last N lines of existing log (default: 2000)")
+    p.add_argument("--once", action="store_true",
+                   help="render one frame and exit (for screenshot/test use)")
+    p.add_argument("--saga-stale", type=int, default=SAGA_STALE_S,
+                   help=f"dim sagas idle past N seconds (default: {SAGA_STALE_S})")
+    p.add_argument("--saga-kill", type=int, default=SAGA_KILL_S,
+                   help=f"drop sagas idle past N seconds (default: {SAGA_KILL_S})")
+    p.add_argument("--saga-allow-implicit-open", action="store_true",
+                   help="open sagas on ANY event with cycle_id (legacy behavior); "
+                        "default requires explicit .start/.opened/.created/.cycle.start")
+    p.add_argument("--schemas", type=Path, default=DEFAULT_SCHEMAS_DIR,
+                   help=f"schemas/ dir for silent-channel detection "
+                        f"(default: {DEFAULT_SCHEMAS_DIR}; pass empty/missing path to disable)")
+    p.add_argument("--tab", type=int, default=1, choices=[1, 2, 3, 4],
+                   help="start on tab N (1=bus 2=sysmap 3=agents 4=loomies)")
+    args = p.parse_args()
+
+    # Apply tunables to module globals so existing code paths pick them up.
+    SAGA_STALE_S = args.saga_stale
+    SAGA_KILL_S  = args.saga_kill
+    SAGA_REQUIRE_START = not args.saga_allow_implicit_open
+
+    state = State(log_path=args.log)
+    state.expected_channels = load_expected_channels(args.schemas)
+    try:
+        import redis as _r
+        state._redis = _r.Redis.from_url("redis://localhost:6379", decode_responses=True,
+                                          socket_timeout=1, socket_connect_timeout=1)
+        state._redis.ping()
+    except Exception:
+        state._redis = None
+
+    # bootstrap from existing log so the dashboard isn't empty on startup.
+    if args.log.exists():
+        try:
+            with args.log.open("r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            state.last_bucket_epoch = int(time.time()) // BUCKET_SECONDS
+            for line in lines[-args.max_history:]:
+                line = line.strip()
+                if line:
+                    ingest_event(state, line, historical=True)
+        except Exception:
+            pass
+
+    open_log(state)
+
+    console = Console()
+
+    if args.once:
+        console.print(build_layout(state, args.tick))
+        return 0
+
+    # ── keyboard reader thread ──────────────────────────────────────────────
+    current_tab = args.tab
+    quit_flag   = threading.Event()
+    _key_lock   = threading.Lock()
+
+    def _keyboard_reader() -> None:
+        nonlocal current_tab
+        fd = sys.stdin.fileno()
+        try:
+            old = termios.tcgetattr(fd)
+        except termios.error:
+            return  # not a tty (pipe/redirect) — skip
+        try:
+            tty.setcbreak(fd)
+            while not quit_flag.is_set():
+                if select.select([sys.stdin], [], [], 0.2)[0]:
+                    ch = os.read(fd, 1).decode("utf-8", errors="ignore")
+                    if ch == "\x1b":
+                        # ESC alone? Could be a quit. ESC followed by another
+                        # byte within 50ms is an Alt+X / CSI sequence — drain
+                        # & ignore. Prevents zellij-locked-mode Alt+[ etc.
+                        # leaking through and killing the dashboard.
+                        if _esc_is_alt_sequence(
+                            poll_fn=lambda t: bool(select.select([sys.stdin], [], [], t)[0]),
+                            read_fn=lambda n: os.read(fd, n),
+                        ):
+                            continue             # swallow — never quit on Alt-anything
+                        quit_flag.set()
+                        break
+                    if ch in ("q", "\x03"):       # q / Ctrl+C
+                        quit_flag.set()
+                        break
+                    if ch in ("1", "2", "3", "4"):
+                        with _key_lock:
+                            current_tab = int(ch)
+                    # m9d keybinds
+                    if ch == "/":
+                        with _key_lock:
+                            state.filter_glob = ""
+                            # next keypresses build the glob (handled in main loop via stdin)
+                    if ch == "z":
+                        with _key_lock:
+                            state.zoom_idx = (state.zoom_idx + 1) % 3
+                            state.BUCKET_SECONDS = [300, 3600, 86400][state.zoom_idx]
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    kb_thread = threading.Thread(target=_keyboard_reader, daemon=True, name="cc-kb")
+    kb_thread.start()
+
+    try:
+        last_sysmap_version = -1
+        last_rendered_tab   = -1
+        with Live(build_layout(state, args.tick, current_tab),
+                  console=console,
+                  refresh_per_second=1,
+                  screen=True) as live:
+            while not quit_flag.is_set():
+                new_lines = read_new_lines(state)
+                for line in new_lines:
+                    ingest_event(state, line)
+                state.roll_buckets_to(int(time.time()))
+                state.thresholds.refresh()
+                with _key_lock:
+                    tab = current_tab
+                tab_changed = (tab != last_rendered_tab)
+                if tab == 2 and HAS_SYSMAP:
+                    cur_ver = _sysmap_state.version
+                    if tab_changed or cur_ver != last_sysmap_version:
+                        live.update(build_layout(state, args.tick, tab))
+                        last_sysmap_version = cur_ver
+                    last_rendered_tab = tab
+                else:
+                    live.update(build_layout(state, args.tick, tab))
+                    last_rendered_tab = tab
+                time.sleep(args.tick)
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        console.print(f"[red]dashboard crashed:[/] {e}")
+        return 1
+    finally:
+        quit_flag.set()
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

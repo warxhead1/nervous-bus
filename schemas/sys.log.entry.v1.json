@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/sys.log.entry.v1.json",
+  "title": "sys.log.entry v1",
+  "description": "Normalized log entry from the log-normalizer adapter. Produced from Docker container logs, journald, application log files, kernel /dev/kmsg, or Redis slow-log. Lives only in nbus:logs Redis stream — never emitted on the bus.",
+  "type": "object",
+  "required": ["log_source", "service", "level", "message", "raw"],
+  "properties": {
+    "log_source": {
+      "type": "string",
+      "enum": ["docker", "journal", "app", "kernel", "redis"],
+      "description": "Origin of the log entry"
+    },
+    "service": {
+      "type": "string",
+      "description": "Container name, systemd unit, app filename, 'kernel', or 'redis-slowlog'"
+    },
+    "level": {
+      "type": "string",
+      "enum": ["debug", "info", "warn", "error", "critical", "unknown"]
+    },
+    "message": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "Cleaned single-line human-readable message"
+    },
+    "raw": {
+      "type": "string",
+      "maxLength": 1000,
+      "description": "Original log line, UTF-8 decoded with replacement chars"
+    },
+    "parsed_fields": {
+      "type": "object",
+      "description": "Source-specific fields: journald _SYSTEMD_UNIT/_PID, Docker container_name/image, kernel priority/seqnum, Redis command/duration_us"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bus.beads.kanban.snapshot.v1",
+  "title": "Beads kanban board snapshot",
+  "description": "Full kanban board state pushed when any column changes.",
+  "type": "object",
+  "required": ["project", "timestamp", "columns"],
+  "properties": {
+    "project":   { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "columns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["status", "count", "issues"],
+        "properties": {
+          "status": { "type": "string" },
+          "count":  { "type": "integer" },
+          "issues": { "type": "array", "items": { "type": "object" } }
+        }
+      }
+    }
+  }
+}

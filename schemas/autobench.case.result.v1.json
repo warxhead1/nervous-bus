@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.case.result.v1.json",
+  "title": "autobench.case.result v1",
+  "description": "Per-case evaluator result with captured generated code. Closes the observability gap where the agent's generated code was previously discarded after length measurement. Unlocks AST feature extraction, failure clustering, and the diagnoser pattern from research/ast_pattern_extraction_2026.md §10. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.case.result.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "case_id",
+        "iteration",
+        "language",
+        "verdict",
+        "p_score",
+        "latency_ms",
+        "generated_code",
+        "generated_code_length"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the autobench run"
+        },
+        "case_id": {
+          "type": "string",
+          "description": "Benchmark case identifier"
+        },
+        "iteration": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "RSI iteration number (0 when not running in an RSI loop)"
+        },
+        "language": {
+          "type": "string",
+          "description": "Programming language for this case (python, cpp, go, glsl, ...)"
+        },
+        "verdict": {
+          "type": "string",
+          "description": "Verdict on completion (OK/WA/TLE/RE/CE/MLE/VF)"
+        },
+        "p_score": {
+          "type": "number",
+          "description": "Normalized score in [0.0, 1.0]"
+        },
+        "latency_ms": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Wall-clock latency for the case in milliseconds"
+        },
+        "generated_code": {
+          "type": "string",
+          "maxLength": 4096,
+          "description": "The agent's generated code, truncated to the first 4096 characters"
+        },
+        "generated_code_length": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Original (untruncated) length of the generated code in characters"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1,
+          "description": "1-indexed attempt counter within an iterative rollout protocol. attempt=1 is the first try; attempt>1 indicates a retry after a verify_code failure. Optional (omitted == 1) so events emitted before the nervous-bus-x3os field addition remain valid. Downstream consumers should distinguish first-attempt-OK from retry-OK when scoring self-correction signals."
+        },
+        "per_input_results": {
+          "type": "array",
+          "default": [],
+          "description": "Per-input verdicts when the case carries multiple test_inputs (nervous-bus-uwjh). Each element records the verdict, p_score, and latency for one (test_input, expected_output) pair. Optional and defaults to [] for legacy events and single-input cases where the aggregate fields already tell the whole story.",
+          "items": {
+            "type": "object",
+            "required": ["verdict", "p_score", "latency_ms"],
+            "properties": {
+              "verdict": {"type": "string"},
+              "p_score": {"type": "number"},
+              "latency_ms": {"type": "number", "minimum": 0.0}
+            }
+          }
+        }
+      }
+    }
+  }
+}

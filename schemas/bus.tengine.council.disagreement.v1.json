@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.council.disagreement.v1.json",
+  "title": "bus.tengine.council.disagreement v1",
+  "description": "When: The council (multi-model evaluation) produces divergent results and the models cannot reach consensus on the topic. Source: /tengine. Emitted when model results differ beyond a acceptable threshold, signaling a need for human arbitration or deeper analysis.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.tengine.council.disagreement.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["v", "source", "host", "topic", "positions"],
+      "properties": {
+        "v": {"type": "integer", "description": "Payload schema version, always 1."},
+        "source": {"type": "string", "description": "Emitting subsystem identifier, always 'tengine'."},
+        "host": {"type": "string", "description": "Hostname of the machine that generated this event."},
+        "topic": {"type": "string", "description": "The topic or question that the council models were evaluating when disagreement occurred."},
+        "positions": {
+          "type": "object",
+          "description": "Free-form JSON object mapping model name to the position/answer it returned; structure varies by council configuration."
+        }
+      }
+    }
+  }
+}

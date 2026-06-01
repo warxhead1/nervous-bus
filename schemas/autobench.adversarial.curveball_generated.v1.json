@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.adversarial.curveball_generated.v1.json",
+  "title": "autobench.adversarial.curveball_generated v1",
+  "description": "One LLM-generated adversarial test case produced by the Code-A1 / SAGE adversarial dual. Emitted per call to AdversarialGenerator.generate_curveball. Carries enough metadata (gotcha, failure mode, generator model, prompt preview) for downstream consumers to cluster curveballs without re-reading the full prompt.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.adversarial.curveball_generated.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "case_id",
+        "gotcha",
+        "generator_model",
+        "prompt_preview"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the autobench session that owns this curveball."
+        },
+        "case_id": {
+          "type": "string",
+          "description": "Curveball identifier (prefixed 'adv-' followed by a ULID)."
+        },
+        "gotcha": {
+          "type": "string",
+          "description": "One-sentence description of the trap the generator set."
+        },
+        "target_failure_mode": {
+          "type": "string",
+          "description": "The failure mode the generator was steered toward (e.g. integer_overflow, empty_input). Absent when the generator chose freely."
+        },
+        "generator_model": {
+          "type": "string",
+          "description": "Model identifier (e.g. MiniMax-M2.7). 'fallback_static' when the LLM call failed and the static template fired."
+        },
+        "prompt_preview": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "First 200 characters of the generated problem statement."
+        }
+      }
+    }
+  }
+}

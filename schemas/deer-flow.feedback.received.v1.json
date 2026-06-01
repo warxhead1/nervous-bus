@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.feedback.received.v1.json",
+  "title": "deer-flow.feedback.received v1",
+  "description": "A feedback item was received by the feedback router. The feedback may or may not have resulted in a system change — see feedback.acted for that outcome.",
+  "type": "object",
+  "required": ["feedback_id", "feedback_type", "target_id", "source", "timestamp"],
+  "properties": {
+    "feedback_id": {
+      "type": "string",
+      "description": "Unique feedback identifier (e.g. fb_<ts>_<random>)"
+    },
+    "feedback_type": {
+      "type": "string",
+      "enum": ["correction", "wiki_update", "cache_invalidate", "enrichment_pushback", "council_dissent", "soul_feedback"],
+      "description": "Controls which subsystem(s) receive this feedback"
+    },
+    "target_id": {
+      "type": "string",
+      "description": "The thing being corrected: page title, bead_id, cycle_id, etc."
+    },
+    "original_value": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "What the system thought was correct (corrections only)"
+    },
+    "corrected_value": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "The correct value/answer (most feedback types)"
+    },
+    "explanation": {
+      "type": "string",
+      "maxLength": 1000,
+      "description": "Human-readable explanation"
+    },
+    "source": {
+      "type": "string",
+      "description": "Feedback origin (e.g. human:eric, agent:research-advisor-hy3)"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO8601 UTC"
+    }
+  }
+}

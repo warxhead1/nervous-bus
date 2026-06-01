@@ -1,0 +1,18 @@
+[redis]
+url = "redis://localhost:6379"
+db = 0
+
+[streams]
+maxlen = 100000
+
+[sources.app]
+paths = [
+    "~/projects/hearth-loom/main/logs",
+    "~/.cache/nervous-bus/silo-watcher.log",
+]
+
+[filters]
+docker  = ["GET /health", "GET /ping", "healthcheck"]
+journal = []
+app     = []
+kernel  = []

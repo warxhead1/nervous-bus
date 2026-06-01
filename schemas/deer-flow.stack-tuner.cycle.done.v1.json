@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.stack-tuner.cycle.done.v1.json",
+  "title": "deer-flow.stack-tuner.cycle.done v1",
+  "description": "Terminal event for a stack-tuner cycle — closes the saga opened by cycle.start. Two emitter sources: /deer-flow (minimal: cycle_id+verdict+score) and /deer-flow/stack-tuner (full: adds per-stage breakdown so consumers can analyze cycle anatomy without re-fetching summary.json).",
+  "type": "object",
+  "required": ["cycle_id", "verdict"],
+  "properties": {
+    "cycle_id": { "type": "string" },
+    "verdict": { "type": "string" },
+    "score": { "type": ["number", "null"], "description": "compact-form score field (single number, no before/after)" },
+    "stages": {
+      "type": "array",
+      "description": "per-stage record (rich form only); each stage is a model invocation (bulk_v1, critic_v1, ...)",
+      "items": {
+        "type": "object",
+        "required": ["stage", "model"],
+        "properties": {
+          "stage": { "type": "string" },
+          "model": { "type": "string" },
+          "ok": { "type": "boolean" },
+          "tokens": { "type": ["integer", "null"], "minimum": 0 },
+          "cost_usd": { "type": "number", "minimum": 0 },
+          "answer_len": { "type": ["integer", "null"], "minimum": 0 },
+          "verdict": { "type": ["string", "null"] },
+          "score": { "type": ["number", "null"] },
+          "lift": { "type": ["number", "null"] },
+          "error": { "type": ["string", "null"] },
+          "rejection_reasons": { "type": ["array", "null"], "items": { "type": "string" } }
+        }
+      }
+    },
+    "question_class": { "type": ["string", "null"] },
+    "score_before": { "type": ["number", "null"] },
+    "score_after": { "type": ["number", "null"] },
+    "lift": { "type": ["number", "null"] },
+    "wall_elapsed_s": { "type": "number" },
+    "cumulative_cost_usd": { "type": "number", "minimum": 0 },
+    "integrity_issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "stage": { "type": "string" },
+          "issue": { "type": "string" },
+          "ok": { "type": "boolean" },
+          "answer_len": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "final_answer_len": { "type": ["integer", "null"], "minimum": 0, "description": "null when the cycle terminated before producing a final answer" }
+  }
+}

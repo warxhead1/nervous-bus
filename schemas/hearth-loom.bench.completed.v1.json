@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth-loom.bench.completed.v1.json",
+  "title": "hearth-loom.bench.completed v1",
+  "description": "Benchmark comparison result from the deer-flow Forge bench runner. Emitted after a baseline vs treatment comparison completes with a delta and pass/fail verdict. Source: /deer-flow.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string", "const": "/deer-flow"},
+    "type": {"type": "string", "const": "hearth-loom.bench.completed.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "subject": {
+      "type": "string",
+      "description": "Session ID this bench result belongs to"
+    },
+    "data": {
+      "type": "object",
+      "required": ["session_id", "bead_id", "baseline_metric", "treatment_metric", "delta", "n", "passes_threshold"],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "Forge session this benchmark belongs to"
+        },
+        "bead_id": {
+          "type": "string",
+          "description": "Bead that triggered this benchmark"
+        },
+        "baseline_metric": {
+          "type": "number",
+          "description": "Baseline (control) metric value"
+        },
+        "treatment_metric": {
+          "type": "number",
+          "description": "Treatment metric value"
+        },
+        "delta": {
+          "type": "number",
+          "description": "treatment_metric - baseline_metric"
+        },
+        "n": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of test runs / sample size"
+        },
+        "passes_threshold": {
+          "type": "boolean",
+          "description": "Whether delta exceeds the configured threshold"
+        },
+        "ci_lower": {
+          "type": ["number", "null"],
+          "description": "Lower bound of confidence interval"
+        },
+        "ci_upper": {
+          "type": ["number", "null"],
+          "description": "Upper bound of confidence interval"
+        },
+        "duration_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "description": "How long the benchmark took to run"
+        }
+      }
+    }
+  }
+}

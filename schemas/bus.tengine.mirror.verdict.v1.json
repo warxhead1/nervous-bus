@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.mirror.verdict.v1.json",
+  "title": "bus.tengine.mirror.verdict v1",
+  "description": "When: The Mirror agent completes evaluation of a wave and produces a verdict. Source: /tengine. Emitted after Mirror finishes its analysis of the wave's dispatches and determines whether to proceed, quarantine, or escalate.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.tengine.mirror.verdict.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["v", "source", "host", "wave", "agent_name", "verdict", "lens_summary", "follow_up_beads"],
+      "properties": {
+        "v": {"type": "integer", "description": "Payload schema version, always 1."},
+        "source": {"type": "string", "description": "Emitting subsystem identifier, always 'tengine'."},
+        "host": {"type": "string", "description": "Hostname of the machine that generated this event."},
+        "wave": {"type": "string", "description": "Wave identifier this verdict applies to."},
+        "agent_name": {"type": "string", "description": "Name of the Mirror agent that produced the verdict."},
+        "verdict": {"type": "string", "description": "Verdict decision string, e.g. 'approve', 'quarantine', 'escalate', 'reject'."},
+        "lens_summary": {
+          "type": "object",
+          "description": "Structured summary from the Mirror lens analysis; schema is agent-defined JSON."},
+        "follow_up_beads": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "List of bead identifiers that Mirror recommends creating as follow-up actions based on findings."}
+      }
+    }
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.improver.prediction.refuted_live.v1.json",
+  "title": "autobench.improver.prediction.refuted_live v1",
+  "description": "Live (partial) refutation of a previously-emitted autobench.improver.prediction.v1 fired the moment incoming iter N+1 cases make the prediction mathematically unachievable, instead of waiting for the iter N+1 → N+2 boundary. Emitted at most once per prediction. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.improver.prediction.refuted_live.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "iteration",
+        "prediction",
+        "actuals_so_far",
+        "remaining_cases",
+        "is_refuted",
+        "refutation_reason",
+        "confidence_at_refute"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the autobench run (matches the prediction event)"
+        },
+        "iteration": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "RSI iteration being verified live, i.e. iter N+1 (one after the iteration that produced the prediction)"
+        },
+        "prediction": {
+          "type": "object",
+          "description": "The original Prediction payload being live-refuted",
+          "required": [
+            "predicted_score_delta",
+            "predicted_verdict_class_changes",
+            "confidence",
+            "rationale"
+          ],
+          "properties": {
+            "predicted_score_delta": {"type": "number"},
+            "predicted_verdict_class_changes": {
+              "type": "object",
+              "additionalProperties": {"type": "integer"}
+            },
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "rationale": {"type": "string"}
+          }
+        },
+        "actuals_so_far": {
+          "type": "object",
+          "description": "Verdict-count histogram of iter N+1 cases completed at refutation time",
+          "additionalProperties": {"type": "integer"}
+        },
+        "remaining_cases": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of iter N+1 cases not yet dispatched at refutation time"
+        },
+        "is_refuted": {
+          "type": "boolean",
+          "description": "True when the prediction is mathematically unachievable given actuals_so_far + remaining_cases"
+        },
+        "refutation_reason": {
+          "type": "string",
+          "description": "Human-readable explanation citing the unreachable verdict-delta entries"
+        },
+        "confidence_at_refute": {
+          "type": ["number", "null"],
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Original prediction confidence carried forward at refutation time; null when not refuted"
+        }
+      }
+    }
+  }
+}

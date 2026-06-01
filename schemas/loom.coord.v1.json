@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12",
+  "$id": "nervous-bus/schemas/loom.coord.v1.json",
+  "title": "loom.coord v1",
+  "description": "Bidirectional ownership coordination schema for lease-based coordination between coding agents and hearth-loom workers",
+  "type": "object",
+  "required": ["verb", "bead_id", "actor"],
+  "properties": {
+    "verb": {
+      "type": "string",
+      "enum": ["claim", "heartbeat", "release", "redirect"]
+    },
+    "bead_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "actor": {
+      "type": "string",
+      "description": "agent:<kind>:<session_id> | loomie:<worker_id> | human:<name>"
+    },
+    "lease_seconds": {
+      "type": "integer",
+      "minimum": 30,
+      "maximum": 7200
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["completed", "abandoned", "blocked"]
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "redirect_to": {
+      "type": "string"
+    },
+    "saga_id": {
+      "type": "string"
+    },
+    "pane_id": {
+      "type": "string"
+    }
+  }
+}

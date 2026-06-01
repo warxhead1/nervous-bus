@@ -1,0 +1,100 @@
+name: schema-coverage
+
+# Schema-first drift detector — fails when a producer emits a channel that
+# nervous-bus has no schema for. See nervous-bus-baid for the rationale.
+#
+# The first-run rollout is REPORT-ONLY: the workflow logs the report but
+# exits 0 even when missing channels are found. A follow-up bead flips the
+# `--report-only` flag to make this a hard gate.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  scan-producers:
+    name: scan-producers
+    runs-on: [self-hosted, linux, nervous-bus]
+    steps:
+      - name: Configure PATH and project dirs
+        run: |
+          echo "$HOME/.pyenv/shims" >> $GITHUB_PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          # Sibling repos exist on the self-hosted runner; read-only scanned.
+          # Steps below skip gracefully when dirs are absent (public CI, forks).
+          echo "HEARTH_LOOM_DIR=$HOME/projects/hearth-loom/main" >> $GITHUB_ENV
+          echo "DEER_FLOW_DIR=$HOME/projects/deer-flow" >> $GITHUB_ENV
+          echo "KB_DIR=$HOME/projects/kb" >> $GITHUB_ENV
+      - uses: actions/checkout@v6
+        with:
+          clean: false
+
+      - name: Verify producer directories exist
+        run: |
+          set -euo pipefail
+          for d in "$HEARTH_LOOM_DIR" "$DEER_FLOW_DIR" "$KB_DIR"; do
+            if [ ! -d "$d" ]; then
+              echo "WARN: producer dir not found: $d (skipping)" >&2
+            else
+              echo "OK: $d"
+            fi
+          done
+
+      - name: Scan emitted channels (hearth-loom + deer-flow + kb)
+        run: |
+          set -euo pipefail
+          args=()
+          [ -d "$HEARTH_LOOM_DIR" ] && args+=("hearth-loom=$HEARTH_LOOM_DIR")
+          [ -d "$DEER_FLOW_DIR" ]    && args+=("deer-flow=$DEER_FLOW_DIR")
+          [ -d "$KB_DIR" ]           && args+=("kb=$KB_DIR")
+          if [ ${#args[@]} -eq 0 ]; then
+            echo "No producer trees available — emitting empty result."
+            echo "[]" > scan_emitted_channels.json
+          else
+            python3 tools/scan_emitted_channels.py "${args[@]}" \
+              > scan_emitted_channels.json
+          fi
+          echo "--- scan output (first 40 lines) ---"
+          head -40 scan_emitted_channels.json
+          echo "... total $(wc -l < scan_emitted_channels.json) lines"
+
+      - name: Check schema coverage (report-only on first rollout)
+        # continue-on-error so the gate is informational on first rollout.
+        # When the in-flight drift is cleared, a follow-up PR (tracked as a
+        # nervous-bus follow-up bead) flips this to false AND drops the
+        # --report-only flag below.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python3 tools/check_schema_coverage.py \
+            --input scan_emitted_channels.json \
+            --schemas schemas \
+            --allowlist tools/schema_coverage_allowlist.txt \
+            --deprecated tools/schema_coverage_deprecated.txt \
+            --report-only \
+            | tee schema-coverage-report.txt
+
+      - name: Upload scan artefact
+        # Forensics aid only — the actual signal is in the prior steps'
+        # stdout (head -40 of scan_emitted_channels.json is already echoed
+        # to the job log). When GitHub Actions storage quota is exhausted
+        # this step fails with "Artifact storage quota has been hit";
+        # without continue-on-error that would gate every PR despite the
+        # schema check itself being clean. The upload is convenience, not
+        # contract.
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: schema-coverage-report
+          path: |
+            scan_emitted_channels.json
+            schema-coverage-report.txt
+          if-no-files-found: warn
+          # Shorter retention reduces the chance of hitting the quota in the
+          # first place — these reports are most useful in the day after a
+          # PR runs, not 14 days later.
+          retention-days: 3

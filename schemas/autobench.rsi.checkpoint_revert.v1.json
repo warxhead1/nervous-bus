@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.rsi.checkpoint_revert.v1.json",
+  "title": "autobench.rsi.checkpoint_revert v1",
+  "description": "Emitted (nervous-bus-sf0y) when an RSI iteration scored more than ``variance_floor`` below the best-so-far iter and the loop reverted its working harness to the best-iter checkpoint before starting the next iteration. Prevents compounding wrong-direction improver edits — after a >2σ regression the loop snaps back to the known-good harness AND the improver's next call gets revert context so it can reconsider its hypothesis instead of doubling down on the failed edit. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.rsi.checkpoint_revert.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "iter_regressed",
+        "regression_delta",
+        "reverted_to_iter",
+        "variance_floor_used"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the autobench run"
+        },
+        "iter_regressed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "RSI iteration whose score regressed below (best_score - variance_floor)"
+        },
+        "regression_delta": {
+          "type": "number",
+          "description": "iter_regressed.score - best_score (negative; magnitude > variance_floor_used)"
+        },
+        "reverted_to_iter": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Iteration whose harness is now the active base for the next iter"
+        },
+        "variance_floor_used": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "The 2σ noise floor (from AUTOBENCH_VARIANCE_FLOOR or default 0.027) below which we treat the regression as signal not noise"
+        },
+        "best_score": {
+          "type": "number",
+          "description": "Score of the iteration we're reverting to"
+        },
+        "iter_score": {
+          "type": "number",
+          "description": "Score of the regressing iteration"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.curriculum.problem.v1.json",
+  "title": "autobench.curriculum.problem v1",
+  "description": "One newly-generated curriculum problem. Emitted by autobench.curriculum.CurriculumAgent each time a problem is synthesized. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string", "description": "ULID — unique identifier for this event"},
+    "source": {"type": "string", "description": "Source URI — typically /autobench"},
+    "type": {"type": "string", "const": "autobench.curriculum.problem.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time", "description": "RFC3339 UTC timestamp"},
+    "data": {
+      "type": "object",
+      "required": ["session_id", "case_id", "target_skills", "difficulty_rating", "generator_model", "date"],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the curriculum cycle; correlates events across channels"
+        },
+        "case_id": {
+          "type": "string",
+          "description": "Stable id for the generated case (e.g. curr-2026-05-16-03)"
+        },
+        "cycle_id": {
+          "type": "string",
+          "description": "Cycle tag (curr-YYYY-MM-DD-<epoch>) — groups all problems generated in the same cycle. Absent on events emitted before multi-cycle attribution (nervous-bus-9obz)."
+        },
+        "prompt_preview": {
+          "type": "string",
+          "description": "First ~280 chars of the problem prompt — bus payload bound"
+        },
+        "target_skills": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Skills the problem is designed to drill (e.g. ['dp', 'large-arrays'])"
+        },
+        "difficulty_rating": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5000,
+          "description": "CF-style rating (800–3500 typical, 0 allowed for trivial)"
+        },
+        "generator_model": {
+          "type": "string",
+          "description": "Model id that produced the problem (e.g. MiniMax-M2.7)"
+        },
+        "rationale_preview": {
+          "type": "string",
+          "description": "First ~280 chars of generator rationale (why this problem)"
+        },
+        "date": {
+          "type": "string",
+          "description": "ISO date (YYYY-MM-DD) the curriculum cycle ran"
+        }
+      }
+    }
+  }
+}

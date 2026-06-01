@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.council.session.v1.json",
+  "title": "deer-flow.council.session v1",
+  "description": "Unified council lifecycle event — single stream for consumers that want all council events without subscribing to council.started + council.completed separately. Carries started, member_speaking, member_voted, and completed events on the same channel. Does not replace council.started / council.completed (those remain for dedicated consumers). Source: /deer-flow/council.",
+  "type": "object",
+  "required": ["council_id", "topic", "event", "status"],
+  "properties": {
+    "council_id": {
+      "type": "string",
+      "description": "Unique council run identifier"
+    },
+    "topic": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "The question or decision topic put to the council"
+    },
+    "event": {
+      "type": "string",
+      "enum": ["started", "member_speaking", "member_voted", "completed"],
+      "description": "Lifecycle discriminator for this event"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["running", "completed", "failed", "cancelled"],
+      "description": "Overall council status at the time of this event"
+    },
+    "members": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Model/agent identifiers for all council members — present on event=started"
+    },
+    "current_speaker": {
+      "type": ["string", "null"],
+      "description": "Agent name currently speaking or just voted"
+    },
+    "vote_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of members that have submitted verdicts so far"
+    },
+    "consensus": {
+      "type": ["string", "null"],
+      "description": "Emerging or final consensus verdict"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC — when the council was dispatched"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC — when all agents finished; present only on event=completed"
+    }
+  }
+}

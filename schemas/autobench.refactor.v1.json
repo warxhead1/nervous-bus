@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.refactor.v1.json",
+  "title": "autobench.refactor v1",
+  "description": "Per-case refactor-verifier result. Emitted after a tier-1 (symbol-rename) refactor candidate is checked by autobench.refactor_verifier.RenameVerifier — ast-grep scope, difftastic AST diff (or Python-AST fallback), and test-suite pass. The verifier scores continuous semantic-equivalence verdicts beyond the binary OK/CE/RE/WA family: RV (Refactor Verified), RD (Refactor Drift), RT (Refactor Test Fail). Source: /autobench/refactor.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.refactor.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "case_id",
+        "verdict",
+        "refactor_type",
+        "old_name",
+        "new_name",
+        "test_pass",
+        "ast_drift_files",
+        "details"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "Caller-supplied identifier grouping a batch of refactor verifications (e.g. an autobench run ID)."
+        },
+        "case_id": {
+          "type": "string",
+          "description": "Benchmark case identifier (e.g. refactor_tier1.01_clean_rename)."
+        },
+        "verdict": {
+          "type": "string",
+          "enum": ["RV", "RD", "RT"],
+          "description": "RV = Refactor Verified, RD = Refactor Drift (AST changes beyond rename), RT = Refactor Test Fail (test suite regressed)."
+        },
+        "refactor_type": {
+          "type": "string",
+          "enum": ["rename"],
+          "description": "Refactor class. v1 schema covers only the tier-1 symbol-rename case; future tiers (extract/inline, async migration, framework migration) extend the enum in v2+."
+        },
+        "old_name": {
+          "type": "string",
+          "description": "Pre-refactor symbol name."
+        },
+        "new_name": {
+          "type": "string",
+          "description": "Post-refactor symbol name."
+        },
+        "test_pass": {
+          "type": ["boolean", "null"],
+          "description": "Whether the project test suite passed under the post-refactor tree. null when no test command was configured."
+        },
+        "ast_drift_files": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Repo-relative file paths whose AST/structural diff exceeds the declared rename (the evidence behind an RD verdict). Empty for RV / RT."
+        },
+        "details": {
+          "type": "object",
+          "description": "Free-form evidence dict: ast-grep counts, difftastic JSON records, fallback-path indicators (tools_used), test runner output. Schema-free to allow tooling evolution without bumping the major version."
+        }
+      }
+    }
+  }
+}

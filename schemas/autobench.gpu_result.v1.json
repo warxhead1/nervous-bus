@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "nervous-bus/schemas/autobench.gpu_result.v1.json",
+  "title": "autobench.gpu_result.v1",
+  "description": "Result of a GPU shader execution job from the autobench broker",
+  "type": "object",
+  "required": ["case_id", "silo_id", "verdict"],
+  "properties": {
+    "case_id": {"type": "string"},
+    "silo_id": {"type": "string"},
+    "verdict": {"type": "string", "enum": ["OK", "RE", "TLE", "WA", "VF", "CE"]},
+    "fps_mean": {"type": "number"},
+    "frame_ms_p99": {"type": "number"},
+    "frames_rendered": {"type": "integer"},
+    "frames_requested": {"type": "integer"},
+    "frame_uri": {"type": "string", "description": "file:// URI of last rendered frame"},
+    "latency_ms": {"type": "number"},
+    "silo_tester_report": {"type": "object", "description": "Full SiloTesterEnvelope JSON"},
+    "error": {"type": "string"}
+  }
+}

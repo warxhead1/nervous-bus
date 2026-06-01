@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.otel.span.v1.json",
+  "title": "deer-flow.otel.span v1",
+  "description": "OpenTelemetry span bridged to nervous-bus via deer-flow's _BusBridgeSpanProcessor.on_end(). Only spans carrying a thread_id attribute are emitted (startup/shutdown spans dropped). Enabled by env DEERFLOW_OTEL_BRIDGE_BUS=1. Emit site: deer-flow/backend/packages/harness/deerflow/bus.py:1105 (emit_otel_span_event). Source: /deer-flow/harness.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "deer-flow.otel.span.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["trace_id", "span_id", "parent_span_id", "name", "attributes", "start_time_unix_nano", "duration_ms"],
+      "properties": {
+        "trace_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "OTel trace id, 32 lowercase hex chars"
+        },
+        "span_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$",
+          "description": "OTel span id, 16 lowercase hex chars"
+        },
+        "parent_span_id": {
+          "type": ["string", "null"],
+          "description": "16 lowercase hex chars, or null for root spans"
+        },
+        "name": {"type": "string", "description": "Span name"},
+        "attributes": {
+          "type": "object",
+          "description": "Whitelisted span attributes (other keys are stripped at the bridge). Permitted keys: agent_name, tool_name, model_name, finish_reason, error, error.type, status_code, thread_id, deerflow.agent_name, deerflow.tool_name, deerflow.model_name, deerflow.thread_id, deerflow.run_id"
+        },
+        "start_time_unix_nano": {"type": "integer", "minimum": 0, "description": "Span start time as nanoseconds since the epoch"},
+        "duration_ms": {"type": "number", "minimum": 0, "description": "Span duration in ms, rounded to 2 decimals"},
+        "status_code": {"type": "string", "description": "OTel status enum name (e.g. OK, ERROR); emitted when span.status is set"},
+        "status_message": {"type": "string", "description": "OTel status description; emitted when set"}
+      }
+    }
+  }
+}

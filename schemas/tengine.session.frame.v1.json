@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.session.frame.v1.json",
+  "title": "tengine.session.frame v1",
+  "description": "Per-step heartbeat from silo_tester: emitted after each step command completes. Carries current frame number, FPS aggregates, average frame time, and cumulative anomaly count since session start.",
+  "type": "object",
+  "required": ["frame", "stepped", "fps_avg", "fps_min", "fps_max"],
+  "properties": {
+    "frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "current GPU frame index after the step completes"
+    },
+    "stepped": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "number of frames advanced in this step command"
+    },
+    "fps_avg": {
+      "type": "number",
+      "minimum": 0,
+      "description": "rolling average FPS over recent frames"
+    },
+    "fps_min": {
+      "type": "number",
+      "minimum": 0,
+      "description": "minimum FPS observed in the tracking window"
+    },
+    "fps_max": {
+      "type": "number",
+      "minimum": 0,
+      "description": "maximum FPS observed in the tracking window"
+    },
+    "frame_time_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "average frame time in milliseconds (1000/fps_avg); 0 when fps_avg is 0"
+    },
+    "anomaly_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "cumulative visual anomaly count from the GPU anomaly ring buffer since session start; consumers can compute per-step delta by diffing successive values"
+    }
+  }
+}

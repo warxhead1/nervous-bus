@@ -1,0 +1,25 @@
+[package]
+name = "nervous-bus"
+version = "0.1.0"
+edition = "2021"
+description = "zellij WASM plugin: routes nervous-bus events between named channels"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+zellij-tile = "0.44"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+
+# Vendored fork of atty 0.2.15 with upstream PR #51 applied to address
+# RUSTSEC-2021-0145 (atty is unmaintained; the PR has sat unmerged for years).
+# See vendor/atty/PATCH.md. Remove once upstream zellij drops clap 3.
+[patch.crates-io]
+atty = { path = "../vendor/atty" }

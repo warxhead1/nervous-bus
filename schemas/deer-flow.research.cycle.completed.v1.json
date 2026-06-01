@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.research.cycle.completed.v1.json",
+  "title": "deer-flow.research.cycle.completed v1",
+  "description": "Emitted by deer-flow's ResearchDispatchConsumer when a meta_probe cycle completes. hearth-api (nbus_consumer.rs::handle_research_cycle_completed) writes the result to ~/knowledge/indexed/deer-flow/<research_id>.md and upserts cycle_results + action_items tables. Note: the kb_path field is stale and ignored by hearth-api; do not rely on it to locate the written file.",
+  "type": "object",
+  "required": ["research_id", "cycle_id", "question", "question_class", "summary"],
+  "properties": {
+    "research_id": {
+      "type": "string",
+      "description": "Echoed from the dispatch event — the caller's correlation ID."
+    },
+    "cycle_id": {
+      "type": "string",
+      "description": "deer-flow's internal cycle identifier (e.g. '20260525T193105Z-3924'). Maps to a results directory under skills/custom/stack-tuner/results/."
+    },
+    "question": {
+      "type": "string",
+      "description": "The original research question, echoed for consumer convenience."
+    },
+    "question_class": {
+      "type": "string",
+      "description": "The question class used for this cycle."
+    },
+    "summary": {
+      "type": "object",
+      "description": "The full summary.json payload from the completed cycle. Key fields: verdict (ship|lift_measured|retry_bulk_recommended|bulk_failed), state (completed|failed), final_answer, best_answer, cumulative_cost_usd, wall_elapsed_s.",
+      "properties": {
+        "verdict": { "type": "string" },
+        "state": { "type": "string" },
+        "final_answer": { "type": ["string", "null"] },
+        "best_answer": { "type": ["string", "null"] },
+        "cumulative_cost_usd": { "type": "number" },
+        "wall_elapsed_s": { "type": "number" }
+      }
+    },
+    "kb_path": {
+      "type": "string",
+      "deprecated": true,
+      "description": "DEPRECATED — stale field, ignored by hearth-api. hearth-api::handle_research_cycle_completed always writes to ~/knowledge/indexed/deer-flow/<research_id>.md regardless of this value. Do not use this field to locate the written KB entry. The old example path '~/projects/kb/home-automation/{research_id}.yaml' is incorrect."
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.antidefer.flagged.v1.json",
+  "title": "bus.tengine.antidefer.flagged v1",
+  "description": "When: The anti-deferment engine detects that an agent appears to be deferring work (making plans instead of acting, writing documentation instead of code). Source: /tengine. Emitted as a warning that the agent may be stalling or gaming the progress model.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.tengine.antidefer.flagged.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["v", "source", "host", "agent_name", "deferment_summary", "evidence_files", "recommended_action"],
+      "properties": {
+        "v": {"type": "integer", "description": "Payload schema version, always 1."},
+        "source": {"type": "string", "description": "Emitting subsystem identifier, always 'tengine'."},
+        "host": {"type": "string", "description": "Hostname of the machine that generated this event."},
+        "agent_name": {"type": "string", "description": "Name of the agent flagged for potential deferment."},
+        "deferment_summary": {"type": "string", "description": "Human-readable explanation of what behavior triggered the flag, e.g. 'agent wrote 3 planning docs without touching code'."},
+        "evidence_files": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Absolute paths to files that provide evidence of the deferment behavior."},
+        "recommended_action": {"type": "string", "description": "Suggested action to take, e.g. 'cancel_bead', 'escalate', 'force_direct_editing'."}
+      }
+    }
+  }
+}

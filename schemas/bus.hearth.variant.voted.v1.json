@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth.variant.voted.v1.json",
+  "title": "bus.hearth.variant.voted v1",
+  "description": "Emitted by hearth-api's reactor when the Android app casts an up/down vote on a council variant or proposal. The vote is informational — hearth-api routes it to the appropriate listener for scoring.",
+  "type": "object",
+  "required": ["variant_id", "vote", "voted_at"],
+  "properties": {
+    "variant_id": {
+      "type": "string",
+      "description": "Identifier of the variant or proposal being voted on."
+    },
+    "vote": {
+      "type": "string",
+      "enum": ["up", "down"],
+      "description": "Direction of the vote."
+    },
+    "note": {
+      "type": "string",
+      "description": "Optional free-text note attached to the vote."
+    },
+    "voted_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the vote was recorded."
+    }
+  }
+}

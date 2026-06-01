@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bus.beads.command.v1",
+  "title": "Beads inbound command",
+  "description": "Sent by any service to create/update/close beads via hearth-loom.",
+  "type": "object",
+  "required": ["cmd", "project", "request_id"],
+  "properties": {
+    "cmd":        { "type": "string", "enum": ["create","update","close","note","label","claim"] },
+    "project":    { "type": "string" },
+    "request_id": { "type": "string", "description": "ULID for correlation" },
+    "issue_id":   { "type": "string", "description": "Required for update/close/note/label/claim" },
+    "payload":    { "type": "object", "description": "Command-specific fields (title, status, labels, text, etc.)" }
+  }
+}

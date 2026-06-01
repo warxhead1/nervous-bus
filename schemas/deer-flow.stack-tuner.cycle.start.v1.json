@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.stack-tuner.cycle.start.v1.json",
+  "title": "deer-flow.stack-tuner.cycle.start v1",
+  "description": "A stack-tuner experimentation cycle has begun. Opens the saga for downstream stage.* events that share the same cycle_id. Two emitter sources: /deer-flow (minimal: cycle_id+question_class) and /deer-flow/stack-tuner (full: adds question text, budget, num_variants).",
+  "type": "object",
+  "required": ["cycle_id"],
+  "properties": {
+    "cycle_id": { "type": "string", "description": "unique cycle identifier; matches subject" },
+    "question": { "type": "string", "description": "the question / task the cycle is exploring (rich form only)" },
+    "question_class": {
+      "type": "string",
+      "description": "router classification of the question (e.g. trivial, general, strategic, surgical)"
+    },
+    "budget_usd": { "type": "number", "minimum": 0, "description": "max spend authorized for this cycle" },
+    "num_variants": { "type": "integer", "minimum": 1, "description": "how many parallel variants to explore" }
+  }
+}

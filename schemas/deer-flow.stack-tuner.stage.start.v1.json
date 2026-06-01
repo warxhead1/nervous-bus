@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.stack-tuner.stage.start.v1.json",
+  "title": "deer-flow.stack-tuner.stage.start v1",
+  "description": "A single stage within a stack-tuner cycle has begun. Pairs with stage.done sharing the same cycle_id+stage. Useful for live progress UIs and per-stage latency measurement. Compact form (source=/deer-flow) omits model; full form (source=/deer-flow/stack-tuner) includes it.",
+  "type": "object",
+  "required": ["cycle_id", "stage"],
+  "properties": {
+    "cycle_id": { "type": "string" },
+    "stage": { "type": "string", "description": "stage name (e.g. bulk_v1, critic_v1)" },
+    "model": { "type": "string", "description": "model id this stage will invoke (full form only)" }
+  }
+}

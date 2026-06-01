@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "kb.plan.updated.v1",
+  "title": "KB Plan Updated",
+  "description": "Emitted by `kb plan update <id>` when a plan YAML file is modified. Lets deer-flow and hearth-loom react to plan changes without polling the vault.",
+  "type": "object",
+  "required": ["plan_id", "title"],
+  "properties": {
+    "plan_id": { "type": "string", "format": "uuid", "description": "UUID v7 of the plan entry" },
+    "title":   { "type": "string", "maxLength": 200 },
+    "project": { "type": "string" },
+    "file":    { "type": "string", "description": "Absolute path to the plan YAML file" }
+  }
+}

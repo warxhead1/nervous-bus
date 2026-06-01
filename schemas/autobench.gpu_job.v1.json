@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "nervous-bus/schemas/autobench.gpu_job.v1.json",
+  "title": "autobench.gpu_job.v1",
+  "description": "GPU shader execution job submitted to the autobench broker",
+  "type": "object",
+  "required": ["silo_id", "shader_artifact_path", "case_id"],
+  "properties": {
+    "silo_id": {"type": "string", "description": "Tengine silo name, e.g. 'racing'"},
+    "shader_artifact_path": {"type": "string", "description": "Absolute path to .slang/.spv artifact"},
+    "case_id": {"type": "string"},
+    "frames": {"type": "integer", "default": 60},
+    "timeout_s": {"type": "number", "default": 120.0},
+    "reference_image_path": {"type": "string", "description": "Optional path for SSIM comparison"}
+  }
+}

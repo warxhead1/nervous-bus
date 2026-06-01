@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.stream.dump_ready.v1.json",
+  "title": "tengine.stream.dump_ready v1",
+  "description": "A buffer dump landed on disk; consumers can read in parallel with the silo run loop. Producer: tengine silo_tester via the registry handle STREAM_DUMP_READY in crates/tengine-dgc-hal/src/silo/shadergen_handlers/event_registry.rs. CloudEvents subject is 'frame_{frame}'. schema_hash is null when the buffer schema is not registered with a stable hash.",
+  "type": "object",
+  "required": ["frame", "buffer", "slot", "path", "bytes"],
+  "properties": {
+    "frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index at which the dump was emitted"
+    },
+    "buffer": {
+      "type": "string",
+      "description": "logical buffer name (e.g. 'RES_TEST', 'POD_STATE')"
+    },
+    "slot": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "internal slot identifier for the dumped buffer"
+    },
+    "schema_hash": {
+      "type": ["string", "null"],
+      "description": "stable hash of the buffer's field layout; null when no schema is registered"
+    },
+    "path": {
+      "type": "string",
+      "description": "absolute path to the dumped binary file"
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "on-disk size of the dump in bytes"
+    }
+  }
+}

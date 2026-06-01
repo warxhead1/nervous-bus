@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.redis-mirror.config.v1.json",
+  "title": "bus.redis-mirror.config v1",
+  "description": "Configuration schema for the redis-mirror adapter. Defines which channels to mirror to Redis Streams, stream retention parameters, and connection settings.",
+  "type": "object",
+  "required": ["channels", "redis"],
+  "properties": {
+    "channels": {
+      "type": "array",
+      "description": "List of channel type prefixes to mirror. Events whose 'type' starts with any of these prefixes will be XADD'd to Redis Streams.",
+      "items": {
+        "type": "string",
+        "description": "Channel type prefix (e.g. 'home-automation.news.article' matches 'home-automation.news.article.v1')"
+      },
+      "minItems": 0
+    },
+    "redis": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Redis connection URL (e.g. 'redis://localhost:6379')"
+        },
+        "password": {
+          "type": "string",
+          "description": "Optional Redis password"
+        },
+        "db": {
+          "type": "integer",
+          "default": 0,
+          "description": "Redis database number"
+        },
+        "connect_timeout_s": {
+          "type": "number",
+          "default": 5.0,
+          "description": "Connection timeout in seconds"
+        }
+      }
+    },
+    "streams": {
+      "type": "object",
+      "description": "Stream retention and behavior settings",
+      "properties": {
+        "maxlen": {
+          "type": "integer",
+          "default": 10000,
+          "description": "Maximum stream length (MAXLEN). Older entries are trimmed when limit is reached."
+        },
+        "trim_strategy": {
+          "type": "string",
+          "enum": ["MAXLEN", "MINID"],
+          "default": "MAXLEN",
+          "description": "Trim strategy: MAXLEN trims to N entries, MINID trims entries older than a timestamp"
+        },
+        "min_idle_ms": {
+          "type": "integer",
+          "default": 0,
+          "description": "For MINID strategy: only trim entries older than this idle time in milliseconds"
+        }
+      }
+    },
+    "offset_file": {
+      "type": "string",
+      "default": "~/.cache/nervous-bus/redis-mirror-offset.json",
+      "description": "Path to file where tail position is persisted for restart resilience"
+    },
+    "metrics_interval_s": {
+      "type": "number",
+      "default": 60.0,
+      "description": "Interval in seconds for logging metrics to stderr"
+    }
+  }
+}

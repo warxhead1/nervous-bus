@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.continuous.promotion_decision.v1.json",
+  "title": "autobench.continuous.promotion_decision v1",
+  "description": "Emitted by continuous.py when a PopulationRunner cycle ends. Records the top confirmed-AHE advocate and whether the canonical harness was swapped. Three terminal decisions: staged (logged only — default, awaiting human approval), accepted (the canonical harness was swapped via _promote), rejected (an explicit reject path was taken). When no advocate is promotable the event is still emitted with candidate_advocate_id=null and decision=staged so the ledger is contiguous across cycles. Source: /autobench/continuous.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.continuous.promotion_decision.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["cycle_id", "decision", "decided_by", "ahe_outcome"],
+      "properties": {
+        "cycle_id": {
+          "type": "string",
+          "description": "ULID identifying the population cycle this decision applies to."
+        },
+        "candidate_advocate_id": {
+          "type": ["string", "null"],
+          "description": "advocate-N id of the selected candidate, or null when no advocate was promotable on this cycle."
+        },
+        "candidate_session_id": {
+          "type": ["string", "null"],
+          "description": "Session ULID of the candidate advocate, or null."
+        },
+        "candidate_score": {
+          "type": "number",
+          "description": "best_score of the candidate. 0.0 when no candidate."
+        },
+        "candidate_adjusted_score": {
+          "type": "number",
+          "description": "Diversity-adjusted score of the candidate. 0.0 when no candidate."
+        },
+        "ahe_outcome": {
+          "type": "string",
+          "enum": ["confirmed", "partial", "refuted", "refuted_live", "none"],
+          "description": "AHE outcome label of the candidate's latest prediction. Cross-run promotion only selects 'confirmed' or 'partial'."
+        },
+        "decision": {
+          "type": "string",
+          "enum": ["staged", "accepted", "rejected"],
+          "description": "staged: logged only, canonical NOT swapped. accepted: _promote fired, canonical was swapped. rejected: explicit reject path, canonical NOT swapped."
+        },
+        "decided_by": {
+          "type": "string",
+          "description": "Source of the decision: 'cli' (--confirm-promotion), 'env' (AUTOBENCH_CONFIRM_PROMOTION), 'auto-skip' (no promotable candidate), 'auto-reject' (explicit reject flag), or 'default' (stage-only)."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Optional human-readable reason (e.g. 'all advocates refuted', 'operator rejected via CLI')."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# runner-probe — poll GitHub self-hosted runner status, emit loom.runner events on state changes.
+#
+# Runs via systemd user timer every 60s. Diff-only emission: only publishes when a
+# runner's status actually changes from the last poll, keeping loom.runner quiet in steady state.
+#
+# State is persisted in Redis hash: runner-probe:state:{repo}:{runner_name} → status
+# When status differs from previous poll → emit loom.runner.{new_status} event.
+#
+# Env:
+#   GITHUB_TOKEN    GitHub personal access token (required)
+#   NERVOUS_SOURCE   override source field (default: /runner-probe)
+#   NERVOUS_PLUGIN   plugin name (default: nervous-bus)
+#   REDIS_URL       Redis URL for state persistence (default: redis://localhost:6379)
+
+set -euo pipefail
+
+# shellcheck disable=SC2034 # documented constants kept for future use / debug
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC2034
+STATE_PREFIX="runner-probe:state"
+TIMEOUT=10
+
+log() { echo "[runner-probe] $(date -u +%Y-%m-%dT%H:%M:%SZ) $*" >&2; }
+
+err() { echo "[runner-probe ERROR] $*" >&2; exit 1; }
+
+need() {
+    command -v "$1" >/dev/null 2>&1 || err "required: $1 not on PATH"
+}
+
+need nervous
+need curl
+
+[[ -n "${GITHUB_TOKEN:-}" ]] || err "GITHUB_TOKEN env not set"
+
+STATE_FILE="${XDG_RUNTIME_DIR:-/tmp}/runner-probe.state"
+
+_redis_state_get() {
+    local repo="$1"; shift
+    local runner="$1"
+    python3 - "$STATE_FILE" "$@" <<'PYEOF'
+import json, sys, os
+state_file = sys.argv[1]
+repo = sys.argv[2]
+runner = sys.argv[3]
+key = f"runner-probe:state:{repo}:{runner}"
+try:
+    import redis as _r
+    r = _r.Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+    print(r.get(key) or "", end="")
+except Exception:
+    # fallback to in-memory state file
+    try:
+        with open(state_file) as f:
+            state = json.load(f)
+        print(state.get(key, ""), end="")
+    except Exception:
+        print("", end="")
+PYEOF
+}
+
+_redis_state_set() {
+    local repo="$1"; shift
+    # shellcheck disable=SC2034 # passed to python heredoc via "$@"
+    local runner="$1"; shift
+    local status="$1"
+    python3 - "$STATE_FILE" "$@" <<'PYEOF'
+import json, sys, os
+state_file = sys.argv[1]
+repo = sys.argv[2]
+runner = sys.argv[3]
+status = sys.argv[4]
+key = f"runner-probe:state:{repo}:{runner}"
+try:
+    import redis as _r
+    r = _r.Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+    r.set(key, status)
+except Exception:
+    # fallback to in-memory state file
+    try:
+        with open(state_file) as f:
+            state = json.load(f)
+    except Exception:
+        state = {}
+    state[key] = status
+    os.makedirs(os.path.dirname(state_file), exist_ok=True)
+    with open(state_file, "w") as f:
+        json.dump(state, f)
+PYEOF
+}
+
+_gh_api() {
+    local endpoint="$1"
+    curl -s --max-time "$TIMEOUT" \
+        -H "Authorization: token $GITHUB_TOKEN" \
+        -H "Accept: application/vnd.github.v3+json" \
+        "https://api.github.com$endpoint"
+}
+
+emit() {
+    local status="$1"; shift
+    local payload="$1"
+    nervous publish "loom.runner.$status" "$payload" 2>&1 | while read -r line; do
+        err "nervous publish failed: $line"
+    done
+}
+
+probe_repo() {
+    local repo="$1"
+    local runners
+    runners=$(_gh_api "/repos/$repo/actions/runners" 2>/dev/null) || return 0
+
+    # shellcheck disable=SC2259 # heredoc-stdin is intentional; argv carries data
+    echo "$runners" | python3 - "$repo" "$@" <<'PYEOF'
+import json, sys, subprocess, os
+repo = sys.argv[1]
+argv = sys.argv[2:]
+state_file = os.getenv("XDG_RUNTIME_DIR", "/tmp") + "/runner-probe.state"
+
+def state_get(r):
+    key = f"runner-probe:state:{repo}:{r}"
+    try:
+        import redis as _r
+        return _r.Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True).get(key) or ""
+    except Exception:
+        try:
+            with open(state_file) as f:
+                return json.load(f).get(key, "")
+        except Exception:
+            return ""
+
+def state_set(r, status):
+    key = f"runner-probe:state:{repo}:{r}"
+    try:
+        import redis as _r
+        _r.Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True).set(key, status)
+    except Exception:
+        import json, os
+        try:
+            with open(state_file) as f:
+                state = json.load(f)
+        except Exception:
+            state = {}
+        state[key] = status
+        os.makedirs(os.path.dirname(state_file), exist_ok=True)
+        with open(state_file, "w") as f:
+            json.dump(state, f)
+
+def nervous_publish(status, payload):
+    env = os.environ.copy()
+    env["NERVOUS_SOURCE"] = env.get("NERVOUS_SOURCE", "/runner-probe")
+    subprocess.run(["nervous", "publish", f"loom.runner.{status}", payload],
+                  capture_output=True, env=env)
+
+data = json.load(sys.stdin)
+for runner in data.get("runners", []):
+    name = runner.get("name", "")
+    current_status = runner.get("status", "")
+    labels = runner.get("labels", [])
+    last_seen = runner.get("last_seen", "")
+    os_name = ""
+    arch = ""
+    for lbl in labels:
+        if lbl.startswith("os:"):
+            os_name = lbl.removeprefix("os:")
+        elif lbl.startswith("arch:"):
+            arch = lbl.removeprefix("arch:")
+
+    prev = state_get(name)
+    if prev == current_status:
+        continue  # no change — skip
+
+    event = current_status
+    payload = json.dumps({
+        "runner_name": name,
+        "repo": repo,
+        "status": current_status,
+        "event": event,
+        "labels": labels,
+        "last_seen": last_seen,
+        "os": os_name,
+        "architecture": arch,
+    })
+    nervous_publish(event, payload)
+    state_set(name, current_status)
+PYEOF
+}
+
+# repos with self-hosted runners — add your repos here
+REPOS=(
+    "warxhead1/nervous-bus"
+    "warxhead1/hearth-loom"
+    "warxhead1/deer-flow"
+)
+
+for repo in "${REPOS[@]}"; do
+    log "probing $repo..."
+    probe_repo "$repo"
+done
+
+log "done"

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth.session.permission.responded.v1.json",
+  "title": "bus.hearth.session.permission.responded v1",
+  "description": "Emitted by hearth-session's permission_publisher after the keystroke has been sent into the tmux pane. Fires regardless of whether the user approved or denied; the keystroke itself (approve=1, deny=N) is already consumed. Consumers use this to dismiss the permission card and update session state in the phone UI.",
+  "type": "object",
+  "required": ["correlation_id", "decision", "responded_at"],
+  "properties": {
+    "correlation_id": {
+      "type": "string",
+      "description": "UUID v4 token matching the correlation_id from the corresponding permission.requested event."
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["approve", "deny", "deny_with_feedback", "resolved"],
+      "description": "The user's final decision; deny_with_feedback includes a feedback string sent as subsequent keystrokes. 'resolved' is emitted by the server's stale-prompt reaper (not a user action) when a prompt disappears — answered at the desktop, expired, or the session closed — so consumers dismiss the now-orphaned permission card; no keystroke is sent for 'resolved'."
+    },
+    "feedback": {
+      "type": "string",
+      "description": "Free-text feedback typed by the user when denying with feedback; passed as additional keystrokes after the deny key."
+    },
+    "responded_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the response was recorded."
+    }
+  }
+}

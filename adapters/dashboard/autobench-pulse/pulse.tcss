@@ -1,0 +1,119 @@
+/* autobench-pulse v2 — Textual stylesheet
+ *
+ * 2-column horizontal: left = tree + sparkline + gauge, right = histogram + scatter.
+ * Header docks top, footer docks bottom (via Textual built-ins).
+ */
+
+Screen {
+    layout: vertical;
+}
+
+#body {
+    layout: horizontal;
+    height: 1fr;
+}
+
+#left {
+    width: 1fr;
+    height: 100%;
+    layout: vertical;
+    border: round $primary;
+    padding: 0 1;
+}
+
+#right {
+    width: 1fr;
+    height: 100%;
+    layout: vertical;
+    border: round $accent;
+    padding: 0 1;
+}
+
+/* Failure-code sidebar: matches #right's rounded $accent border so the three
+ * columns read as one visual family. Narrower so the existing widgets keep
+ * their proportions — slots into remaining real estate per bead spec. */
+#failures {
+    width: 40;
+    min-width: 28;
+    height: 100%;
+    layout: vertical;
+    border: round $accent;
+    padding: 0 1;
+}
+
+FailureCodeSidebar {
+    height: 1fr;
+    border: tall $secondary;
+}
+
+HeaderStats {
+    height: 1;
+    padding: 0 1;
+    color: $accent;
+    background: $boost;
+}
+
+/* AHE prediction tracker — the falsifiability panel. Border style mirrors
+ * ScoreSpark's warning-tinted round border because "we caught ourselves
+ * being wrong" is the same family of signal as "score moved" — both are
+ * load-bearing self-observation. */
+AHEPredictionTracker {
+    height: auto;
+    min-height: 5;
+    max-height: 16;
+    padding: 0 1;
+    margin: 0 0 1 0;
+    border: round $warning;
+}
+
+SessionTree {
+    height: 1fr;
+    border: tall $secondary;
+}
+
+ScoreSpark {
+    height: 5;
+    margin: 1 0 0 0;
+    border: tall $warning 50%;
+}
+
+BurnGauge {
+    height: 3;
+    margin: 1 0 0 0;
+}
+
+VerdictHistogram {
+    height: 1fr;
+    border: tall $secondary;
+}
+
+ParetoScatter {
+    height: 1fr;
+    border: tall $secondary;
+    margin: 1 0 0 0;
+}
+
+#filter-bar {
+    height: 3;
+    padding: 0 1;
+    display: none;
+}
+
+#filter-bar.shown {
+    display: block;
+}
+
+#help-screen {
+    align: center middle;
+    width: 60;
+    height: 18;
+    border: thick $accent;
+    background: $surface;
+    padding: 1 2;
+}
+
+/* Semantic verdict tints — used inline via [class=...] when needed */
+.verdict-pass    { color: green; }
+.verdict-fail    { color: red; }
+.verdict-pending { color: yellow; }
+.dim-old         { color: $text 50%; }

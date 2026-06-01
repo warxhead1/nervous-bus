@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.continuous.session_complete.v1.json",
+  "title": "autobench.continuous.session_complete v1",
+  "description": "Emitted by the ContinuousModeDaemon at the end of each session. Records initial/final scores, iteration count, total cost and whether the improved harness was promoted to canonical. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.continuous.session_complete.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "initial_score",
+        "final_score",
+        "n_iterations",
+        "total_cost_usd",
+        "promoted"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID identifying the autobench session for bus correlation."
+        },
+        "initial_score": {
+          "type": "number",
+          "description": "Aggregate score of the canonical harness before this session."
+        },
+        "final_score": {
+          "type": "number",
+          "description": "Aggregate score after the session's RSI loop completed."
+        },
+        "n_iterations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of RSI iterations performed during the session."
+        },
+        "total_cost_usd": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Cumulative LLM cost (dollars) reported during the session."
+        },
+        "promoted": {
+          "type": "boolean",
+          "description": "True when the new harness beat canonical and was promoted."
+        },
+        "benchmark_source": {
+          "type": "string",
+          "description": "Filesystem path or label identifying the benchmark used."
+        },
+        "duration_seconds": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Wall-clock duration of the session."
+        }
+      }
+    }
+  }
+}

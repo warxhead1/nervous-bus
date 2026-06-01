@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.agent.thread.v1.json",
+  "title": "deer-flow.agent.thread v1",
+  "description": "Lifecycle of an agent thread (Claude Code, opencode, codex, gemini) spawned or observed by deer-flow. Distinct from agent.session.v1 which is published by external shadow-binary wrappers: this event is authored by deer-flow itself when it dispatches or tracks a thread it owns. Source: /deer-flow/dispatch.",
+  "type": "object",
+  "required": ["thread_id", "agent", "project", "event"],
+  "properties": {
+    "thread_id": {
+      "type": "string",
+      "description": "Unique identifier for this agent thread — stable across paused/resumed transitions"
+    },
+    "agent": {
+      "type": "string",
+      "enum": ["claude-code", "opencode", "codex", "gemini", "unknown"],
+      "description": "Agent type identifier"
+    },
+    "project": {
+      "type": "string",
+      "description": "Project directory basename the agent is working in"
+    },
+    "event": {
+      "type": "string",
+      "enum": ["started", "stopped", "paused", "resumed"],
+      "description": "Lifecycle transition for this thread"
+    },
+    "model": {
+      "type": "string",
+      "description": "Model ID in use (e.g. claude-sonnet-4-6)"
+    },
+    "pane_id": {
+      "type": "string",
+      "description": "ZELLIJ_PANE_ID or tmux pane identifier if the thread runs in a pane"
+    },
+    "saga_id": {
+      "type": "string",
+      "description": "bus.saga correlation ID if this thread is executing a coordinated plan"
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable task description from the dispatching bead or prompt — first 120 chars"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["idle", "thinking", "tool_executing", "error"],
+      "description": "Fine-grained operational status within the current event"
+    },
+    "context_size_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Approximate context window consumption at event time"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC — when this thread was first started"
+    },
+    "last_activity_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC — last observed activity timestamp"
+    }
+  }
+}

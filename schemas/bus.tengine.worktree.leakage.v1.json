@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.worktree.leakage.v1.json",
+  "title": "bus.tengine.worktree.leakage v1",
+  "description": "When: The check_agent_leakage.sh hook detects that a worktree has files or processes that should not be present (worktree isolation was breached). Source: /tengine. Emitted as a critical violation indicating a defect in worktree lifecycle management.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.tengine.worktree.leakage.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["v", "source", "host", "wt_id", "leaked_paths", "hook_exit_code"],
+      "properties": {
+        "v": {"type": "integer", "description": "Payload schema version, always 1."},
+        "source": {"type": "string", "description": "Emitting subsystem identifier, always 'tengine'."},
+        "host": {"type": "string", "description": "Hostname of the machine that generated this event."},
+        "wt_id": {"type": "string", "description": "Worktree identifier that experienced the leakage."},
+        "leaked_paths": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Absolute paths to files or directories that leaked outside the expected worktree boundary."},
+        "hook_exit_code": {"type": "integer", "description": "Exit code returned by the check_agent_leakage.sh hook; non-zero indicates the leakage was detected."}
+      }
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.session.client_disconnected.v1.json",
+  "title": "tengine.session.client_disconnected v1",
+  "description": "An IPC client disconnected (EOF or read error). Producer: tengine silo_tester via the registry handle SESSION_CLIENT_DISCONNECTED in crates/tengine-dgc-hal/src/silo/shadergen_handlers/event_registry.rs. CloudEvents subject is 'session_{session_id}'. agent_id is the empty string for clients that never sent an identify command.",
+  "type": "object",
+  "required": [
+    "client_idx",
+    "session_id",
+    "agent_id",
+    "connected_frame",
+    "disconnected_frame",
+    "frames_held",
+    "occupancy"
+  ],
+  "properties": {
+    "client_idx": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "slot index of this client in the silo's connection table"
+    },
+    "session_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "monotonic per-silo client session counter; mirrored in the CloudEvents subject as 'session_{n}'"
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "agent identifier supplied via a prior identify command; empty string if the client disconnected before identifying"
+    },
+    "connected_frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index when the connection was accepted"
+    },
+    "disconnected_frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index when the disconnect was observed"
+    },
+    "frames_held": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "disconnected_frame minus connected_frame; convenience for consumers"
+    },
+    "occupancy": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "number of clients still connected to the silo socket after this disconnect"
+    }
+  }
+}

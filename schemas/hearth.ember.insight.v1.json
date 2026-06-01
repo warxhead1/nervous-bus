@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.ember.insight.v1.json",
+  "title": "hearth.ember.insight v1",
+  "description": "Cognitive insight derived from Ember tick — semantic/temporal/causal/entity observations about user behavior and environment. Published by hearth-cognitive after internal insight commit.",
+  "type": "object",
+  "required": ["event_type", "source", "insight_id", "graph", "subject", "summary", "confidence", "evidence_count", "created_at"],
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "const": "hearth.ember.insight.v1",
+      "description": "CloudEvents type identifier for this event; always 'hearth.ember.insight.v1'."
+    },
+    "source": {
+      "type": "string",
+      "description": "URI path identifying the emitting subsystem; always '/hearth/cognitive'."
+    },
+    "insight_id": {
+      "type": "string",
+      "description": "ULID identifier for this insight"
+    },
+    "graph": {
+      "type": "string",
+      "enum": ["semantic", "temporal", "causal", "entity"],
+      "description": "The cognitive graph category this insight belongs to"
+    },
+    "subject": {
+      "type": "string",
+      "description": "Entity or topic the insight is about"
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "Short human-readable summary (≤200 chars)"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Confidence score 0..1"
+    },
+    "evidence_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of observations supporting this insight"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the insight was created"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional tags for categorization"
+    },
+    "source_session_id": {
+      "type": "string",
+      "description": "ULID of the session that produced this insight (if applicable)"
+    },
+    "related_insights": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "ULIDs of related insights for correlation"
+    }
+  }
+}

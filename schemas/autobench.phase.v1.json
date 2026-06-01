@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.phase.v1.json",
+  "title": "autobench.phase v1",
+  "description": "Phase boundaries (start / complete / error) inside one autobench session. Emitted by autobench.observability.AutobenchObservability. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string", "description": "ULID — unique identifier for this event"},
+    "source": {"type": "string", "description": "Source URI — typically /autobench"},
+    "type": {"type": "string", "const": "autobench.phase.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time", "description": "RFC3339 UTC timestamp"},
+    "data": {
+      "type": "object",
+      "required": ["session_id", "phase", "status"],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the autobench run; correlates events across channels"
+        },
+        "phase": {
+          "type": "string",
+          "description": "Free-form phase label (benchmark, sandbox_exec, rsi_iteration, improver_call, pareto_update, ...)"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["start", "complete", "error"],
+          "description": "Phase lifecycle status"
+        },
+        "duration_ms": {
+          "type": "number",
+          "minimum": 0.0,
+          "description": "Wall-clock duration in milliseconds (set on complete/error)"
+        },
+        "error": {
+          "type": "string",
+          "description": "Captured error text (set on status=error)"
+        },
+        "extra": {
+          "type": "object",
+          "description": "Arbitrary additional fields passed via **kwargs"
+        }
+      }
+    }
+  }
+}

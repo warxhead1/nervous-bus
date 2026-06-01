@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.session.client_identified.v1.json",
+  "title": "tengine.session.client_identified v1",
+  "description": "Anonymous client transitioned to a named agent via a connect/identify command. Producer: tengine silo_tester via the registry handle SESSION_CLIENT_IDENTIFIED in crates/tengine-dgc-hal/src/silo/shadergen_handlers/event_registry.rs. CloudEvents subject is 'session_{session_id}'. Pair with tengine.session.client_connected on (client_idx, session_id) to link the anonymous and identified phases.",
+  "type": "object",
+  "required": ["client_idx", "session_id", "agent_id", "engine_frame"],
+  "properties": {
+    "client_idx": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "slot index of this client in the silo's connection table"
+    },
+    "session_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "monotonic per-silo client session counter; mirrored in the CloudEvents subject as 'session_{n}'"
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "agent identifier supplied by the client (e.g. 'claude-pane-3', 'autobench-worker-7')"
+    },
+    "engine_frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index at the moment of identification"
+    }
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.sandbox.stderr.v1.json",
+  "title": "autobench.sandbox.stderr v1",
+  "description": "Per-case sandbox stderr excerpt emitted whenever a non-OK error-class verdict (CE/RE/TLE/MLE) fires. Carries the first 200 chars of the sandboxed process's stderr so a downstream consumer can correlate verdicts with the actual error message without parsing case_result.generated_code by hand. Source: /autobench. See bead nervous-bus-bns.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.sandbox.stderr.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "case_id",
+        "iteration",
+        "verdict",
+        "stderr_excerpt",
+        "language"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the autobench run"
+        },
+        "case_id": {
+          "type": "string",
+          "description": "Benchmark case identifier"
+        },
+        "iteration": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "RSI iteration number (0 when not running in an RSI loop)"
+        },
+        "verdict": {
+          "type": "string",
+          "enum": ["CE", "RE", "TLE", "MLE"],
+          "description": "Error-class verdict that triggered this emission. OK and WA never emit on this channel."
+        },
+        "stderr_excerpt": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "First 200 characters of the sandboxed process's stderr"
+        },
+        "exit_code": {
+          "type": ["integer", "null"],
+          "description": "Process exit code if known; null when unavailable (e.g. generation-side errors)"
+        },
+        "language": {
+          "type": "string",
+          "description": "Programming language for this case (python, cpp, go, glsl, ...)"
+        }
+      }
+    }
+  }
+}

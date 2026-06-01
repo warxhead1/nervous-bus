@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.cumulative.hard.v1.json",
+  "title": "deer-flow.cumulative.hard v1",
+  "description": "Cumulative-synthesis middleware fired the HARD threshold for an agent thread — count reached the configured hard limit and the agent gets a single grace turn before being force-exited. Producer: backend/packages/harness/deerflow/agents/middlewares/cumulative_synthesis_middleware.py. PRODUCER NOTE: live producer emits unversioned channel name `deer-flow.cumulative.hard`; this schema is filed against the canonical versioned name and validates the same data block (versioning cleanup tracked separately).",
+  "type": "object",
+  "required": ["thread_id", "count", "mode", "threshold"],
+  "properties": {
+    "thread_id": {
+      "type": "string",
+      "description": "LangGraph thread id this cumulative state belongs to"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "current cumulative count at the moment the threshold tripped"
+    },
+    "mode": {
+      "type": "string",
+      "description": "cumulative-tracking mode (e.g. 'all', 'discovery') — selects which message classes count"
+    },
+    "threshold": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "configured hard-threshold value the count just met or exceeded"
+    }
+  }
+}

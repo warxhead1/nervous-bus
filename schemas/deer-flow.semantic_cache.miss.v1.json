@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.semantic_cache.miss.v1.json",
+  "title": "deer-flow.semantic_cache.miss v1",
+  "description": "A semantic cache lookup found no entry. The 'reason' field explains why.",
+  "type": "object",
+  "required": ["query_hash", "reason"],
+  "properties": {
+    "query_hash": {
+      "type": "string",
+      "description": "First 12 chars of the query embedding hash"
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["no_entry", "expired", "similarity_below_threshold", "invalidated"],
+      "description": "Why the cache miss occurred"
+    }
+  }
+}

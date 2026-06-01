@@ -1,0 +1,21 @@
+# silo-watcher configuration.
+#
+# All sections are optional — watcher runs with sensible defaults if the file
+# is empty or absent.
+
+[sessions]
+# Directory containing silo_* run dirs. tengine writes ~/.tengine/sessions/silo_*/.
+root = "~/.tengine/sessions"
+
+# Polling interval. 2s gives ~2s detection lag on new dirs / new
+# verification_report.json. Silo runs are minutes long so 2s is plenty.
+poll_interval_s = 2.0
+
+[offset_file]
+# Where to persist (seen_dirs, verified_dirs). Survives restarts so we don't
+# replay history on every restart.
+path = "~/.cache/nervous-bus/silo-watcher-offset.json"
+
+[publish]
+# Source field stamped on every event published by this adapter.
+source = "/silo-watcher"

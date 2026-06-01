@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/loom.lifecycle.pr.v1.json",
+  "title": "loom.lifecycle.pr v1",
+  "description": "hearth-loom PR lifecycle events: opened, merged, failed, reverted. Consumed by deer-flow for scoring and by Android app for notifications.",
+  "type": "object",
+  "required": ["bead_id", "event", "project"],
+  "properties": {
+    "bead_id": { "type": "string" },
+    "project": { "type": "string" },
+    "event": {
+      "type": "string",
+      "enum": ["opened", "merged", "failed", "reverted", "ci_failed", "review_requested"]
+    },
+    "pr_url": { "type": "string" },
+    "pr_number": { "type": "integer" },
+    "executor": { "type": "string" },
+    "worker_id": { "type": "string", "description": "hearth-loom loomie worker id" },
+    "saga_id": { "type": "string" },
+    "failure_reason": { "type": "string" }
+  }
+}

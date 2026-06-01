@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.feedback.acted.v1.json",
+  "title": "deer-flow.feedback.acted v1",
+  "description": "A feedback item was processed by the feedback router and resulted in at least one system action (cache invalidation, wiki annotation, review queue entry, etc.).",
+  "type": "object",
+  "required": ["feedback_id", "feedback_type", "target_id", "source", "actions", "success"],
+  "properties": {
+    "feedback_id": { "type": "string" },
+    "feedback_type": { "type": "string" },
+    "target_id": { "type": "string" },
+    "corrected_value": { "type": "string", "maxLength": 500 },
+    "original_value": { "type": "string", "maxLength": 500 },
+    "explanation": { "type": "string", "maxLength": 1000 },
+    "source": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "actions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Human-readable list of actions taken"
+    },
+    "success": {
+      "type": "boolean",
+      "description": "True if at least one action succeeded"
+    }
+  }
+}

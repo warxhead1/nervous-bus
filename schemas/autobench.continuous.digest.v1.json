@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.continuous.digest.v1.json",
+  "title": "autobench.continuous.digest v1",
+  "description": "Emitted by the SurpriseDigest when a daily digest is generated. Summarises the past 24h of continuous-mode sessions: number of sessions, promotions, and notable surprises (confidently wrong predictions, divergence wins, regressions). Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.continuous.digest.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "date",
+        "n_sessions",
+        "n_promotions",
+        "n_surprises",
+        "biggest_surprise_summary"
+      ],
+      "properties": {
+        "date": {
+          "type": "string",
+          "description": "Date for the digest in YYYY-MM-DD form (UTC)."
+        },
+        "n_sessions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total continuous-mode sessions observed in the window."
+        },
+        "n_promotions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of sessions whose improved harness was promoted to canonical."
+        },
+        "n_surprises": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total surprises flagged (confidently-wrong + divergence-win + regression + verdict-flip)."
+        },
+        "biggest_surprise_summary": {
+          "type": "string",
+          "description": "Human-readable description of the most informative surprise in the window."
+        },
+        "digest_path": {
+          "type": "string",
+          "description": "Filesystem path of the written markdown digest."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nervous-bus.local/schemas/autobench.failure.category.v1.json",
+  "title": "autobench.failure.category.v1",
+  "description": "Structured classification of one error-class verdict (CE/RE/TLE/MLE) into a named failure category. Emitted alongside autobench.sandbox.stderr.v1 so the improver and downstream consumers can route failures by mode without re-parsing stderr text. WA verdicts do NOT produce events on this channel — see autobench.sandbox.stderr.v1 for the same rationale.",
+  "type": "object",
+  "required": ["case_id", "iteration", "verdict", "category", "confidence"],
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Matches the case_id on the parent sandbox.stderr.v1 event."
+    },
+    "iteration": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Iteration index within the population/RSI cycle."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["CE", "RE", "TLE", "MLE"],
+      "description": "Sandbox verdict that triggered classification."
+    },
+    "category": {
+      "type": "string",
+      "pattern": "^[a-z]+(_[a-z0-9]+)+$",
+      "description": "Lowercase snake_case category identifier. Pattern not enum so the classifier can grow without bumping schema major. Conventional prefixes: ce_, re_, tle_, mle_, unknown."
+    },
+    "subcategory": {
+      "type": "string",
+      "description": "Optional finer-grained tag. Free-form snake_case."
+    },
+    "hint": {
+      "type": "string",
+      "maxLength": 240,
+      "description": "Human/improver-readable hint about what to change next. Short, imperative."
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Classifier confidence in the category. 1.0 = unambiguous regex match; 0.5 = best guess; <0.5 = unknown bucket."
+    },
+    "language": {
+      "type": "string",
+      "description": "Code language (python, etc.) — informs which regex set was applied."
+    },
+    "matched_pattern": {
+      "type": "string",
+      "maxLength": 120,
+      "description": "Diagnostic: the short snippet that matched. Truncated to 120 chars."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Optional autobench session ID for cross-event correlation."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 emission timestamp."
+    }
+  }
+}

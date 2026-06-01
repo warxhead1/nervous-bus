@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.router.decision.v1.json",
+  "title": "hearth.router.decision v1",
+  "description": "Hearth AI router selection event. Published each time the router picks a model for a request — enables deer-flow to track fallback rates, cost distribution, and model health.",
+  "type": "object",
+  "required": ["model_selected", "intent_class", "latency_ms"],
+  "properties": {
+    "model_selected": {
+      "type": "string",
+      "description": "e.g. ollama/mistral-nemo, minimax/m2-7b, gemini/2.0-flash, claude/sonnet-4-6"
+    },
+    "models_tried": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "All models attempted in order before success (for fallback tracking)"
+    },
+    "intent_class": {
+      "type": "string",
+      "description": "Device command / media command / hardware query / general / unknown"
+    },
+    "latency_ms": { "type": "number" },
+    "was_fallback": { "type": "boolean", "description": "True if primary model failed or timed out" },
+    "fallback_reason": { "type": "string" },
+    "cost_estimate_usd": { "type": "number" },
+    "session_id": { "type": "string" }
+  }
+}

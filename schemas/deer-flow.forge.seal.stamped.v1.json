@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.forge.seal.stamped.v1.json",
+  "title": "deer-flow.forge.seal.stamped v1",
+  "description": "A seal on a Forge session was stamped, skipped, or auto-stamped. Producer: backend/packages/harness/deerflow/bus.py::emit_forge_seal_stamped (and the forge router for slot-change emits). Subject is session_id. The optional `reason` field is truncated to 200 chars and is only present for skipped/auto-stamped seals.",
+  "type": "object",
+  "required": ["session_id", "seal_type", "status", "stamped_by", "bead_id", "project_name"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "stable session UUID (matches CloudEvents subject)"
+    },
+    "seal_type": {
+      "type": "string",
+      "description": "which seal slot (e.g. code_review, quality_gate, integration_test, human_signoff)"
+    },
+    "status": {
+      "type": "string",
+      "description": "stamp outcome (e.g. stamped, skipped, auto_stamped, failed)"
+    },
+    "stamped_by": {
+      "type": "string",
+      "description": "actor that stamped — typically 'human:<name>', 'agent:<name>', or 'auto:<rule>'"
+    },
+    "bead_id": {
+      "type": "string",
+      "description": "beads id this session was opened for"
+    },
+    "project_name": {
+      "type": "string",
+      "description": "target project the session is running against"
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "free-text justification for skipped/auto-stamped seals (truncated)"
+    }
+  }
+}

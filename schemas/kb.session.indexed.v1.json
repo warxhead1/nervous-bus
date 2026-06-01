@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "kb.session.indexed.v1",
+  "title": "KB Session Indexed",
+  "description": "Emitted by kb ingest-sessions and kb watch (research.cycle.completed handler) when a new session or research artifact is written to index.yaml. Consumed by hearth-api for Android counter updates.",
+  "type": "object",
+  "required": ["source", "added"],
+  "properties": {
+    "source":        { "type": "string", "description": "Origin: ingest-sessions | watch.research.cycle | watch.guidance.fact" },
+    "added":         { "type": "integer", "minimum": 0, "description": "Number of newly indexed entries" },
+    "already_known": { "type": "integer", "minimum": 0, "description": "Entries skipped (already in index)" },
+    "project":       { "type": "string", "description": "Project namespace if batch was project-scoped" },
+    "entry_ids":     { "type": "array", "items": { "type": "string", "format": "uuid" }, "maxItems": 100 }
+  }
+}

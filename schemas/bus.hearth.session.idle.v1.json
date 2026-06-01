@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth.session.idle.v1.json",
+  "title": "bus.hearth.session.idle v1",
+  "description": "Emitted by hearth-api's session_events module when a session has been quiet for 120+ seconds. Signals the phone app to show an idle badge on the session card. Emitted exactly once per idle streak; a resumed activity event resets the latch so a future quiet period can re-emit.",
+  "type": "object",
+  "required": ["session_id", "idle_since"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Unique session identifier."
+    },
+    "idle_since": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp of the last detected activity before going idle."
+    }
+  }
+}

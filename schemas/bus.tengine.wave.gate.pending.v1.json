@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.wave.gate.pending.v1.json",
+  "title": "bus.tengine.wave.gate.pending v1",
+  "description": "When: A wave reaches a gate and is pending evaluation before dispatches can proceed. Source: /tengine. Emitted by the orchestrator when a wave gate condition is detected and the pipeline must wait for gate resolution (approval, anti-deferment check, or integration log review).",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.tengine.wave.gate.pending.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["v", "source", "host", "wave_name", "just_landed", "next_dispatches", "anti_deferment_summary"],
+      "properties": {
+        "v": {"type": "integer", "description": "Payload schema version, always 1."},
+        "source": {"type": "string", "description": "Emitting subsystem identifier, always 'tengine'."},
+        "host": {"type": "string", "description": "Hostname of the machine that generated this event."},
+        "wave_name": {"type": "string", "description": "Name of the wave that has hit the gate and is now pending evaluation."},
+        "just_landed": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "List of bead IDs that just landed in the wave and have not yet been dispatched."},
+        "next_dispatches": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "List of bead IDs that are queued for dispatch next if the gate clears."},
+        "anti_deferment_summary": {
+          "type": "string",
+          "description": "Human-readable summary of the anti-deferment analysis: which beads appear to defer work and what the recommended action is."},
+        "integration_log_url": {
+          "type": "string",
+          "description": "Optional URL to the integration log showing what has already run in this wave."}
+      }
+    }
+  }
+}

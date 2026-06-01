@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "_per-project.capabilities.advertised.v1",
+  "description": "Shared base schema. Concrete event types: <project>.capabilities.advertised.v1. Emitted when a project announces its hearth-loom customization bundle.",
+  "type": "object",
+  "required": ["project", "version", "profiles"],
+  "properties": {
+    "project":    { "type": "string", "description": "Project slug; MUST match the type prefix" },
+    "version":    { "type": "integer", "minimum": 1 },
+    "languages":  { "type": "array", "items": { "type": "string" } },
+    "primary_language": { "type": "string" },
+    "language_detectors": {
+      "type": "object",
+      "additionalProperties": { "type": "array", "items": { "type": "string" } }
+    },
+    "defaults": {
+      "type": "object",
+      "properties": {
+        "baseline_rules": { "type": "string" },
+        "baseline_subscribes_to": { "type": "array" }
+      }
+    },
+    "profiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["selector"],
+        "properties": {
+          "selector": {
+            "type": "object",
+            "properties": {
+              "class":    { "type": "string", "enum": ["feature","ci_fix","conflict_fix","review_fix","*"] },
+              "language": { "type": "string" }
+            }
+          },
+          "agents":         { "type": "array", "items": { "type": "string" } },
+          "skills":         { "type": "array", "items": { "type": "string" } },
+          "shims":          { "type": "array", "items": { "type": "string" } },
+          "model":          { "type": "string" },
+          "subscribes_to":  { "type": "array" }
+        }
+      }
+    }
+  }
+}

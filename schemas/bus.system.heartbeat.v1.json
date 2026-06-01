@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.system.heartbeat.v1.json",
+  "title": "bus.system.heartbeat v1",
+  "description": "Periodic system health heartbeat emitted by the sysmap poller. Absence for >90s indicates SYSTEM DEGRADED on the mobile hub. Replaces polling-based health checks.",
+  "type": "object",
+  "required": ["ts", "host"],
+  "properties": {
+    "ts": {"type": "string", "format": "date-time"},
+    "host": {"type": "string"},
+    "services_up": {"type": "integer"},
+    "services_total": {"type": "integer"},
+    "services_failed": {"type": "array", "items": {"type": "string"}},
+    "memory_pressure": {"type": "boolean", "description": "true if any service is above MemoryHigh"},
+    "gpu_util_pct": {"type": "number"},
+    "cpu_pct": {"type": "number"},
+    "bus_evpm": {"type": "number", "description": "bus events per minute in last 60s"}
+  },
+  "additionalProperties": true
+}

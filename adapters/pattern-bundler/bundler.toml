@@ -1,0 +1,51 @@
+[redis]
+url = "redis://localhost:6379"
+
+[windows]
+bus_count_trigger   = 50
+bus_time_trigger_s  = 900
+log_count_trigger   = 100
+log_time_trigger_s  = 300
+
+[streams]
+bundles_maxlen = 1000
+
+[offsets]
+all_offset_file  = "~/.cache/nervous-bus/bundler-all-offset"
+logs_offset_file = "~/.cache/nervous-bus/bundler-logs-offset"
+
+# ── per-channel-family window overrides ─────────────────────────────────────
+# Patterns matched against channel name prefix. First match wins.
+# These override the global bus_*/log_* triggers for specific channel families.
+
+[[channel_overrides]]
+# loom bus events are discrete meaningful units (one job = one event)
+# Close quickly so each CI wave becomes its own analyzable bundle.
+pattern = "loom."
+count_trigger = 15
+time_trigger_s = 300
+
+[[channel_overrides]]
+# hearth-loom Docker container logs are very high volume — raise the floor
+# so we accumulate enough to see meaningful rate distributions.
+pattern = "log:docker:hearth-loom"
+count_trigger = 150
+time_trigger_s = 600
+
+[[channel_overrides]]
+# Actions runner journal logs: moderate volume, meaningful per-job context
+pattern = "log:journal:actions-runner"
+count_trigger = 75
+time_trigger_s = 300
+
+[[channel_overrides]]
+# tengine sessions are discrete GPU compute units — close fast
+pattern = "tengine."
+count_trigger = 10
+time_trigger_s = 180
+
+[[channel_overrides]]
+# deer-flow thread events are high-level research operations
+pattern = "deer-flow."
+count_trigger = 10
+time_trigger_s = 300

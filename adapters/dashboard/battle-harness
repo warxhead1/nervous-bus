@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+"""battle-harness — synthetic load generator for cc-bus-dashboard.
+
+Publishes realistic events into ~/.cache/nervous-bus/debug.jsonl so you can
+verify the dashboard looks groovy under different load profiles WITHOUT
+needing real loomies/cycles to be running.
+
+Profiles:
+  baseline   ~5 events/min mixed, simulating idle pipeline
+  burst      50 events/sec for 10s (loomie storm), then back to baseline
+  chaos      mix of all 12 channels including dead letters + integrity warns
+  saga       open 4 sagas with multiple stages, then close them
+  cleanup    truncate the log so you can start fresh
+
+Usage:
+  ./battle-harness baseline --duration 60      # 60s of baseline drip
+  ./battle-harness burst                       # one storm
+  ./battle-harness chaos --duration 120        # 2 min of mixed
+  ./battle-harness saga                        # open + close 4 sagas
+  ./battle-harness cleanup                     # truncate log
+
+Pair with the dashboard:
+  # Terminal 1
+  ./battle-harness cleanup
+  ./cc-bus-dashboard
+  # Terminal 2
+  ./battle-harness baseline --duration 30 && ./battle-harness burst && ./battle-harness chaos --duration 60
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import random
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+LOG = Path(os.environ.get("NERVOUS_DEBUG_LOG",
+                          str(Path.home() / ".cache" / "nervous-bus" / "debug.jsonl")))
+LOG.parent.mkdir(parents=True, exist_ok=True)
+
+
+def ulid() -> str:
+    """ULID-ish: 26 chars, sortable."""
+    ms = int(time.time() * 1000)
+    rand = "".join(random.choices("0123456789ABCDEFGHJKMNPQRSTVWXYZ", k=16))
+    return f"{ms:010X}{rand}"
+
+
+def emit(channel: str, source: str, data: dict) -> None:
+    """Append a CloudEvents-lite envelope to the log."""
+    env = {
+        "specversion": "1.0",
+        "id": ulid(),
+        "source": source,
+        "type": channel,
+        "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "datacontenttype": "application/json",
+        "data": data,
+    }
+    with LOG.open("a") as f:
+        f.write(json.dumps(env) + "\n")
+
+
+# ─── event generators ─────────────────────────────────────────────────────
+def gen_agent_session() -> tuple[str, str, dict]:
+    bead = f"loom-{random.choice(['xa','5k','ug','pb','8b','lp','mf','qb','kx'])}{random.choice('0123456789abcdef')*3}"
+    return ("agent.session", "/pilot", {
+        "agent": random.choice(["opencode", "claude", "claude-code"]),
+        "bead_id": bead,
+        "event": random.choice(["updated", "started", "stopped"]),
+        "git_branch": "",
+        "model": "",
+        "pane_id": f"docker:hearth-loom-agent-{random.randint(10**15, 10**16)}",
+        "project": random.choice(["pilot", "deer-flow", "tengine", "unknown"]),
+        "session_type": "master_dispatched",
+    })
+
+
+def gen_deer_flow_stage() -> tuple[str, str, dict]:
+    return ("deer-flow.stack-tuner.stage." + random.choice(["start", "done"]),
+            "/deer-flow", {
+        "cycle_id": f"20260503T{random.randint(10000, 99999):05d}Z-{random.randint(1000,9999):x}",
+        "stage": random.choice(["bulk_v1", "interval-critic", "question-tuner", "bulk_v2", "critic_v2"]),
+        "model": random.choice(["minimax-m2.7", "deepseek-v4-flash"]),
+        "ok": random.choice([True, True, True, False]),
+        "tokens": random.randint(500, 5000),
+    })
+
+
+def gen_metaprobe_cycle() -> tuple[str, str, dict]:
+    return ("deer-flow.metaprobe.cycle", "/deer-flow", {
+        "cycle_id": f"20260503T{random.randint(10000, 99999):05d}Z-{random.randint(1000,9999):x}",
+        "verdict": random.choice(["needs_pro_tuning", "shippable", "retry_bulk_recommended"]),
+        "score": random.randint(20, 95),
+        "cumulative_cost_usd": round(random.uniform(0.005, 0.05), 4),
+    })
+
+
+def gen_audit_recommendation() -> tuple[str, str, dict]:
+    return ("deer-flow.audit.recommendation", "/deer-flow", {
+        "cycle_id": f"20260503T{random.randint(10000, 99999):05d}Z-{random.randint(1000,9999):x}",
+        "action": random.choice(["rerun_with_tweak", "flag_for_human", "adjust_soul"]),
+        "pathology": random.choice(["planning_speak_not_results", "trivial_task_economy_conflict", "none"]),
+    })
+
+
+def gen_bead_event() -> tuple[str, str, dict]:
+    chan = random.choice(["bus.bead.created", "bus.bead.closed", "bus.bead.pr_opened"])
+    return (chan, "/nervous-bus", {
+        "bead_id": f"nervous-bus-{random.choice('abcdefghjkmnpqrstvwxyz')}{random.randint(10,99)}{random.choice('xyz123')}",
+        "project": "nervous-bus",
+        "title": random.choice(["wire X", "fix Y", "bump Z", "schema for W"]),
+    })
+
+
+def gen_dead_letter() -> tuple[str, str, dict]:
+    return ("bus.dead_letter", "/test", {
+        "original_type": random.choice(["bus.test", "loom.lifecycle.pr", "agent.session"]),
+        "failure_reason": random.choice(["malformed_json", "missing_required_field", "schema_violation"]),
+        "original_payload_excerpt": "this is the broken payload that failed parse",
+        "retry_count": 0,
+    })
+
+
+def gen_integrity_warn() -> tuple[str, str, dict]:
+    return ("deer-flow.stack-tuner.integrity.warn", "/deer-flow", {
+        "signal": random.choice(["ringbuf_high_watermark", "checkpoint_drift", "audit_skew"]),
+        "value": random.uniform(0.7, 0.99),
+    })
+
+
+def gen_tengine_event() -> tuple[str, str, dict]:
+    return (random.choice(["tengine.session.fps_drop", "tengine.code.changed"]),
+            "/tengine", {
+        "fps": round(random.uniform(20, 80), 1),
+        "session_id": f"silo_racing_{random.randint(1,9)}",
+        "event": "fps_drop" if random.random() < 0.3 else "frame",
+    })
+
+
+# weighted picker for "natural" mix (matches observed traffic shape)
+NATURAL_MIX = [
+    (gen_agent_session, 60),
+    (gen_deer_flow_stage, 12),
+    (gen_metaprobe_cycle, 4),
+    (gen_audit_recommendation, 4),
+    (gen_bead_event, 3),
+    (gen_tengine_event, 3),
+    (gen_integrity_warn, 1),
+]
+
+
+def pick_event() -> tuple[str, str, dict]:
+    funcs, weights = zip(*NATURAL_MIX)
+    f = random.choices(funcs, weights=weights, k=1)[0]
+    return f()
+
+
+# ─── profiles ─────────────────────────────────────────────────────────────
+def profile_baseline(duration: float) -> None:
+    """~5 events/min mixed."""
+    print(f"[baseline] {duration}s @ ~5 ev/min", file=sys.stderr)
+    end = time.time() + duration
+    n = 0
+    while time.time() < end:
+        emit(*pick_event())
+        n += 1
+        time.sleep(random.uniform(8, 16))  # ~5/min
+    print(f"[baseline] emitted {n} events", file=sys.stderr)
+
+
+def profile_burst(duration: float) -> None:
+    """50 ev/sec for 10s, then quiet."""
+    print(f"[burst] {duration}s storm @ 50 ev/sec", file=sys.stderr)
+    end = time.time() + duration
+    n = 0
+    while time.time() < end:
+        for _ in range(5):  # 5 events per 0.1s = 50/s
+            emit(*pick_event())
+            n += 1
+        time.sleep(0.1)
+    print(f"[burst] emitted {n} events", file=sys.stderr)
+
+
+def profile_chaos(duration: float) -> None:
+    """Mixed: baseline + occasional burst + dead letters + integrity warns."""
+    print(f"[chaos] {duration}s mixed load", file=sys.stderr)
+    end = time.time() + duration
+    n = 0
+    next_burst = time.time() + random.uniform(15, 25)
+    next_dl = time.time() + random.uniform(8, 15)
+    next_warn = time.time() + random.uniform(20, 40)
+    while time.time() < end:
+        emit(*pick_event())
+        n += 1
+        if time.time() > next_dl:
+            emit(*gen_dead_letter()); n += 1
+            next_dl = time.time() + random.uniform(8, 20)
+        if time.time() > next_warn:
+            emit(*gen_integrity_warn()); n += 1
+            next_warn = time.time() + random.uniform(20, 50)
+        if time.time() > next_burst:
+            print(f"[chaos] mini-burst @ t+{int(time.time() - (end-duration))}s", file=sys.stderr)
+            for _ in range(40):
+                emit(*pick_event()); n += 1
+                time.sleep(0.05)
+            next_burst = time.time() + random.uniform(20, 40)
+        time.sleep(random.uniform(2, 5))
+    print(f"[chaos] emitted {n} events", file=sys.stderr)
+
+
+def profile_saga() -> None:
+    """Open 4 sagas with stages, close 3, leave 1 stale."""
+    print("[saga] opening 4 sagas, closing 3", file=sys.stderr)
+    sagas = [f"20260503T031{i:05d}Z-{random.randint(1000,9999):x}" for i in range(4)]
+    for cid in sagas:
+        emit("deer-flow.stack-tuner.cycle.start", "/deer-flow",
+             {"cycle_id": cid, "question_class": "strategic"})
+        time.sleep(0.3)
+    print("[saga]   firing stages…", file=sys.stderr)
+    for _ in range(8):
+        cid = random.choice(sagas)
+        emit("deer-flow.stack-tuner.stage.start", "/deer-flow",
+             {"cycle_id": cid, "stage": random.choice(["bulk_v1", "critic", "tuner"])})
+        time.sleep(0.2)
+        emit("deer-flow.stack-tuner.stage.done", "/deer-flow",
+             {"cycle_id": cid, "stage": "bulk_v1", "ok": True})
+        time.sleep(0.2)
+    print("[saga]   closing 3, leaving 1 stale", file=sys.stderr)
+    for cid in sagas[:3]:
+        emit("deer-flow.stack-tuner.cycle.done", "/deer-flow",
+             {"cycle_id": cid, "verdict": "shippable", "score": random.randint(60, 90)})
+        time.sleep(0.2)
+    print("[saga] 1 saga left in-flight (intentionally stale)", file=sys.stderr)
+
+
+def profile_cleanup() -> None:
+    """Truncate the log."""
+    if LOG.exists():
+        sz = LOG.stat().st_size
+        LOG.write_text("")
+        print(f"[cleanup] truncated {LOG} ({sz} bytes)", file=sys.stderr)
+    else:
+        print(f"[cleanup] log doesn't exist: {LOG}", file=sys.stderr)
+
+
+# ─── main ─────────────────────────────────────────────────────────────────
+def main() -> int:
+    global LOG
+    p = argparse.ArgumentParser(description="cc-bus-dashboard battle harness")
+    p.add_argument("profile", choices=["baseline", "burst", "chaos", "saga", "cleanup"])
+    p.add_argument("--duration", type=float, default=30,
+                   help="seconds of load (default: 30; ignored for burst/saga/cleanup)")
+    p.add_argument("--log", type=Path, default=None,
+                   help=f"override log path (default: {LOG})")
+    args = p.parse_args()
+
+    if args.log:
+        LOG = args.log
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.profile == "baseline":
+        profile_baseline(args.duration)
+    elif args.profile == "burst":
+        profile_burst(min(args.duration, 10))
+    elif args.profile == "chaos":
+        profile_chaos(args.duration)
+    elif args.profile == "saga":
+        profile_saga()
+    elif args.profile == "cleanup":
+        profile_cleanup()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

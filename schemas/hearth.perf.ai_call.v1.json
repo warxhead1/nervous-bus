@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.perf.ai_call.v1.json",
+  "title": "hearth.perf.ai_call v1",
+  "description": "Emitted by hearth-brain's query router after each AI provider call completes (success or failure). Covers the full lifecycle: router selection, provider call, response. Enables latency tracking per provider and surfaces timeout/rate-limit patterns without log scraping. Source: hearth_brain::router::QueryRouter.",
+  "type": "object",
+  "required": ["provider", "model", "elapsed_ms", "success", "ts"],
+  "additionalProperties": false,
+  "properties": {
+    "provider": {
+      "type": "string",
+      "enum": ["ollama", "claude", "minimax", "gemini", "claude_cli", "local"],
+      "description": "Which AI provider handled this call."
+    },
+    "model": {
+      "type": "string",
+      "description": "Model identifier used for this call, e.g. 'claude-sonnet-4-20250514' or 'qwen2.5:3b'."
+    },
+    "elapsed_ms": {
+      "type": "number",
+      "description": "Wall-clock time from request start to first token (streaming) or full response (non-streaming)."
+    },
+    "success": {
+      "type": "boolean",
+      "description": "Whether the provider returned a usable response. False covers HTTP errors, timeouts, and quality-gate failures."
+    },
+    "failure_reason": {
+      "type": "string",
+      "enum": ["timeout", "rate_limited", "http_error", "quality_gate", "provider_error", "parse_error"],
+      "description": "Set when success=false. Helps distinguish transient failures (timeout, rate_limited) from configuration issues."
+    },
+    "routed_from": {
+      "type": "string",
+      "enum": ["ollama", "claude", "minimax", "gemini", "initial"],
+      "description": "Which provider was tried before this one (for fallthrough chains). 'initial' if this was the first attempt."
+    },
+    "intent": {
+      "type": "string",
+      "description": "Classified intent slug that triggered this call, e.g. 'knowledge_query' or 'device_control'. Optional."
+    },
+    "prompt_tokens": {
+      "type": "integer",
+      "description": "Approximate prompt token count if known from the provider response."
+    },
+    "completion_tokens": {
+      "type": "integer",
+      "description": "Approximate completion token count if known from the provider response."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the call completed."
+    }
+  }
+}

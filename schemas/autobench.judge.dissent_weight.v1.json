@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.judge.dissent_weight.v1.json",
+  "title": "autobench.judge.dissent_weight v1",
+  "description": "Dissent-weighted AHE confirmation score per iteration. Emitted by PopulationRunner after each RSI iteration to surface how the contested_score_multiplier derived from judge-pool dissent affects the verified-AHE outcome. Cases with dissent_ratio > 0.4 are downweighted by (1 - dissent_ratio) so disputed cases count less toward confirming the prediction. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.judge.dissent_weight.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "iteration",
+        "mean_dissent_ratio",
+        "contested_case_count",
+        "total_case_count",
+        "contested_score_multiplier",
+        "outcome_label",
+        "ahe_confirmed"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the autobench run"
+        },
+        "iteration": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "RSI iteration number this weight applies to"
+        },
+        "mean_dissent_ratio": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Mean dissent_ratio across all cases in this iteration (0.0 when pool disabled)"
+        },
+        "contested_case_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of cases where dissent_ratio > 0.4"
+        },
+        "total_case_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of cases evaluated in this iteration"
+        },
+        "contested_score_multiplier": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Downweight applied to verified-AHE score for this iteration. Computed as max(0.0, 1.0 - mean_dissent_ratio) when mean_dissent_ratio > 0.4, else 1.0"
+        },
+        "outcome_label": {
+          "type": "string",
+          "enum": ["confirmed", "partial", "refuted"],
+          "description": "AHE verification outcome label for this iteration"
+        },
+        "ahe_confirmed": {
+          "type": "boolean",
+          "description": "True when outcome_label is 'confirmed'"
+        }
+      }
+    }
+  }
+}

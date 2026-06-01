@@ -1,0 +1,663 @@
+#!/usr/bin/env bash
+# nervous — publish events to the nervous-bus from any shell.
+#
+# Wraps `zellij pipe -p nervous-bus -n <channel>` with CloudEvents-lite
+# envelope construction. Reads payload as JSON from arg or stdin.
+#
+# Usage:
+#   nervous publish <channel> '<json-payload>'
+#   echo '<json>' | nervous publish <channel>
+#   nervous publish tengine.session.frame --subject silo_racing_X '{"fps":47.3}'
+#   nervous tail tengine.session            # subscribe (requires plugin running)
+#   nervous schemas                         # list known channels (repo + user-home)
+#   nervous schema install <path>           # install private/custom schema to user-home
+#   nervous schema list                     # list user-home schemas
+#   nervous setup                           # bootstrap NERVOUS_HOME directory structure
+#   nervous dlq                             # show recent dead-letter events
+#   nervous dlq --since 1h --reason malformed_json
+#   nervous dlq --json                      # raw JSONL for piping into jq
+#
+# Env:
+#   NERVOUS_SOURCE   override source field (default: /<basename-cwd>)
+#   NERVOUS_PLUGIN   plugin name (default: nervous-bus)
+#   NERVOUS_HOME     user-level config + private schema overlay
+#                    (default: ~/.config/nervous-bus)
+
+set -euo pipefail
+
+CMD="${1:-help}"
+shift || true
+
+# User-level home directory — holds private/custom schemas and config.
+# Schemas here override repo schemas for the same channel name.
+NERVOUS_HOME="${NERVOUS_HOME:-$HOME/.config/nervous-bus}"
+
+PLUGIN="${NERVOUS_PLUGIN:-nervous-bus}"
+
+ulid() {
+    # ULID-ish: timestamp-ms (10 chars) + 16 random base32 chars
+    local ts ms hex
+    ts=$(date +%s)
+    ms=$(( $(date +%N | sed 's/^0*//') / 1000000 ))
+    hex=$(head -c 10 /dev/urandom | od -An -vtx1 | tr -d ' \n' | tr 'a-f' 'A-F')
+    printf "%010d%s\n" "$ts$ms" "${hex:0:16}"
+}
+
+iso_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+cmd_help() {
+    sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
+    exit 0
+}
+
+# Write a CloudEvents envelope to Redis Streams directly (nbus:<channel> + nbus:all).
+# Fail-soft: silent no-op if Redis is unreachable or redis Python lib missing.
+_nbus_redis_xadd() {
+    local raw_json="$1"
+    [[ "${NERVOUS_NO_REDIS:-0}" == "1" ]] && return 0
+    python3 - "$raw_json" <<'PYEOF' 2>/dev/null || true
+import sys, os, json
+try:
+    import redis as _r
+    raw = sys.argv[1]
+    env = json.loads(raw)
+    ch = env.get('type', '')
+    if not ch:
+        sys.exit(0)
+    fields = {
+        '_raw':      raw,
+        'type':      ch,
+        'source':    env.get('source', ''),
+        'timestamp': env.get('time', ''),
+        'event_id':  env.get('id', ''),
+    }
+    url = os.environ.get('NERVOUS_REDIS_URL', 'redis://localhost:6379')
+    r = _r.Redis.from_url(url, socket_connect_timeout=1, socket_timeout=1)
+    p = r.pipeline(transaction=False)
+    p.xadd(f'nbus:{ch}', fields, maxlen=10000, approximate=True)
+    p.xadd('nbus:all',   fields, maxlen=50000, approximate=True)
+    p.execute()
+except Exception:
+    pass
+PYEOF
+}
+
+cmd_publish() {
+    # Parse flags before positional args so Go can call:  nervous publish --json
+    # (stdin = complete CloudEvents envelope, no channel arg needed).
+    # Or: nervous publish <channel> [--subject S] <payload>
+    local subject="" pass_through=false
+    while [[ $# -gt 0 && "$1" == --* ]]; do
+        case "$1" in
+            --subject) subject="$2"; shift 2 ;;
+            --json)    pass_through=true; shift ;;
+            --)        shift; break ;;
+            --*)       echo "unknown flag: $1" >&2; return 2 ;;
+        esac
+    done
+
+    # Determine channel from args or parsed payload.
+    local channel=""
+    if [[ "$pass_through" == "true" ]]; then
+        channel="$(python3 -c "import json,sys; print(json.load(sys.stdin).get('type',''))" <<< "$(cat)")" || {
+            echo "nervous publish --json: failed to parse event type from payload" >&2; return 2
+        }
+    else
+        channel="${1:?usage: nervous publish <channel> [--subject S] [--json] <payload>}"
+    fi
+
+    # ── uwb: allowlist enforcement via nervous.toml ─────────────────────────────────
+    # Walk up from PWD to find nearest nervous.toml; parse [channels] with glob matching.
+    # Permissive (warn once) if no TOML found. Exit 2 on violation.
+    if [[ "$pass_through" == "false" && "${NERVOUS_SKIP_ALLOWLIST:-}" != "1" ]]; then
+        local toml_path=""
+        local dir="$PWD"
+        while [[ "$dir" != "/" && -z "$toml_path" ]]; do
+            if [[ -f "$dir/nervous.toml" ]]; then
+                toml_path="$dir/nervous.toml"
+            else
+                dir="$(dirname "$dir")"
+            fi
+        done
+
+        if [[ -n "$toml_path" ]]; then
+            local allowed=false
+            allowed=$(python3 - "$toml_path" "$channel" <<'PYEOF'
+import sys
+from fnmatch import fnmatch
+
+toml_path = sys.argv[1]
+channel = sys.argv[2]
+
+try:
+    import tomllib
+except ImportError:
+    import toml as tomllib
+
+with open(toml_path, "rb") as f:
+    cfg = tomllib.load(f)
+
+patterns = cfg.get("channels", [])
+if not patterns:
+    print("allow")  # absent [channels] → permissive
+    sys.exit(0)
+
+for pat in patterns:
+    if fnmatch(channel, pat):
+        print("allow")
+        sys.exit(0)
+
+print("deny")
+PYEOF
+)
+            if [[ "$allowed" != "allow" ]]; then
+                echo "ERROR: channel '$channel' not in allowlist" >&2
+                echo "  nervous.toml: $toml_path" >&2
+                echo "  add '$channel' to [channels] or remove nervous.toml" >&2
+                NERVOUS_SKIP_ALLOWLIST=1 NERVOUS_NO_ZELLIJ=1 NERVOUS_NO_REDIS=1 \
+                    nervous publish bus.dead_letter "$(python3 -c "import json; print(json.dumps({
+                        'failure_reason': 'allowlist_violation',
+                        'original_type': '$channel',
+                        'original_source': '${NERVOUS_SOURCE:-/unknown}',
+                    }))")" >/dev/null 2>&1 || true
+                return 2
+            fi
+        else
+            # Permissive: no TOML found — warn once per session (tracked via tmp marker)
+            local warn_marker="/tmp/nervous-no-toml-warned"
+            if [[ ! -f "$warn_marker" ]]; then
+                echo "nervous: WARNING: no nervous.toml found, publish not allowlist-checked" >&2
+                touch "$warn_marker"
+            fi
+        fi
+    fi
+
+    # --json: no channel arg; payload comes from stdin (Go sends full envelope via stdin).
+    # Normal: channel in $1, payload in $2.
+    local payload=""
+    if [[ "$pass_through" == "true" ]]; then
+        payload="$(cat)"
+    else
+        payload="$2"
+    fi
+
+    # --json: caller already built the full CloudEvents envelope (Go side).
+    # Pass it straight through — no re-enveloping, preserves Go's source/id/time/type.
+    if [[ "$pass_through" == "true" ]]; then
+        local log="${NERVOUS_DEBUG_LOG:-$HOME/.cache/nervous-bus/debug.jsonl}"
+        mkdir -p "$(dirname "$log")"
+        local event_channel
+        event_channel="$(printf '%s' "$payload" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('type',''), end='')")" 2>/dev/null || true
+        if [[ -z "$event_channel" ]]; then
+            echo "nervous publish --json: failed to parse event type from payload" >&2
+            return 2
+        fi
+        printf '%s\n' "$payload" >> "$log"
+        _nbus_redis_xadd "$payload"
+        if [[ -n "${ZELLIJ:-}" ]] && command -v zellij >/dev/null 2>&1 && [[ "${NERVOUS_NO_ZELLIJ:-0}" != "1" ]]; then
+            # Fire-and-forget: zellij pipe is best-effort legacy compat. File-tail + Redis
+            # Streams are the primary subscriber paths; don't pay the 1s timeout tax inline.
+            ( printf '%s' "$payload" | timeout 1 zellij pipe -p "$PLUGIN" -n "$event_channel" 2>/dev/null ) &
+            disown
+        fi
+        return 0
+    fi
+
+    local source="${NERVOUS_SOURCE:-/$(basename "$PWD")}"
+    local id; id="$(ulid)"
+    local time; time="$(iso_now)"
+    local subj_field=""
+    if [[ -n "$subject" ]]; then
+        subj_field="\"subject\":$(printf '%s' "$subject" | jq -R .),"
+    fi
+    local envelope
+    envelope=$(printf '{"specversion":"1.0","id":"%s","source":%s,"type":"%s",%s"time":"%s","datacontenttype":"application/json","data":%s}' \
+        "$id" \
+        "$(printf '%s' "$source" | jq -R .)" \
+        "$channel" \
+        "$subj_field" \
+        "$time" \
+        "$payload")
+    local log="${NERVOUS_DEBUG_LOG:-$HOME/.cache/nervous-bus/debug.jsonl}"
+    mkdir -p "$(dirname "$log")"
+
+    # ── Schema validation ────────────────────────────────────────────────────────
+    # Skip validation when NBUS_SKIP_VALIDATION=1 (high-frequency pre-validated publishers).
+    if [[ "${NBUS_SKIP_VALIDATION:-0}" != "1" ]]; then
+        local _repo_schema_dir
+        _repo_schema_dir="$(dirname "$(readlink -f "$0")")/../../schemas"
+        # User-home schemas take precedence over repo schemas (overlay pattern).
+        local _schema_file=""
+        if [[ -f "${NERVOUS_HOME}/schemas/${channel}.json" ]]; then
+            _schema_file="${NERVOUS_HOME}/schemas/${channel}.json"
+        elif [[ -f "${_repo_schema_dir}/${channel}.json" ]]; then
+            _schema_file="${_repo_schema_dir}/${channel}.json"
+        fi
+        if [[ -n "$_schema_file" ]]; then
+            # Pass envelope + schema path as argv so stdin is unambiguous (no heredoc conflict).
+            # Use `if` to run the validator — this suppresses set -e for the tested command,
+            # so a non-zero exit from the validator doesn't abort the script.
+            local _validation_result _exit_code
+            local _vtmp; _vtmp=$(mktemp)
+            if python3 -c '
+import sys, json, jsonschema
+schema_file = sys.argv[1]
+envelope_raw = sys.argv[2]
+try:
+    envelope = json.loads(envelope_raw)
+    schema   = json.load(open(schema_file))
+except Exception as e:
+    print("parse_error:" + str(e), end="")
+    sys.exit(1)
+is_envelope_schema = "specversion" in schema.get("required", [])
+subject = envelope if is_envelope_schema else envelope.get("data", {})
+try:
+    jsonschema.validate(subject, schema)
+    print("ok", end="")
+    sys.exit(0)
+except jsonschema.ValidationError as e:
+    print("violation:" + str(e.message)[:500], end="")
+    sys.exit(2)
+except Exception as e:
+    print("error:" + str(e), end="")
+    sys.exit(3)
+' "$_schema_file" "$envelope" >"$_vtmp" 2>&1; then
+                _exit_code=0
+            else
+                _exit_code=$?
+            fi
+            _validation_result=$(cat "$_vtmp"); rm -f "$_vtmp"
+            if [[ $_exit_code -eq 2 ]]; then
+                # Exit 2 = explicit ValidationError — real schema violation, dead-letter it.
+                local _detail="${_validation_result#violation:}"
+                local _excerpt
+                _excerpt="$(printf '%s' "$envelope" | cut -c1-500)"
+                local _dl_payload
+                _dl_payload=$(python3 -c "import json,sys; print(json.dumps({
+                    'failure_reason': 'schema_violation',
+                    'original_type': sys.argv[1],
+                    'original_source': sys.argv[2],
+                    'schema_violation_detail': sys.argv[3],
+                    'original_payload_excerpt': sys.argv[4],
+                }))" "$channel" "$source" "$_detail" "$_excerpt" 2>/dev/null)
+                if [[ -n "$_dl_payload" ]]; then
+                    local _dl_id; _dl_id="$(ulid)"
+                    local _dl_time; _dl_time="$(iso_now)"
+                    local _dl_envelope
+                    _dl_envelope=$(printf '{"specversion":"1.0","id":"%s","source":%s,"type":"bus.dead_letter","time":"%s","datacontenttype":"application/json","data":%s}' \
+                        "$_dl_id" \
+                        "$(printf '%s' "$source" | jq -R .)" \
+                        "$_dl_time" \
+                        "$_dl_payload")
+                    printf '%s\n' "$_dl_envelope" >> "$log"
+                    NBUS_SKIP_VALIDATION=1 _nbus_redis_xadd "$_dl_envelope"
+                fi
+                echo "[nbus schema] validation failed for $channel: $_detail" >&2
+                return 2
+            elif [[ $_exit_code -ne 0 ]]; then
+                # Exit 1 = parse/import error, exit 3 = unexpected validator error.
+                # These are infrastructure failures (e.g. missing jsonschema module),
+                # not payload violations. Warn and allow through — never dead-letter.
+                echo "[nbus schema] validator error for $channel (exit $_exit_code): ${_validation_result}" >&2
+            fi
+        else
+            echo "[nbus warn] no schema for type: $channel" >&2
+        fi
+    fi
+    # ────────────────────────────────────────────────────────────────────────────
+
+    # Always tee to debug log (durable, easy to subscribe via tail -F).
+    printf '%s\n' "$envelope" >> "$log"
+    # Also write directly to Redis Streams — eliminates the file→mirror→Redis hop.
+    _nbus_redis_xadd "$envelope"
+
+    # If we're in a real zellij session AND the socket is reachable, also pipe
+    # to the plugin — fire-and-forget so a stalled/missing plugin doesn't block.
+    # File-tail + Redis Streams are the primary subscriber paths; this remains
+    # only as best-effort legacy compat for the WASM plugin path.
+    if [[ -n "${ZELLIJ:-}" ]] && command -v zellij >/dev/null 2>&1; then
+        if [[ "${NERVOUS_NO_ZELLIJ:-0}" != "1" ]]; then
+            ( printf '%s' "$envelope" | timeout 1 zellij pipe -p "$PLUGIN" -n "$channel" 2>/dev/null ) &
+            disown
+        fi
+    fi
+}
+
+cmd_subscribers() {
+    if [[ -z "${ZELLIJ:-}" ]]; then
+        echo "nervous subscribers requires a Zellij session" >&2
+        return 1
+    fi
+    local out
+    out="$(printf '{"pid":%d}' "$$" | zellij pipe -p "$PLUGIN" -n "subscribers" 2>/dev/null)" || {
+        echo "nervous subscribers: plugin unreachable" >&2
+        return 1
+    }
+    echo "$out"
+}
+
+cmd_tail() {
+    local channel="${1:?usage: nervous tail <channel>}"
+    if [[ -z "${ZELLIJ:-}" ]]; then
+        local log="${NERVOUS_DEBUG_LOG:-$HOME/.cache/nervous-bus/debug.jsonl}"
+        tail -f "$log" | grep --line-buffered -F "\"type\":\"$channel\""
+        return
+    fi
+    # In zellij: send subscribe request to plugin
+    printf '{"plugin_id":%d}' "$$" | zellij pipe -p "$PLUGIN" -n "subscribe:$channel"
+    echo "subscribed pid=$$ to $channel (plugin will fan out via pipe_message_to_plugin)"
+}
+
+cmd_schemas() {
+    local repo_dir
+    repo_dir="$(dirname "$(readlink -f "$0")")/../../schemas"
+    if [[ ! -d "$repo_dir" ]]; then
+        echo "no schemas directory: $repo_dir" >&2
+        exit 2
+    fi
+    find "$repo_dir" -maxdepth 1 -name '*.json' -printf '%f\n' 2>/dev/null | sort
+    local user_dir="${NERVOUS_HOME}/schemas"
+    if [[ -d "$user_dir" ]] && [[ -n "$(find "$user_dir" -maxdepth 1 -name '*.json' 2>/dev/null)" ]]; then
+        echo ""
+        echo "# user schemas (${user_dir}):"
+        find "$user_dir" -maxdepth 1 -name '*.json' -printf '%f\n' 2>/dev/null | sort
+    fi
+}
+
+cmd_setup() {
+    local install_hooks=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --install-hooks) install_hooks=true; shift ;;
+            *) echo "nervous setup: unknown flag $1" >&2; return 2 ;;
+        esac
+    done
+
+    echo "nervous-bus setup — bootstrapping user home: ${NERVOUS_HOME}"
+    mkdir -p "${NERVOUS_HOME}/schemas"
+    mkdir -p "${NERVOUS_HOME}/adapters"
+
+    if [[ "$install_hooks" == "true" ]]; then
+        local repo_root
+        repo_root="$(dirname "$(readlink -f "$0")")/../../"
+        local hook_src="${repo_root}/sdk/shell/hooks/pre-commit-gitleaks.sh"
+        local hook_dst="${repo_root}/.git/hooks/pre-commit"
+        if [[ -f "$hook_src" ]]; then
+            cp "$hook_src" "$hook_dst" && chmod +x "$hook_dst"
+            echo "installed: .git/hooks/pre-commit (gitleaks)"
+        fi
+    fi
+    if [[ ! -f "${NERVOUS_HOME}/config.toml" ]]; then
+        cat > "${NERVOUS_HOME}/config.toml" << 'TOML'
+# nervous-bus user configuration (~/.config/nervous-bus/config.toml)
+#
+# NERVOUS_HOME layout:
+#   schemas/    — private/custom schema overlay (loaded alongside repo schemas;
+#                 same channel name here overrides the repo version)
+#   adapters/   — private adapter source + systemd unit files that should not
+#                 live in the public repo (e.g. bridges to private services)
+#
+# Install schemas with:  nervous schema install <path>
+# List adapters with:    nervous adapter list
+#
+# [redis]
+# url = "redis://localhost:6379"
+TOML
+        echo "created: ${NERVOUS_HOME}/config.toml"
+    fi
+    echo ""
+    echo "  schema overlay  : ${NERVOUS_HOME}/schemas/"
+    echo "  private adapters: ${NERVOUS_HOME}/adapters/"
+    echo ""
+    echo "  nervous schema install <file-or-dir>   install private schemas"
+    echo "  nervous adapter list                   list installed private adapters"
+    echo ""
+    echo "Add to shell profile to override the default location:"
+    echo "  export NERVOUS_HOME=${NERVOUS_HOME}"
+}
+
+cmd_adapter() {
+    local sub="${1:-list}"; shift || true
+    case "$sub" in
+        list)
+            local adap_dir="${NERVOUS_HOME}/adapters"
+            if [[ -d "$adap_dir" ]]; then
+                find "$adap_dir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort
+            else
+                echo "(no private adapters — run 'nervous setup' first)" >&2
+            fi
+            ;;
+        *)
+            echo "usage: nervous adapter list" >&2; return 1
+            ;;
+    esac
+}
+
+cmd_schema() {
+    local sub="${1:-help}"; shift || true
+    case "$sub" in
+        install)
+            local target="${1:?usage: nervous schema install <file-or-dir>}"
+            mkdir -p "${NERVOUS_HOME}/schemas"
+            if [[ -d "$target" ]]; then
+                local count=0
+                for f in "$target"/*.json; do
+                    [[ -f "$f" ]] || continue
+                    cp "$f" "${NERVOUS_HOME}/schemas/"
+                    echo "installed: $(basename "$f")"
+                    count=$(( count + 1 ))
+                done
+                echo "$count schema(s) → ${NERVOUS_HOME}/schemas/"
+            elif [[ -f "$target" ]]; then
+                cp "$target" "${NERVOUS_HOME}/schemas/"
+                echo "installed: $(basename "$target") → ${NERVOUS_HOME}/schemas/"
+            else
+                echo "nervous schema install: not found: $target" >&2; return 2
+            fi
+            ;;
+        list)
+            local user_dir="${NERVOUS_HOME}/schemas"
+            if [[ -d "$user_dir" ]] && [[ -n "$(find "$user_dir" -maxdepth 1 -name '*.json' 2>/dev/null)" ]]; then
+                find "$user_dir" -maxdepth 1 -name '*.json' -printf '%f\n' 2>/dev/null | sort
+            else
+                echo "(no user schemas — run 'nervous setup' then 'nervous schema install')" >&2
+            fi
+            ;;
+        remove)
+            local name="${1:?usage: nervous schema remove <channel-name>}"
+            local f="${NERVOUS_HOME}/schemas/${name%.json}.json"
+            if [[ -f "$f" ]]; then
+                rm "$f" && echo "removed: $(basename "$f")"
+            else
+                echo "not found in user schemas: $f" >&2; return 2
+            fi
+            ;;
+        *)
+            echo "usage: nervous schema install <file-or-dir> | list | remove <name>" >&2; return 1
+            ;;
+    esac
+}
+
+# IMPORTANT: the bus.dead_letter ring is ephemeral (256 entries per channel,
+# in-memory in the WASM plugin). `nervous dlq` reads the durable JSONL log
+# instead, which captures every dead-letter ever emitted on this host.
+# It is NOT a queue — there are no acks, redelivery, or guaranteed retention.
+cmd_dlq() {
+    local log="${NERVOUS_DEBUG_LOG:-$HOME/.cache/nervous-bus/debug.jsonl}"
+    local since="" reason="" mode="pretty"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --since)   since="$2"; shift 2 ;;
+            --reason)  reason="$2"; shift 2 ;;
+            --json)    mode="json"; shift ;;
+            -h|--help)
+                cat <<HELP
+nervous dlq — surface bus.dead_letter events from the durable JSONL log.
+
+Usage:
+  nervous dlq                       show last 50 dead letters, formatted
+  nervous dlq --since 1h            only show entries from the last hour
+  nervous dlq --reason malformed_json
+                                    filter by failure_reason
+  nervous dlq --json                raw JSONL (pipe into jq)
+
+NOTE: The plugin's dead-letter ring is in-memory (256 entries per channel).
+      \`nervous dlq\` reads the JSONL log instead, which is durable. Older
+      entries persist on disk but the in-plugin ring may have evicted them.
+HELP
+                return 0
+                ;;
+            *) echo "nervous dlq: unknown flag $1" >&2; return 2 ;;
+        esac
+    done
+    [[ -f "$log" ]] || { echo "no log: $log" >&2; return 2; }
+
+    # Resolve --since to an epoch cutoff (e.g. 1h, 30m, 2d)
+    local cutoff_epoch=0
+    if [[ -n "$since" ]]; then
+        local n="${since//[^0-9]/}" unit="${since//[0-9]/}"
+        [[ -z "$n" ]] && { echo "bad --since: $since" >&2; return 2; }
+        case "$unit" in
+            s|"") cutoff_epoch=$(( $(date +%s) - n )) ;;
+            m)    cutoff_epoch=$(( $(date +%s) - n*60 )) ;;
+            h)    cutoff_epoch=$(( $(date +%s) - n*3600 )) ;;
+            d)    cutoff_epoch=$(( $(date +%s) - n*86400 )) ;;
+            *)    echo "bad --since unit: $unit (use s/m/h/d)" >&2; return 2 ;;
+        esac
+    fi
+
+    REASON_FILTER="$reason" CUTOFF_EPOCH="$cutoff_epoch" MODE="$mode" \
+    python3 - "$log" <<'PYEOF'
+import json, os, sys, datetime as dt
+
+log = sys.argv[1]
+mode = os.environ.get('MODE', 'pretty')
+reason_filter = os.environ.get('REASON_FILTER', '')
+cutoff_epoch = int(os.environ.get('CUTOFF_EPOCH', '0'))
+
+def parse_ts(s):
+    try:
+        return int(dt.datetime.fromisoformat(s.replace('Z','+00:00')).timestamp())
+    except Exception:
+        return 0
+
+hits = []
+with open(log) as f:
+    for line in f:
+        line = line.strip()
+        if not line or '"bus.dead_letter"' not in line:
+            continue
+        try:
+            e = json.loads(line)
+        except Exception:
+            continue
+        if e.get('type') != 'bus.dead_letter':
+            continue
+        if cutoff_epoch and parse_ts(e.get('time','')) < cutoff_epoch:
+            continue
+        d = e.get('data') or {}
+        if reason_filter and d.get('failure_reason','') != reason_filter:
+            continue
+        hits.append(e)
+
+if mode == 'json':
+    for e in hits:
+        print(json.dumps(e))
+    sys.exit(0)
+
+if not hits:
+    print('\033[2mno dead letters found\033[0m', file=sys.stderr)
+    sys.exit(0)
+
+R = '\033[0m'; DIM = '\033[2m'; BOLD = '\033[1m'
+RED = '\033[31m'; YEL = '\033[33m'; CYN = '\033[36m'; MAG = '\033[35m'
+
+reason_color = {
+    'malformed_json':         RED,
+    'missing_required_field': YEL,
+    'unknown_channel':        MAG,
+    'schema_violation':       YEL,
+    'payload_too_large':      YEL,
+    'delivery_failed':        RED,
+}
+print(f"{BOLD}nervous dlq{R}  {DIM}{len(hits)} dead letters{R}  "
+      f"{DIM}(ring is ephemeral; log is durable){R}")
+print(DIM + ('─' * 70) + R)
+
+# Show last 50, newest last (so it scrolls naturally in a terminal)
+for e in hits[-50:]:
+    t = (e.get('time','') or '')[11:19]
+    d = e.get('data') or {}
+    reason = d.get('failure_reason','?')
+    orig = d.get('original_type','?')
+    excerpt = (d.get('original_payload_excerpt','') or '').replace('\n',' ')[:60]
+    src = (e.get('source','') or '').lstrip('/').split('/')[-1][:14]
+    col = reason_color.get(reason, DIM)
+    print(f"{DIM}{t}{R}  {col}{reason:<22}{R}  "
+          f"{CYN}{orig:<26}{R}  {DIM}{src:<14}{R}  {excerpt}")
+
+# Reason histogram footer
+from collections import Counter
+hist = Counter((e.get('data') or {}).get('failure_reason','?') for e in hits)
+print(DIM + ('─' * 70) + R)
+parts = [f"{reason_color.get(k,'')}{k}{R}={v}" for k,v in hist.most_common()]
+print(f"{DIM}by reason:{R}  " + '  '.join(parts))
+PYEOF
+}
+
+cmd_pattern() {
+    local sub="${1:-list}"; shift || true
+
+    case "$sub" in
+        list)
+            ~/.pyenv/versions/3.11.13/bin/python3 - <<'PYEOF'
+import redis, sys
+try:
+    r = redis.Redis.from_url('redis://localhost:6379', decode_responses=True)
+    entries = r.xrange('nbus:draft-beads', count=20)
+    if not entries:
+        print('no draft signals pending')
+    else:
+        for eid, data in entries:
+            sid = data.get('signal_id', eid)[-12:]
+            st  = data.get('signal_type', '?')
+            conf = data.get('confidence', '?')
+            proj = data.get('project_hint', '')
+            desc = data.get('description', '')[:60]
+            print(f'{sid}  {st:<12} conf={conf}  [{proj}]  {desc}')
+        print()
+        print('nervous pattern accept <signal_id> [notes]')
+        print('nervous pattern reject <signal_id> [notes]')
+except Exception as e:
+    print(f'error reading drafts: {e}', file=sys.stderr)
+PYEOF
+            ;;
+        accept|reject)
+            local signal_id="${1:?signal_id required}"; shift || true
+            local notes="${*}"
+            local verdict="$sub"
+            local payload
+            payload=$(python3 -c "import json,sys; print(json.dumps({'signal_id':sys.argv[1],'verdict':sys.argv[2],'draft_bead_id':None,'notes':sys.argv[3]}))" "$signal_id" "$verdict" "$notes")
+            nervous publish bus.pattern.feedback.v1 "$payload"
+            echo "feedback recorded: $verdict $signal_id"
+            ;;
+        *)
+            echo "usage: nervous pattern list|accept|reject [args]" >&2
+            return 1
+            ;;
+    esac
+}
+
+case "$CMD" in
+    publish) cmd_publish "$@" ;;
+    tail)    cmd_tail "$@" ;;
+    subscribers) cmd_subscribers "$@" ;;
+    schemas) cmd_schemas "$@" ;;
+    schema)  cmd_schema "$@" ;;
+    adapter) cmd_adapter "$@" ;;
+    setup)   cmd_setup "$@" ;;
+    dlq)     cmd_dlq "$@" ;;
+    pattern) cmd_pattern "$@" ;;
+    help|-h|--help) cmd_help ;;
+    *) echo "unknown command: $CMD" >&2; cmd_help ;;
+esac

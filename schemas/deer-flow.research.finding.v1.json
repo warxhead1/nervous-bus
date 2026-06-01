@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.research.finding.v1.json",
+  "title": "deer-flow.research.finding v1",
+  "description": "A significant evidence item gathered during research stages of a stack-tuner cycle. Emitted mid-cycle to enable live streaming of findings to Android Research card UIs. Compact form (source=/deer-flow) includes only cycle_id+stage+finding_type; full form (source=/deer-flow/stack-tuner) adds model, excerpt, source_url, and confidence.",
+  "type": "object",
+  "required": ["cycle_id", "stage", "finding_type"],
+  "properties": {
+    "cycle_id": { "type": "string", "description": "unique cycle identifier; matches subject" },
+    "stage": { "type": "string", "description": "stage name within the cycle (e.g. research_v1, evidence_v1)" },
+    "model": { "type": "string", "description": "model id that produced or gathered this finding (full form only)" },
+    "finding_type": {
+      "type": "string",
+      "description": "category of finding (e.g. doc_reference, code_snippet, benchmark_result, api_contract, heuristic)"
+    },
+    "excerpt": { "type": "string", "description": "relevant text or data snippet from the finding source" },
+    "source_url": { "type": "string", "format": "uri", "description": "URL or path to the source document or data" },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "confidence score for this finding's relevance or accuracy"
+    }
+  }
+}

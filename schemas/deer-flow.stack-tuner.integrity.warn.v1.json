@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.stack-tuner.integrity.warn.v1.json",
+  "title": "deer-flow.stack-tuner.integrity.warn v1",
+  "description": "Out-of-band integrity warning surfaced during a stack-tuner stage. Distinct from a stage error: the stage may still be ok=true while a downstream parser flags a structural problem (e.g. critic verdict not extractable). Drives dashboard 'integrity issues' counter.",
+  "type": "object",
+  "required": ["cycle_id", "stage", "issue"],
+  "properties": {
+    "cycle_id": { "type": "string" },
+    "stage": { "type": "string" },
+    "issue": {
+      "type": "string",
+      "description": "machine-readable issue tag (e.g. critic_verdict_extraction_failed, schema_mismatch)"
+    },
+    "model": { "type": "string" },
+    "ok": { "type": "boolean", "description": "stage's own ok flag — warn can fire even when stage.ok=true" },
+    "answer_len": { "type": "integer", "minimum": 0 },
+    "answer_preview": { "type": "string", "description": "first ~200 chars of the offending payload for triage" }
+  }
+}

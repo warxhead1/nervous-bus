@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.improver.v1.json",
+  "title": "autobench.improver v1",
+  "description": "Improver model call boundaries — start and complete events around an LLM-driven harness mutation. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.improver.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["session_id", "model", "status"],
+      "properties": {
+        "session_id": {"type": "string"},
+        "model": {
+          "type": "string",
+          "description": "Improver model identifier (e.g. minimax-m2.7, claude-sonnet-4.5, ...)"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["start", "complete"],
+          "description": "Improver call lifecycle status"
+        },
+        "prompt_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Prompt token count (set on start)"
+        },
+        "completion_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Completion token count (set on complete)"
+        },
+        "delta_summary": {
+          "type": "string",
+          "description": "Short text summary of the mutation proposed by the improver"
+        }
+      }
+    }
+  }
+}

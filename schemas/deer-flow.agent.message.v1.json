@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.agent.message.v1.json",
+  "title": "deer-flow.agent.message v1",
+  "description": "Streaming AI message events emitted by deer-flow's runtime agent message emitter. Two event_types: 'delta' (incremental chunk during streaming) and 'final' (terminal event for one message_id). Per-message_id throttling applies. Emit site: deer-flow/backend/packages/harness/deerflow/bus.py:338 (emit_agent_message_event). Source: /deer-flow/harness.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "deer-flow.agent.message.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "subject": {"type": "string", "description": "Typically the thread_id, used as CloudEvent subject for partitioning"},
+    "data": {
+      "type": "object",
+      "required": ["thread_id", "run_id", "message_id", "event_type", "is_final"],
+      "properties": {
+        "thread_id": {"type": ["string", "null"], "description": "LangGraph thread ID"},
+        "run_id": {"type": ["string", "null"], "description": "Gateway runtime run ID"},
+        "message_id": {"type": ["string", "null"], "description": "Unique id for the AI message; used for per-message throttling"},
+        "event_type": {
+          "type": "string",
+          "enum": ["delta", "final"],
+          "description": "'delta' for streaming chunks, 'final' for the terminal event"
+        },
+        "is_final": {"type": "boolean", "description": "True iff this is the terminal event for the message"},
+        "content_delta": {"type": "string", "description": "New text content since last emit; omitted when empty"},
+        "content_cumulative": {"type": "string", "description": "All text accumulated for this message so far; omitted when empty"},
+        "reasoning_content_delta": {"type": "string", "description": "New reasoning/thinking chunk since last emit; omitted when empty"},
+        "reasoning_content_cumulative": {"type": "string", "description": "All reasoning accumulated so far; omitted when empty"},
+        "token_usage": {
+          "type": "object",
+          "description": "Token usage from the final chunk; only present on is_final=true",
+          "properties": {
+            "input": {"type": "integer", "minimum": 0},
+            "output": {"type": "integer", "minimum": 0},
+            "total": {"type": "integer", "minimum": 0}
+          }
+        },
+        "model": {"type": "string", "description": "Model name that produced the message; emitted when available"}
+      }
+    }
+  }
+}

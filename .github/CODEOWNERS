@@ -1,0 +1,18 @@
+# nervous-bus code owners
+# Every PR requires review from at least one owner.
+# hearth-loom bot PRs are auto-approved by CI — human review required for:
+#   - Any change to schemas/ (wire format is a cross-project contract)
+#   - Changes to plugin/src/ (WASM ABI is hard to roll back)
+#   - Changes to CLAUDE.md or AGENTS.md (agent-facing instructions)
+
+* @warxhead1
+
+# Schema changes require explicit owner sign-off — these are cross-project contracts
+schemas/ @warxhead1
+
+# Plugin ABI — fan-out behaviour, ring buffer semantics
+plugin/src/ @warxhead1
+
+# Agent instructions — changes here affect every loomie and agent working this repo
+CLAUDE.md @warxhead1
+AGENTS.md @warxhead1

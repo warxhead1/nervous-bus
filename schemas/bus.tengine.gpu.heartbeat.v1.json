@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.gpu.heartbeat.v1.json",
+  "title": "bus.tengine.gpu.heartbeat v1",
+  "description": "When: Emitted every N frames (typically every 30 frames) by the GPU telemetry loop in a silo's render thread. Source: /tengine. Consumers use this to monitor GPU health, track FPS stability, and observe VRAM pressure over the lifetime of a session.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.tengine.gpu.heartbeat.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["v", "source", "host", "session_id", "silo", "frame", "fps", "vram_mb", "hottest_wts"],
+      "properties": {
+        "v": {"type": "integer", "description": "Payload schema version, always 1."},
+        "source": {"type": "string", "description": "Emitting subsystem identifier, always 'tengine'."},
+        "host": {"type": "string", "description": "Hostname of the machine that generated this event."},
+        "session_id": {"type": "string", "description": "Tengine session identifier, matching the session directory basename."},
+        "silo": {"type": "string", "description": "Silo name this heartbeat originates from (e.g. 'Racing', 'Fluid')."},
+        "frame": {"type": "integer", "description": "Current frame counter at time of this heartbeat."},
+        "fps": {"type": "number", "description": "Measured frames per second over the sampling window."},
+        "vram_mb": {"type": "integer", "description": "Estimated GPU video memory usage in megabytes at time of heartbeat."},
+        "hottest_wts": {
+          "type": "array",
+          "description": "Top work-types consuming GPU time in this frame, ordered by descending milliseconds.",
+          "items": {
+            "type": "object",
+            "required": ["id", "name", "ms"],
+            "properties": {
+              "id": {"type": "integer", "description": "Numeric work-type identifier."},
+              "name": {"type": "string", "description": "Human-readable work-type name, e.g. 'composer_dispatch' or 'shadergen'."},
+              "ms": {"type": "number", "description": "GPU time spent on this work-type in milliseconds for the current frame."}
+            }
+          }
+        }
+      }
+    }
+  }
+}

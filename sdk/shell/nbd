@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# nbd — nervous-bus aware bd wrapper.
+#
+# Wraps bd commands and publishes lifecycle events to the nervous-bus so that
+# deer-flow and hearth-loom learn about beads in real time rather than polling.
+#
+# Install:
+#   ln -s "$(pwd)/sdk/shell/nbd" ~/.local/bin/nbd     # from repo root
+#
+# Usage:
+#   nbd create --title=...          # → publishes bus.bead.created
+#   nbd close <id> --reason=...     # → publishes bus.bead.closed
+#   nbd update <id> --claim         # → publishes bus.bead.updated (no schema yet)
+#
+# Auto-routing: bd itself has no post-create hook system in this version, so
+# `bd create` will NOT auto-publish. To make every bd call emit, alias it in
+# the user's shell:
+#   alias bd=nbd                     # zsh/bash interactive rc
+# Or replace the existing bd shell function to call nbd instead of `command bd`.
+#
+# Environment:
+#   NERVOUS_SAGA_ID   If set, included as saga_id in bus.bead.created and
+#                     bus.bead.closed payloads for multi-bead plan correlation.
+#   BD_BIN            Override the underlying bd binary (default: bd).
+#
+# Requires: bd, nervous (both on PATH), jq
+
+set -euo pipefail
+
+NERVOUS="${NERVOUS:-$(dirname "$(readlink -f "$0")")/nervous}"
+BD="${BD_BIN:-bd}"
+NERVOUS_SAGA_ID="${NERVOUS_SAGA_ID:-}"
+
+# Detect project name from repo root
+_project() {
+    git rev-parse --show-toplevel 2>/dev/null | xargs -I{} basename {} 2>/dev/null || basename "$PWD"
+}
+
+# Publish to bus; never block the user if bus is unavailable
+_publish() {
+    local channel="$1" payload="$2"
+    "$NERVOUS" publish "$channel" "$payload" 2>/dev/null || true
+}
+
+# Parse bead ID from bd create output (looks for: ✓ Created issue: <id>)
+_parse_created_id() {
+    grep -oP '(?<=Created issue: )\S+' || grep -oP '\b[a-z]+-[a-z0-9]{4,}\b' | head -1 || true
+}
+
+# Parse bead ID from first positional arg (bd close <id>, bd update <id>)
+# First arg is the bd subcommand (e.g. "close"), which we deliberately skip.
+_positional_id() {
+    shift || true
+    for arg in "$@"; do
+        [[ "$arg" == --* ]] && continue
+        echo "$arg"
+        return
+    done
+}
+
+CMD="${1:-help}"
+
+case "$CMD" in
+    create|new)
+        # Run bd create, capture output, publish event with the new bead id.
+        # `|| exit_code=$?` keeps `set -e` from killing the script on bd
+        # failure (e.g. validation rejection) before we can replay the output.
+        # Errors are replayed on stderr so callers' `2>` redirections still work.
+        exit_code=0
+        output=$("$BD" "$@" 2>&1) || exit_code=$?
+        if [[ $exit_code -ne 0 ]]; then
+            printf '%s\n' "$output" >&2
+        else
+            printf '%s\n' "$output"
+        fi
+
+        if [[ $exit_code -eq 0 ]]; then
+            bead_id=$(printf '%s\n' "$output" | _parse_created_id)
+            project=$(_project)
+
+            if [[ -n "$bead_id" ]]; then
+                # Fetch full bead details for the event payload.
+                # `bd show --json` returns an array; normalize to a single object.
+                bead_json=$("$BD" show "$bead_id" --json 2>/dev/null || echo '[]')
+                bead_obj=$(printf '%s' "$bead_json" | jq -c 'if type=="array" then (.[0] // {}) else . end' 2>/dev/null || echo '{}')
+                title=$(printf '%s' "$bead_obj" | jq -r '.title // ""')
+                btype=$(printf '%s' "$bead_obj" | jq -r '.issue_type // "task"')
+                priority=$(printf '%s' "$bead_obj" | jq -r '.priority // 2')
+                description=$(printf '%s' "$bead_obj" | jq -r '.description // ""' | head -c 1000)
+                filer=$(printf '%s' "$bead_obj" | jq -r '.created_by // "unknown"')
+                # Prepend "human:" only if the value isn't already qualified.
+                case "$filer" in
+                    human:*|agent:*) ;;
+                    *) filer="human:$filer" ;;
+                esac
+                has_ac=$(printf '%s' "$description" | grep -q "^acceptance:" && echo true || echo false)
+
+                payload=$(jq -cn \
+                    --arg bead_id "$bead_id" \
+                    --arg project "$project" \
+                    --arg title "$title" \
+                    --arg type "$btype" \
+                    --argjson priority "$priority" \
+                    --arg filer "$filer" \
+                    --arg description_excerpt "$description" \
+                    --argjson has_acceptance_criteria "$has_ac" \
+                    --arg saga_id "$NERVOUS_SAGA_ID" \
+                    '{
+                        bead_id: $bead_id,
+                        project: $project,
+                        title: $title,
+                        type: $type,
+                        priority: $priority,
+                        filer: $filer,
+                        description_excerpt: $description_excerpt,
+                        has_acceptance_criteria: $has_acceptance_criteria
+                    } + (if $saga_id != "" then {saga_id: $saga_id} else {} end)')
+                _publish "bus.bead.created" "$payload"
+            fi
+        fi
+        exit $exit_code
+        ;;
+
+    close)
+        exit_code=0
+        output=$("$BD" "$@" 2>&1) || exit_code=$?
+        if [[ $exit_code -ne 0 ]]; then
+            printf '%s\n' "$output" >&2
+        else
+            printf '%s\n' "$output"
+        fi
+
+        if [[ $exit_code -eq 0 ]]; then
+            bead_id=$(_positional_id "$@")
+            project=$(_project)
+            if [[ -n "$bead_id" ]]; then
+                payload=$(jq -cn \
+                    --arg bead_id "$bead_id" \
+                    --arg project "$project" \
+                    --arg saga_id "$NERVOUS_SAGA_ID" \
+                    '{ bead_id: $bead_id, project: $project }
+                     + (if $saga_id != "" then {saga_id: $saga_id} else {} end)')
+                _publish "bus.bead.closed" "$payload"
+            fi
+        fi
+        exit $exit_code
+        ;;
+
+    update)
+        exit_code=0
+        output=$("$BD" "$@" 2>&1) || exit_code=$?
+        if [[ $exit_code -ne 0 ]]; then
+            printf '%s\n' "$output" >&2
+        else
+            printf '%s\n' "$output"
+        fi
+
+        if [[ $exit_code -eq 0 ]]; then
+            bead_id=$(_positional_id "$@")
+            project=$(_project)
+            if [[ -n "$bead_id" ]]; then
+                # Determine what changed from flags
+                change="updated"
+                for arg in "$@"; do
+                    case "$arg" in
+                        --claim) change="claimed" ;;
+                        --status=*) change="status:${arg#--status=}" ;;
+                    esac
+                done
+                payload=$(jq -cn \
+                    --arg bead_id "$bead_id" \
+                    --arg project "$project" \
+                    --arg change "$change" \
+                    '{ bead_id: $bead_id, project: $project, change: $change }')
+                _publish "bus.bead.updated" "$payload"
+            fi
+        fi
+        exit $exit_code
+        ;;
+
+    *)
+        exec "$BD" "$@"
+        ;;
+esac

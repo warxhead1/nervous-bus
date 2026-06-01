@@ -1,0 +1,131 @@
+# ─── Rust / Cargo ──────────────────────────────────────────────────────────────
+target/
+*.wasm.bak
+
+# Compiled WASM artifacts (built, not stored in git)
+*.wasm
+
+# ─── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+
+# ─── Node / TypeScript SDK ─────────────────────────────────────────────────────
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# ─── OS / Editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ─── Secrets / Credentials ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ─── Beads issue tracker ───────────────────────────────────────────────────────
+# (detailed rules in .beads/.gitignore; these are the repo-root guards)
+.beads-credential-key
+.dolt/
+# Dolt server is the source of truth (per memory + `bd context`). The JSONL
+# snapshot is kept locally (.beads/snapshot.jsonl) for bootstrap of fresh
+# clones via `bd import`, but never tracked — bd's upgrade-recovery path
+# treats any file literally named `.beads/issues.jsonl` as "stale state to
+# auto-reimport", causing a self-perpetuating dirty-dolt loop in v1.0.4.
+# Renamed to snapshot.jsonl to dodge that magic name; ignore both for safety.
+.beads/issues.jsonl
+.beads/snapshot.jsonl
+
+# ─── Debug / Observability ─────────────────────────────────────────────────────
+# Debug log written by the nervous-bus plugin adapter
+.cache/
+debug.jsonl
+*.log
+
+# ─── Misc build artifacts ──────────────────────────────────────────────────────
+*.tmp
+*.bak
+*.orig
+
+# ─── Autobench run outputs & caches ────────────────────────────────────────────
+autobench/benchmarks/
+autobench/data/
+benchmarks/
+
+# ─── Generated visualizations ──────────────────────────────────────────────────
+pulse.png
+sysmap.png
+
+# ─── Log rotation artifacts (*.log already above; this catches rotated .log.1 etc.)
+*.log.*
+
+# ─── Per-run tool artifacts (keep .py/.md, ignore output data files) ───────────
+tools/*.jsonl
+tools/diversity_drift*.json
+tools/ab_minimax*.json
+
+# ─── Schema migration artifacts (naming convention *_v*.json, not authoritative)
+schemas/*_v*.json
+
+# Scratch from running deer-flow probes from this dir (host: ~/.cache/deer-flow/...)
+.deer-flow/
+# Claude Code scheduled task lock (per-machine)
+.claude/scheduled_tasks.lock
+# Claude Code per-machine settings — host hooks (bd prime) differ from
+# loomie-container hooks (/usr/local/bin/hearth-loom-hook). Tracking this
+# file caused loomies to commit container-internal hook paths back to the
+# repo and break the host's Claude Code on every autoloom merge.
+.claude/settings.json
+# Claude Code session data — never commit any of .claude/ except settings.local.json
+.claude/reports/
+.claude/worktrees/
+.claude/*.jsonl
+.claude/*.lock
+
+# Beads issue tracker internals — dolt DB, hooks, per-machine metadata
+.beads/dolt/
+.beads/hooks/
+.beads/metadata.json
+.beads/config.yaml
+.beads/snapshot.jsonl
+.beads/issues.jsonl
+
+# Internal claims / EDD audits — not relevant to OSS contributors
+claims/
+
+# Internal research notes and benchmark run artifacts
+tools/recovered_cycles/
+tools/validation_cycles/
+tools/*research*.md
+tools/ab_minimax*.json
+tools/multifile_refactor*.json
+tools/variance_floor*.json
+tools/check_minimax*.json
+tools/burn-logs/
+
+# HearthLoom-internal — do not commit
+.hearth-loom/
+.local_version
+last-touched
+.hearth-loom-failed-at
+BLOCKED-*.md
+
+# Loomie agent scaffold — per-worktree, not for the shared repo
+.agent/

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.shadergen.screenshot.v1.json",
+  "title": "tengine.shadergen.screenshot v1",
+  "description": "A screenshot was captured to disk. Producer: tengine silo_tester via the registry handle SHADERGEN_SCREENSHOT in crates/tengine-dgc-hal/src/silo/shadergen_handlers/event_registry.rs. CloudEvents subject is 'frame_{frame:04}' for stable sort order. Consumers can read 'path' directly; the file is durably flushed before this event fires.",
+  "type": "object",
+  "required": ["label", "frame", "path", "bytes"],
+  "properties": {
+    "label": {
+      "type": "string",
+      "description": "screenshot label as passed to the screenshot command (e.g. 'shadergen', 'pre_race')"
+    },
+    "frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index at which the screenshot was captured"
+    },
+    "path": {
+      "type": "string",
+      "description": "absolute path to the PNG file under the session-dir's artifacts/ subtree"
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "on-disk size of the screenshot in bytes"
+    }
+  }
+}

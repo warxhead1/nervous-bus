@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.design.generated.v1.json",
+  "title": "hearth.design.generated v1",
+  "description": "Forge visualization result emitted by deer-flow DesignRequestBusConsumer after calling POST /api/forge/visualize. image_url is relative to the deer-flow gateway. Android should call the proxy endpoint via hearth-api. Producer: deer-flow/backend/.../design_request_consumer.py. Consumers: hearth-api nbus_consumer (SSE forwarding to Android), Android app (ForgeSection card refresh).",
+  "type": "object",
+  "required": ["entity_key", "mode", "requester", "request_event_id"],
+  "properties": {
+    "entity_key": {
+      "type": "string",
+      "description": "Required. Echoed from the triggering hearth.command.design_request.v1 event."
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["image", "blueprint"],
+      "description": "Required. Rendering mode used for generation — 'image' for a raster output, 'blueprint' for SVG."
+    },
+    "requester": {
+      "type": "string",
+      "description": "Required. Echoed from the triggering hearth.command.design_request.v1 event."
+    },
+    "request_event_id": {
+      "type": "string",
+      "description": "Required. The `id` field from the triggering hearth.command.design_request.v1 CloudEvents envelope, used for correlation."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Optional. Forge session UUID that was used or created during generation."
+    },
+    "image_url": {
+      "type": "string",
+      "description": "Optional. Path to retrieve the generated image from the deer-flow gateway (e.g. /api/forge/sessions/{id}/trial-card). Android must proxy via hearth-api."
+    },
+    "blueprint_svg": {
+      "type": "string",
+      "description": "Optional. Inline SVG content when mode=blueprint and the SVG is small enough to embed directly."
+    },
+    "error": {
+      "type": "string",
+      "description": "Optional. If generation failed, a human-readable reason. Present iff generation did not succeed."
+    }
+  }
+}

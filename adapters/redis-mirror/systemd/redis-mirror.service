@@ -1,0 +1,18 @@
+[Unit]
+Description=nervous-bus Redis Streams mirror adapter
+After=network-online.target redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.cache/nervous-bus
+ExecStart=%h/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/redis-mirror/mirror.py
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=redis-mirror
+ReadWritePaths=%h/.cache/nervous-bus
+
+[Install]
+WantedBy=default.target

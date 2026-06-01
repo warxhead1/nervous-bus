@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.tengine.bridge_path_verified.v1.json",
+  "title": "bus.tengine.bridge_path_verified v1",
+  "description": "Bridge path verification event for environment/silo terrain generation — fires after a heightmap sample is computed for a given silo and frame. Produced by the Tengine bridge subsystem. Distinct from bus.tengine.bridge.path_verified.v1 which uses dot-separated naming and a different data shape.",
+  "type": "object",
+  "required": ["silo", "source", "frame", "v"],
+  "properties": {
+    "silo": {
+      "type": "string",
+      "description": "Silo/environment identifier (e.g. EnvironmentDuskDesert)."
+    },
+    "source": {
+      "type": "string",
+      "description": "Lowercase source identifier for the environment."
+    },
+    "frame": {
+      "type": "integer",
+      "description": "Frame number at which this verification was computed."
+    },
+    "hm_sample": {
+      "type": "number",
+      "description": "Heightmap sample value at the verified path point."
+    },
+    "hm_sample_m": {
+      "type": "number",
+      "description": "Heightmap sample value (metres scale) at the verified path point."
+    },
+    "v": {
+      "type": "integer",
+      "description": "Schema version marker. Currently 1."
+    }
+  },
+  "additionalProperties": true
+}

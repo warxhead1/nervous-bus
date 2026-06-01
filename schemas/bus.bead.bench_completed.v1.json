@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.bead.bench_completed.v1.json",
+  "title": "bus.bead.bench_completed v1",
+  "description": "A benchmark comparison has completed for a bead — baseline vs treatment metric with optional confidence interval. Lives on its own channel rather than under bus.bead.lifecycle because the payload is structurally richer (numeric metrics + CI) and downstream Forge consumers route it differently from binary pass/fail events. Producer: any bench harness that completes a paired baseline/treatment run keyed by a bead. Consumer: deer-flow Forge bus_consumer.",
+  "type": "object",
+  "required": [
+    "session_id",
+    "bead_id",
+    "baseline_metric",
+    "treatment_metric",
+    "delta",
+    "n",
+    "passes_threshold",
+    "ts"
+  ],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Bench session correlation id — groups paired baseline/treatment trials and downstream analysis."
+    },
+    "bead_id": {
+      "type": "string",
+      "description": "Bead this bench result is attributed to."
+    },
+    "baseline_metric": {
+      "type": "number",
+      "description": "Aggregate metric from the baseline (pre-change) condition. Higher-or-lower-is-better is bench-specific; consumers infer from sign of `delta`."
+    },
+    "treatment_metric": {
+      "type": "number",
+      "description": "Aggregate metric from the treatment (post-change) condition."
+    },
+    "delta": {
+      "type": "number",
+      "description": "treatment_metric - baseline_metric. Sign convention is bench-specific."
+    },
+    "ci_lower": {
+      "type": "number",
+      "description": "Lower bound of the confidence interval around `delta`. Optional — omit when CI not computed."
+    },
+    "ci_upper": {
+      "type": "number",
+      "description": "Upper bound of the confidence interval around `delta`. Optional."
+    },
+    "n": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Sample size used to compute the metric (e.g. number of paired trials)."
+    },
+    "passes_threshold": {
+      "type": "boolean",
+      "description": "Whether the bench result clears the bead's promotion threshold. Forge uses this as the gate signal."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp of bench completion."
+    }
+  },
+  "additionalProperties": true
+}

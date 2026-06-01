@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.judge.disagreement.v1.json",
+  "title": "autobench.judge.disagreement v1",
+  "description": "Escalation signal fired when the anonymous JudgingPool's dissent ratio for a single case exceeds the configured threshold (default 0.4). Indicates the case is contested — judges materially disagree on the verdict. Downstream consumers (AHE, promotion gating, calibration) should treat the matching autobench.judge.pool.verdict.v1 event with reduced confidence and may route the case to manual review or a higher-tier judge. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.judge.disagreement.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "case_id",
+        "iteration",
+        "n_votes",
+        "consensus_verdict",
+        "dissent_ratio",
+        "dissent_threshold",
+        "verdict_distribution"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the autobench run"
+        },
+        "case_id": {
+          "type": "string",
+          "description": "Benchmark case identifier"
+        },
+        "iteration": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "RSI iteration number (0 when not running in an RSI loop)"
+        },
+        "n_votes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of judges that successfully returned a vote for this case"
+        },
+        "consensus_verdict": {
+          "type": "string",
+          "description": "Majority-vote verdict the pool would have emitted despite the dissent"
+        },
+        "dissent_ratio": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Observed fraction of votes that did NOT match the consensus verdict. Strictly greater than dissent_threshold whenever this event fires."
+        },
+        "dissent_threshold": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Configured threshold the dissent ratio had to exceed for this escalation to fire (default 0.4 per nervous-bus-c48)."
+        },
+        "verdict_distribution": {
+          "type": "object",
+          "description": "Map of verdict-string -> count of judges that voted for it. Sums to n_votes.",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "minority_verdicts": {
+          "type": "array",
+          "default": [],
+          "description": "Distinct verdicts the minority of judges voted for (excludes the consensus verdict). Useful for routing — e.g. an OK consensus with a CE minority is qualitatively different from an OK consensus with a WA minority.",
+          "items": {"type": "string"}
+        }
+      }
+    }
+  }
+}

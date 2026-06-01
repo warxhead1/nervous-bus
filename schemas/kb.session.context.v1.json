@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "kb.session.context.v1",
+  "title": "KB Session Context",
+  "description": "Emitted by `kb prime` at Claude Code SessionStart. Records what context was injected into the session: how many active plans, gaps, and pending vets were surfaced. Enables cross-session auditing of knowledge utilization — did the model use the context it was given?",
+  "type": "object",
+  "required": ["project", "timestamp"],
+  "properties": {
+    "project":      { "type": "string", "description": "Project scope used for the prime run" },
+    "plan_count":   { "type": "integer", "minimum": 0, "description": "Number of active plans surfaced" },
+    "gap_count":    { "type": "integer", "minimum": 0, "description": "Number of pending knowledge gaps surfaced" },
+    "pending_vets": { "type": "integer", "minimum": 0, "description": "Entries awaiting evidence surfaced" },
+    "timestamp":    { "type": "string", "format": "date-time" }
+  }
+}

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# cc-agents — active-agent sessions pane for command-center
+# Delegates to cc_agents.py (adjacent file with underscore for Python import)
+exec "$(dirname "$0")/cc_agents.py" "$@"

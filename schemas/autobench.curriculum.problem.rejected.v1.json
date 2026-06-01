@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.curriculum.problem.rejected.v1.json",
+  "title": "autobench.curriculum.problem.rejected v1",
+  "description": "Per-problem rejection telemetry from autobench.curriculum. Sibling of autobench.curriculum.problem.v1 (the success path) and autobench.curriculum.cycle.v1 (the aggregate). Emitted at two stages: (1) parse — from _parse_problems on JSON decode / shape / required-key / field-validation failures; (2) judge — from CurriculumAgent.judge_problem when LLM-side validation rejects a structurally-valid problem (unsolvable, output mismatch vs judge solution, or claimed-skills mismatch). The optional 'stage' field distinguishes them. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.curriculum.problem.rejected.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["session_id", "reason", "detail", "generator_model"],
+      "properties": {
+        "session_id": {"type": "string", "description": "ULID for the autobench run"},
+        "cycle_id": {"type": "string", "description": "Cycle tag (curr-YYYY-MM-DD-<epoch>); empty when not yet assigned"},
+        "row_index": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "0-based index of the offending row in the LLM response array. Null for whole-response failures (e.g. unparseable JSON, non-array top level)."
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "json_decode_error",
+            "not_an_array",
+            "not_an_object",
+            "missing_required_keys",
+            "field_validation_error",
+            "judge_unsolvable",
+            "output_mismatch",
+            "skill_mismatch",
+            "judge_error"
+          ],
+          "description": "Rejection taxonomy. Parse-stage reasons (json_decode_error, not_an_array, not_an_object, missing_required_keys, field_validation_error) come from _parse_problems. Judge-stage reasons (judge_unsolvable, output_mismatch, skill_mismatch, judge_error) come from CurriculumAgent.judge_problem under validate=True."
+        },
+        "stage": {
+          "type": "string",
+          "enum": ["parse", "judge"],
+          "description": "Validation stage that produced the rejection. 'parse' = structural rejection during _parse_problems. 'judge' = semantic rejection during LLM-side validation. Optional; absent on older events that pre-date the field."
+        },
+        "judge_detail": {
+          "type": "object",
+          "description": "Additional context from the judge stage. Absent for parse-stage rejections.",
+          "properties": {
+            "judge_output": {"type": "string", "maxLength": 512, "description": "The judge's independently-computed output for sample_input."},
+            "claimed_output": {"type": "string", "maxLength": 512, "description": "The expected_output the generator claimed."},
+            "actual_skills": {"type": "array", "items": {"type": "string"}, "description": "Skills the judge identified as actually required."},
+            "claimed_skills": {"type": "array", "items": {"type": "string"}, "description": "Skills the generator claimed."},
+            "notes": {"type": "string", "maxLength": 512, "description": "Judge's one-sentence rationale."}
+          }
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "Human-readable explanation: exception message, missing-key summary, or type-mismatch description. Capped at 1024 chars."
+        },
+        "missing_keys": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Sorted list of required keys absent from the row. Only populated when reason=missing_required_keys."
+        },
+        "raw_excerpt": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "First 1024 chars of the offending JSON (the row, or the whole response for top-level failures). Capped to keep the bus payload bounded."
+        },
+        "generator_model": {
+          "type": "string",
+          "description": "Model identifier of the curriculum generator (e.g. MiniMax-M2.7)."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.session.completed.v1.json",
+  "title": "hearth.session.completed v1",
+  "description": "Emitted by hearth-nbus when a Claude Code session finishes. Tracks aggregate session stats (turns, messages, duration, cost) and the file set modified so hearth-loom can drive post-session automation (bead creation, bench, promotion). Fires once per session termination.",
+  "type": "object",
+  "required": ["session_id", "project", "total_turns", "message_count", "duration_minutes", "cost_usd", "modified_files", "trigger"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "ULID of the session that just completed."
+    },
+    "project": {
+      "type": "string",
+      "description": "Absolute path of the project the session was running in."
+    },
+    "branch": {
+      "type": "string",
+      "description": "Git branch name active for this session (if known)."
+    },
+    "current_task": {
+      "type": "string",
+      "description": "The bead/task ID the session was working on, if any."
+    },
+    "total_turns": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of request/response round-trips in this session."
+    },
+    "message_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total human+assistant messages exchanged."
+    },
+    "duration_minutes": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Wall-clock session duration in minutes."
+    },
+    "cost_usd": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Billed cost in US dollars for this session."
+    },
+    "modified_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of file paths modified during the session."
+    },
+    "trigger": {
+      "type": "string",
+      "description": "What initiated this session (e.g. 'shell', 'bd', 'reactor')."
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.shadergen.multiverse.v1.json",
+  "title": "tengine.shadergen.multiverse v1",
+  "description": "Multiverse composite-mode change. Producer: tengine silo_tester via the registry handle SHADERGEN_MULTIVERSE in crates/tengine-dgc-hal/src/silo/shadergen_handlers/event_registry.rs. Emitted whenever the silo flips between single-universe and grid-composite rendering, so consumers can re-scale visualisations.",
+  "type": "object",
+  "required": ["sub", "composite_mode", "rows", "cols", "n"],
+  "properties": {
+    "sub": {
+      "type": "string",
+      "description": "multiverse subsystem identifier the change applies to"
+    },
+    "composite_mode": {
+      "type": "string",
+      "description": "name of the composite mode now in effect (e.g. 'grid', 'single', 'overlay')"
+    },
+    "rows": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "number of rows in the composite grid"
+    },
+    "cols": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "number of columns in the composite grid"
+    },
+    "n": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "total universe count (typically rows * cols)"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+# Runtime deps for autobench-pulse v2 (Textual rewrite).
+# Pinned floors per autobench/research/terminal_rendering_2026.md §1.
+textual>=1.0
+textual-plotext>=1.0
+
+# Optional — only required if you pass --graphics=auto and your terminal speaks TGP/Sixel
+# textual-image>=0.6
+
+# Tests
+pytest>=7

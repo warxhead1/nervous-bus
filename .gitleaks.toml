@@ -1,0 +1,57 @@
+# gitleaks configuration for nervous-bus
+#
+# Extends the default gitleaks ruleset with rules specific to this project.
+# Run: gitleaks detect --source . --config .gitleaks.toml
+#      gitleaks protect --staged --config .gitleaks.toml   (pre-commit)
+
+title = "nervous-bus gitleaks config"
+
+[extend]
+# Pull in the full gitleaks default ruleset on top of these custom rules.
+useDefault = true
+
+# ── Custom rules ─────────────────────────────────────────────────────────────
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key"
+regex = '''sk-ant-[a-zA-Z0-9\-_]{40,}'''
+tags = ["anthropic", "ai", "key"]
+
+[[rules]]
+id = "openrouter-api-key"
+description = "OpenRouter API key"
+regex = '''sk-or-[a-zA-Z0-9\-_]{32,}'''
+tags = ["openrouter", "ai", "key"]
+
+[[rules]]
+id = "redis-url-with-password"
+description = "Redis URL containing a password"
+regex = '''redis://[^:@\s]+:[^@\s]{4,}@'''
+tags = ["redis", "password"]
+
+[[rules]]
+id = "nervous-home-absolute-path"
+description = "Hardcoded absolute path — use NERVOUS_HOME or Path(__file__) instead"
+regex = '''/home/[a-z_][a-z0-9_-]{0,30}/'''
+tags = ["path", "portability"]
+
+# ── Allow-list (known safe patterns) ─────────────────────────────────────────
+
+[allowlist]
+description = "Global allow-list for known false positives"
+
+# Test fixtures and documentation examples are allowed to contain fake keys.
+paths = [
+    '''tests/''',
+    '''\.md$''',
+    '''\.toml$''',
+]
+
+# ULID false-positives — high-entropy but not secrets.
+regexes = [
+    '''[0-9A-Z]{26}''',   # ULIDs
+]
+
+# ── CI enforcement ────────────────────────────────────────────────────────────
+# See .github/workflows/gitleaks.yml for the GitHub Actions integration.

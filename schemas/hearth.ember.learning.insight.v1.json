@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.ember.learning.insight.v1.json",
+  "title": "hearth.ember.learning.insight v1",
+  "description": "Ember AI learning insight — behavioral pattern discovered from home state history. Enables cross-project pattern correlation and automation suggestion.",
+  "type": "object",
+  "required": ["ts", "insight_id", "pattern_type", "description", "confidence"],
+  "properties": {
+    "ts": {"type": "string", "format": "date-time"},
+    "insight_id": {"type": "string", "description": "ULID"},
+    "pattern_type": {"type": "string", "enum": ["routine", "anomaly", "preference", "correlation", "suggestion"]},
+    "description": {"type": "string"},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "affected_devices": {"type": "array", "items": {"type": "string"}},
+    "suggested_action": {"type": "string"},
+    "time_context": {"type": "string", "description": "e.g. weekday_morning, weekend_evening"},
+    "evidence_count": {"type": "integer"}
+  },
+  "additionalProperties": true
+}

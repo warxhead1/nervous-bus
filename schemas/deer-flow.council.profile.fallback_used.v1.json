@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.council.profile.fallback_used.v1.json",
+  "title": "deer-flow.council.profile.fallback_used v1",
+  "description": "A council persona dispatch fell back from its primary model to the next configured fallback model. Emitted per fallback use so consumers can reconstruct full retry chains by correlating on subject=deliberation_id. Source: /deer-flow/council.",
+  "type": "object",
+  "required": ["deliberation_id", "profile_id", "persona", "primary_model", "fallback_model", "reason"],
+  "properties": {
+    "deliberation_id": {
+      "type": "string",
+      "description": "Stable identifier for this deliberation — used as the event subject so multi-level fallback chains are reconstructable"
+    },
+    "profile_id": {
+      "type": "string",
+      "description": "Active profile name that initiated the dispatch (e.g. skeptic, synthesizer)"
+    },
+    "persona": {
+      "type": "string",
+      "description": "Persona slot whose primary model failed (e.g. skeptic, analyst)"
+    },
+    "primary_model": {
+      "type": "string",
+      "description": "Model that just failed or was rate-limited (e.g. claude-sonnet-4-6)"
+    },
+    "fallback_model": {
+      "type": "string",
+      "description": "Model now being attempted as the fallback (e.g. MiniMax-M2.7)"
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "Short tag describing why the fallback was triggered (e.g. rate_limited, timeout, 429, context_overflow)"
+    }
+  }
+}

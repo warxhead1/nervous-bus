@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.judge.pool.verdict.v1.json",
+  "title": "autobench.judge.pool.verdict v1",
+  "description": "Per-case consensus verdict from an anonymous N-judge pool. Each case is scored by N independent JudgingPool members (default N=5 anonymous MiniMax instances per nervous-bus-c48). The pool's majority verdict, mean continuous scores, dissent ratio, and a compact per-judge vote summary are recorded here so downstream consumers (AHE, promotion, calibration) can distinguish high-confidence consensus from contested verdicts. Source: /autobench.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "autobench.judge.pool.verdict.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "case_id",
+        "iteration",
+        "n_judges",
+        "n_votes",
+        "consensus_verdict",
+        "dissent_ratio",
+        "verdict_distribution",
+        "consensus_p_score"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "ULID for the autobench run"
+        },
+        "case_id": {
+          "type": "string",
+          "description": "Benchmark case identifier"
+        },
+        "iteration": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "RSI iteration number (0 when not running in an RSI loop)"
+        },
+        "n_judges": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of judges invoked for this case (target ensemble size, e.g. 5 by default)"
+        },
+        "n_votes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of judges that successfully returned a vote (some may have errored)"
+        },
+        "consensus_verdict": {
+          "type": "string",
+          "description": "Majority-vote verdict from the pool (OK/WA/TLE/RE/CE/MLE/VF)"
+        },
+        "consensus_p_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Mean p_score across all successful judge votes (continuous, [0, 1])"
+        },
+        "consensus_p_cost": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Mean p_cost across all successful judge votes"
+        },
+        "consensus_p_time": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Mean p_time across all successful judge votes"
+        },
+        "dissent_ratio": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Fraction of votes that did NOT match the consensus verdict. 0.0 = unanimous agreement; values > the configured threshold (default 0.4) trigger an autobench.judge.disagreement.v1 escalation event."
+        },
+        "verdict_distribution": {
+          "type": "object",
+          "description": "Map of verdict-string -> count of judges that voted for it. Sums to n_votes.",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "votes_summary": {
+          "type": "array",
+          "default": [],
+          "description": "Compact per-judge vote summary. Each element records one judge's anonymous slot, its verdict, and its p_score. Reasoning text is omitted to keep the bus payload bounded — full reasoning lives on the in-process JudgeVote dataclass and may be persisted by the integration layer if needed.",
+          "items": {
+            "type": "object",
+            "required": ["slot", "verdict", "p_score"],
+            "properties": {
+              "slot": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Anonymous judge slot index (0-based), assigned at pool construction. Stable across cases within one run."
+              },
+              "verdict": {"type": "string"},
+              "p_score": {"type": "number"}
+            }
+          }
+        }
+      }
+    }
+  }
+}

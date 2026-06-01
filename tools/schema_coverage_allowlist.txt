@@ -1,0 +1,61 @@
+# schema_coverage_allowlist.txt — channels exempt from the schema-coverage gate.
+#
+# Add a channel here ONLY if it's internal-only (never crosses the bus) or if
+# a follow-up bead is tracking schema creation. Each entry MUST have a comment
+# describing why and (ideally) a bead ID for the cleanup.
+#
+# Format: one channel per line. Lines starting with `#` and blank lines ignored.
+
+# ─── doc-string false positives ─────────────────────────────────────────────
+# Appears in deerflow/bus.py module docstring as an example, not a real emit.
+my.channel
+
+# ─── hearth-loom: streamBase-prefixed names ─────────────────────────────────
+# `BeadLifecycleStream = "bead.lifecycle.v1"` is the SUFFIX used by the
+# publisher (see hearth-loom/internal/bus/publisher.go:126). The publisher
+# prepends "bus." at runtime (publisher.go:57), producing the canonical
+# `bus.bead.lifecycle.v1`. Our scanner now synthesises the prefixed channel,
+# but the bare suffix const still shows up — allowlist it because only the
+# prefixed form actually crosses the bus.
+bead.lifecycle.v1
+
+# Same streamBase concat pattern: bare suffix const (now schema-backed via
+# bus.exec.lifecycle.v1.json — removed from allowlist).
+# exec.lifecycle.v1
+# bus.exec.lifecycle.v1
+
+# Triage runner stream key (now schema-backed via bus.triage.findings.v1.json).
+# triage.findings
+# bus.triage.findings
+
+# Shared-session observability publisher channel (now schema-backed via
+# loom.shared-session.v1.json).
+# loom.shared-session.v1
+
+# Agent activity hook channel — emitted by ~/.claude/hooks/lib/nbus-publish.sh
+# fan-out (see hearth-loom docs/architecture/host-hooks/zzy-nbus-activity.sh).
+# TODO: file follow-up bead to add schemas/bus.agent.activity.v1.json.
+bus.agent.activity.v1
+
+# ─── deer-flow: telemetry-migration channels ────────────────────────────────
+# Internal stack-tuner telemetry migration events, behind a feature flag.
+# Schema TBD when the migration graduates out of validation.
+deer-flow.telemetry.migration.validated.v1
+deer-flow.telemetry.migration.promoted.v1
+deer-flow.telemetry.migration.rollback.v1
+
+# ─── deer-flow: drift backfill candidates ───────────────────────────────────
+# These channels exist in code but lack schemas. They were emitted by recent
+# feature work (council profile fallbacks, forge subscription error path,
+# stack-tuner cycle wrappers, hearth-loom bench bridge). Backfill in a
+# follow-up bead — the first-run gate is report-only.
+deer-flow.council.profile.fallback_used.v1
+deer-flow.forge.subscription.error.v1
+deer-flow.stack-tuner.cycle.started.v1
+deer-flow.stack-tuner.cycle.completed.v1
+# hearth-loom.bench.completed.v1 — now schema-backed via hearth-loom.bench.completed.v1.json
+
+# ─── smoke-test fixtures ────────────────────────────────────────────────────
+# Internal-only test events that live in source code only for UI/dev testing.
+# Never cross the bus to real consumers.
+bus.test.approval.requested.v1  # smoke-test fixture, internal only, never crosses bus to real consumers

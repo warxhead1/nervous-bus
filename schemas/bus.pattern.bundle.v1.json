@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.pattern.bundle.v1.json",
+  "title": "bus.pattern.bundle v1",
+  "description": "A windowed summary of bus events or log entries for a single channel/source, with Welford-derived stats and baseline deviation. Emitted by the pattern-bundler on anomalous windows. Low-interest bundles go to nbus:bundles only; interesting ones also publish to the bus.",
+  "type": "object",
+  "required": ["bundle_id", "source_stream", "channel", "window_start", "window_end", "event_count", "low_interest", "stats"],
+  "properties": {
+    "bundle_id": {"type": "string", "description": "ULID"},
+    "source_stream": {"type": "string", "enum": ["bus", "logs"]},
+    "channel": {"type": "string"},
+    "window_start": {"type": "string", "format": "date-time"},
+    "window_end": {"type": "string", "format": "date-time"},
+    "event_count": {"type": "integer", "minimum": 1},
+    "low_interest": {"type": "boolean"},
+    "sample_events": {"type": "array", "maxItems": 20, "items": {"type": "string"}},
+    "error_events": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Verbatim error/critical log events captured during this window (max 20)"
+    },
+    "transient_context": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "fp":        {"type": "string"},
+          "count":     {"type": "integer"},
+          "dismissed": {"type": "integer"},
+          "sample":    {"type": "string"},
+          "last_seen": {"type": "number"}
+        }
+      },
+      "description": "Recurring error fingerprints for this channel (count >= 2), with dismiss history"
+    },
+    "pattern_dist": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "fp":           {"type": "string", "description": "Normalized message fingerprint"},
+          "count":        {"type": "integer"},
+          "rate_per_100": {"type": "number", "description": "Occurrences per 100 events in this window"}
+        }
+      },
+      "description": "Top 20 message fingerprints by frequency — all log levels, not just errors"
+    },
+    "stats": {
+      "type": "object",
+      "required": ["rate_per_min", "error_rate"],
+      "properties": {
+        "rate_per_min":        {"type": "number"},
+        "baseline_deviation":  {"type": ["number", "null"]},
+        "baseline_n":          {"type": "integer"},
+        "field_stats":         {"type": "object"},
+        "error_rate":          {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    }
+  }
+}
