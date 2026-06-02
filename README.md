@@ -132,14 +132,16 @@ Every event is a single JSON line — a CloudEvents-lite envelope:
 
 ## Schema-first discipline
 
-Every channel requires a JSON Schema in `schemas/` **before** any producer emits. Breaking changes bump the major version (`v1` → `v2`) as a new file; old schemas remain.
+Every channel requires a JSON Schema **before** any producer emits. Breaking changes bump the major version (`v1` → `v2`) as a new file; old schemas remain.
+
+**Where schemas live:** the `schemas/` directory at the repo root is the authoritative store — one file per channel, flat, named `<type>.json` (the version is part of the type, e.g. `tengine.session.frame.v1.json`). This directory is the complete source of truth for the *public* bus, so listing `schemas/` is a valid way to see every public channel. At runtime the validator also overlays private channels from `$NERVOUS_HOME/schemas/` (see [NERVOUS_HOME](#nervous_home--private-schema-and-adapter-overlay)); user schemas win on a name conflict. Use `nervous schemas` to enumerate the full merged set rather than assuming `schemas/` is everything a given machine has loaded.
 
 ```bash
-nervous schemas          # list all known channels (repo + NERVOUS_HOME overlay)
-nervous schema install path/to/my.channel.v1.json   # add a private schema
+nervous schemas          # list all known channels (repo schemas/ + NERVOUS_HOME overlay)
+nervous schema install path/to/my.channel.v1.json   # add a private schema to NERVOUS_HOME
 ```
 
-The shell SDK validates every `nervous publish` call against the schema automatically. Violations are dead-lettered to `nbus:bus.dead_letter` — not silently dropped.
+The shell SDK validates every `nervous publish` call against the resolved schema automatically. Violations are dead-lettered to `nbus:bus.dead_letter` — not silently dropped.
 
 ---
 
@@ -173,7 +175,7 @@ publish("tengine.silo.verify.v1", &json!({
 }))?;
 ```
 
-The default feature shells out to `nervous publish`. The `native` feature writes directly to `debug.jsonl` + Redis (no subprocess hop) — see `sdk/rust/` for the tracking bead.
+The default (`subprocess`) feature shells out to `nervous publish`. The `native` feature appends the envelope straight to `debug.jsonl` (and pipes to the Zellij plugin when running inside Zellij), skipping the `nervous` CLI; Redis delivery still happens via the redis-mirror adapter that tails `debug.jsonl`. See `sdk/rust/src/lib.rs` for the v1 status.
 
 ### Python
 
@@ -233,7 +235,7 @@ python -m pulse_app --once         # one-shot dump
 ### Prometheus + Grafana
 
 ```bash
-python adapters/exporter/prometheus_exporter.py   # :9100/metrics
+python adapters/exporter/prometheus_exporter.py   # :9418/metrics (--port to change)
 ```
 
 Import `adapters/exporter/dashboards/` for pre-built Grafana panels covering event throughput, session counts, and autobench scoring trends.
@@ -271,7 +273,7 @@ Both repos are designed to be cloned side-by-side. kb consumes the bus for cross
 
 ### autobench (submodule)
 
-The `autobench/` directory is a git submodule pointing at [`nervous-autobench`](https://github.com/warxhead1/nervous-autobench) — a FunSearch + RSI evaluation harness for evolving GPU kernels (SDF, TSP, SPH, Allen-Cahn PDE, terrain). It publishes ~30 event types to the bus covering iteration progress, sandbox verdicts, and evolved kernel candidates.
+The `autobench/` directory is a git submodule pointing at [`nervous-autobench`](https://github.com/warxhead1/nervous-autobench) — a FunSearch + RSI evaluation harness for evolving GPU kernels (SDF, TSP, SPH, Allen-Cahn PDE, terrain). It publishes dozens of event types to the bus (see the `autobench.*` schemas in `schemas/`) covering iteration progress, sandbox verdicts, and evolved kernel candidates.
 
 The submodule is optional — the core bus works without it.
 
