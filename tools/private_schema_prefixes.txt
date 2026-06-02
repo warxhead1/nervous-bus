@@ -1,0 +1,10 @@
+# Private channel prefixes — schemas whose channel name starts with one of
+# these are PRIVATE (org- or integration-specific) and MUST NOT be committed
+# to this public repo. They live in $NERVOUS_HOME/schemas/ (the local overlay,
+# ~/.config/nervous-bus/schemas/), installed via `nervous schema install`.
+#
+# Enforced by tools/check_private_schema_leak.py (CI: no-private-schema-leak).
+# One prefix per line; matched against schema filenames in schemas/.
+# See schemas/README.md for the full policy.
+
+tachyonos.

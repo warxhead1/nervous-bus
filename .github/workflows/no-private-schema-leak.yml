@@ -1,0 +1,27 @@
+name: no-private-schema-leak
+
+# Hard gate: private event contracts (tachyonos.* trading schemas, etc.) must
+# never be tracked in this PUBLIC repo — they live in $NERVOUS_HOME/schemas/
+# (the local overlay). .gitignore blocks new adds but cannot stop a merge of a
+# branch that still carries them; this catches that. Prefixes live in
+# tools/private_schema_prefixes.txt. See schemas/README.md for the policy.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  check-private-leak:
+    name: check-private-leak
+    runs-on: [self-hosted, linux, nervous-bus]
+    steps:
+      - name: Configure PATH
+        run: echo "$HOME/.pyenv/shims" >> $GITHUB_PATH
+      - uses: actions/checkout@v6
+        with:
+          clean: false
+      - name: Fail if private schemas are tracked
+        run: python3 tools/check_private_schema_leak.py
