@@ -45,11 +45,14 @@ from .widgets import (
     FailureCodeSidebar,
     CEPatternPanel,
     CostRatePanel,
+    CuriositySpikeFeed,
     DivergenceHighlights,
     HELP_TEXT,
     HeaderStats,
+    IslandHeatmap,
     IterationLineageStrip,
     IterationProgressPanel,
+    KernelLeaderboard,
     ParetoScatter,
     QueuePressureBar,
     ScoreSpark,
@@ -174,6 +177,14 @@ class PulseApp(App):
         # caught itself being wrong." Sits above the body so it's the first
         # widget the operator sees once the header docks.
         yield AHEPredictionTracker(id="ahe-tracker")
+        # KernelArena (nervous-bus-tvfw): the reclaimed centre band — live
+        # FunSearch kernel evolution. Leaderboard (what's evolving) + island
+        # heatmap (how the island model behaves) + curiosity feed (when
+        # something interesting happens).
+        with Horizontal(id="kernel-arena"):
+            yield KernelLeaderboard(id="kernel-leaderboard")
+            yield IslandHeatmap(id="island-heatmap")
+            yield CuriositySpikeFeed(id="curiosity-feed")
         with Container(id="body"):
             with Vertical(id="left"):
                 yield SessionTree("autobench sessions")
@@ -344,6 +355,13 @@ class PulseApp(App):
         try:
             strip = self.query_one(IterationLineageStrip)
             strip.cells = self.state.iteration_lineage()
+        except Exception:
+            pass
+        # KernelArena fanout (nervous-bus-tvfw) — three cheap snapshot pushes.
+        try:
+            self.query_one(KernelLeaderboard).runs = self.state.kernel_leaderboard()
+            self.query_one(IslandHeatmap).run = self.state.focused_kernel_run()
+            self.query_one(CuriositySpikeFeed).spikes = self.state.curiosity_feed()
         except Exception:
             pass
         # nervous-bus-wutr: push the cycle-outcome banner payload. Cheap

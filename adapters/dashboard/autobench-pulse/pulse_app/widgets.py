@@ -712,7 +712,7 @@ class CostRatePanel(Container):
 
     def compose(self) -> ComposeResult:
         yield Static("Rate: -- / -- requests", id="cost-header")
-        yield Static("[dim]notional cost: $0.0000 / $1.00[/]", id="cost-notional")
+        yield Static("[dim]headroom: -- requests this window[/]", id="cost-notional")
         yield CostTrajectoryPlot(id="cost-chart")
         yield Static("", id="cost-warning")
 
@@ -775,13 +775,23 @@ class CostRatePanel(Container):
 
     @staticmethod
     def _format_notional(value: dict[str, Any]) -> str:
-        """Secondary readout: dollar total, labeled "notional". The MiniMax
-        coding plan bills flat-rate per requests-per-5h, NOT per token — so the
-        dollar figure is a derived estimate, not real money. Rendered dim so it
-        never competes with the requests headline."""
-        total = float(value.get("total_usd") or 0.0)
-        cap = float(value.get("max_cost_usd") or 1.0)
-        return f"[dim]notional cost: ${total:.4f} / ${cap:.2f}[/]"
+        """Secondary readout: request HEADROOM left in the current window.
+
+        The MiniMax coding plan bills by requests-per-5h, so headroom is the
+        operator-meaningful number. We deliberately do NOT render a dollar
+        figure: the in-tree token→$ estimator is hard-zeroed (it always
+        returned $0.0000), and per project policy ($ tables decay into lies)
+        the real billing unit — requests — is the only honest axis. Dim so it
+        never competes with the requests headline above."""
+        rate = value.get("rate") or {}
+        mx = int(rate.get("max_requests") or 0)
+        if mx <= 0:
+            return "[dim]headroom: -- requests this window[/]"
+        cur = int(rate.get("current_count") or 0)
+        left = max(0, mx - cur)
+        win_s = float(rate.get("window_seconds") or 0.0)
+        win = f"{win_s / 3600.0:.0f}h" if win_s >= 3600.0 else f"{win_s:.0f}s"
+        return f"[dim]headroom: {left} requests left this {win}[/]"
 
     @staticmethod
     def _format_warning(value: dict[str, Any]) -> str:
@@ -2473,3 +2483,196 @@ HELP_TEXT = """\
 
 Press [bold]?[/] again to dismiss.
 """
+
+
+# ─────────────────────────────────────────────────────────────────────────── #
+# KernelArena — FunSearch kernel evolution observability (nervous-bus-tvfw)   #
+# ─────────────────────────────────────────────────────────────────────────── #
+#
+# Three pure-display widgets fed by PulseState's kernel accessors. They make
+# the FunSearch loop legible: WHAT is evolving (leaderboard), HOW the island
+# model is behaving (heatmap), and WHEN something interesting happens
+# (curiosity feed). All duck-type their reactives (KernelRun / Spike) the same
+# way DivergenceHighlights duck-types its event — widgets stay state-agnostic.
+
+_SPARK_BLOCKS = "▁▂▃▄▅▆▇█"
+_HEATMAP_COLS = 26
+
+
+def _sparkline(values: Any, width: int = 28) -> str:
+    """Unicode block sparkline; normalised within its own min/max for trend."""
+    vals = [float(v) for v in (values or [])][-width:]
+    if not vals:
+        return ""
+    lo, hi = min(vals), max(vals)
+    rng = (hi - lo) or 1.0
+    return "".join(_SPARK_BLOCKS[min(7, int((v - lo) / rng * 7))] for v in vals)
+
+
+def _plateau_glyph(plateau: int) -> tuple[str, str]:
+    """(glyph, color) for an island's plateau severity."""
+    if plateau <= 0:
+        return ("·", "green")
+    if plateau <= 2:
+        return ("▪", "yellow")
+    return ("▰", "red")
+
+
+class KernelLeaderboard(Static):
+    """One row per kernel run: status · sparkline · best fitness · requests.
+
+    The headline view of the arena — answers "what is evolving and is it
+    getting better?" at a glance. Fed the list returned by
+    ``PulseState.kernel_leaderboard()``.
+    """
+
+    DEFAULT_CSS = """
+    KernelLeaderboard {
+        height: 1fr;
+        border: tall $secondary;
+        padding: 0 1;
+    }
+    """
+
+    runs: reactive[list] = reactive(list, always_update=True)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__("", *args, **kwargs)
+        self._empty = "[dim]kernel arena[/]  [dim]no FunSearch runs yet[/]"
+        self.update(self._empty)
+
+    def watch_runs(self, runs: list) -> None:
+        if not runs:
+            self.update(self._empty)
+            return
+        lines = [
+            "[bold cyan]kernel arena[/]  "
+            "[dim]gen · fitness trend · best · requests[/]"
+        ]
+        for r in runs:
+            running = getattr(r, "is_running", True)
+            color = "cyan" if running else "green"
+            badge = "▶" if running else "✓"
+            spark = _sparkline(getattr(r, "fitness_values", []))
+            delta = getattr(r, "last_delta", 0.0) or 0.0
+            delta_tag = f"[green]+{delta:.3f}[/]" if delta > 1e-9 else "        "
+            tgt = getattr(r, "target_generations", 0)
+            gen = getattr(r, "generation", 0)
+            gtag = f"g{gen}/{tgt}" if tgt else f"g{gen}"
+            kern = str(getattr(r, "kernel", "?"))[:7]
+            inst = (",".join(getattr(r, "instances", [])) or "?")[:14]
+            reqs = getattr(r, "llm_requests", 0)
+            resets = getattr(r, "n_resets", 0)
+            reset_tag = f" [magenta]↻{resets}[/]" if resets else ""
+            lines.append(
+                f"[{color}]{badge}[/] [bold]{kern:<7}[/][dim]{inst:<14}[/] "
+                f"[dim]{gtag:<7}[/] [cyan]{spark:<28}[/] "
+                f"[bold]{getattr(r, 'best_fitness', 0.0):.4f}[/] {delta_tag} "
+                f"[dim]{reqs}rq[/]{reset_tag}"
+            )
+        self.update("\n".join(lines))
+
+
+class IslandHeatmap(Static):
+    """Island-health heatmap for the focused run: islands × recent generations.
+
+    Each cell's colour encodes plateau severity (green healthy → yellow
+    plateauing → red stuck); a reset generation shows ↻ (magenta). The best
+    island is flagged ◆. Visualises the island-model dynamics — per-island
+    plateau, reset/migration — that drive the search. Fed
+    ``PulseState.focused_kernel_run()``.
+    """
+
+    DEFAULT_CSS = """
+    IslandHeatmap {
+        height: 1fr;
+        border: tall $secondary;
+        padding: 0 1;
+    }
+    """
+
+    run: reactive[Optional[Any]] = reactive(None, always_update=True)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__("", *args, **kwargs)
+        self._empty = "[dim]islands[/]  [dim]awaiting island health…[/]"
+        self.update(self._empty)
+
+    def watch_run(self, run: Optional[Any]) -> None:
+        history = getattr(run, "island_history", None) if run is not None else None
+        if not history:
+            self.update(self._empty)
+            return
+        best_island = getattr(run, "best_island", -1)
+        reset_gens = getattr(run, "reset_gens", set())
+        lines = [
+            f"[bold cyan]islands[/] [dim]{getattr(run, 'kernel', '?')}·"
+            f"g{getattr(run, 'generation', 0)}[/]  "
+            "[green]·[/]ok [yellow]▪[/]plateau [red]▰[/]stuck "
+            "[magenta]↻[/]reset [yellow]◆[/]best"
+        ]
+        for isl in sorted(history):
+            cells = []
+            for (g, plateau, _age) in history[isl][-_HEATMAP_COLS:]:
+                if g in reset_gens:
+                    cells.append("[magenta]↻[/]")
+                    continue
+                glyph, color = _plateau_glyph(plateau)
+                cells.append(f"[{color}]{glyph}[/]")
+            marker = " [bold yellow]◆[/]" if isl == best_island else ""
+            lines.append(f"[dim]I{isl}[/] " + "".join(cells) + marker)
+        self.update("\n".join(lines))
+
+
+class CuriositySpikeFeed(Static):
+    """Reverse-chronological feed of notable evolution moments.
+
+    Big fitness jumps (★ above threshold), island resets, plateau hints, and
+    completions. This is the "did the system just discover something?" panel.
+    Fed ``PulseState.curiosity_feed()``.
+    """
+
+    DEFAULT_CSS = """
+    CuriositySpikeFeed {
+        height: 1fr;
+        border: tall $secondary;
+        padding: 0 1;
+    }
+    """
+
+    _GLYPH = {"jump": "▲", "reset": "↻", "hint": "?", "complete": "✓", "start": "▸"}
+
+    spikes: reactive[list] = reactive(list, always_update=True)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__("", *args, **kwargs)
+        self._empty = "[dim]curiosity feed[/]  [dim]no spikes yet[/]"
+        self.update(self._empty)
+
+    def watch_spikes(self, spikes: list) -> None:
+        if not spikes:
+            self.update(self._empty)
+            return
+        lines = ["[bold cyan]curiosity feed[/]"]
+        for sp in spikes:
+            kind = getattr(sp, "kind", "")
+            g = self._GLYPH.get(kind, "·")
+            mag = getattr(sp, "magnitude", 0.0) or 0.0
+            if kind == "jump":
+                if getattr(sp, "starred", False):
+                    head = f"[bold green]★{g} +{mag:.3f}[/]"
+                else:
+                    head = f"[green] {g} +{mag:.3f}[/]"
+            elif kind == "reset":
+                head = "[magenta] ↻ reset  [/]"
+            elif kind == "hint":
+                head = "[cyan] ? hint   [/]"
+            elif kind == "complete":
+                head = "[bold] ✓ done   [/]"
+            else:
+                head = "[dim] ▸ start  [/]"
+            detail = (getattr(sp, "detail", "") or "")[:44].replace("[", r"\[")
+            kern = str(getattr(sp, "kernel", "?"))
+            gen = getattr(sp, "generation", 0)
+            lines.append(f"{head} [dim]{kern}·g{gen}[/] {detail}")
+        self.update("\n".join(lines))

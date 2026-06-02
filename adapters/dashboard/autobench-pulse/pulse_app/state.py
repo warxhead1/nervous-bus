@@ -359,6 +359,126 @@ class Session:
 
 
 # ---------------------------------------------------------------------------- #
+# FunSearch kernel evolution (the KernelArena)                                 #
+# ---------------------------------------------------------------------------- #
+
+# The kernels (tsp/sdf/sph/terrain/phase/thermal/latent/noise) emit a run-scoped
+# event stream that is orthogonal to the RSI loop's session-scoped one. Channel
+# names are NOT fixed strings — they're ``<kernel>.<event>.v1`` where the prefix
+# is the kernel name — so we classify by suffix instead of a frozenset.
+
+KERNEL_SPARK_WIDTH: int = 28          # cols of fitness sparkline per leaderboard row
+KERNEL_HEATMAP_GENS: int = 26         # cols of island-health heatmap
+KERNEL_ISLAND_HISTORY: int = 256      # per-island (gen, plateau, age) samples kept
+KERNEL_FITNESS_HISTORY: int = 400     # per-run (gen, fitness) samples kept
+KERNEL_SPIKE_RING: int = 48           # curiosity-feed ring size
+# A best-fitness jump >= this is a "curiosity spike" (starred/bright in the feed).
+KERNEL_SPIKE_THRESHOLD: float = 0.02
+
+# suffix (channel minus the ``<kernel>.`` prefix and ``.v1``) -> internal kind
+_KERNEL_EVENT_KINDS: dict[str, str] = {
+    "kernel.started": "started",
+    "kernel.completed": "completed",
+    "generation.completed": "generation",
+    "best_fitness_improved": "best",
+    "island_reset": "reset",
+    "plateau_hint": "hint",
+}
+
+
+def classify_kernel_event(ev_type: Optional[str]) -> Optional[tuple[str, str]]:
+    """Map a channel name to ``(kernel_name, kind)`` or ``None`` if not a kernel event.
+
+    The two shared, kernel-agnostic channels resolve to ``("?", ...)`` — the
+    kernel name is recovered later from the run's prefixed events.
+    """
+    if not ev_type:
+        return None
+    if ev_type == "autobench.island.health.v1":
+        return ("?", "island_health")
+    if ev_type == "autobench.budget.gauge.v1":
+        return ("?", "budget_gauge")
+    if not ev_type.endswith(".v1"):
+        return None
+    body = ev_type[:-3]  # strip ".v1"
+    head, _, rest = body.partition(".")
+    # Anything under the autobench.* namespace is an RSI channel, not a kernel.
+    if head == "autobench" or not rest:
+        return None
+    kind = _KERNEL_EVENT_KINDS.get(rest)
+    if kind is None:
+        return None
+    return (head, kind)
+
+
+@dataclass
+class KernelRun:
+    """One FunSearch kernel evolution run (keyed by ULID ``run_id``)."""
+
+    run_id: str
+    kernel: str = "?"
+    instances: list[str] = field(default_factory=list)
+    n_islands: int = 0
+    population_per_island: int = 0
+    target_generations: int = 0
+    generation: int = 0
+    best_fitness: float = 0.0
+    mean_pop_fitness: float = 0.0
+    best_island: int = -1
+    llm_requests: int = 0
+    requests_used: int = 0
+    max_requests: Optional[int] = None
+    code_diversity: float = 0.0
+    fitness_std: float = 0.0
+    status: str = "running"          # "running" | "complete"
+    stop_reason: str = ""
+    last_delta: float = 0.0
+    n_resets: int = 0
+    last_hint: str = ""
+    final_code: str = ""
+    started_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+    fitness_history: list[tuple[int, float]] = field(default_factory=list)
+    mean_history: list[tuple[int, float]] = field(default_factory=list)
+    # island_id -> latest {plateau_count, age, population_size, generation}
+    island_health: dict[int, dict[str, Any]] = field(default_factory=dict)
+    # island_id -> [(gen, plateau_count, age), ...] (capped)
+    island_history: dict[int, list[tuple[int, int, int]]] = field(default_factory=dict)
+    reset_gens: set[int] = field(default_factory=set)
+
+    def touch(self) -> None:
+        self.updated_at = time.time()
+
+    @property
+    def is_running(self) -> bool:
+        return self.status == "running"
+
+    @property
+    def fitness_values(self) -> list[float]:
+        return [f for _, f in self.fitness_history]
+
+    @property
+    def label(self) -> str:
+        inst = ",".join(self.instances) if self.instances else "?"
+        return f"{self.kernel}·{inst}"
+
+
+@dataclass
+class Spike:
+    """One notable moment in kernel evolution (the curiosity feed)."""
+
+    ts: float
+    kernel: str
+    run_id: str
+    generation: int
+    kind: str               # jump | reset | hint | complete | start
+    fitness: float = 0.0
+    magnitude: float = 0.0  # improvement_delta for jumps
+    detail: str = ""
+    starred: bool = False    # a "curiosity spike" — a jump above threshold
+
+
+# ---------------------------------------------------------------------------- #
 # Aggregate state                                                              #
 # ---------------------------------------------------------------------------- #
 
@@ -445,6 +565,17 @@ class PulseState:
         # the render tick can detect "new entry" without diffing the deque.
         self.stderr_revision: int = 0
 
+        # --- FunSearch kernel arena (nervous-bus-tvfw) -----------------------
+        # Run-scoped kernel evolution state, keyed by ULID run_id. Distinct
+        # from RSI ``sessions`` — kernels emit their own ``<kernel>.*`` stream
+        # with no session_id. Drives the KernelLeaderboard / IslandHeatmap.
+        self.kernel_runs: dict[str, KernelRun] = {}
+        # Ring of notable evolution moments (fitness jumps, resets, hints,
+        # completions) — newest pushed right. Feeds CuriositySpikeFeed.
+        self.curiosity_spikes: deque[Spike] = deque(maxlen=KERNEL_SPIKE_RING)
+        # Bumped on every spike push so the render tick can change-detect.
+        self.kernel_spike_revision: int = 0
+
     # ----------------------------------------------------------- ingestion --
     def apply(self, evt: dict[str, Any]) -> set[str]:
         """Apply one CloudEvents envelope, return set of dirty session_ids.
@@ -452,9 +583,19 @@ class PulseState:
         Returns an empty set if the event is irrelevant (wrong type, no sid).
         """
         ev_type = evt.get("type")
+        data = evt.get("data") or {}
+
+        # FunSearch kernel events are run-scoped (no session_id) and use dynamic
+        # ``<kernel>.*`` channel names, so they're classified by suffix and
+        # handled before the session-oriented RSI path below.
+        kev = classify_kernel_event(ev_type)
+        if kev is not None:
+            self._apply_kernel_event(kev, data)
+            self.events_total += 1
+            return set()
+
         if ev_type not in VALID_CHANNELS:
             return set()
-        data = evt.get("data") or {}
 
         # Budget channels are session-scoped via BudgetGuard.session_id, but
         # they don't represent an autobench RSI session; route them through
@@ -540,6 +681,139 @@ class PulseState:
             self._apply_sandbox_stderr(sess, data)
 
         return {sid}
+
+    # ------------------------------------------------------- kernel arena ---
+    def _push_spike(self, run: "KernelRun", gen: int, kind: str, *,
+                    fitness: float = 0.0, magnitude: float = 0.0,
+                    detail: str = "", starred: bool = False) -> None:
+        self.curiosity_spikes.append(Spike(
+            ts=time.time(), kernel=run.kernel, run_id=run.run_id,
+            generation=gen, kind=kind, fitness=fitness, magnitude=magnitude,
+            detail=detail, starred=starred,
+        ))
+        self.kernel_spike_revision += 1
+
+    def _apply_kernel_event(self, kev: tuple[str, str], data: dict[str, Any]) -> None:
+        """Apply one FunSearch kernel event (run-scoped, no Session)."""
+        kernel, kind = kev
+        run_id = str(data.get("run_id") or "?")
+        run = self.kernel_runs.get(run_id)
+        if run is None:
+            run = KernelRun(run_id=run_id, kernel=kernel)
+            self.kernel_runs[run_id] = run
+        if kernel != "?" and run.kernel == "?":
+            run.kernel = kernel
+        run.touch()
+        gen = int(data.get("generation", run.generation) or 0)
+
+        if kind == "started":
+            run.kernel = kernel
+            run.instances = [str(x) for x in (data.get("instances") or [])]
+            run.n_islands = int(data.get("n_islands") or 0)
+            run.population_per_island = int(data.get("population_per_island") or 0)
+            run.target_generations = int(data.get("generations") or 0)
+            run.status = "running"
+            self._push_spike(run, gen, "start",
+                             detail=f"{kernel} ▸ {','.join(run.instances) or '?'}")
+        elif kind == "generation":
+            run.generation = gen
+            run.best_fitness = float(data.get("best_fitness") or 0.0)
+            run.mean_pop_fitness = float(data.get("mean_pop_fitness") or 0.0)
+            run.best_island = int(data.get("best_island", run.best_island))
+            run.llm_requests = int(data.get("llm_requests") or run.llm_requests)
+            run.fitness_std = float(data.get("fitness_std") or 0.0)
+            run.code_diversity = float(data.get("code_diversity") or 0.0)
+            run.fitness_history.append((gen, run.best_fitness))
+            run.mean_history.append((gen, run.mean_pop_fitness))
+            if len(run.fitness_history) > KERNEL_FITNESS_HISTORY:
+                del run.fitness_history[:-KERNEL_FITNESS_HISTORY]
+            if len(run.mean_history) > KERNEL_FITNESS_HISTORY:
+                del run.mean_history[:-KERNEL_FITNESS_HISTORY]
+            if data.get("island_reset_fired"):
+                run.reset_gens.add(gen)
+        elif kind == "best":
+            bf = float(data.get("best_fitness") or 0.0)
+            delta = float(data.get("improvement_delta") or 0.0)
+            run.best_fitness = bf
+            run.best_island = int(data.get("best_island", run.best_island))
+            run.last_delta = delta
+            run.generation = max(run.generation, gen)
+            self._push_spike(run, gen, "jump", fitness=bf, magnitude=delta,
+                             starred=delta >= KERNEL_SPIKE_THRESHOLD,
+                             detail=f"best → {bf:.4f}")
+        elif kind == "reset":
+            run.n_resets += 1
+            run.reset_gens.add(gen)
+            nc = int(data.get("n_islands_culled") or 0)
+            self._push_spike(run, gen, "reset",
+                             fitness=float(data.get("pre_reset_best_fitness") or 0.0),
+                             detail=f"culled {nc} island(s) on plateau")
+        elif kind == "hint":
+            hint = str(data.get("hint_preview") or "")
+            run.last_hint = hint
+            self._push_spike(run, gen, "hint",
+                             fitness=float(data.get("best_fitness") or 0.0),
+                             detail=hint[:90])
+        elif kind == "completed":
+            run.status = "complete"
+            run.stop_reason = str(data.get("stop_reason") or "")
+            run.generation = int(data.get("total_generations") or run.generation)
+            run.llm_requests = int(data.get("llm_requests") or run.llm_requests)
+            bp = data.get("best_program")
+            if isinstance(bp, dict):
+                run.best_fitness = float(bp.get("fitness") or run.best_fitness)
+                code = bp.get("priority_code") or bp.get("code") or ""
+                if code:
+                    run.final_code = str(code)
+            self._push_spike(run, run.generation, "complete", fitness=run.best_fitness,
+                             detail=f"done · {run.stop_reason[:60]}")
+        elif kind == "island_health":
+            isl = int(data.get("island", -1))
+            if isl >= 0:
+                snap = {
+                    "plateau_count": int(data.get("plateau_count") or 0),
+                    "age": int(data.get("age_since_last_reset") or 0),
+                    "population_size": int(data.get("population_size") or 0),
+                    "generation": gen,
+                }
+                run.island_health[isl] = snap
+                hist = run.island_history.setdefault(isl, [])
+                hist.append((gen, snap["plateau_count"], snap["age"]))
+                if len(hist) > KERNEL_ISLAND_HISTORY:
+                    del hist[:-KERNEL_ISLAND_HISTORY]
+                run.n_islands = max(run.n_islands, isl + 1)
+                run.generation = max(run.generation, gen)
+        elif kind == "budget_gauge":
+            run.requests_used = int(data.get("requests_used") or run.requests_used)
+            mr = data.get("max_requests")
+            if mr is not None:
+                run.max_requests = int(mr)
+            run.generation = max(run.generation, gen)
+
+    # ----- kernel accessors (read by the KernelArena widgets) ---------------
+    def kernel_leaderboard(self, limit: int = 8) -> list[KernelRun]:
+        """Active runs first, then most-recently-updated. Capped to ``limit``."""
+        runs = sorted(
+            self.kernel_runs.values(),
+            key=lambda r: (r.is_running, r.updated_at),
+            reverse=True,
+        )
+        return runs[:limit]
+
+    def focused_kernel_run(self) -> Optional["KernelRun"]:
+        """The run the heatmap focuses on — newest active run, else newest run."""
+        runs = list(self.kernel_runs.values())
+        if not runs:
+            return None
+        running = [r for r in runs if r.is_running]
+        return max(running or runs, key=lambda r: r.updated_at)
+
+    def curiosity_feed(self, n: int = 14) -> list[Spike]:
+        """Newest-first slice of notable evolution moments."""
+        return list(self.curiosity_spikes)[-n:][::-1]
+
+    def has_kernel_activity(self) -> bool:
+        return bool(self.kernel_runs)
 
     def _apply_improver_reasoning(self, sess: Session, data: dict[str, Any]) -> None:
         """Record parse_status so the dashboard can distinguish silent parser

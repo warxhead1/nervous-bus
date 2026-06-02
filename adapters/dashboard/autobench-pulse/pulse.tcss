@@ -59,11 +59,33 @@ HeaderStats {
  * load-bearing self-observation. */
 AHEPredictionTracker {
     height: auto;
-    min-height: 5;
-    max-height: 16;
+    min-height: 3;
+    max-height: 8;
     padding: 0 1;
     margin: 0 0 1 0;
     border: round $warning;
+}
+
+/* KernelArena (nervous-bus-tvfw): the reclaimed centre band. A horizontal
+ * trio — leaderboard (widest), island heatmap, curiosity feed — that fills
+ * the space the AHE region used to waste between iteration boundaries. */
+#kernel-arena {
+    layout: horizontal;
+    height: 14;
+    margin: 0 0 1 0;
+}
+
+#kernel-leaderboard {
+    width: 2fr;
+}
+
+#island-heatmap {
+    width: 1fr;
+    margin: 0 1;
+}
+
+#curiosity-feed {
+    width: 1fr;
 }
 
 SessionTree {
