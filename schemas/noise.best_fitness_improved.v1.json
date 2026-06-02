@@ -2,28 +2,74 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/noise.best_fitness_improved.v1.json",
   "title": "noise.best_fitness_improved v1",
-  "description": "Emitted whenever a new all-time best fitness is recorded for the noise kernel within an autobench run. Source: /autobench/noise_kernel.",
+  "description": "Autobench noise FunSearch kernel \u2014 best_fitness_improved event. Source: /autobench/noise_kernel.",
   "type": "object",
-  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
   "properties": {
-    "specversion": {"type": "string", "const": "1.0"},
-    "id": {"type": "string"},
-    "source": {"type": "string", "const": "/autobench/noise_kernel"},
-    "type": {"type": "string", "const": "noise.best_fitness_improved.v1"},
-    "datacontenttype": {"type": "string", "const": "application/json"},
-    "time": {"type": "string", "format": "date-time"},
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/noise_kernel"
+    },
+    "type": {
+      "type": "string",
+      "const": "noise.best_fitness_improved.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
     "data": {
       "type": "object",
-      "required": ["run_id", "generation", "prefix", "best_fitness", "improvement_delta", "island_id", "timestamp"],
+      "required": [
+        "run_id",
+        "generation",
+        "best_fitness",
+        "improvement_delta",
+        "best_program_id",
+        "best_island"
+      ],
       "properties": {
-        "run_id": {"type": "string", "description": "ULID identifying the autobench run."},
-        "generation": {"type": "integer", "minimum": 0, "description": "Generation at which the new best was recorded."},
-        "prefix": {"type": "string", "const": "noise", "description": "Kernel namespace."},
-        "best_fitness": {"type": "number", "description": "New all-time best fitness score for this run."},
-        "improvement_delta": {"type": "number", "description": "Absolute improvement over the previous all-time best (new - old). Always > 0."},
-        "island_id": {"type": "integer", "minimum": 0, "description": "Island that produced the new best program."},
-        "timestamp": {"type": "string", "format": "date-time", "description": "RFC3339 UTC timestamp when the improvement was detected."}
-      }
+        "run_id": {
+          "type": "string",
+          "description": "ULID identifying this kernel run."
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "best_fitness": {
+          "type": "number",
+          "description": "Best fitness this generation (domain-specific; higher = better)."
+        },
+        "improvement_delta": {
+          "type": "number"
+        },
+        "best_program_id": {
+          "type": "string"
+        },
+        "best_island": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

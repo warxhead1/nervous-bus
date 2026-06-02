@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/terrain.kernel.started.v1.json",
   "title": "terrain.kernel.started v1",
-  "description": "Emitted when the terrain FunSearch kernel begins a run. Source: /autobench/terrain_kernel.",
+  "description": "Autobench terrain FunSearch kernel \u2014 kernel.started event. Source: /autobench/terrain_kernel.",
   "type": "object",
   "required": [
     "specversion",
@@ -41,47 +41,39 @@
       "type": "object",
       "required": [
         "run_id",
+        "git_commit",
         "instances",
         "n_islands",
         "population_per_island",
         "generations",
-        "migration_interval"
+        "plateau_generations",
+        "temperature",
+        "plateau_hint",
+        "sandbox_type"
       ],
       "properties": {
         "run_id": {
           "type": "string",
           "description": "ULID identifying this kernel run."
         },
+        "git_commit": {
+          "type": "string",
+          "description": "Short git SHA of the autobench source at run start."
+        },
         "instances": {
           "type": "array",
           "items": {
             "type": "string"
-          },
-          "description": "TSPLIB instance names being evaluated."
+          }
         },
         "n_islands": {
-          "type": "integer",
-          "minimum": 1
+          "type": "integer"
         },
         "population_per_island": {
-          "type": "integer",
-          "minimum": 1
+          "type": "integer"
         },
         "generations": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "migration_interval": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "sandbox_type": {
-          "type": "string",
-          "description": "Isolation tier executing untrusted candidate code (e.g. 'gvisor', 'subprocess')."
-        },
-        "git_commit": {
-          "type": "string",
-          "description": "Short git SHA of the autobench source at run start."
+          "type": "integer"
         },
         "plateau_generations": {
           "type": [
@@ -94,8 +86,12 @@
         },
         "plateau_hint": {
           "type": "boolean"
+        },
+        "sandbox_type": {
+          "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     }
   }
 }

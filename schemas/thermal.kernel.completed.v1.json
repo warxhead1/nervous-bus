@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/thermal.kernel.completed.v1.json",
+  "title": "thermal.kernel.completed v1",
+  "description": "Autobench thermal FunSearch kernel \u2014 kernel.completed event. Source: /autobench/thermal_kernel.",
+  "type": "object",
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/thermal_kernel"
+    },
+    "type": {
+      "type": "string",
+      "const": "thermal.kernel.completed.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "total_generations",
+        "stop_reason",
+        "llm_requests",
+        "best_program"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "description": "ULID identifying this kernel run."
+        },
+        "total_generations": {
+          "type": "integer"
+        },
+        "stop_reason": {
+          "type": "string"
+        },
+        "llm_requests": {
+          "type": "integer",
+          "description": "Cumulative LLM requests this run (MiniMax billing unit is requests)."
+        },
+        "best_program": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "fitness": {
+              "type": "number"
+            },
+            "island": {
+              "type": "integer"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "description": "Best program summary at run end (null if the run produced none)."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

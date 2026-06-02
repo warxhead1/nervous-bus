@@ -2,35 +2,98 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/sdf.generation.completed.v1.json",
   "title": "sdf.generation.completed v1",
-  "description": "Emitted at the end of each SDF FunSearch generation. Source: /autobench/sdf_kernel. Includes eikonal-penalised fitness (fitness = (1/(1+MSE)) * exp(-0.5*grad_err)) and diversity diagnostics.",
+  "description": "Autobench sdf FunSearch kernel \u2014 generation.completed event. Source: /autobench/sdf_kernel.",
   "type": "object",
-  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
   "properties": {
-    "specversion": { "type": "string", "const": "1.0" },
-    "id": { "type": "string" },
-    "source": { "type": "string", "const": "/autobench/sdf_kernel" },
-    "type": { "type": "string", "const": "sdf.generation.completed.v1" },
-    "datacontenttype": { "type": "string", "const": "application/json" },
-    "time": { "type": "string", "format": "date-time" },
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/sdf_kernel"
+    },
+    "type": {
+      "type": "string",
+      "const": "sdf.generation.completed.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
     "data": {
       "type": "object",
-      "required": ["run_id", "generation", "best_fitness", "best_island", "mean_pop_fitness", "llm_requests"],
+      "required": [
+        "run_id",
+        "generation",
+        "best_fitness",
+        "best_island",
+        "mean_pop_fitness",
+        "gen_seconds",
+        "eval_seconds",
+        "llm_requests",
+        "fitness_std",
+        "code_diversity",
+        "island_reset_fired"
+      ],
       "properties": {
-        "run_id": { "type": "string", "description": "ULID run identifier." },
-        "generation": { "type": "integer" },
+        "run_id": {
+          "type": "string",
+          "description": "ULID identifying this kernel run."
+        },
+        "generation": {
+          "type": "integer"
+        },
         "best_fitness": {
           "type": "number",
-          "description": "Best eikonal-penalised fitness this generation: (1/(1+MSE)) * exp(-0.5*grad_err). 1.0 = perfect eikonal-valid SDF."
+          "description": "Best fitness this generation (domain-specific; higher = better)."
         },
-        "best_island": { "type": "integer" },
-        "mean_pop_fitness": { "type": "number" },
-        "gen_seconds": { "type": "number" },
-        "eval_seconds": { "type": "number" },
-        "llm_requests": { "type": "integer" },
-        "fitness_std": { "type": "number", "description": "Standard deviation of fitness across all island populations." },
-        "code_diversity": { "type": "number", "description": "Mean pairwise Jaccard distance of code token sets (0=identical, 1=disjoint)." },
-        "island_reset_fired": { "type": "boolean", "description": "True if island_reset() culled weak islands this generation." }
-      }
+        "best_island": {
+          "type": "integer"
+        },
+        "mean_pop_fitness": {
+          "type": "number"
+        },
+        "gen_seconds": {
+          "type": "number"
+        },
+        "eval_seconds": {
+          "type": "number"
+        },
+        "llm_requests": {
+          "type": "integer",
+          "description": "Cumulative LLM requests this run (MiniMax billing unit is requests)."
+        },
+        "fitness_std": {
+          "type": "number",
+          "description": "Population fitness standard deviation \u2014 leading indicator of premature convergence."
+        },
+        "code_diversity": {
+          "type": "number",
+          "description": "Mean pairwise Jaccard code-token distance across active programs (0=identical, 1=disjoint)."
+        },
+        "island_reset_fired": {
+          "type": "boolean",
+          "description": "Whether a plateau-driven island reset fired this generation."
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

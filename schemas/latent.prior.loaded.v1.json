@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/latent.prior.loaded.v1.json",
+  "title": "latent.prior.loaded v1",
+  "description": "Autobench latent FunSearch kernel \u2014 prior.loaded event. Source: /autobench/latent_kernel.",
+  "type": "object",
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/latent_kernel"
+    },
+    "type": {
+      "type": "string",
+      "const": "latent.prior.loaded.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "kernel",
+        "vectors_loaded",
+        "prior_fitted"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "description": "ULID identifying this kernel run."
+        },
+        "kernel": {
+          "type": "string"
+        },
+        "vectors_loaded": {
+          "type": "integer"
+        },
+        "prior_fitted": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

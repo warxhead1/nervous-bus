@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tsp.island_reset.v1.json",
   "title": "tsp.island_reset v1",
-  "description": "Emitted by a FunSearch kernel when island_reset() fires at plateau midpoint. Bottom 40% of islands are culled and reseeded from scratch.",
+  "description": "Autobench tsp FunSearch kernel \u2014 island_reset event. Source: /autobench/tsp_kernel.",
   "type": "object",
   "required": [
     "specversion",
@@ -47,25 +48,23 @@
       ],
       "properties": {
         "run_id": {
-          "type": "string"
+          "type": "string",
+          "description": "ULID identifying this kernel run."
         },
         "generation": {
           "type": "integer"
         },
         "n_islands_culled": {
-          "type": "integer",
-          "description": "Number of islands seeded from scratch (bottom 40% by fitness)."
+          "type": "integer"
         },
         "pre_reset_best_fitness": {
-          "type": "number",
-          "description": "Global best fitness just before culling."
+          "type": "number"
         },
         "plateau_count": {
-          "type": "integer",
-          "description": "Consecutive non-improving generations when reset fired."
+          "type": "integer"
         }
-      }
+      },
+      "additionalProperties": false
     }
-  },
-  "$id": "nervous-bus/schemas/tsp.island_reset.v1.json"
+  }
 }

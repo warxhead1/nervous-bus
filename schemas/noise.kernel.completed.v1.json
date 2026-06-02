@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/noise.kernel.completed.v1.json",
   "title": "noise.kernel.completed v1",
-  "description": "Emitted when the Noise FunSearch kernel finishes all generations. Source: /autobench/noise_kernel.",
+  "description": "Autobench noise FunSearch kernel \u2014 kernel.completed event. Source: /autobench/noise_kernel.",
   "type": "object",
   "required": [
     "specversion",
@@ -42,33 +42,37 @@
       "required": [
         "run_id",
         "total_generations",
+        "stop_reason",
+        "llm_requests",
         "best_program",
         "history"
       ],
       "properties": {
         "run_id": {
-          "type": "string"
+          "type": "string",
+          "description": "ULID identifying this kernel run."
         },
         "total_generations": {
           "type": "integer"
         },
         "stop_reason": {
-          "type": "string",
-          "description": "Why the run ended: a horizon (target_fitness/request budget/wall-clock/plateau) or the generation cap."
+          "type": "string"
         },
         "llm_requests": {
           "type": "integer",
-          "description": "Total LLM requests issued during the run (billing unit is requests, not dollars)."
+          "description": "Cumulative LLM requests this run (MiniMax billing unit is requests)."
         },
         "best_program": {
-          "type": "object",
+          "type": [
+            "object",
+            "null"
+          ],
           "properties": {
             "id": {
               "type": "string"
             },
             "fitness": {
-              "type": "number",
-              "description": "Mean SSIM fitness across all instances. Range [0, 1], 1.0 = exact visual match."
+              "type": "number"
             },
             "island": {
               "type": "integer"
@@ -77,62 +81,22 @@
               "type": "integer"
             },
             "source": {
-              "type": "string",
-              "description": "Origin of this program: 'llm', 'baseline', 'mutated', or 'migrated'."
+              "type": "string"
             },
             "noise_glsl": {
-              "type": "string",
-              "description": "The GLSL float noise(vec3 p) function body \u2014 the evolved shader primitive."
+              "type": "string"
             }
-          }
+          },
+          "description": "Best program summary at run end (null if the run produced none)."
         },
         "history": {
           "type": "array",
-          "description": "Per-generation fitness (SSIM) progression.",
           "items": {
-            "type": "object",
-            "properties": {
-              "generation": {
-                "type": "integer"
-              },
-              "best_fitness": {
-                "type": "number",
-                "description": "Best eikonal-penalised fitness this generation."
-              },
-              "best_id": {
-                "type": "string"
-              },
-              "best_island": {
-                "type": "integer"
-              },
-              "mean_pop_fitness": {
-                "type": "number"
-              },
-              "gen_seconds": {
-                "type": "number"
-              },
-              "eval_seconds": {
-                "type": "number"
-              },
-              "llm_requests": {
-                "type": "integer"
-              },
-              "fitness_std": {
-                "type": "number",
-                "description": "StdDev of fitness across all island populations."
-              },
-              "code_diversity": {
-                "type": "number",
-                "description": "Mean pairwise Jaccard distance of code token sets (0=identical, 1=disjoint)."
-              },
-              "island_reset_fired": {
-                "type": "boolean",
-                "description": "True if island_reset() culled weak islands this generation."
-              }
-            }
+            "type": "object"
           }
         }
-      }
+      },
+      "additionalProperties": false
     }
   }
 }

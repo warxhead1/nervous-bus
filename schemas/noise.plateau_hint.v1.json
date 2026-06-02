@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/noise.plateau_hint.v1.json",
   "title": "noise.plateau_hint v1",
-  "description": "Emitted when deer query returns strategic plateau advice that is injected into all island prompts.",
+  "description": "Autobench noise FunSearch kernel \u2014 plateau_hint event. Source: /autobench/noise_kernel.",
   "type": "object",
   "required": [
     "specversion",
@@ -47,7 +48,8 @@
       ],
       "properties": {
         "run_id": {
-          "type": "string"
+          "type": "string",
+          "description": "ULID identifying this kernel run."
         },
         "generation": {
           "type": "integer"
@@ -56,14 +58,15 @@
           "type": "integer"
         },
         "best_fitness": {
-          "type": "number"
+          "type": "number",
+          "description": "Best fitness this generation (domain-specific; higher = better)."
         },
         "hint_preview": {
           "type": "string",
-          "description": "First 200 characters of the deer query response."
+          "description": "First 200 chars of the strategic plateau hint injected into the prompt."
         }
-      }
+      },
+      "additionalProperties": false
     }
-  },
-  "$id": "nervous-bus/schemas/noise.plateau_hint.v1.json"
+  }
 }

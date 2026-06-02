@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/thermal.island_reset.v1.json",
+  "title": "thermal.island_reset v1",
+  "description": "Autobench thermal FunSearch kernel \u2014 island_reset event. Source: /autobench/thermal_kernel.",
+  "type": "object",
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/thermal_kernel"
+    },
+    "type": {
+      "type": "string",
+      "const": "thermal.island_reset.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "generation",
+        "n_islands_culled",
+        "pre_reset_best_fitness",
+        "plateau_count"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "description": "ULID identifying this kernel run."
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "n_islands_culled": {
+          "type": "integer"
+        },
+        "pre_reset_best_fitness": {
+          "type": "number"
+        },
+        "plateau_count": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
