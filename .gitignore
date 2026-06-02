@@ -129,3 +129,4 @@ BLOCKED-*.md
 
 # Loomie agent scaffold — per-worktree, not for the shared repo
 .agent/
+.antigravitycli/
