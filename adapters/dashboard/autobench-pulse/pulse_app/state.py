@@ -714,7 +714,7 @@ class PulseState:
             run.target_generations = int(data.get("generations") or 0)
             run.status = "running"
             self._push_spike(run, gen, "start",
-                             detail=f"{kernel} ▸ {','.join(run.instances) or '?'}")
+                             detail=",".join(run.instances) or "?")
         elif kind == "generation":
             run.generation = gen
             run.best_fitness = float(data.get("best_fitness") or 0.0)
@@ -766,7 +766,7 @@ class PulseState:
                 if code:
                     run.final_code = str(code)
             self._push_spike(run, run.generation, "complete", fitness=run.best_fitness,
-                             detail=f"done · {run.stop_reason[:60]}")
+                             detail=run.stop_reason[:60] or "complete")
         elif kind == "island_health":
             isl = int(data.get("island", -1))
             if isl >= 0:
@@ -801,12 +801,25 @@ class PulseState:
         return runs[:limit]
 
     def focused_kernel_run(self) -> Optional["KernelRun"]:
-        """The run the heatmap focuses on — newest active run, else newest run."""
+        """The run the heatmap focuses on.
+
+        The heatmap needs island-health history to render anything, so we
+        prefer (in order): the newest *running* run that has island history,
+        then the newest run with island history, then just the newest run.
+        Without this, the heatmap goes blank whenever the most-recently-updated
+        run happens to lack island.health events (e.g. a just-completed run).
+        """
         runs = list(self.kernel_runs.values())
         if not runs:
             return None
+        with_islands = [r for r in runs if r.island_history]
         running = [r for r in runs if r.is_running]
-        return max(running or runs, key=lambda r: r.updated_at)
+        running_with = [r for r in with_islands if r.is_running]
+        # Preference: running+islands → any+islands → running → any. This keeps
+        # the heatmap on a live, island-rich run, but never blanks out: it
+        # always falls back to the newest run of the best available tier.
+        pool = running_with or with_islands or running or runs
+        return max(pool, key=lambda r: r.updated_at)
 
     def curiosity_feed(self, n: int = 14) -> list[Spike]:
         """Newest-first slice of notable evolution moments."""

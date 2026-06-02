@@ -2547,28 +2547,33 @@ class KernelLeaderboard(Static):
             return
         lines = [
             "[bold cyan]kernel arena[/]  "
-            "[dim]gen · fitness trend · best · requests[/]"
+            "[dim]kernel·instance   gen      trend            best    Δ      μ     reqs[/]"
         ]
         for r in runs:
             running = getattr(r, "is_running", True)
             color = "cyan" if running else "green"
             badge = "▶" if running else "✓"
-            spark = _sparkline(getattr(r, "fitness_values", []))
+            spark = _sparkline(getattr(r, "fitness_values", []), width=16)
             delta = getattr(r, "last_delta", 0.0) or 0.0
-            delta_tag = f"[green]+{delta:.3f}[/]" if delta > 1e-9 else "        "
+            delta_tag = f"[green]+{delta:.3f}[/]" if delta > 1e-9 else "[dim]  ·   [/]"
             tgt = getattr(r, "target_generations", 0)
             gen = getattr(r, "generation", 0)
             gtag = f"g{gen}/{tgt}" if tgt else f"g{gen}"
             kern = str(getattr(r, "kernel", "?"))[:7]
-            inst = (",".join(getattr(r, "instances", [])) or "?")[:14]
+            inst = (",".join(getattr(r, "instances", [])) or "?")[:12]
             reqs = getattr(r, "llm_requests", 0)
             resets = getattr(r, "n_resets", 0)
             reset_tag = f" [magenta]↻{resets}[/]" if resets else ""
+            mean = getattr(r, "mean_pop_fitness", 0.0)
+            if running:
+                tail = ""
+            else:
+                tail = f"  [dim]{str(getattr(r, 'stop_reason', '') or 'done')[:24]}[/]"
             lines.append(
-                f"[{color}]{badge}[/] [bold]{kern:<7}[/][dim]{inst:<14}[/] "
-                f"[dim]{gtag:<7}[/] [cyan]{spark:<28}[/] "
+                f"[{color}]{badge}[/] [bold {color}]{kern:<7}[/][dim]{inst:<12}[/] "
+                f"[dim]{gtag:<8}[/][cyan]{spark:<16}[/] "
                 f"[bold]{getattr(r, 'best_fitness', 0.0):.4f}[/] {delta_tag} "
-                f"[dim]{reqs}rq[/]{reset_tag}"
+                f"[dim]{mean:.3f}[/] [dim]{reqs:>3}rq[/]{reset_tag}{tail}"
             )
         self.update("\n".join(lines))
 
@@ -2656,23 +2661,27 @@ class CuriositySpikeFeed(Static):
         lines = ["[bold cyan]curiosity feed[/]"]
         for sp in spikes:
             kind = getattr(sp, "kind", "")
-            g = self._GLYPH.get(kind, "·")
             mag = getattr(sp, "magnitude", 0.0) or 0.0
-            if kind == "jump":
-                if getattr(sp, "starred", False):
-                    head = f"[bold green]★{g} +{mag:.3f}[/]"
-                else:
-                    head = f"[green] {g} +{mag:.3f}[/]"
-            elif kind == "reset":
-                head = "[magenta] ↻ reset  [/]"
-            elif kind == "hint":
-                head = "[cyan] ? hint   [/]"
-            elif kind == "complete":
-                head = "[bold] ✓ done   [/]"
-            else:
-                head = "[dim] ▸ start  [/]"
-            detail = (getattr(sp, "detail", "") or "")[:44].replace("[", r"\[")
-            kern = str(getattr(sp, "kernel", "?"))
+            fit = getattr(sp, "fitness", 0.0) or 0.0
+            detail = (getattr(sp, "detail", "") or "").replace("[", r"\[")
+            kern = str(getattr(sp, "kernel", "?"))[:7]
             gen = getattr(sp, "generation", 0)
-            lines.append(f"{head} [dim]{kern}·g{gen}[/] {detail}")
+            # Fixed-width icon (2 cells) + fixed kernel/gen column → rows align.
+            if kind == "jump":
+                star = "★" if getattr(sp, "starred", False) else " "
+                icon = f"[bold green]{star}▲[/]"
+                msg = f"[green]+{mag:.3f}[/] [dim]→ {fit:.4f}[/]"
+            elif kind == "reset":
+                icon = "[magenta]↻ [/]"
+                msg = f"[magenta]{detail[:46]}[/]"
+            elif kind == "hint":
+                icon = "[cyan]? [/]"
+                msg = f"[dim]{detail[:46]}[/]"
+            elif kind == "complete":
+                icon = "[bold green]✓ [/]"
+                msg = f"[green]done[/] [dim]{detail[:40]}[/]"
+            else:  # start
+                icon = "[dim]▸ [/]"
+                msg = f"[dim]start {detail[:40]}[/]"
+            lines.append(f"{icon} [bold]{kern:<7}[/][dim]g{gen:<3}[/] {msg}")
         self.update("\n".join(lines))
