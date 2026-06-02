@@ -192,7 +192,6 @@ The Python shim (`sdk/python/nbus.py`) wraps the shell SDK and is kept for backw
 | `adapters/signal-router/` | Consumes `bus.pattern.signal.v1`, routes by confidence tier, optionally auto-files beads. |
 | `adapters/pattern-watchdog/` | Health check for consumer-group lag; emits `bus.intrinsic.marker.v1` on stall. |
 | `adapters/log-normalizer/` | Normalises raw log lines from multiple sources into typed bus events. |
-| `adapters/osc133/` | Opt-in OSC 133 prompt tagging — lets terminal tooling know which project a pane belongs to. |
 | `adapters/zjstatus/` | Format bus events for zjstatus (zellij status bar). |
 | `adapters/dlq/` | Dead-letter queue inspector and replay tool. |
 

@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/home/eric/projects/nervous-bus/sdk/shell/runner-probe
+WorkingDirectory=%h/projects/nervous-bus/sdk/shell
+ExecStart=%h/projects/nervous-bus/sdk/shell/runner-probe
 Environment="GITHUB_TOKEN=%u"
 Environment="REDIS_URL=redis://localhost:6379"

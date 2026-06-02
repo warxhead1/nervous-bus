@@ -47,8 +47,8 @@ are authoritative and hot-reloaded by redis-mirror every 5 minutes.
   in v1, no state beyond a small ring buffer. Validation happens at adapter edges.
 - **deer-flow is a consumer, not a peer.** It subscribes; it does not authenticate
   the bus. The bus has no auth in v1 (it's per-user, in-process via zellij).
-- **OSC 133 emission is opt-in.** Adapter `adapters/osc133/` lets any pane tag its
-  prompts with `aid=<project>` — but it never injects without explicit shell config.
+- **OSC 133 emission, if added, is opt-in.** A pane-tagging adapter (`aid=<project>`
+  prompt marks) must never inject without explicit shell config. Not yet shipped.
 
 ## Build / test
 
