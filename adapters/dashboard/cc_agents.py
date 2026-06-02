@@ -28,6 +28,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -49,6 +50,16 @@ KNOWN_PROJECTS = frozenset([
     "tachyonos", "deer-flow", "mobile", "cli-wall", "rooftop",
     "system-monitor", "_status", "_loom-extras", "default",
 ])
+
+
+def _local_hms(iso_utc: str) -> str:
+    """RFC3339 UTC timestamp -> local HH:MM:SS for display (sessions store UTC)."""
+    if not iso_utc:
+        return ""
+    try:
+        return datetime.fromisoformat(iso_utc.replace("Z", "+00:00")).astimezone().strftime("%H:%M:%S")
+    except (ValueError, TypeError):
+        return iso_utc[11:19]
 
 
 # ─── types ─────────────────────────────────────────────────────────────────
@@ -97,7 +108,7 @@ def fetch_sessions() -> List[SessionInfo]:
                 agent_type=s.get("agent_type") or "",
                 state=s.get("state") or "",
                 message_count=s.get("message_count") or 0,
-                started_at=(s.get("started_at") or "")[11:19],
+                started_at=_local_hms(s.get("started_at") or ""),
                 execution_id=s.get("execution_id"),
                 task_id=s.get("task_id"),
                 title=s.get("title"),

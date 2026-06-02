@@ -90,6 +90,16 @@ ALERT_RESOLVED_S  = 600      # silence period after last failure to call 'resolv
 ALERT_SEV_DIM     = 0.10     # severity below this = dim/collapse to resolved
 ALERT_SEV_LOUD    = 0.30     # severity above this = active/loud
 
+def _local_hms(iso_utc: str) -> str:
+    """RFC3339 UTC timestamp -> local HH:MM:SS for display (events store UTC)."""
+    if not iso_utc:
+        return ""
+    try:
+        return datetime.fromisoformat(iso_utc.replace("Z", "+00:00")).astimezone().strftime("%H:%M:%S")
+    except (ValueError, TypeError):
+        return iso_utc[11:19]
+
+
 # Channel-family colors (consistent with cc-bus-feed)
 def channel_color(chan: str) -> str:
     if chan.startswith("bus.bead."):        return "green"
@@ -848,7 +858,7 @@ def panel_stream(state: State) -> Panel:
     for e in display:
         chan = e.get("type", "?")
         col  = channel_color(chan)
-        t    = (e.get("time", "") or "")[11:19]
+        t    = _local_hms(e.get("time", "") or "")
         src  = _project_label(e)[:10]
         summary = _summarize(chan, e.get("data") or {})
         table.add_row(

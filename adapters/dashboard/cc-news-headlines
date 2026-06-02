@@ -106,7 +106,7 @@ def format_row(entry: dict, min_tier: int, min_score: float) -> Optional[Text]:
     if ts:
         try:
             dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            ts = dt.strftime("%H:%M")
+            ts = dt.astimezone().strftime("%H:%M")
         except Exception:
             pass
 
