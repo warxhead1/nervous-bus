@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/funsearch.assessment.v1.json",
   "title": "funsearch.assessment.v1",
   "description": "Post-run observer assessment: MiniMax structural analysis of top evolved programs.",
   "type": "object",
