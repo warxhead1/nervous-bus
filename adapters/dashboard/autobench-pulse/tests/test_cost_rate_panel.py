@@ -179,11 +179,14 @@ def test_header_promotes_requests_as_primary():
     assert "5h" in header_text
     # Dollar figures do NOT appear in the headline anymore.
     assert "$" not in header_text
-    # Notional line carries the $ scale, rendered dim.
+    # Secondary line carries request HEADROOM (no $), rendered dim. Per policy
+    # the in-tree token→$ estimator is hard-zeroed; requests are the only honest
+    # billing axis, so headroom = max_requests - current_count.
     notional = CostRatePanel._format_notional(payload)
-    assert "$1.00" in notional
-    assert "$0.0432" in notional
-    assert "notional" in notional
+    assert "$" not in notional
+    assert "14063" in notional  # 14250 - 187 left
+    assert "headroom" in notional
+    assert "5h" in notional
     assert "[dim]" in notional
 
 
@@ -222,10 +225,11 @@ def test_header_empty_state():
     # No rate snapshot yet → placeholder requests line, no $ in headline.
     assert "Rate: --" in header_text
     assert "$" not in header_text
-    # Notional $ readout still renders so the secondary line isn't empty.
+    # No rate snapshot → placeholder headroom line (no $), not empty.
     notional = CostRatePanel._format_notional(payload)
-    assert "$0.0000" in notional
-    assert "notional" in notional
+    assert "$" not in notional
+    assert "headroom" in notional
+    assert "--" in notional
 
 
 # --------------------------------------------------------------------------- #
@@ -262,7 +266,7 @@ async def test_cost_rate_panel_mounts():
         rendered = CostRatePanel._format_header(panel.payload)
         assert "14250" in rendered and "requests" in rendered
         notional = CostRatePanel._format_notional(panel.payload)
-        assert "0.0432" in notional and "notional" in notional
+        assert "14063" in notional and "headroom" in notional
 
 
 @pytest.mark.asyncio

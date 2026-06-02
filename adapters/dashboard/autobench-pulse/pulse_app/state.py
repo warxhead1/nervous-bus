@@ -16,7 +16,18 @@ from __future__ import annotations
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Optional
+
+
+def _rfc3339_epoch(ts: Optional[str]) -> float:
+    """Parse an RFC3339 UTC timestamp to epoch seconds. 0.0 if unparseable."""
+    if not ts or not isinstance(ts, str):
+        return 0.0
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return 0.0
 
 # ---------------------------------------------------------------------------- #
 # Constants                                                                    #
@@ -374,6 +385,11 @@ KERNEL_FITNESS_HISTORY: int = 400     # per-run (gen, fitness) samples kept
 KERNEL_SPIKE_RING: int = 48           # curiosity-feed ring size
 # A best-fitness jump >= this is a "curiosity spike" (starred/bright in the feed).
 KERNEL_SPIKE_THRESHOLD: float = 0.02
+# Runs whose latest event is older than this (relative to the freshest kernel
+# event seen) drop off the leaderboard/feed unless still running. Measured in
+# event-time so it's correct on replay of an accumulated debug.jsonl, not just
+# live. 30 min keeps the current + recently-active runs, sheds day-old tests.
+KERNEL_RUN_RECENCY_WINDOW_S: float = 1800.0
 
 # suffix (channel minus the ``<kernel>.`` prefix and ``.v1``) -> internal kind
 _KERNEL_EVENT_KINDS: dict[str, str] = {
@@ -438,12 +454,15 @@ class KernelRun:
     final_code: str = ""
     started_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+    # Event-time (epoch) of the latest applied event — used for recency filtering
+    # that stays correct on replay of historical debug.jsonl. 0.0 = unknown.
+    last_event_epoch: float = 0.0
     fitness_history: list[tuple[int, float]] = field(default_factory=list)
     mean_history: list[tuple[int, float]] = field(default_factory=list)
     # island_id -> latest {plateau_count, age, population_size, generation}
     island_health: dict[int, dict[str, Any]] = field(default_factory=dict)
-    # island_id -> [(gen, plateau_count, age), ...] (capped)
-    island_history: dict[int, list[tuple[int, int, int]]] = field(default_factory=dict)
+    # island_id -> [(gen, plateau_count, age, best_fitness), ...] (capped)
+    island_history: dict[int, list[tuple[int, int, int, float]]] = field(default_factory=dict)
     reset_gens: set[int] = field(default_factory=set)
 
     def touch(self) -> None:
@@ -570,6 +589,9 @@ class PulseState:
         # from RSI ``sessions`` — kernels emit their own ``<kernel>.*`` stream
         # with no session_id. Drives the KernelLeaderboard / IslandHeatmap.
         self.kernel_runs: dict[str, KernelRun] = {}
+        # Freshest kernel event-time (epoch) seen, for replay-correct recency
+        # filtering of the leaderboard/feed. 0.0 until the first timed event.
+        self._kernel_latest_event_epoch: float = 0.0
         # Ring of notable evolution moments (fitness jumps, resets, hints,
         # completions) — newest pushed right. Feeds CuriositySpikeFeed.
         self.curiosity_spikes: deque[Spike] = deque(maxlen=KERNEL_SPIKE_RING)
@@ -590,7 +612,7 @@ class PulseState:
         # handled before the session-oriented RSI path below.
         kev = classify_kernel_event(ev_type)
         if kev is not None:
-            self._apply_kernel_event(kev, data)
+            self._apply_kernel_event(kev, data, evt.get("time"))
             self.events_total += 1
             return set()
 
@@ -693,7 +715,8 @@ class PulseState:
         ))
         self.kernel_spike_revision += 1
 
-    def _apply_kernel_event(self, kev: tuple[str, str], data: dict[str, Any]) -> None:
+    def _apply_kernel_event(self, kev: tuple[str, str], data: dict[str, Any],
+                            event_time: Optional[str] = None) -> None:
         """Apply one FunSearch kernel event (run-scoped, no Session)."""
         kernel, kind = kev
         run_id = str(data.get("run_id") or "?")
@@ -704,6 +727,11 @@ class PulseState:
         if kernel != "?" and run.kernel == "?":
             run.kernel = kernel
         run.touch()
+        epoch = _rfc3339_epoch(event_time)
+        if epoch > 0.0:
+            run.last_event_epoch = epoch
+            if epoch > self._kernel_latest_event_epoch:
+                self._kernel_latest_event_epoch = epoch
         gen = int(data.get("generation", run.generation) or 0)
 
         if kind == "started":
@@ -736,11 +764,18 @@ class PulseState:
             delta = float(data.get("improvement_delta") or 0.0)
             run.best_fitness = bf
             run.best_island = int(data.get("best_island", run.best_island))
-            run.last_delta = delta
             run.generation = max(run.generation, gen)
-            self._push_spike(run, gen, "jump", fitness=bf, magnitude=delta,
-                             starred=delta >= KERNEL_SPIKE_THRESHOLD,
-                             detail=f"best → {bf:.4f}")
+            # The first "best" event of a run reports improvement_delta measured
+            # from a zero baseline (delta == bf), i.e. the seed being published
+            # as the first-ever best — not an evolved discovery. Don't surface
+            # it as a Δ improvement or a (starred) curiosity spike; only record
+            # the fitness. Detect it gen-agnostically so it's replay-safe.
+            seed_baseline = bf > 0.0 and delta >= bf - 1e-9
+            if not seed_baseline:
+                run.last_delta = delta
+                self._push_spike(run, gen, "jump", fitness=bf, magnitude=delta,
+                                 starred=delta >= KERNEL_SPIKE_THRESHOLD,
+                                 detail=f"best → {bf:.4f}")
         elif kind == "reset":
             run.n_resets += 1
             run.reset_gens.add(gen)
@@ -792,10 +827,25 @@ class PulseState:
             run.generation = max(run.generation, gen)
 
     # ----- kernel accessors (read by the KernelArena widgets) ---------------
+    def _is_recent_run(self, run: "KernelRun") -> bool:
+        """True if a run should still appear (running, or recently active).
+
+        Recency is measured in event-time relative to the freshest kernel event
+        seen, so a replayed debug.jsonl full of day-old test runs is pruned the
+        same as it would be live. Runs with no parseable event-time (epoch 0)
+        are kept — never hide a run on a parse failure.
+        """
+        if run.is_running:
+            return True
+        latest = self._kernel_latest_event_epoch
+        if latest <= 0.0 or run.last_event_epoch <= 0.0:
+            return True
+        return (latest - run.last_event_epoch) <= KERNEL_RUN_RECENCY_WINDOW_S
+
     def kernel_leaderboard(self, limit: int = 8) -> list[KernelRun]:
-        """Active runs first, then most-recently-updated. Capped to ``limit``."""
+        """Active + recently-active runs, running first then newest. Capped."""
         runs = sorted(
-            self.kernel_runs.values(),
+            (r for r in self.kernel_runs.values() if self._is_recent_run(r)),
             key=lambda r: (r.is_running, r.updated_at),
             reverse=True,
         )
@@ -823,8 +873,12 @@ class PulseState:
         return max(pool, key=lambda r: r.updated_at)
 
     def curiosity_feed(self, n: int = 14) -> list[Spike]:
-        """Newest-first slice of notable evolution moments."""
-        return list(self.curiosity_spikes)[-n:][::-1]
+        """Newest-first slice of notable moments from recently-active runs."""
+        recent_ids = {r.run_id for r in self.kernel_runs.values()
+                      if self._is_recent_run(r)}
+        spikes = [sp for sp in self.curiosity_spikes
+                  if sp.run_id in recent_ids or sp.run_id not in self.kernel_runs]
+        return spikes[-n:][::-1]
 
     def has_kernel_activity(self) -> bool:
         return bool(self.kernel_runs)

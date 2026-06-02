@@ -96,10 +96,14 @@ cmd_publish() {
         esac
     done
 
-    # Determine channel from args or parsed payload.
-    local channel=""
+    # Determine channel from args or parsed payload. For --json we MUST read
+    # stdin exactly once (a second `cat` later would get an empty string, since
+    # stdin is already drained) — capture the full envelope into `payload` here
+    # and derive the channel from it.
+    local channel="" payload=""
     if [[ "$pass_through" == "true" ]]; then
-        channel="$(python3 -c "import json,sys; print(json.load(sys.stdin).get('type',''))" <<< "$(cat)")" || {
+        payload="$(cat)"
+        channel="$(printf '%s' "$payload" | python3 -c "import json,sys; print(json.load(sys.stdin).get('type',''))")" || {
             echo "nervous publish --json: failed to parse event type from payload" >&2; return 2
         }
     else
@@ -172,12 +176,9 @@ PYEOF
         fi
     fi
 
-    # --json: no channel arg; payload comes from stdin (Go sends full envelope via stdin).
+    # --json: payload was already read from stdin above (single read).
     # Normal: channel in $1, payload in $2.
-    local payload=""
-    if [[ "$pass_through" == "true" ]]; then
-        payload="$(cat)"
-    else
+    if [[ "$pass_through" != "true" ]]; then
         payload="$2"
     fi
 

@@ -14,16 +14,17 @@ arena widgets (KernelLeaderboard / IslandHeatmap / CuriositySpikeFeed):
 from __future__ import annotations
 
 from pulse_app.state import (
+    KERNEL_RUN_RECENCY_WINDOW_S,
     KERNEL_SPIKE_THRESHOLD,
     PulseState,
     classify_kernel_event,
 )
 
 
-def ev(t: str, d: dict) -> dict:
+def ev(t: str, d: dict, time: str = "2026-06-02T00:00:00Z") -> dict:
     return {"specversion": "1.0", "id": "x", "source": "/autobench",
             "type": t, "datacontenttype": "application/json",
-            "time": "2026-06-02T00:00:00Z", "data": d}
+            "time": time, "data": d}
 
 
 RID = "01KERNELRUNTEST"
@@ -159,3 +160,58 @@ def test_no_kernel_activity_by_default():
     assert s.kernel_leaderboard() == []
     assert s.focused_kernel_run() is None
     assert s.curiosity_feed() == []
+
+
+# ------------------------------------------------------- seed-baseline guard --
+def test_seed_baseline_jump_not_starred_or_fed():
+    """The first best event (delta == bf, the seed publish) is not a discovery:
+    no jump spike, no Δ — but a later genuine improvement is."""
+    s = PulseState()
+    s.apply(ev("tsp.kernel.started.v1", {"run_id": RID}))
+    # Seed publish: improvement_delta equals the whole best_fitness (from 0).
+    s.apply(ev("tsp.best_fitness_improved.v1", {
+        "run_id": RID, "generation": 0, "best_fitness": 0.67,
+        "improvement_delta": 0.67, "best_island": 0}))
+    run = s.kernel_runs[RID]
+    assert run.best_fitness == 0.67          # fitness still recorded
+    assert run.last_delta == 0.0             # but not surfaced as a Δ
+    assert [sp for sp in s.curiosity_feed() if sp.kind == "jump"] == []
+    # A genuine later improvement (delta < bf) IS a discovery.
+    s.apply(ev("tsp.best_fitness_improved.v1", {
+        "run_id": RID, "generation": 3, "best_fitness": 0.71,
+        "improvement_delta": 0.04, "best_island": 1}))
+    jumps = [sp for sp in s.curiosity_feed() if sp.kind == "jump"]
+    assert len(jumps) == 1 and jumps[0].starred is True
+    assert s.kernel_runs[RID].last_delta == 0.04
+
+
+# ----------------------------------------------------------- recency window --
+def _ts(offset_s: float) -> str:
+    from datetime import datetime, timedelta, timezone
+    base = datetime(2026, 6, 2, tzinfo=timezone.utc)
+    return (base + timedelta(seconds=offset_s)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_recency_window_prunes_stale_completed_runs():
+    s = PulseState()
+    # Stale completed run, far in the past relative to the fresh one.
+    s.apply(ev("tsp.kernel.started.v1", {"run_id": "STALE"}, time=_ts(0)))
+    s.apply(ev("tsp.kernel.completed.v1",
+               {"run_id": "STALE", "total_generations": 3, "stop_reason": "done"},
+               time=_ts(10)))
+    # Fresh run, well beyond the recency window after the stale one.
+    fresh_t = _ts(KERNEL_RUN_RECENCY_WINDOW_S + 600)
+    s.apply(ev("sdf.kernel.started.v1", {"run_id": "FRESH"}, time=fresh_t))
+    ids = {r.run_id for r in s.kernel_leaderboard()}
+    assert ids == {"FRESH"}  # stale completed run pruned
+
+
+def test_recency_window_keeps_running_run_however_old():
+    s = PulseState()
+    s.apply(ev("tsp.kernel.started.v1", {"run_id": "OLDRUN"}, time=_ts(0)))  # still running
+    fresh_t = _ts(KERNEL_RUN_RECENCY_WINDOW_S + 600)
+    s.apply(ev("sdf.kernel.completed.v1",
+               {"run_id": "NEWDONE", "total_generations": 1, "stop_reason": "done"},
+               time=fresh_t))
+    ids = {r.run_id for r in s.kernel_leaderboard()}
+    assert ids == {"OLDRUN", "NEWDONE"}  # running run never pruned by age
