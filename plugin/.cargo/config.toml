@@ -1,0 +1,10 @@
+[build]
+rustc-wrapper = "/usr/local/bin/sccache"
+jobs = 6
+incremental = true
+
+[profile.dev]
+opt-level = 0
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+incremental = true
