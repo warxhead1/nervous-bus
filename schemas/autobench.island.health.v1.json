@@ -14,7 +14,7 @@
     "time": {"type": "string", "format": "date-time"},
     "data": {
       "type": "object",
-      "required": ["run_id", "generation", "island", "plateau_count", "population_size", "age_since_last_reset"],
+      "required": ["run_id", "generation", "island", "best_fitness", "plateau_count", "population_size", "age_since_last_reset"],
       "additionalProperties": false,
       "properties": {
         "run_id": {
@@ -30,6 +30,10 @@
           "type": "integer",
           "minimum": 0,
           "description": "Zero-based index of the island within the run."
+        },
+        "best_fitness": {
+          "type": "number",
+          "description": "Best fitness in this island's population this generation (domain-specific; higher = better)."
         },
         "plateau_count": {
           "type": "integer",

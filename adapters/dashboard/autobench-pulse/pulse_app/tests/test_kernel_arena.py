@@ -80,12 +80,14 @@ def test_island_health_zero_index_not_dropped():
     s = PulseState()
     s.apply(ev("tsp.kernel.started.v1", {"run_id": RID, "n_islands": 2}))
     s.apply(ev("autobench.island.health.v1", {
-        "run_id": RID, "generation": 1, "island": 0,
+        "run_id": RID, "generation": 1, "island": 0, "best_fitness": 0.42,
         "plateau_count": 3, "population_size": 6, "age_since_last_reset": 1}))
     run = s.kernel_runs[RID]
     assert 0 in run.island_health
     assert run.island_health[0]["plateau_count"] == 3
-    assert run.island_history[0] == [(1, 3, 1)]
+    assert run.island_health[0]["best_fitness"] == 0.42
+    # history tuple is (gen, plateau_count, age, best_fitness)
+    assert run.island_history[0] == [(1, 3, 1, 0.42)]
 
 
 def test_best_fitness_jump_starred_above_threshold():

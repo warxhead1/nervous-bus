@@ -2613,19 +2613,24 @@ class IslandHeatmap(Static):
         lines = [
             f"[bold cyan]islands[/] [dim]{getattr(run, 'kernel', '?')}·"
             f"g{getattr(run, 'generation', 0)}[/]  "
-            "[green]·[/]ok [yellow]▪[/]plateau [red]▰[/]stuck "
-            "[magenta]↻[/]reset [yellow]◆[/]best"
+            "[dim]fitness trend · best · state[/] "
+            "[green]·[/]ok [yellow]▪[/]plateau [red]▰[/]stuck [magenta]↻[/]reset"
         ]
         for isl in sorted(history):
-            cells = []
-            for (g, plateau, _age) in history[isl][-_HEATMAP_COLS:]:
-                if g in reset_gens:
-                    cells.append("[magenta]↻[/]")
-                    continue
-                glyph, color = _plateau_glyph(plateau)
-                cells.append(f"[{color}]{glyph}[/]")
-            marker = " [bold yellow]◆[/]" if isl == best_island else ""
-            lines.append(f"[dim]I{isl}[/] " + "".join(cells) + marker)
+            rows = history[isl][-_HEATMAP_COLS:]
+            # rows are (gen, plateau_count, age, best_fitness)
+            fitvals = [r[3] for r in rows] if rows and len(rows[-1]) > 3 else []
+            spark = _sparkline(fitvals, width=_HEATMAP_COLS)
+            cur = fitvals[-1] if fitvals else 0.0
+            latest_plateau = rows[-1][1] if rows else 0
+            glyph, color = _plateau_glyph(latest_plateau)
+            recently_reset = any((r[0] in reset_gens) for r in rows)
+            state = "[magenta]↻[/]" if recently_reset else f"[{color}]{glyph}[/]"
+            marker = " [bold yellow]◆[/]" if isl == best_island else "  "
+            lines.append(
+                f"[dim]I{isl}[/] [cyan]{spark:<{_HEATMAP_COLS}}[/] "
+                f"[bold]{cur:.3f}[/] {state}{marker}"
+            )
         self.update("\n".join(lines))
 
 

@@ -774,11 +774,12 @@ class PulseState:
                     "plateau_count": int(data.get("plateau_count") or 0),
                     "age": int(data.get("age_since_last_reset") or 0),
                     "population_size": int(data.get("population_size") or 0),
+                    "best_fitness": float(data.get("best_fitness") or 0.0),
                     "generation": gen,
                 }
                 run.island_health[isl] = snap
                 hist = run.island_history.setdefault(isl, [])
-                hist.append((gen, snap["plateau_count"], snap["age"]))
+                hist.append((gen, snap["plateau_count"], snap["age"], snap["best_fitness"]))
                 if len(hist) > KERNEL_ISLAND_HISTORY:
                     del hist[:-KERNEL_ISLAND_HISTORY]
                 run.n_islands = max(run.n_islands, isl + 1)
