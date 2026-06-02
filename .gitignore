@@ -130,3 +130,10 @@ BLOCKED-*.md
 # Loomie agent scaffold — per-worktree, not for the shared repo
 .agent/
 .antigravitycli/
+
+# Private event contracts — these belong in $NERVOUS_HOME/schemas/ (the local
+# overlay at ~/.config/nervous-bus/schemas/), NEVER in this public repo. See
+# schemas/README.md. tachyonos.* is the private trading/prediction-market
+# engine (tachyonac-engine): PnL, positions, trades, venue/order data.
+schemas/tachyonos.*.json
+docs/tachyonos-contract.md
