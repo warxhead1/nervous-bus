@@ -93,6 +93,15 @@ FAILING_CASE_BUFFER: int = 256
 # CostRatePanel — chart-history cap (§7.5.5). ~600 samples ≈ 10 min @ 1 Hz.
 COST_HISTORY_MAX: int = 600
 
+# Memory caps (perf — keep a long run / replay from growing without bound).
+# ``sessions`` and ``iteration_summaries`` were previously never evicted; a
+# multi-hour run or a full debug.jsonl replay would accumulate indefinitely.
+# Keep the most-recent N and evict oldest. N is generous so the dashboard's
+# recency-windowed views never notice the cap during normal operation.
+MAX_SESSIONS: int = 200
+MAX_ITERATION_SUMMARIES: int = 400
+MAX_PREDICTIONS: int = 400
+
 # Default dollar cap when no budget.warning event has been observed yet.
 # Upgraded from the first budget.warning payload's max_cost_usd.
 # NOTE: For MiniMax coding plan workloads dollars are NOTIONAL — the real
@@ -655,6 +664,16 @@ class PulseState:
         self.kernel_snapshot_latest: Optional[dict[str, Any]] = None
         self.kernel_snapshot_count: int = 0
 
+        # --- ParetoScatter memo (perf) --------------------------------------
+        # pareto_points() is O(n) over iteration_summaries and is called twice
+        # a second by _tick_aggregates; pareto_classified() then runs an O(n²)
+        # frontier pass. Both only change when an iteration.summary lands or a
+        # session score updates, so we memoize on a monotonic version that the
+        # relevant write paths bump. Cache invalidated lazily on read.
+        self._pareto_version: int = 0
+        self._pareto_cache_version: int = -1
+        self._pareto_cache: list[tuple[float, float]] = []
+
     # ----------------------------------------------------------- ingestion --
     def apply(self, evt: dict[str, Any]) -> set[str]:
         """Apply one CloudEvents envelope, return set of dirty session_ids.
@@ -734,6 +753,11 @@ class PulseState:
         if sess is None:
             sess = Session(session_id=sid, parent_id=data.get("parent_session_id"))
             self.sessions[sid] = sess
+            # Cap the session map (perf) — a long run / full-log replay would
+            # otherwise grow it without bound. Evict the least-recently-active
+            # sessions (and their now-orphaned predictions) when over cap.
+            if len(self.sessions) > MAX_SESSIONS:
+                self._evict_oldest_sessions()
         sess.touch()
         self.events_total += 1
         now_sec = int(time.time())
@@ -775,6 +799,31 @@ class PulseState:
             self._apply_sandbox_stderr(sess, data)
 
         return {sid}
+
+    def _evict_oldest_sessions(self) -> None:
+        """Drop the least-recently-active sessions back down to MAX_SESSIONS.
+
+        Also drops predictions / iteration_summaries owned only by evicted
+        sessions so the auxiliary maps don't retain pointers to vanished runs.
+        ``last_event`` (wall clock) orders recency; the most-recent MAX_SESSIONS
+        are kept. Cheap — runs only when the cap is exceeded (rare).
+        """
+        excess = len(self.sessions) - MAX_SESSIONS
+        if excess <= 0:
+            return
+        oldest = sorted(self.sessions.values(), key=lambda s: s.last_event)[:excess]
+        dropped: set[str] = {s.session_id for s in oldest}
+        for sid in dropped:
+            self.sessions.pop(sid, None)
+        if dropped:
+            self.predictions = {
+                k: v for k, v in self.predictions.items() if k[0] not in dropped
+            }
+            self.iteration_summaries = {
+                k: v for k, v in self.iteration_summaries.items() if k[0] not in dropped
+            }
+            # The point cloud changed — invalidate the pareto memo.
+            self._pareto_version += 1
 
     # ------------------------------------------------------- kernel arena ---
     def _push_spike(self, run: "KernelRun", gen: int, kind: str, *,
@@ -1249,6 +1298,9 @@ class PulseState:
                 sess.scores.append(float(it.aggregate_score))
                 if it.prev_score is not None:
                     it.score_delta = float(it.aggregate_score) - float(it.prev_score)
+                # A new session score feeds the pareto back-compat path —
+                # invalidate the memo.
+                self._pareto_version += 1
             # global verdict counts
             for k, v in it.verdict_counts.items():
                 self.verdict_counts[k] += int(v)
@@ -1336,6 +1388,14 @@ class PulseState:
             last_event_at=time.time(),
         )
         self.predictions[key] = rec
+        # Bound the prediction map (perf) — evict the oldest by last_event_at
+        # when over cap. Generous N so the AHE tracker's recent view (≤5) and
+        # the panel's history dots never lose anything they'd actually render.
+        if len(self.predictions) > MAX_PREDICTIONS:
+            for old_key in sorted(
+                self.predictions, key=lambda k: self.predictions[k].last_event_at
+            )[: len(self.predictions) - MAX_PREDICTIONS]:
+                self.predictions.pop(old_key, None)
 
     def _apply_prediction_refuted_live(
         self, sess: Session, data: dict[str, Any]
@@ -1531,6 +1591,16 @@ class PulseState:
                 self.worker_cost_total_usd + sess.cost_usd
             ),
         }
+        # Bound the summary map (perf) — keep the most-recent N by insertion
+        # order, evicting oldest. dict preserves insertion order in CPython, so
+        # FIFO eviction is just popping the first key. Bounding here also bounds
+        # the ParetoScatter input so its O(n)/O(n²) passes stay flat on a long
+        # run / full-log replay.
+        while len(self.iteration_summaries) > MAX_ITERATION_SUMMARIES:
+            oldest = next(iter(self.iteration_summaries))
+            del self.iteration_summaries[oldest]
+        # Invalidate the pareto memo — a new summary changed the point cloud.
+        self._pareto_version += 1
 
     # ---- queue pressure ----------------------------------------------------
     def _apply_queue_pressure(self, data: dict[str, Any]) -> None:
@@ -1595,7 +1665,15 @@ class PulseState:
         Falls back to the old per-session view for sessions with scores
         but no iteration_summaries — preserves the smoke-test invariant
         in test_pareto_points_after_complete.
+
+        Memoized (perf): the point cloud only changes when an iteration.summary
+        lands or a session score updates — both bump ``_pareto_version``. Until
+        then we hand back the cached list, so the 2 Hz aggregate tick (and the
+        O(n²) frontier pass that consumes it) does no recompute on a quiescent
+        scatter.
         """
+        if self._pareto_cache_version == self._pareto_version:
+            return self._pareto_cache
         out: list[tuple[float, float]] = []
         seen_sessions: set[str] = set()
         # Iteration-final snapshots first (the new, dense layer).
@@ -1616,6 +1694,8 @@ class PulseState:
                 continue
             if s.scores:
                 out.append((s.cost_usd, max(s.scores)))
+        self._pareto_cache = out
+        self._pareto_cache_version = self._pareto_version
         return out
 
     def pareto_classified(self) -> dict[str, list[tuple[float, float]]]:
