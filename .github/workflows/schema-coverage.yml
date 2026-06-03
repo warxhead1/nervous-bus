@@ -66,6 +66,10 @@ jobs:
         # When the in-flight drift is cleared, a follow-up PR (tracked as a
         # nervous-bus follow-up bead) flips this to false AND drops the
         # --report-only flag below.
+        #
+        # Report-only does NOT mean quiet: --summary-file appends a LOUD,
+        # PR-visible Markdown block (with a missing-channel table) to the run
+        # summary, and the driver emits ::warning:: annotations for every miss.
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -75,6 +79,7 @@ jobs:
             --allowlist tools/schema_coverage_allowlist.txt \
             --deprecated tools/schema_coverage_deprecated.txt \
             --report-only \
+            --summary-file "$GITHUB_STEP_SUMMARY" \
             | tee schema-coverage-report.txt
 
       - name: Upload scan artefact
