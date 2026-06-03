@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nervous-bus/schemas/terrain.kernel.started.v1.json",
-  "title": "terrain.kernel.started v1",
-  "description": "Autobench terrain FunSearch kernel \u2014 kernel.started event. Source: /autobench/terrain_kernel.",
+  "$id": "nervous-bus/schemas/kernel.started.v1.json",
+  "title": "kernel.started v1",
+  "description": "Autobench FunSearch kernel — kernel.started event. Domain-discriminated via data.domain. Source: /autobench/kernel.",
   "type": "object",
   "required": [
     "specversion",
@@ -23,11 +23,11 @@
     },
     "source": {
       "type": "string",
-      "const": "/autobench/terrain_kernel"
+      "const": "/autobench/kernel"
     },
     "type": {
       "type": "string",
-      "const": "terrain.kernel.started.v1"
+      "const": "kernel.started.v1"
     },
     "datacontenttype": {
       "type": "string",
@@ -40,6 +40,7 @@
     "data": {
       "type": "object",
       "required": [
+        "domain",
         "run_id",
         "git_commit",
         "instances",
@@ -52,6 +53,11 @@
         "sandbox_type"
       ],
       "properties": {
+        "domain": {
+          "type": "string",
+          "enum": ["sph", "sdf", "noise", "phase", "terrain", "thermal", "latent", "tsp"],
+          "description": "Kernel domain discriminator."
+        },
         "run_id": {
           "type": "string",
           "description": "ULID identifying this kernel run."

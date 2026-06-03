@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nervous-bus/schemas/latent.prior.loaded.v1.json",
-  "title": "latent.prior.loaded v1",
-  "description": "Autobench latent FunSearch kernel \u2014 prior.loaded event. Source: /autobench/latent_kernel.",
+  "$id": "nervous-bus/schemas/kernel.island_reset.v1.json",
+  "title": "kernel.island_reset v1",
+  "description": "Autobench FunSearch kernel — island_reset event. Domain-discriminated via data.domain. Source: /autobench/kernel.",
   "type": "object",
   "required": [
     "specversion",
@@ -23,11 +23,11 @@
     },
     "source": {
       "type": "string",
-      "const": "/autobench/latent_kernel"
+      "const": "/autobench/kernel"
     },
     "type": {
       "type": "string",
-      "const": "latent.prior.loaded.v1"
+      "const": "kernel.island_reset.v1"
     },
     "datacontenttype": {
       "type": "string",
@@ -40,24 +40,34 @@
     "data": {
       "type": "object",
       "required": [
+        "domain",
         "run_id",
-        "kernel",
-        "vectors_loaded",
-        "prior_fitted"
+        "generation",
+        "n_islands_culled",
+        "pre_reset_best_fitness",
+        "plateau_count"
       ],
       "properties": {
+        "domain": {
+          "type": "string",
+          "enum": ["sph", "sdf", "noise", "phase", "terrain", "thermal", "latent", "tsp"],
+          "description": "Kernel domain discriminator."
+        },
         "run_id": {
           "type": "string",
           "description": "ULID identifying this kernel run."
         },
-        "kernel": {
-          "type": "string"
-        },
-        "vectors_loaded": {
+        "generation": {
           "type": "integer"
         },
-        "prior_fitted": {
-          "type": "boolean"
+        "n_islands_culled": {
+          "type": "integer"
+        },
+        "pre_reset_best_fitness": {
+          "type": "number"
+        },
+        "plateau_count": {
+          "type": "integer"
         }
       },
       "additionalProperties": false

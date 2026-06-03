@@ -43,13 +43,22 @@ def load_results(path: Path) -> dict:
 
 
 def load_bus_events(run_id: str | None) -> list[dict]:
-    """Load tsp.candidate.evaluated events from the bus debug log (best-effort)."""
+    """Load candidate.evaluated events for the tsp domain from the bus debug
+    log (best-effort).
+
+    Accepts both the legacy per-domain ``tsp.candidate.evaluated`` channel and
+    the unified ``kernel.candidate.evaluated`` channel (filtered to
+    ``data.domain == "tsp"``) during the kernel-unification merge window.
+    """
     if not BUS_LOG.exists():
         return []
     events = []
     for line in BUS_LOG.read_text(errors="replace").splitlines():
         line = line.strip()
-        if not line or "tsp.candidate.evaluated" not in line:
+        if not line or (
+            "tsp.candidate.evaluated" not in line
+            and "kernel.candidate.evaluated" not in line
+        ):
             continue
         try:
             env = json.loads(line)
@@ -57,9 +66,17 @@ def load_bus_events(run_id: str | None) -> list[dict]:
             continue
         # The CLI may double-envelope; unwrap to the inner data payload.
         data = env.get("data", {})
-        if isinstance(data, dict) and data.get("type", "").startswith("tsp."):
+        if isinstance(data, dict) and (
+            data.get("type", "").startswith("tsp.")
+            or data.get("type", "").startswith("kernel.")
+        ):
             data = data.get("data", {})
         if not isinstance(data, dict) or "fitness" not in data:
+            continue
+        # Unified channel carries an explicit domain discriminator; only keep
+        # tsp-domain events. Legacy events have no domain field — keep them.
+        domain = data.get("domain")
+        if domain not in (None, "tsp"):
             continue
         if run_id and data.get("run_id") != run_id:
             continue

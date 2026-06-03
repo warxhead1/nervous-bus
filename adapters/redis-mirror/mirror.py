@@ -66,6 +66,11 @@ class SchemaRegistry:
         self._registry: Dict[str, dict] = {}
         self._envelope_types: set = set()
         self._last_load: float = 0.0
+        # Unknown-channel counter, keyed by event type. Pass-through events that
+        # have no registered schema (e.g. legacy <domain>.* kernel channels still
+        # in flight during the kernel-unification merge window) are warned about
+        # AND tallied here so the count can be surfaced in the metrics line.
+        self.unknown_channels: Dict[str, int] = {}
         self._load()
 
     def _load(self) -> None:
@@ -110,8 +115,15 @@ class SchemaRegistry:
         """
         schema = self._registry.get(event_type)
         if schema is None:
-            sys.stderr.write(f"[nbus warn] no schema for type: {event_type}\n")
-            sys.stderr.flush()
+            # Unknown channel: warn + tally + pass through (never drop or
+            # hard dead-letter — see kernel-unification spec §4, WARN+METRIC).
+            count = self.unknown_channels.get(event_type, 0) + 1
+            self.unknown_channels[event_type] = count
+            # Warn on first sight to avoid log spam for high-frequency unknowns;
+            # the running tally is surfaced periodically by log_metrics().
+            if count == 1:
+                sys.stderr.write(f"[nbus warn] no schema for type: {event_type}\n")
+                sys.stderr.flush()
             return None
 
         # Decide what to validate: full envelope or just the data payload.
@@ -529,12 +541,23 @@ def log_metrics(state: State) -> None:
     elapsed = time.time() - state.started_at
     events_per_sec = state.events_mirrored / max(1, elapsed)
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    unknown = get_schema_registry().unknown_channels
+    unknown_total = sum(unknown.values())
     sys.stderr.write(
         f"[{now_str}] redis-mirror metrics: "
         f"mirrored={state.events_mirrored} dropped={state.events_dropped} "
-        f"redis_errors={state.redis_errors} rate={events_per_sec:.2f}/s\n"
+        f"redis_errors={state.redis_errors} "
+        f"unknown_channels={unknown_total} rate={events_per_sec:.2f}/s\n"
     )
     sys.stderr.flush()
+    if unknown:
+        # Per-type breakdown so operators can see which channels lack a schema
+        # (e.g. legacy <domain>.* kernel events still emitted during the merge
+        # window). Pass-through is preserved; this is observability only.
+        top = sorted(unknown.items(), key=lambda kv: kv[1], reverse=True)
+        detail = "  ".join(f"{t}={n}" for t, n in top)
+        sys.stderr.write(f"[{now_str}] redis-mirror unknown-channel tally: {detail}\n")
+        sys.stderr.flush()
 
 
 def main() -> int:

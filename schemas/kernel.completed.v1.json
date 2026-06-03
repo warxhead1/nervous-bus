@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nervous-bus/schemas/tsp.kernel.completed.v1.json",
-  "title": "tsp.kernel.completed v1",
-  "description": "Autobench tsp FunSearch kernel \u2014 kernel.completed event. Source: /autobench/tsp_kernel.",
+  "$id": "nervous-bus/schemas/kernel.completed.v1.json",
+  "title": "kernel.completed v1",
+  "description": "Autobench FunSearch kernel — kernel.completed event. Domain-discriminated via data.domain. Source: /autobench/kernel.",
   "type": "object",
   "required": [
     "specversion",
@@ -23,11 +23,11 @@
     },
     "source": {
       "type": "string",
-      "const": "/autobench/tsp_kernel"
+      "const": "/autobench/kernel"
     },
     "type": {
       "type": "string",
-      "const": "tsp.kernel.completed.v1"
+      "const": "kernel.completed.v1"
     },
     "datacontenttype": {
       "type": "string",
@@ -40,6 +40,7 @@
     "data": {
       "type": "object",
       "required": [
+        "domain",
         "run_id",
         "total_generations",
         "stop_reason",
@@ -48,6 +49,11 @@
         "history"
       ],
       "properties": {
+        "domain": {
+          "type": "string",
+          "enum": ["sph", "sdf", "noise", "phase", "terrain", "thermal", "latent", "tsp"],
+          "description": "Kernel domain discriminator."
+        },
         "run_id": {
           "type": "string",
           "description": "ULID identifying this kernel run."
@@ -83,7 +89,7 @@
             "source": {
               "type": "string"
             },
-            "priority_code": {
+            "sph_code": {
               "type": "string"
             }
           },

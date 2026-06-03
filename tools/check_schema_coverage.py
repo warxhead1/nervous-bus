@@ -137,6 +137,16 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="Print the report but always exit 0 (useful for first-run rollout).",
     )
+    ap.add_argument(
+        "--summary-file",
+        type=Path,
+        default=None,
+        help=(
+            "Append a Markdown summary block of any missing channels to this "
+            "file (e.g. $GITHUB_STEP_SUMMARY) so misses are loud and "
+            "PR-visible even while --report-only keeps the exit code 0."
+        ),
+    )
     args = ap.parse_args(argv)
 
     if args.input:
@@ -196,6 +206,14 @@ def main(argv: list[str]) -> int:
         print("  1. Add schemas/<channel>.v1.json describing the payload, OR")
         print("  2. Add the channel to tools/schema_coverage_allowlist.txt with a")
         print("     comment explaining why it never crosses the bus.")
+
+        # LOUD, PR-visible summary block. The report itself stays --report-only
+        # (exit 0), but we make sure a reviewer cannot miss the gap: a GitHub
+        # workflow annotation (::warning::) AND a Markdown block appended to
+        # $GITHUB_STEP_SUMMARY (when --summary-file points there).
+        _write_summary(args.summary_file, missing, total, len(covered), len(allowlisted))
+        _emit_annotation(missing)
+
         if args.report_only:
             print()
             print("(--report-only) returning 0 despite missing coverage.")
@@ -203,7 +221,71 @@ def main(argv: list[str]) -> int:
         return 1
 
     print("All emitted channels have schemas. ✔")
+    _write_summary(args.summary_file, missing, total, len(covered), len(allowlisted))
     return 0
+
+
+def _emit_annotation(missing: list[tuple[str, list[dict]]]) -> None:
+    """Emit a GitHub Actions ::warning:: annotation so the miss shows up on the
+    PR Files/Checks UI even when the step exits 0 (report-only)."""
+    names = ", ".join(ch for ch, _ in missing[:20])
+    extra = "" if len(missing) <= 20 else f" (+{len(missing) - 20} more)"
+    msg = (
+        f"schema-coverage: {len(missing)} emitted channel(s) have NO schema: "
+        f"{names}{extra}. Add schemas/<channel>.v1.json or allowlist them."
+    )
+    # `::warning::` is rendered as a yellow annotation on the run/PR; a no-op
+    # plain print outside CI.
+    print(f"::warning title=Schema coverage gap::{msg}")
+
+
+def _write_summary(
+    summary_file: Path | None,
+    missing: list[tuple[str, list[dict]]],
+    total: int,
+    covered: int,
+    allowlisted: int,
+) -> None:
+    """Append a Markdown summary to summary_file (typically $GITHUB_STEP_SUMMARY).
+
+    No-op when no summary file is configured. The block is intentionally loud
+    so any schema miss is impossible to overlook in the PR/run summary."""
+    if not summary_file:
+        return
+    lines: list[str] = []
+    lines.append("## Schema coverage")
+    lines.append("")
+    lines.append(f"- total unique channels emitted: **{total}**")
+    lines.append(f"- covered by schema: **{covered}**")
+    lines.append(f"- allowlisted: **{allowlisted}**")
+    lines.append(f"- **MISSING: {len(missing)}**")
+    lines.append("")
+    if missing:
+        lines.append(
+            f"> [!WARNING]\n> {len(missing)} emitted channel(s) have **no schema** "
+            "(report-only — not gating this PR yet)."
+        )
+        lines.append("")
+        lines.append("| channel | first emit site |")
+        lines.append("| --- | --- |")
+        for ch, sites in missing:
+            site = sites[0] if sites else {}
+            loc = f"{site.get('producer', '?')}: {site.get('file', '?')}:{site.get('line', '?')}"
+            more = f" (+{len(sites) - 1} more)" if len(sites) > 1 else ""
+            lines.append(f"| `{ch}` | {loc}{more} |")
+        lines.append("")
+        lines.append(
+            "Resolution: add `schemas/<channel>.v1.json` or allowlist the "
+            "channel in `tools/schema_coverage_allowlist.txt`."
+        )
+    else:
+        lines.append("All emitted channels have schemas. :white_check_mark:")
+    lines.append("")
+    try:
+        with summary_file.open("a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except OSError as e:
+        sys.stderr.write(f"[schema-coverage] could not write summary: {e}\n")
 
 
 if __name__ == "__main__":

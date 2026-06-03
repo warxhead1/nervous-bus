@@ -5,3 +5,7 @@
 # is still being emitted.
 #
 # Format: one channel per line. Lines starting with `#` and blank lines ignored.
+
+# Deprecated in the kernel-unify wave (2026-06-02): underscore-spelled duplicate
+# of bus.tengine.bridge.path_verified.v1. Canonical is the dot-separated channel.
+bus.tengine.bridge_path_verified.v1

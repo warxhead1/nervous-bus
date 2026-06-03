@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nervous-bus/schemas/phase.generation.completed.v1.json",
-  "title": "phase.generation.completed v1",
-  "description": "Autobench phase FunSearch kernel \u2014 generation.completed event. Source: /autobench/phase_kernel.",
+  "$id": "nervous-bus/schemas/kernel.generation.completed.v1.json",
+  "title": "kernel.generation.completed v1",
+  "description": "Autobench FunSearch kernel — generation.completed event. Domain-discriminated via data.domain. Source: /autobench/kernel.",
   "type": "object",
   "required": [
     "specversion",
@@ -23,11 +23,11 @@
     },
     "source": {
       "type": "string",
-      "const": "/autobench/phase_kernel"
+      "const": "/autobench/kernel"
     },
     "type": {
       "type": "string",
-      "const": "phase.generation.completed.v1"
+      "const": "kernel.generation.completed.v1"
     },
     "datacontenttype": {
       "type": "string",
@@ -40,6 +40,7 @@
     "data": {
       "type": "object",
       "required": [
+        "domain",
         "run_id",
         "generation",
         "best_fitness",
@@ -53,6 +54,11 @@
         "island_reset_fired"
       ],
       "properties": {
+        "domain": {
+          "type": "string",
+          "enum": ["sph", "sdf", "noise", "phase", "terrain", "thermal", "latent", "tsp"],
+          "description": "Kernel domain discriminator."
+        },
         "run_id": {
           "type": "string",
           "description": "ULID identifying this kernel run."
@@ -82,7 +88,7 @@
         },
         "fitness_std": {
           "type": "number",
-          "description": "Population fitness standard deviation \u2014 leading indicator of premature convergence."
+          "description": "Population fitness standard deviation — leading indicator of premature convergence."
         },
         "code_diversity": {
           "type": "number",

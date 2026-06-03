@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nervous-bus/schemas/phase.prior.updated.v1.json",
-  "title": "phase.prior.updated v1",
-  "description": "Autobench phase FunSearch kernel \u2014 prior.updated event. Source: /autobench/phase_kernel.",
+  "$id": "nervous-bus/schemas/kernel.prior.updated.v1.json",
+  "title": "kernel.prior.updated v1",
+  "description": "Autobench FunSearch kernel — prior.updated event. Domain-discriminated via data.domain. Source: /autobench/kernel.",
   "type": "object",
   "required": [
     "specversion",
@@ -23,11 +23,11 @@
     },
     "source": {
       "type": "string",
-      "const": "/autobench/phase_kernel"
+      "const": "/autobench/kernel"
     },
     "type": {
       "type": "string",
-      "const": "phase.prior.updated.v1"
+      "const": "kernel.prior.updated.v1"
     },
     "datacontenttype": {
       "type": "string",
@@ -40,6 +40,7 @@
     "data": {
       "type": "object",
       "required": [
+        "domain",
         "run_id",
         "kernel",
         "vectors_added",
@@ -47,6 +48,11 @@
         "prior_path"
       ],
       "properties": {
+        "domain": {
+          "type": "string",
+          "enum": ["sph", "sdf", "noise", "phase", "terrain", "thermal", "latent", "tsp"],
+          "description": "Kernel domain discriminator."
+        },
         "run_id": {
           "type": "string",
           "description": "ULID identifying this kernel run."

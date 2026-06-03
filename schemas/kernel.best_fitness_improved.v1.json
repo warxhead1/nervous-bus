@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nervous-bus/schemas/noise.island_reset.v1.json",
-  "title": "noise.island_reset v1",
-  "description": "Autobench noise FunSearch kernel \u2014 island_reset event. Source: /autobench/noise_kernel.",
+  "$id": "nervous-bus/schemas/kernel.best_fitness_improved.v1.json",
+  "title": "kernel.best_fitness_improved v1",
+  "description": "Autobench FunSearch kernel — best_fitness_improved event. Domain-discriminated via data.domain. Source: /autobench/kernel.",
   "type": "object",
   "required": [
     "specversion",
@@ -23,11 +23,11 @@
     },
     "source": {
       "type": "string",
-      "const": "/autobench/noise_kernel"
+      "const": "/autobench/kernel"
     },
     "type": {
       "type": "string",
-      "const": "noise.island_reset.v1"
+      "const": "kernel.best_fitness_improved.v1"
     },
     "datacontenttype": {
       "type": "string",
@@ -40,13 +40,20 @@
     "data": {
       "type": "object",
       "required": [
+        "domain",
         "run_id",
         "generation",
-        "n_islands_culled",
-        "pre_reset_best_fitness",
-        "plateau_count"
+        "best_fitness",
+        "improvement_delta",
+        "best_program_id",
+        "best_island"
       ],
       "properties": {
+        "domain": {
+          "type": "string",
+          "enum": ["sph", "sdf", "noise", "phase", "terrain", "thermal", "latent", "tsp"],
+          "description": "Kernel domain discriminator."
+        },
         "run_id": {
           "type": "string",
           "description": "ULID identifying this kernel run."
@@ -54,13 +61,17 @@
         "generation": {
           "type": "integer"
         },
-        "n_islands_culled": {
-          "type": "integer"
+        "best_fitness": {
+          "type": "number",
+          "description": "Best fitness this generation (domain-specific; higher = better)."
         },
-        "pre_reset_best_fitness": {
+        "improvement_delta": {
           "type": "number"
         },
-        "plateau_count": {
+        "best_program_id": {
+          "type": "string"
+        },
+        "best_island": {
           "type": "integer"
         }
       },
