@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/funsearch.review.v1.json",
+  "title": "funsearch.review.v1",
+  "description": "Human (or agent) annotation on an evolved candidate — a free-form comment and optional rating, keyed by candidate_id. Annotate-only: these are notes for the results gallery and do not feed back into the search. Mirrors the kb.review.* pattern.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "time", "data"],
+  "properties": {
+    "specversion": { "type": "string", "const": "1.0" },
+    "id": { "type": "string" },
+    "source": { "type": "string" },
+    "type": { "type": "string", "const": "funsearch.review.v1" },
+    "time": { "type": "string", "format": "date-time" },
+    "data": {
+      "type": "object",
+      "required": ["candidate_id", "run_id", "author", "comment"],
+      "properties": {
+        "candidate_id": { "type": "string", "description": "The evolved candidate this comment is about" },
+        "run_id": { "type": "string" },
+        "kernel": { "type": "string", "description": "Kernel/domain (free-form, not enumerated so new kernels need no schema bump)" },
+        "author": { "type": "string", "description": "Who left the comment (operator, or an agent id)" },
+        "comment": { "type": "string", "description": "Free-form note on how the procedure is turning out" },
+        "rating": { "type": "integer", "minimum": 0, "maximum": 5, "description": "Optional 0-5 quality rating" },
+        "generation": { "type": "integer", "description": "Optional, for gallery grouping" },
+        "island": { "type": "integer", "description": "Optional, for gallery grouping" }
+      }
+    }
+  }
+}
