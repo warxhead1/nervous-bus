@@ -145,6 +145,14 @@ class PulseApp(App):
         # bool is fine — race is benign (worst case we render one frame late).
         self._state_dirty: bool = False
         self._last_chart_tick: float = 0.0
+        # Aggregate-tick gate (perf): _tick_aggregates runs ~14 query+recompute
+        # +repaint ops at 2 Hz, including 3 expensive plotext Braille charts.
+        # An IDLE dashboard must stop repainting them. We snapshot the
+        # state_version we last painted aggregates for; if it hasn't advanced
+        # (and we aren't force-painting for a pause/replay badge flip) we bail
+        # before touching any widget. state_version only advances on a dirty
+        # render tick, so this short-circuits a quiescent bus to ~0 work/sec.
+        self._aggregates_version: int = -1
 
     # -------------------------------------------------------- compose -----
     def compose(self) -> ComposeResult:
@@ -292,8 +300,19 @@ class PulseApp(App):
             pass
 
     # -------------------------------------------------------- ticks -------
-    def _tick_aggregates(self) -> None:
-        """Refresh charts + header subtitle. Runs at ≤2 Hz (§8.2)."""
+    def _tick_aggregates(self, *, force: bool = False) -> None:
+        """Refresh charts + header subtitle. Runs at ≤2 Hz (§8.2).
+
+        Gated on ``state_version`` (perf): when no event has mutated state
+        since the last aggregate paint we bail immediately, so an idle
+        dashboard does ~0 work/sec instead of re-running ~14 query+recompute
+        +repaint ops (incl. 3 plotext Braille charts) twice a second. The
+        ``force`` path lets the pause toggle repaint the header badge even
+        when state is otherwise quiescent.
+        """
+        if not force and self.state_version == self._aggregates_version:
+            return
+        self._aggregates_version = self.state_version
         try:
             hist = self.query_one(VerdictHistogram)
             hist.counts = dict(self.state.verdict_counts)
@@ -458,8 +477,9 @@ class PulseApp(App):
     # -------------------------------------------------------- actions -----
     def action_toggle_pause(self) -> None:
         self.paused = not self.paused
-        # Force header refresh immediately so the [PAUSED] tag shows up
-        self._tick_aggregates()
+        # Force header refresh immediately so the [PAUSED] tag shows up even
+        # when the bus is idle (state_version hasn't advanced).
+        self._tick_aggregates(force=True)
 
     def action_focus_filter(self) -> None:
         bar = self.query_one("#filter-bar", Input)

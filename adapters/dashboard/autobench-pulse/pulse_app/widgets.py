@@ -900,6 +900,10 @@ class AHEPredictionTracker(Static):
     cheap (≤5 rows, plain markup) and avoids the 10 Hz tick reaching in.
     """
 
+    # always_update so a list of mutated-in-place PredictionRecord objects
+    # still drives the watcher; the actual repaint is gated on a combined
+    # content signature (records + case_progress) so an unchanged snapshot
+    # skips the markup rebuild (perf — was repainting every aggregate tick).
     records: reactive[list[Any]] = reactive(list, always_update=True)
     case_progress: reactive[dict[tuple[str, int], tuple[int, int]]] = reactive(
         dict, always_update=True
@@ -916,15 +920,43 @@ class AHEPredictionTracker(Static):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__("", **kwargs)
         self._empty_text = "[dim]no predictions yet — waiting for improver to commit a falsifiable claim…[/]"
+        self._sig: Optional[tuple] = None
 
     # ----------------------------------------------------- reactive watchers
-    def watch_records(self, _value: list[Any]) -> None:
+    def _content_signature(self) -> tuple:
+        rows = list(self.records or [])[:PREDICTION_TRACKER_LIMIT]
+        out: list[tuple] = []
+        for rec in rows:
+            sid = str(getattr(rec, "session_id", ""))
+            iteration = int(getattr(rec, "iteration", 0))
+            out.append((
+                sid,
+                iteration,
+                getattr(rec, "status", "pending"),
+                round(float(getattr(rec, "confidence", 0.0)), 4),
+                round(float(getattr(rec, "predicted_score_delta", 0.0)), 6),
+                getattr(rec, "actual_score_delta", None),
+                getattr(rec, "score_delta_error", None),
+                getattr(rec, "confidence_calibration", None),
+                getattr(rec, "refutation_reason", ""),
+                self.case_progress.get((sid, iteration), (0, 0)),
+            ))
+        return tuple(out)
+
+    def _maybe_update(self) -> None:
+        sig = self._content_signature()
+        if sig == self._sig:
+            return
+        self._sig = sig
         self.update(self._render_content())
+
+    def watch_records(self, _value: list[Any]) -> None:
+        self._maybe_update()
 
     def watch_case_progress(
         self, _value: dict[tuple[str, int], tuple[int, int]]
     ) -> None:
-        self.update(self._render_content())
+        self._maybe_update()
 
     # ------------------------------------------------------------- render --
     def _render_content(self) -> str:
@@ -2324,14 +2356,32 @@ class IterationLineageStrip(Static):
     }
     """
 
+    # always_update so a rebuilt-each-tick cell list still drives the watcher;
+    # the repaint is gated on a content signature so an unchanged lineage skips
+    # the (4-row markup) rebuild.
     cells: reactive[list[dict[str, Any]]] = reactive(list, always_update=True)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__("", markup=True, **kwargs)
         self.border_title = "Iteration Lineage"
+        self._sig: Optional[tuple] = None
         self.update(self._render_idle())
 
     def watch_cells(self, value: list[dict[str, Any]]) -> None:
+        sig = tuple(
+            (
+                int(c.get("iteration") or 0),
+                str(c.get("kind") or "completed"),
+                str(c.get("ahe_status") or "pending"),
+                c.get("aggregate_score"),
+                c.get("predicted_score_delta"),
+                tuple(sorted((c.get("verdict_distribution") or {}).items())),
+            )
+            for c in value
+        )
+        if sig == self._sig:
+            return
+        self._sig = sig
         if not value:
             self.update(self._render_idle())
             return
@@ -2534,14 +2584,35 @@ class KernelLeaderboard(Static):
     }
     """
 
+    # always_update so the watcher fires even when the list holds the SAME
+    # (mutated-in-place) KernelRun objects; the repaint itself is gated on a
+    # cheap content signature so an unchanged snapshot skips the markup
+    # rebuild + Textual diff (perf — was repainting every aggregate tick).
     runs: reactive[list] = reactive(list, always_update=True)
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__("", *args, **kwargs)
         self._empty = "[dim]kernel arena[/]  [dim]no FunSearch runs yet[/]"
+        self._sig: Optional[tuple] = None
         self.update(self._empty)
 
     def watch_runs(self, runs: list) -> None:
+        sig = tuple(
+            (
+                getattr(r, "run_id", ""),
+                getattr(r, "generation", 0),
+                round(float(getattr(r, "best_fitness", 0.0)), 6),
+                round(float(getattr(r, "last_delta", 0.0)), 6),
+                getattr(r, "is_running", True),
+                getattr(r, "llm_requests", 0),
+                getattr(r, "n_resets", 0),
+                len(getattr(r, "fitness_history", []) or []),
+            )
+            for r in runs
+        )
+        if sig == self._sig:
+            return
+        self._sig = sig
         if not runs:
             self.update(self._empty)
             return
@@ -2596,14 +2667,48 @@ class IslandHeatmap(Static):
     }
     """
 
+    # always_update so a mutated-in-place KernelRun still triggers the watcher;
+    # the actual repaint is gated on a signature that INCLUDES per-island
+    # fitness/plateau tails, so the per-island best_fitness sparklines still
+    # update whenever island fitness changes — only an identical snapshot is
+    # skipped.
     run: reactive[Optional[Any]] = reactive(None, always_update=True)
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__("", *args, **kwargs)
         self._empty = "[dim]islands[/]  [dim]awaiting island health…[/]"
+        self._sig: Optional[tuple] = None
         self.update(self._empty)
 
+    @staticmethod
+    def _signature(run: Optional[Any]) -> tuple:
+        history = getattr(run, "island_history", None) if run is not None else None
+        if not history:
+            return ()
+        parts: list[tuple] = [
+            (getattr(run, "run_id", ""),
+             getattr(run, "generation", 0),
+             getattr(run, "best_island", -1),
+             tuple(sorted(getattr(run, "reset_gens", set()) or ()))),
+        ]
+        for isl in sorted(history):
+            rows = history[isl][-_HEATMAP_COLS:]
+            # Capture each rendered cell (gen, plateau, best_fitness) so any
+            # change to a per-island fitness/plateau tail forces a repaint.
+            parts.append((
+                isl,
+                tuple(
+                    (r[0], r[1], round(float(r[3]), 6) if len(r) > 3 else 0.0)
+                    for r in rows
+                ),
+            ))
+        return tuple(parts)
+
     def watch_run(self, run: Optional[Any]) -> None:
+        sig = self._signature(run)
+        if sig == self._sig:
+            return
+        self._sig = sig
         history = getattr(run, "island_history", None) if run is not None else None
         if not history:
             self.update(self._empty)
@@ -2652,14 +2757,31 @@ class CuriositySpikeFeed(Static):
 
     _GLYPH = {"jump": "▲", "reset": "↻", "hint": "?", "complete": "✓", "start": "▸"}
 
+    # always_update so the watcher fires on the freshly-sliced list each tick;
+    # the repaint is gated on a cheap signature of the (immutable) spikes so a
+    # feed that hasn't changed skips the markup rebuild.
     spikes: reactive[list] = reactive(list, always_update=True)
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__("", *args, **kwargs)
         self._empty = "[dim]curiosity feed[/]  [dim]no spikes yet[/]"
+        self._sig: Optional[tuple] = None
         self.update(self._empty)
 
     def watch_spikes(self, spikes: list) -> None:
+        sig = tuple(
+            (
+                getattr(sp, "ts", 0.0),
+                getattr(sp, "run_id", ""),
+                getattr(sp, "kind", ""),
+                getattr(sp, "generation", 0),
+                round(float(getattr(sp, "fitness", 0.0)), 6),
+            )
+            for sp in spikes
+        )
+        if sig == self._sig:
+            return
+        self._sig = sig
         if not spikes:
             self.update(self._empty)
             return

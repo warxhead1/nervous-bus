@@ -93,6 +93,15 @@ FAILING_CASE_BUFFER: int = 256
 # CostRatePanel — chart-history cap (§7.5.5). ~600 samples ≈ 10 min @ 1 Hz.
 COST_HISTORY_MAX: int = 600
 
+# Memory caps (perf — keep a long run / replay from growing without bound).
+# ``sessions`` and ``iteration_summaries`` were previously never evicted; a
+# multi-hour run or a full debug.jsonl replay would accumulate indefinitely.
+# Keep the most-recent N and evict oldest. N is generous so the dashboard's
+# recency-windowed views never notice the cap during normal operation.
+MAX_SESSIONS: int = 200
+MAX_ITERATION_SUMMARIES: int = 400
+MAX_PREDICTIONS: int = 400
+
 # Default dollar cap when no budget.warning event has been observed yet.
 # Upgraded from the first budget.warning payload's max_cost_usd.
 # NOTE: For MiniMax coding plan workloads dollars are NOTIONAL — the real
@@ -401,9 +410,48 @@ _KERNEL_EVENT_KINDS: dict[str, str] = {
     "plateau_hint": "hint",
 }
 
+# Kernel-unification wave (2026-06-02 KERNEL_CONTRACT_SPEC §1): the 8 per-domain
+# kernel families collapse into a single ``kernel.*`` prefix with the domain
+# carried in ``data.domain``. We map the new channel suffix (channel minus the
+# trailing ``.v1``) to the SAME internal kind the legacy ``<domain>.*`` events
+# used, so both code paths converge on ``_apply_kernel_event``. Channels with no
+# render meaning yet (candidate.evaluated, prior.loaded/updated) map to a benign
+# ``ignore`` kind — recognised, counted, but not mutated into KernelRun.
+_KERNEL_UNIFIED_KINDS: dict[str, str] = {
+    "kernel.started": "started",
+    "kernel.completed": "completed",
+    "kernel.generation.completed": "generation",
+    "kernel.best_fitness_improved": "best",
+    "kernel.island_reset": "reset",
+    "kernel.plateau_hint": "hint",
+    "kernel.candidate.evaluated": "ignore",
+    "kernel.prior.loaded": "ignore",
+    "kernel.prior.updated": "ignore",
+}
 
-def classify_kernel_event(ev_type: Optional[str]) -> Optional[tuple[str, str]]:
+# Canonical 8-domain enum (KERNEL_CONTRACT_SPEC §1). Used to validate the
+# ``data.domain`` discriminator on unified ``kernel.*`` events.
+KERNEL_DOMAINS: frozenset[str] = frozenset(
+    {"sph", "sdf", "noise", "phase", "terrain", "thermal", "latent", "tsp"}
+)
+
+# Low-frequency coalesced rollup (KERNEL_CONTRACT_SPEC §2). Consumed best-effort
+# (a compact "snapshot seen" indicator); never the per-candidate firehose.
+KERNEL_SNAPSHOT_CHANNEL: str = "pulse.kernel.snapshot.v1"
+
+
+def classify_kernel_event(
+    ev_type: Optional[str], data: Optional[dict[str, Any]] = None
+) -> Optional[tuple[str, str]]:
     """Map a channel name to ``(kernel_name, kind)`` or ``None`` if not a kernel event.
+
+    Handles BOTH contract shapes during the merge window (spec §3):
+
+      * NEW unified ``kernel.*`` channels — the domain is read from
+        ``data.domain`` (required field). If ``data`` is missing the domain we
+        fall back to ``"?"`` and recover it later from the run's other events.
+      * LEGACY ``<domain>.*`` channels — the domain is inferred from the
+        channel prefix.
 
     The two shared, kernel-agnostic channels resolve to ``("?", ...)`` — the
     kernel name is recovered later from the run's prefixed events.
@@ -417,6 +465,19 @@ def classify_kernel_event(ev_type: Optional[str]) -> Optional[tuple[str, str]]:
     if not ev_type.endswith(".v1"):
         return None
     body = ev_type[:-3]  # strip ".v1"
+
+    # NEW unified ``kernel.*`` channels (spec §1). Domain comes from data.
+    if body.startswith("kernel."):
+        kind = _KERNEL_UNIFIED_KINDS.get(body)
+        if kind is None:
+            return None
+        domain = "?"
+        if isinstance(data, dict):
+            d = data.get("domain")
+            if isinstance(d, str) and d:
+                domain = d
+        return (domain, kind)
+
     head, _, rest = body.partition(".")
     # Anything under the autobench.* namespace is an RSI channel, not a kernel.
     if head == "autobench" or not rest:
@@ -597,6 +658,21 @@ class PulseState:
         self.curiosity_spikes: deque[Spike] = deque(maxlen=KERNEL_SPIKE_RING)
         # Bumped on every spike push so the render tick can change-detect.
         self.kernel_spike_revision: int = 0
+        # Kernel-unification wave (spec §2): most-recent coalesced snapshot +
+        # a running count. Cheap surface for a "snapshot seen" indicator; the
+        # dashboard's primary render path stays on the raw kernel.* stream.
+        self.kernel_snapshot_latest: Optional[dict[str, Any]] = None
+        self.kernel_snapshot_count: int = 0
+
+        # --- ParetoScatter memo (perf) --------------------------------------
+        # pareto_points() is O(n) over iteration_summaries and is called twice
+        # a second by _tick_aggregates; pareto_classified() then runs an O(n²)
+        # frontier pass. Both only change when an iteration.summary lands or a
+        # session score updates, so we memoize on a monotonic version that the
+        # relevant write paths bump. Cache invalidated lazily on read.
+        self._pareto_version: int = 0
+        self._pareto_cache_version: int = -1
+        self._pareto_cache: list[tuple[float, float]] = []
 
     # ----------------------------------------------------------- ingestion --
     def apply(self, evt: dict[str, Any]) -> set[str]:
@@ -607,12 +683,27 @@ class PulseState:
         ev_type = evt.get("type")
         data = evt.get("data") or {}
 
+        # Kernel-unification wave (spec §2): the low-frequency coalesced rollup.
+        # Consumed best-effort — we record a compact snapshot indicator and
+        # never let it drive the per-candidate render path. Handled before the
+        # firehose classifier so it can't be mistaken for a kernel.* event.
+        if ev_type == KERNEL_SNAPSHOT_CHANNEL:
+            self._apply_kernel_snapshot(data)
+            self.events_total += 1
+            return set()
+
         # FunSearch kernel events are run-scoped (no session_id) and use dynamic
-        # ``<kernel>.*`` channel names, so they're classified by suffix and
-        # handled before the session-oriented RSI path below.
-        kev = classify_kernel_event(ev_type)
+        # channel names. During the merge window we accept BOTH the legacy
+        # ``<domain>.*`` channels (domain inferred from prefix) AND the new
+        # unified ``kernel.*`` channels (domain read from ``data.domain``), so
+        # the dashboard works regardless of which repo has merged (spec §3).
+        kev = classify_kernel_event(ev_type, data)
         if kev is not None:
-            self._apply_kernel_event(kev, data, evt.get("time"))
+            # ``ignore`` kinds (candidate.evaluated, prior.loaded/updated) are
+            # recognised + counted but have no render meaning yet — don't mutate
+            # KernelRun state for them.
+            if kev[1] != "ignore":
+                self._apply_kernel_event(kev, data, evt.get("time"))
             self.events_total += 1
             return set()
 
@@ -662,6 +753,11 @@ class PulseState:
         if sess is None:
             sess = Session(session_id=sid, parent_id=data.get("parent_session_id"))
             self.sessions[sid] = sess
+            # Cap the session map (perf) — a long run / full-log replay would
+            # otherwise grow it without bound. Evict the least-recently-active
+            # sessions (and their now-orphaned predictions) when over cap.
+            if len(self.sessions) > MAX_SESSIONS:
+                self._evict_oldest_sessions()
         sess.touch()
         self.events_total += 1
         now_sec = int(time.time())
@@ -704,6 +800,31 @@ class PulseState:
 
         return {sid}
 
+    def _evict_oldest_sessions(self) -> None:
+        """Drop the least-recently-active sessions back down to MAX_SESSIONS.
+
+        Also drops predictions / iteration_summaries owned only by evicted
+        sessions so the auxiliary maps don't retain pointers to vanished runs.
+        ``last_event`` (wall clock) orders recency; the most-recent MAX_SESSIONS
+        are kept. Cheap — runs only when the cap is exceeded (rare).
+        """
+        excess = len(self.sessions) - MAX_SESSIONS
+        if excess <= 0:
+            return
+        oldest = sorted(self.sessions.values(), key=lambda s: s.last_event)[:excess]
+        dropped: set[str] = {s.session_id for s in oldest}
+        for sid in dropped:
+            self.sessions.pop(sid, None)
+        if dropped:
+            self.predictions = {
+                k: v for k, v in self.predictions.items() if k[0] not in dropped
+            }
+            self.iteration_summaries = {
+                k: v for k, v in self.iteration_summaries.items() if k[0] not in dropped
+            }
+            # The point cloud changed — invalidate the pareto memo.
+            self._pareto_version += 1
+
     # ------------------------------------------------------- kernel arena ---
     def _push_spike(self, run: "KernelRun", gen: int, kind: str, *,
                     fitness: float = 0.0, magnitude: float = 0.0,
@@ -735,7 +856,11 @@ class PulseState:
         gen = int(data.get("generation", run.generation) or 0)
 
         if kind == "started":
-            run.kernel = kernel
+            # Don't clobber a known kernel name with "?" — a unified kernel.*
+            # event whose ``data.domain`` was absent classifies as "?"; in that
+            # case keep whatever we already inferred from sibling events.
+            if kernel != "?":
+                run.kernel = kernel
             run.instances = [str(x) for x in (data.get("instances") or [])]
             run.n_islands = int(data.get("n_islands") or 0)
             run.population_per_island = int(data.get("population_per_island") or 0)
@@ -825,6 +950,37 @@ class PulseState:
             if mr is not None:
                 run.max_requests = int(mr)
             run.generation = max(run.generation, gen)
+
+    def _apply_kernel_snapshot(self, data: dict[str, Any]) -> None:
+        """Record a ``pulse.kernel.snapshot.v1`` rollup (spec §2).
+
+        Best-effort and deliberately cheap: we stash the latest payload and
+        bump a counter so a compact "snapshot" indicator can surface it. The
+        snapshot is a coalesced rollup, NOT the per-candidate firehose — we do
+        NOT fan it into KernelRun state (that would double-count against the
+        raw kernel.* stream when both are live).
+        """
+        if not isinstance(data, dict):
+            return
+        self.kernel_snapshot_latest = {
+            "domain": str(data.get("domain") or "?"),
+            "run_id": str(data.get("run_id") or "?"),
+            "generation": data.get("generation"),
+            "best_fitness": data.get("best_fitness"),
+            "mean_fitness": data.get("mean_fitness"),
+            "plateau": bool(data.get("plateau", False)),
+            "event_count": data.get("event_count"),
+            "received_at": time.time(),
+        }
+        self.kernel_snapshot_count += 1
+
+    def kernel_snapshot_indicator(self) -> Optional[dict[str, Any]]:
+        """Compact snapshot read for an optional indicator. ``None`` if unseen."""
+        if self.kernel_snapshot_latest is None:
+            return None
+        out = dict(self.kernel_snapshot_latest)
+        out["count"] = self.kernel_snapshot_count
+        return out
 
     # ----- kernel accessors (read by the KernelArena widgets) ---------------
     def _is_recent_run(self, run: "KernelRun") -> bool:
@@ -1142,6 +1298,9 @@ class PulseState:
                 sess.scores.append(float(it.aggregate_score))
                 if it.prev_score is not None:
                     it.score_delta = float(it.aggregate_score) - float(it.prev_score)
+                # A new session score feeds the pareto back-compat path —
+                # invalidate the memo.
+                self._pareto_version += 1
             # global verdict counts
             for k, v in it.verdict_counts.items():
                 self.verdict_counts[k] += int(v)
@@ -1229,6 +1388,14 @@ class PulseState:
             last_event_at=time.time(),
         )
         self.predictions[key] = rec
+        # Bound the prediction map (perf) — evict the oldest by last_event_at
+        # when over cap. Generous N so the AHE tracker's recent view (≤5) and
+        # the panel's history dots never lose anything they'd actually render.
+        if len(self.predictions) > MAX_PREDICTIONS:
+            for old_key in sorted(
+                self.predictions, key=lambda k: self.predictions[k].last_event_at
+            )[: len(self.predictions) - MAX_PREDICTIONS]:
+                self.predictions.pop(old_key, None)
 
     def _apply_prediction_refuted_live(
         self, sess: Session, data: dict[str, Any]
@@ -1424,6 +1591,16 @@ class PulseState:
                 self.worker_cost_total_usd + sess.cost_usd
             ),
         }
+        # Bound the summary map (perf) — keep the most-recent N by insertion
+        # order, evicting oldest. dict preserves insertion order in CPython, so
+        # FIFO eviction is just popping the first key. Bounding here also bounds
+        # the ParetoScatter input so its O(n)/O(n²) passes stay flat on a long
+        # run / full-log replay.
+        while len(self.iteration_summaries) > MAX_ITERATION_SUMMARIES:
+            oldest = next(iter(self.iteration_summaries))
+            del self.iteration_summaries[oldest]
+        # Invalidate the pareto memo — a new summary changed the point cloud.
+        self._pareto_version += 1
 
     # ---- queue pressure ----------------------------------------------------
     def _apply_queue_pressure(self, data: dict[str, Any]) -> None:
@@ -1488,7 +1665,15 @@ class PulseState:
         Falls back to the old per-session view for sessions with scores
         but no iteration_summaries — preserves the smoke-test invariant
         in test_pareto_points_after_complete.
+
+        Memoized (perf): the point cloud only changes when an iteration.summary
+        lands or a session score updates — both bump ``_pareto_version``. Until
+        then we hand back the cached list, so the 2 Hz aggregate tick (and the
+        O(n²) frontier pass that consumes it) does no recompute on a quiescent
+        scatter.
         """
+        if self._pareto_cache_version == self._pareto_version:
+            return self._pareto_cache
         out: list[tuple[float, float]] = []
         seen_sessions: set[str] = set()
         # Iteration-final snapshots first (the new, dense layer).
@@ -1509,6 +1694,8 @@ class PulseState:
                 continue
             if s.scores:
                 out.append((s.cost_usd, max(s.scores)))
+        self._pareto_cache = out
+        self._pareto_cache_version = self._pareto_version
         return out
 
     def pareto_classified(self) -> dict[str, list[tuple[float, float]]]:
