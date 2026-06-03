@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nervous-bus/schemas/sph.candidate.evaluated.v1.json",
-  "title": "sph.candidate.evaluated v1",
-  "description": "Autobench sph FunSearch kernel \u2014 candidate.evaluated event. Source: /autobench/sph_kernel.",
+  "$id": "nervous-bus/schemas/kernel.candidate.evaluated.v1.json",
+  "title": "kernel.candidate.evaluated v1",
+  "description": "Autobench FunSearch kernel — candidate.evaluated event. Domain-discriminated via data.domain. Source: /autobench/kernel.",
   "type": "object",
   "required": [
     "specversion",
@@ -23,11 +23,11 @@
     },
     "source": {
       "type": "string",
-      "const": "/autobench/sph_kernel"
+      "const": "/autobench/kernel"
     },
     "type": {
       "type": "string",
-      "const": "sph.candidate.evaluated.v1"
+      "const": "kernel.candidate.evaluated.v1"
     },
     "datacontenttype": {
       "type": "string",
@@ -40,6 +40,7 @@
     "data": {
       "type": "object",
       "required": [
+        "domain",
         "run_id",
         "generation",
         "candidate_id",
@@ -52,6 +53,11 @@
         "computation_time_ms"
       ],
       "properties": {
+        "domain": {
+          "type": "string",
+          "enum": ["sph", "sdf", "noise", "phase", "terrain", "thermal", "latent", "tsp"],
+          "description": "Kernel domain discriminator."
+        },
         "run_id": {
           "type": "string",
           "description": "ULID identifying this kernel run."
