@@ -51,5 +51,31 @@ class TestMirrorAll(unittest.TestCase):
         calls = [c[0][0] for c in s.redis_client.xadd.call_args_list]
         self.assertNotIn("nbus:all", calls)
 
+
+class TestUnknownChannelMetric(unittest.TestCase):
+    """Unknown channels (no registered schema) are counted + passed through,
+    never dropped or hard dead-lettered (kernel-unification spec §4)."""
+
+    def _registry(self):
+        reg = mirror.SchemaRegistry.__new__(mirror.SchemaRegistry)
+        reg._registry = {}
+        reg._envelope_types = set()
+        reg.unknown_channels = {}
+        return reg
+
+    def test_unknown_channel_counted_and_passes_through(self):
+        reg = self._registry()
+        # validate() returns None (pass-through) for an unknown channel ...
+        self.assertIsNone(reg.validate("sph.kernel.started.v1", {"data": {}}))
+        # ... and tallies it.
+        self.assertEqual(reg.unknown_channels["sph.kernel.started.v1"], 1)
+
+    def test_unknown_channel_tally_increments(self):
+        reg = self._registry()
+        for _ in range(3):
+            reg.validate("tsp.generation.completed.v1", {"data": {}})
+        self.assertEqual(reg.unknown_channels["tsp.generation.completed.v1"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()
