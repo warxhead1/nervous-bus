@@ -39,15 +39,59 @@ POLL_INTERVAL = 2  # seconds, for --follow
 # ---------------------------------------------------------------------------
 
 
+# During the kernel-unification merge window we accept BOTH the legacy
+# per-domain ``tsp.*`` channels and the new unified ``kernel.*`` channels
+# (carrying ``data.domain == "tsp"``). Event-segment suffixes are shared:
+# ``kernel.started`` / ``kernel.completed`` / ``generation.completed`` /
+# ``candidate.evaluated`` (and the others). We normalise a raw event type to
+# its canonical legacy ``tsp.<suffix>`` form so the rest of the watcher is
+# unchanged.
+
+# Suffix (event segment) -> canonical legacy tsp.* type used internally.
+_TSP_EVENT_SUFFIXES = {
+    "kernel.started": "tsp.kernel.started.v1",
+    "kernel.completed": "tsp.kernel.completed.v1",
+    "generation.completed": "tsp.generation.completed.v1",
+    "candidate.evaluated": "tsp.candidate.evaluated.v1",
+    "best_fitness_improved": "tsp.best_fitness_improved.v1",
+    "island_reset": "tsp.island_reset.v1",
+    "plateau_hint": "tsp.plateau_hint.v1",
+    "prior.loaded": "tsp.prior.loaded.v1",
+    "prior.updated": "tsp.prior.updated.v1",
+}
+
+
+def _normalize_kernel_type(event_type: str, data: dict) -> str | None:
+    """Return a canonical legacy ``tsp.<suffix>.v1`` type for a tsp-domain
+    kernel event, or ``None`` if the event is not a tsp kernel event.
+
+    Accepts both legacy ``tsp.*`` and unified ``kernel.*`` channels. For the
+    unified channels we only treat them as tsp events when ``data.domain`` is
+    absent (legacy double-envelope) or equals ``"tsp"``.
+    """
+    if event_type.startswith("tsp."):
+        return event_type
+    if event_type.startswith("kernel.") and event_type.endswith(".v1"):
+        domain = data.get("domain")
+        if domain not in (None, "tsp"):
+            return None
+        suffix = event_type[len("kernel."):-len(".v1")]
+        return _TSP_EVENT_SUFFIXES.get(suffix)
+    return None
+
+
 def _unwrap(envelope: dict) -> tuple[str, dict]:
     """Return (event_type, data_dict) for a raw envelope line.
 
     Handles double-enveloped events where data itself is a CloudEvents dict
-    with a ``type`` field starting with ``tsp.``.
+    with a ``type`` field starting with ``tsp.`` or ``kernel.``.
     """
     t = envelope.get("type", "")
     d = envelope.get("data", {})
-    if isinstance(d, dict) and d.get("type", "").startswith("tsp."):
+    if isinstance(d, dict) and (
+        d.get("type", "").startswith("tsp.")
+        or d.get("type", "").startswith("kernel.")
+    ):
         # double-envelope: inner CloudEvents payload
         t = d.get("type", t)
         d = d.get("data", {})
@@ -55,7 +99,8 @@ def _unwrap(envelope: dict) -> tuple[str, dict]:
 
 
 def iter_tsp_events(lines: list[str]) -> Iterator[tuple[str, dict]]:
-    """Yield (event_type, data_dict) for every parseable tsp.* line."""
+    """Yield (canonical_event_type, data_dict) for every parseable tsp kernel
+    line, accepting both legacy ``tsp.*`` and unified ``kernel.*`` channels."""
     for raw in lines:
         raw = raw.strip()
         if not raw:
@@ -67,8 +112,9 @@ def iter_tsp_events(lines: list[str]) -> Iterator[tuple[str, dict]]:
         if not isinstance(ev, dict):
             continue
         t, d = _unwrap(ev)
-        if t.startswith("tsp."):
-            yield t, d
+        canonical = _normalize_kernel_type(t, d)
+        if canonical is not None:
+            yield canonical, d
 
 
 # ---------------------------------------------------------------------------
