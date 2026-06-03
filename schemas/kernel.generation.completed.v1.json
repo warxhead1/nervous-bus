@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/kernel.generation.completed.v1.json",
-  "title": "kernel.generation.completed v1",
-  "description": "Autobench FunSearch kernel — generation.completed event. Domain-discriminated via data.domain. Source: /autobench/kernel.",
+  "title": "kernel.generation.completed.v1 v1",
+  "description": "Autobench FunSearch kernel \u2014 kernel.generation.completed.v1 event. Union across all 8 domains; domain-discriminated via data.domain. Source: /autobench/kernel.",
   "type": "object",
   "required": [
     "specversion",
@@ -40,32 +40,16 @@
     "data": {
       "type": "object",
       "required": [
-        "domain",
-        "run_id",
-        "generation",
         "best_fitness",
         "best_island",
-        "mean_pop_fitness",
-        "gen_seconds",
-        "eval_seconds",
-        "llm_requests",
-        "fitness_std",
         "code_diversity",
-        "island_reset_fired"
+        "domain",
+        "fitness_std",
+        "generation",
+        "mean_pop_fitness",
+        "run_id"
       ],
       "properties": {
-        "domain": {
-          "type": "string",
-          "enum": ["sph", "sdf", "noise", "phase", "terrain", "thermal", "latent", "tsp"],
-          "description": "Kernel domain discriminator."
-        },
-        "run_id": {
-          "type": "string",
-          "description": "ULID identifying this kernel run."
-        },
-        "generation": {
-          "type": "integer"
-        },
         "best_fitness": {
           "type": "number",
           "description": "Best fitness this generation (domain-specific; higher = better)."
@@ -73,30 +57,60 @@
         "best_island": {
           "type": "integer"
         },
-        "mean_pop_fitness": {
-          "type": "number"
-        },
-        "gen_seconds": {
-          "type": "number"
-        },
-        "eval_seconds": {
-          "type": "number"
-        },
-        "llm_requests": {
-          "type": "integer",
-          "description": "Cumulative LLM requests this run (MiniMax billing unit is requests)."
-        },
-        "fitness_std": {
-          "type": "number",
-          "description": "Population fitness standard deviation — leading indicator of premature convergence."
+        "best_program_id": {
+          "type": "string"
         },
         "code_diversity": {
           "type": "number",
           "description": "Mean pairwise Jaccard code-token distance across active programs (0=identical, 1=disjoint)."
         },
+        "domain": {
+          "type": "string",
+          "enum": [
+            "sph",
+            "sdf",
+            "noise",
+            "phase",
+            "terrain",
+            "thermal",
+            "latent",
+            "tsp"
+          ],
+          "description": "Kernel domain discriminator."
+        },
+        "eval_seconds": {
+          "type": "number"
+        },
+        "fitness_std": {
+          "type": "number",
+          "description": "Population fitness standard deviation \u2014 leading indicator of premature convergence."
+        },
+        "gen_seconds": {
+          "type": "number"
+        },
+        "generation": {
+          "type": "integer"
+        },
         "island_reset_fired": {
           "type": "boolean",
           "description": "Whether a plateau-driven island reset fired this generation."
+        },
+        "island_summaries": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "llm_requests": {
+          "type": "integer",
+          "description": "Cumulative LLM requests this run (MiniMax billing unit is requests)."
+        },
+        "mean_pop_fitness": {
+          "type": "number"
+        },
+        "run_id": {
+          "type": "string",
+          "description": "ULID identifying this kernel run."
         }
       },
       "additionalProperties": false

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/kernel.completed.v1.json",
-  "title": "kernel.completed v1",
-  "description": "Autobench FunSearch kernel — kernel.completed event. Domain-discriminated via data.domain. Source: /autobench/kernel.",
+  "title": "kernel.completed.v1 v1",
+  "description": "Autobench FunSearch kernel \u2014 kernel.completed.v1 event. Union across all 8 domains; domain-discriminated via data.domain. Source: /autobench/kernel.",
   "type": "object",
   "required": [
     "specversion",
@@ -40,34 +40,14 @@
     "data": {
       "type": "object",
       "required": [
-        "domain",
-        "run_id",
-        "total_generations",
-        "stop_reason",
-        "llm_requests",
         "best_program",
-        "history"
+        "domain",
+        "llm_requests",
+        "run_id",
+        "stop_reason",
+        "total_generations"
       ],
       "properties": {
-        "domain": {
-          "type": "string",
-          "enum": ["sph", "sdf", "noise", "phase", "terrain", "thermal", "latent", "tsp"],
-          "description": "Kernel domain discriminator."
-        },
-        "run_id": {
-          "type": "string",
-          "description": "ULID identifying this kernel run."
-        },
-        "total_generations": {
-          "type": "integer"
-        },
-        "stop_reason": {
-          "type": "string"
-        },
-        "llm_requests": {
-          "type": "integer",
-          "description": "Cumulative LLM requests this run (MiniMax billing unit is requests)."
-        },
         "best_program": {
           "type": [
             "object",
@@ -95,11 +75,39 @@
           },
           "description": "Best program summary at run end (null if the run produced none)."
         },
+        "domain": {
+          "type": "string",
+          "enum": [
+            "sph",
+            "sdf",
+            "noise",
+            "phase",
+            "terrain",
+            "thermal",
+            "latent",
+            "tsp"
+          ],
+          "description": "Kernel domain discriminator."
+        },
         "history": {
           "type": "array",
           "items": {
             "type": "object"
           }
+        },
+        "llm_requests": {
+          "type": "integer",
+          "description": "Cumulative LLM requests this run (MiniMax billing unit is requests)."
+        },
+        "run_id": {
+          "type": "string",
+          "description": "ULID identifying this kernel run."
+        },
+        "stop_reason": {
+          "type": "string"
+        },
+        "total_generations": {
+          "type": "integer"
         }
       },
       "additionalProperties": false

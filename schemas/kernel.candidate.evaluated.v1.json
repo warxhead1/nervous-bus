@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/kernel.candidate.evaluated.v1.json",
-  "title": "kernel.candidate.evaluated v1",
-  "description": "Autobench FunSearch kernel — candidate.evaluated event. Domain-discriminated via data.domain. Source: /autobench/kernel.",
+  "title": "kernel.candidate.evaluated.v1 v1",
+  "description": "Autobench FunSearch kernel \u2014 kernel.candidate.evaluated.v1 event. Union across all 8 domains; domain-discriminated via data.domain. Source: /autobench/kernel.",
   "type": "object",
   "required": [
     "specversion",
@@ -41,35 +41,38 @@
       "type": "object",
       "required": [
         "domain",
-        "run_id",
-        "generation",
-        "candidate_id",
-        "island",
         "fitness",
-        "fitness_variance",
-        "worst_fitness",
-        "source",
-        "code_length",
-        "computation_time_ms"
+        "generation",
+        "island",
+        "run_id",
+        "source"
       ],
       "properties": {
-        "domain": {
-          "type": "string",
-          "enum": ["sph", "sdf", "noise", "phase", "terrain", "thermal", "latent", "tsp"],
-          "description": "Kernel domain discriminator."
-        },
-        "run_id": {
-          "type": "string",
-          "description": "ULID identifying this kernel run."
-        },
-        "generation": {
-          "type": "integer"
-        },
         "candidate_id": {
           "type": "string"
         },
-        "island": {
+        "code_length": {
           "type": "integer"
+        },
+        "computation_time_ms": {
+          "type": "number"
+        },
+        "domain": {
+          "type": "string",
+          "enum": [
+            "sph",
+            "sdf",
+            "noise",
+            "phase",
+            "terrain",
+            "thermal",
+            "latent",
+            "tsp"
+          ],
+          "description": "Kernel domain discriminator."
+        },
+        "eikonal_score": {
+          "type": "number"
         },
         "fitness": {
           "type": "number"
@@ -77,16 +80,53 @@
         "fitness_variance": {
           "type": "number"
         },
-        "worst_fitness": {
+        "generation": {
+          "type": "integer"
+        },
+        "harmonic_ratio": {
+          "type": "number"
+        },
+        "instance_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "island": {
+          "type": "integer"
+        },
+        "mean_grad_err": {
+          "type": "number"
+        },
+        "mean_mse": {
+          "type": "number"
+        },
+        "program_id": {
+          "type": "string"
+        },
+        "raps_fitness": {
+          "type": "number"
+        },
+        "run_id": {
+          "type": "string",
+          "description": "ULID identifying this kernel run."
+        },
+        "sign_change_density": {
           "type": "number"
         },
         "source": {
           "type": "string"
         },
-        "code_length": {
-          "type": "integer"
+        "spectral_beta": {
+          "type": "number"
         },
-        "computation_time_ms": {
+        "ssim_fallback": {
+          "type": "number"
+        },
+        "topology_score": {
+          "type": "number"
+        },
+        "worst_fitness": {
           "type": "number"
         }
       },
