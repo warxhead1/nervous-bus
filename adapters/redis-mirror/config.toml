@@ -6,12 +6,21 @@
 # lack a Python+redis install (hearth-api uses /usr/bin/python3 which has no
 # redis module) still need mirroring here. Those publishers write to debug.jsonl
 # successfully; this mirror picks them up and puts them into Redis Streams.
+#
+# Listing a channel that ALSO publishes live is now safe: both the live path and
+# this mirror claim a short-lived dedup key (nbus:dedup:<id>, SET NX) before
+# XADD, so each event id reaches a stream exactly once regardless of which path
+# wins. funsearch.*/kernel.* are mirrored as a durability backstop — the kernel
+# and hearth review producers run in service contexts, so the file→mirror→Redis
+# path guarantees the results gallery is never silently empty.
 mirror_all = false
 types = [
     "tengine.",
     "home-automation.vision.",
     "home-automation.news.",
     "deer-flow.research.dispatch.",
+    "funsearch.",
+    "kernel.",
 ]
 
 [redis]

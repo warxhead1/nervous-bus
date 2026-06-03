@@ -50,12 +50,32 @@ cmd_help() {
     exit 0
 }
 
-# Write a CloudEvents envelope to Redis Streams directly (nbus:<channel> + nbus:all).
-# Fail-soft: silent no-op if Redis is unreachable or redis Python lib missing.
+# Write a CloudEvents envelope to Redis Streams (nbus:<channel> + nbus:all).
+#
+# The envelope has already been schema-validated by cmd_publish at this point;
+# this function is pure transport (not a producer bypassing the SDK). Delivery
+# is idempotent: an event id is XADD'd at most once across the live publish path
+# and the redis-mirror backstop, gated by a short-lived claim key
+# (nbus:dedup:<id>, claim-before-publish, fail-open).
+#
+# Tries python-redis first (fast, pipelined); falls back to redis-cli when no
+# python interpreter on PATH carries the redis module — the systemd-service case
+# (/usr/bin/python3 with no redis install) that previously made delivery a
+# silent no-op. Pin the interpreter with $NERVOUS_PYTHON. Fail-soft: if Redis is
+# unreachable the event is still durable in debug.jsonl and the mirror delivers
+# it once Redis returns.
 _nbus_redis_xadd() {
     local raw_json="$1"
     [[ "${NERVOUS_NO_REDIS:-0}" == "1" ]] && return 0
-    python3 - "$raw_json" <<'PYEOF' 2>/dev/null || true
+    if _nbus_xadd_python "$raw_json"; then return 0; fi
+    _nbus_xadd_rediscli "$raw_json" || true
+}
+
+# Primary delivery via python-redis. Exits 0 on delivery (or a confirmed dup),
+# non-zero on any failure (missing redis module, unreachable Redis) so the
+# caller falls back to redis-cli.
+_nbus_xadd_python() {
+    "${NERVOUS_PYTHON:-python3}" - "$1" <<'PYEOF' 2>/dev/null
 import sys, os, json
 try:
     import redis as _r
@@ -64,22 +84,63 @@ try:
     ch = env.get('type', '')
     if not ch:
         sys.exit(0)
+    eid = env.get('id', '')
     fields = {
         '_raw':      raw,
         'type':      ch,
         'source':    env.get('source', ''),
         'timestamp': env.get('time', ''),
-        'event_id':  env.get('id', ''),
+        'event_id':  eid,
     }
     url = os.environ.get('NERVOUS_REDIS_URL', 'redis://localhost:6379')
     r = _r.Redis.from_url(url, socket_connect_timeout=1, socket_timeout=1)
+    # Idempotent claim — if the mirror (or a prior call) already delivered this
+    # id, skip the XADD. Fail-open: a dedup-infra error must not block delivery.
+    if eid:
+        try:
+            if r.set('nbus:dedup:' + eid, '1', nx=True, ex=600) is None:
+                sys.exit(0)
+        except Exception:
+            pass
     p = r.pipeline(transaction=False)
     p.xadd(f'nbus:{ch}', fields, maxlen=10000, approximate=True)
     p.xadd('nbus:all',   fields, maxlen=50000, approximate=True)
     p.execute()
+    sys.exit(0)
+except SystemExit:
+    raise
 except Exception:
-    pass
+    sys.exit(1)
 PYEOF
+}
+
+# Fallback delivery via redis-cli (no python dependency). Used when the python
+# path can't reach Redis — typically a systemd service whose python3 lacks the
+# redis module. Mirrors the python path's idempotent claim semantics.
+_nbus_xadd_rediscli() {
+    command -v redis-cli >/dev/null 2>&1 || return 1
+    command -v jq        >/dev/null 2>&1 || return 1
+    local raw="$1" url ch src ts id
+    url="${NERVOUS_REDIS_URL:-redis://localhost:6379}"
+    ch="$(printf '%s' "$raw" | jq -r '.type   // empty' 2>/dev/null)" || ch=""
+    [[ -z "$ch" ]] && return 0
+    src="$(printf '%s' "$raw" | jq -r '.source // empty' 2>/dev/null)" || src=""
+    ts="$( printf '%s' "$raw" | jq -r '.time   // empty' 2>/dev/null)" || ts=""
+    id="$( printf '%s' "$raw" | jq -r '.id     // empty' 2>/dev/null)" || id=""
+    # Idempotent claim. SET..NX returns "OK" when claimed, nil (empty) when the
+    # key already exists. A non-zero exit means Redis is unreachable — report
+    # failure so the event stays in debug.jsonl for the mirror to deliver.
+    if [[ -n "$id" ]]; then
+        local _claim _rc
+        if _claim="$(redis-cli -u "$url" SET "nbus:dedup:$id" 1 NX EX 600 2>/dev/null)"; then _rc=0; else _rc=$?; fi
+        [[ $_rc -ne 0 ]] && return 1
+        [[ "$_claim" != "OK" ]] && return 0
+    fi
+    redis-cli -u "$url" XADD "nbus:$ch" MAXLEN '~' 10000 '*' \
+        _raw "$raw" type "$ch" source "$src" timestamp "$ts" event_id "$id" >/dev/null 2>&1 || return 1
+    redis-cli -u "$url" XADD nbus:all MAXLEN '~' 50000 '*' \
+        _raw "$raw" type "$ch" source "$src" timestamp "$ts" event_id "$id" >/dev/null 2>&1 || true
+    return 0
 }
 
 cmd_publish() {

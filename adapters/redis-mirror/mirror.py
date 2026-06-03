@@ -38,6 +38,13 @@ import redis
 # new schemas added to disk don't require a process restart.
 
 SCHEMA_RELOAD_INTERVAL_S = 300
+
+# Idempotent-delivery claim key TTL. Both the live publish path (sdk/shell/nervous)
+# and this mirror SET nbus:dedup:<id> NX before XADD so an event reaches a stream
+# exactly once no matter which path wins. The TTL only needs to outlive the lag
+# between a live publish and the mirror reading the same line from debug.jsonl.
+DEDUP_TTL_S = 600
+
 _NBUS_ROOT = Path(__file__).parent.parent.parent  # adapters/redis-mirror/../../ == nervous-bus root
 # User-home dir for private/custom schemas and config. Overridable via NERVOUS_HOME env var.
 # Schemas in NERVOUS_HOME/schemas/ are loaded in addition to the repo schemas directory and
@@ -294,6 +301,7 @@ class State:
 
         self.events_mirrored = 0
         self.events_dropped = 0
+        self.events_deduped = 0
         self.redis_errors = 0
         self.last_metrics_log = time.time()
         self.started_at = time.time()
@@ -490,6 +498,24 @@ def mirror_event(state: State, raw: str) -> bool:
         return False
     # ────────────────────────────────────────────────────────────────────────
 
+    # ── Idempotent delivery ───────────────────────────────────────────────────
+    # Claim the event id before XADD. If the live publish path (nervous publish)
+    # already delivered this event, the key exists and we skip — preventing a
+    # duplicate stream entry for channels that publish live AND are mirrored.
+    # Fail-open: a dedup-infra error must never drop an event.
+    event_id = event.get("id") or ""
+    if event_id:
+        try:
+            claimed = state.redis_client.set(
+                f"nbus:dedup:{event_id}", "1", nx=True, ex=DEDUP_TTL_S
+            )
+            if claimed is None:
+                state.events_deduped += 1
+                return False
+        except redis.RedisError:
+            pass
+    # ────────────────────────────────────────────────────────────────────────
+
     stream_name = f"nbus:{event_type}"
 
     try:
@@ -546,7 +572,7 @@ def log_metrics(state: State) -> None:
     sys.stderr.write(
         f"[{now_str}] redis-mirror metrics: "
         f"mirrored={state.events_mirrored} dropped={state.events_dropped} "
-        f"redis_errors={state.redis_errors} "
+        f"deduped={state.events_deduped} redis_errors={state.redis_errors} "
         f"unknown_channels={unknown_total} rate={events_per_sec:.2f}/s\n"
     )
     sys.stderr.flush()

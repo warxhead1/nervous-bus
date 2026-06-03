@@ -18,8 +18,13 @@ class TestMirrorAll(unittest.TestCase):
         s.redis_connected = True
         s.redis_client = MagicMock()
         s.redis_client.xadd.return_value = "1-0"
+        # SET..NX returns truthy when the dedup key is freshly claimed (this
+        # mirror is first to deliver). Tests that exercise the duplicate path
+        # override this to None.
+        s.redis_client.set.return_value = True
         s.events_mirrored = 0
         s.events_dropped = 0
+        s.events_deduped = 0
         s.redis_errors = 0
         return s
 
@@ -50,6 +55,58 @@ class TestMirrorAll(unittest.TestCase):
         mirror.mirror_event(s, raw)
         calls = [c[0][0] for c in s.redis_client.xadd.call_args_list]
         self.assertNotIn("nbus:all", calls)
+
+
+class TestIdempotentDelivery(unittest.TestCase):
+    """An event whose id was already delivered by the live publish path (its
+    dedup key exists) must be skipped here — no duplicate stream entry."""
+
+    def _make_state(self):
+        s = mirror.State.__new__(mirror.State)
+        s.channel_prefixes = ["funsearch."]
+        s.mirror_all = False
+        s.universal_stream = "nbus:all"
+        s.universal_stream_maxlen = 50000
+        s.maxlen = 10000
+        s.trim_strategy = "MAXLEN"
+        s.min_idle_ms = 0
+        s.redis_connected = True
+        s.redis_client = MagicMock()
+        s.redis_client.xadd.return_value = "1-0"
+        s.events_mirrored = 0
+        s.events_dropped = 0
+        s.events_deduped = 0
+        s.redis_errors = 0
+        return s
+
+    def test_already_claimed_event_is_skipped(self):
+        s = self._make_state()
+        s.redis_client.set.return_value = None  # key already exists → claimed elsewhere
+        raw = json.dumps({"id": "01ABC", "type": "funsearch.dedup_probe.v1", "data": {}})
+        result = mirror.mirror_event(s, raw)
+        self.assertFalse(result)
+        s.redis_client.xadd.assert_not_called()
+        self.assertEqual(s.events_deduped, 1)
+
+    def test_fresh_event_is_mirrored_and_claims_key(self):
+        s = self._make_state()
+        s.redis_client.set.return_value = True  # freshly claimed → we deliver
+        raw = json.dumps({"id": "01XYZ", "type": "funsearch.dedup_probe.v1", "data": {}})
+        result = mirror.mirror_event(s, raw)
+        self.assertTrue(result)
+        s.redis_client.set.assert_called_once()
+        calls = [c[0][0] for c in s.redis_client.xadd.call_args_list]
+        self.assertIn("nbus:funsearch.dedup_probe.v1", calls)
+        self.assertEqual(s.events_deduped, 0)
+
+    def test_dedup_infra_error_fails_open(self):
+        s = self._make_state()
+        s.redis_client.set.side_effect = mirror.redis.RedisError("boom")
+        raw = json.dumps({"id": "01ERR", "type": "funsearch.dedup_probe.v1", "data": {}})
+        result = mirror.mirror_event(s, raw)
+        self.assertTrue(result)  # delivery proceeds despite dedup failure
+        calls = [c[0][0] for c in s.redis_client.xadd.call_args_list]
+        self.assertIn("nbus:funsearch.dedup_probe.v1", calls)
 
 
 class TestUnknownChannelMetric(unittest.TestCase):
