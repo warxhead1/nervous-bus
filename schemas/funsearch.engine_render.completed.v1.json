@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/funsearch.engine_render.completed.v1.json",
+  "title": "funsearch.engine_render.completed.v1",
+  "description": "Reply to funsearch.engine_render.requested.v1 (paired by correlation_id): the result of rendering an evolved candidate inside a real engine. Generic/engine-agnostic; the rendering engine names itself in `engine`. The screenshot path is local to the producer's host.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "time", "data"],
+  "properties": {
+    "specversion": { "type": "string", "const": "1.0" },
+    "id": { "type": "string" },
+    "source": { "type": "string" },
+    "type": { "type": "string", "const": "funsearch.engine_render.completed.v1" },
+    "time": { "type": "string", "format": "date-time" },
+    "data": {
+      "type": "object",
+      "required": ["correlation_id", "candidate_id", "status", "completed_at"],
+      "properties": {
+        "correlation_id": { "type": "string" },
+        "candidate_id": { "type": "string" },
+        "run_id": { "type": "string" },
+        "kernel": { "type": "string" },
+        "status": { "type": "string", "enum": ["ok", "error"] },
+        "engine": { "type": "string", "description": "Which engine rendered it (e.g. 'tengine')" },
+        "screenshot_path": { "type": "string", "description": "Local path to the rendered PNG (producer host)" },
+        "frame": { "type": "integer" },
+        "bytes": { "type": "integer" },
+        "build_ms": { "type": "number" },
+        "render_ms": { "type": "number" },
+        "error": { "type": "string", "description": "Failure detail when status='error'" },
+        "completed_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

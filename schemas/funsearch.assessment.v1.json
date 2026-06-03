@@ -15,7 +15,7 @@
       "type": "object",
       "required": ["kernel", "run_id", "fitness", "metadata"],
       "properties": {
-        "kernel": { "type": "string", "enum": ["sdf", "noise", "tsp"] },
+        "kernel": { "type": "string", "description": "Kernel/domain (free-form; not enumerated so new kernels like 'svdag' need no schema bump)" },
         "run_id": { "type": "string" },
         "fitness": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
         "render_type": { "type": "string", "const": "assessment" },
