@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/kernel.started.v1.json",
-  "title": "kernel.started v1",
-  "description": "Autobench FunSearch kernel — kernel.started event. Domain-discriminated via data.domain. Source: /autobench/kernel.",
+  "title": "kernel.started.v1 v1",
+  "description": "Autobench FunSearch kernel \u2014 kernel.started.v1 event. Union across all 8 domains; domain-discriminated via data.domain. Source: /autobench/kernel.",
   "type": "object",
   "required": [
     "specversion",
@@ -41,30 +41,40 @@
       "type": "object",
       "required": [
         "domain",
-        "run_id",
+        "generations",
         "git_commit",
         "instances",
         "n_islands",
-        "population_per_island",
-        "generations",
         "plateau_generations",
-        "temperature",
         "plateau_hint",
-        "sandbox_type"
+        "population_per_island",
+        "run_id",
+        "temperature"
       ],
       "properties": {
         "domain": {
           "type": "string",
-          "enum": ["sph", "sdf", "noise", "phase", "terrain", "thermal", "latent", "tsp"],
+          "enum": [
+            "sph",
+            "sdf",
+            "noise",
+            "phase",
+            "terrain",
+            "thermal",
+            "latent",
+            "tsp"
+          ],
           "description": "Kernel domain discriminator."
         },
-        "run_id": {
-          "type": "string",
-          "description": "ULID identifying this kernel run."
+        "generations": {
+          "type": "integer"
         },
         "git_commit": {
           "type": "string",
           "description": "Short git SHA of the autobench source at run start."
+        },
+        "gpu_backend": {
+          "type": "string"
         },
         "instances": {
           "type": "array",
@@ -75,26 +85,27 @@
         "n_islands": {
           "type": "integer"
         },
-        "population_per_island": {
-          "type": "integer"
-        },
-        "generations": {
-          "type": "integer"
-        },
         "plateau_generations": {
           "type": [
             "integer",
             "null"
           ]
         },
-        "temperature": {
-          "type": "number"
-        },
         "plateau_hint": {
           "type": "boolean"
         },
+        "population_per_island": {
+          "type": "integer"
+        },
+        "run_id": {
+          "type": "string",
+          "description": "ULID identifying this kernel run."
+        },
         "sandbox_type": {
           "type": "string"
+        },
+        "temperature": {
+          "type": "number"
         }
       },
       "additionalProperties": false
