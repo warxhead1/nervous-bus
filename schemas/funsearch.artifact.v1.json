@@ -24,8 +24,7 @@
         "artifact_path": { "type": "string", "description": "Repo-relative path to rendered PNG" },
         "render_type": {
           "type": "string",
-          "enum": ["sdf_raymarch", "noise_render", "none"],
-          "description": "How the artifact was rendered"
+          "description": "What/how the artifact is (free-form; not enumerated so kernels and new artifact kinds — e.g. svdag_voxel_iso, lineage_strip, engine_render, comparison — need no schema bump)"
         },
         "metadata": {
           "type": "object",
