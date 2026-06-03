@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/funsearch.engine_render.requested.v1.json",
+  "title": "funsearch.engine_render.requested.v1",
+  "description": "Generic request to render an evolved candidate inside a real engine (engine-agnostic). A kernel emits this; ANY engine adapter (e.g. a private tengine consumer) may answer it. Carries the candidate function body and where to splice it; the engine renders one frame and replies with funsearch.engine_render.completed.v1 paired by correlation_id. No engine-specific fields live here so this contract stays public.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "time", "data"],
+  "properties": {
+    "specversion": { "type": "string", "const": "1.0" },
+    "id": { "type": "string" },
+    "source": { "type": "string" },
+    "type": { "type": "string", "const": "funsearch.engine_render.requested.v1" },
+    "time": { "type": "string", "format": "date-time" },
+    "data": {
+      "type": "object",
+      "required": ["correlation_id", "run_id", "candidate_id", "kernel", "splice_target", "candidate_code", "requested_at"],
+      "properties": {
+        "correlation_id": { "type": "string", "description": "Pairs this request with its completed event" },
+        "run_id": { "type": "string" },
+        "candidate_id": { "type": "string" },
+        "kernel": { "type": "string", "description": "Kernel/domain (free-form, e.g. 'svdag')" },
+        "splice_target": { "type": "string", "description": "Name of the engine function the candidate replaces (e.g. 'compute_density')" },
+        "candidate_code": { "type": "string", "description": "The evolved function body to splice in" },
+        "instance": { "type": "string", "description": "Optional instance/archetype name (e.g. 'stratovolcano')" },
+        "seed": { "type": "number", "description": "Optional render seed" },
+        "frame": { "type": "integer", "description": "Optional frame index to capture" },
+        "camera": { "type": "object", "description": "Optional camera pose hint", "additionalProperties": true },
+        "requested_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}
