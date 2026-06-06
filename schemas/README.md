@@ -34,6 +34,7 @@ the overlay, never here.
 |---|---|---|
 | `tachyonos.*` | tachyonac-engine | Trading / prediction-market: PnL, positions, trades, venue & order data |
 | `tengine.diag.*` | tengine | Internal diagnostics: WT telemetry, scheduling internals, TSDL activation details |
+| `hearth.market.state.*` | hearth | Bridges tachyonos signals to hearth; `raw_signal` field can carry private tachyonos payload |
 
 **All entries in this table are `.gitignore`d.** They cannot be staged accidentally.
 When adding a new private subsystem: (1) add the glob to `.gitignore`, (2) add a
