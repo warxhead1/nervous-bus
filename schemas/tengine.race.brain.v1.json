@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.race.brain.v1.json",
+  "title": "tengine.race.brain v1",
+  "description": "Lifecycle of a distilled lightweight controller ('brain') for a racing agent — produced by evolution/imitation, distilled to a tiny LUT/MLP, baked to a runtime kernel, and hot-loaded into a silo. Source: /tengine/race (deploy) or /autobench/race (distill). Closes the loop: a 'deployed' brain's runs come back as tengine.race.episode (pilot_kind=ai_brain), feeding the next evolution round. footprint_bytes is the load-bearing constraint — brains must stay tiny because the engine leaves almost no free VRAM.",
+  "type": "object",
+  "required": ["brain_id", "status", "kind"],
+  "properties": {
+    "brain_id": {
+      "type": "string",
+      "description": "ULID identifying this brain across its lifecycle and in episode.pilot_id."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["distilled", "deployed", "retired"],
+      "description": "distilled = produced and baked; deployed = hot-loaded into a live silo; retired = superseded/removed."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["lut", "mlp", "hybrid", "kernel"],
+      "description": "Runtime representation: baked lookup table, small MLP, hybrid, or a hand-shaped evolved kernel."
+    },
+    "controller_artifact": {
+      "type": "string",
+      "description": "URI of the baked controller (LUT texture, MLP weights, or NeuralReaction-style .slang) the silo loads."
+    },
+    "footprint_bytes": {
+      "type": "integer",
+      "description": "Runtime memory footprint in bytes — the 'as lightweight as possible' metric; must fit the engine's residual VRAM/CPU budget."
+    },
+    "source_run": {
+      "type": "string",
+      "description": "autobench run_id (and optionally generation) that produced this brain."
+    },
+    "source_episodes": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "episode_ids of the human/AI runs this brain was trained or calibrated on."
+    },
+    "fitness": {
+      "type": "number",
+      "description": "Oracle fitness at distill time (e.g. lap-time + smoothness + collision-free score)."
+    },
+    "deployed_to": {
+      "type": "string",
+      "description": "Silo/instance the brain was hot-loaded into (e.g. 'svdag_racing/enemy_pod_0'). Present when status=deployed."
+    },
+    "params": {
+      "type": "object",
+      "description": "Architecture/hyperparameter summary (layer sizes, LUT dims, input features, ...).",
+      "additionalProperties": true
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp of this lifecycle transition."
+    }
+  }
+}

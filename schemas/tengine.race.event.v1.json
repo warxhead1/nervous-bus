@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.race.event.v1.json",
+  "title": "tengine.race.event v1",
+  "description": "A sparse, discrete event within a run (overtake, collision, drift, checkpoint, ...) — labeled signals that enrich the dense trajectory for imitation learning and oracle design. Source: /tengine/race. Sparse by construction: emit on meaningful transitions, NOT every tick (per-tick data belongs in the episode's trajectory_artifact).",
+  "type": "object",
+  "required": ["episode_id", "t_ms", "kind"],
+  "properties": {
+    "episode_id": {
+      "type": "string",
+      "description": "ULID of the owning tengine.race.episode."
+    },
+    "t_ms": {
+      "type": "number",
+      "description": "Milliseconds since episode start at which the event occurred."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["spawn", "checkpoint", "lap_complete", "overtake", "overtaken", "collision", "drift_start", "drift_end", "off_track", "recover", "boost", "finish"],
+      "description": "Event type. overtake/overtaken carry actor/target; collision carries magnitude; drift_start/end bracket a drift; off_track/recover bracket a track exit."
+    },
+    "track_u": {
+      "type": "number",
+      "description": "Normalized track progress in [0,1] at the event."
+    },
+    "pos": {
+      "type": "array",
+      "items": {"type": "number"},
+      "minItems": 3,
+      "maxItems": 3,
+      "description": "World position [x,y,z] at the event."
+    },
+    "magnitude": {
+      "type": "number",
+      "description": "Kind-specific scalar (collision impulse, drift angle, boost duration, ...)."
+    },
+    "actor": {
+      "type": "string",
+      "description": "Pod/pilot id that initiated the event (e.g. the overtaker)."
+    },
+    "target": {
+      "type": "string",
+      "description": "Pod/pilot id the event was against (e.g. the overtaken)."
+    },
+    "detail": {
+      "type": "object",
+      "description": "Optional kind-specific extra fields.",
+      "additionalProperties": true
+    }
+  }
+}

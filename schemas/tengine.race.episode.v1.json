@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.race.episode.v1.json",
+  "title": "tengine.race.episode v1",
+  "description": "A completed recorded run (human, AI brain, or scripted) on a track instance — the bus-worthy INDEX + summary of a training episode. Source: /tengine/race. The dense per-tick samples are NOT inlined here; they live in `trajectory_artifact` (artifact store) and follow the `$defs.sample` shape. Emit one of these per run; downstream imitation/FunSearch training consumes the artifact, while the bus carries the searchable metadata. Keep this event small — never inline 60 Hz trajectories (see the redis-mirror _raw size constraint).",
+  "type": "object",
+  "required": ["episode_id", "track_id", "pilot_kind", "started_at", "trajectory_artifact", "sample_rate_hz"],
+  "properties": {
+    "episode_id": {
+      "type": "string",
+      "description": "ULID identifying this episode; referenced by tengine.race.event and by trained brains' source_episodes."
+    },
+    "track_id": {
+      "type": "string",
+      "description": "Track or generated-instance identifier this run was driven on."
+    },
+    "track_seed": {
+      "type": "integer",
+      "description": "Deterministic instance seed, when the track was procedurally generated — required to reproduce the exact track for offline rollouts/eval."
+    },
+    "pilot_kind": {
+      "type": "string",
+      "enum": ["human", "ai_brain", "scripted"],
+      "description": "Who drove: a human (imitation source), a distilled brain (closed-loop telemetry), or a scripted baseline."
+    },
+    "pilot_id": {
+      "type": "string",
+      "description": "Human handle or brain_id (see tengine.race.brain) of the pilot."
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp at which the run began."
+    },
+    "duration_ms": {
+      "type": "integer",
+      "description": "Wall-clock duration of the run in milliseconds."
+    },
+    "lap_time_ms": {
+      "type": "number",
+      "description": "Best (or total, see laps) lap time in milliseconds — a primary fitness signal for racing-line evolution."
+    },
+    "laps": {
+      "type": "integer",
+      "description": "Number of laps completed in this episode."
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["completed", "crashed", "dnf", "aborted"],
+      "description": "Terminal disposition of the run."
+    },
+    "sample_rate_hz": {
+      "type": "integer",
+      "description": "Sampling rate (Hz) of the per-tick records in trajectory_artifact."
+    },
+    "trajectory_artifact": {
+      "type": "string",
+      "description": "URI (file:// or artifact-store path) of the dense per-tick sample stream for this run, each record shaped like $defs.sample."
+    },
+    "sample_schema": {
+      "type": "string",
+      "description": "Identifier of the per-sample record format (default: this schema's #/$defs/sample at v1). Lets the dense format version independently if needed."
+    },
+    "summary": {
+      "type": "object",
+      "description": "Aggregate metrics for fast filtering/oracle calibration without reading the artifact (e.g. mean_speed, max_speed, collisions, off_track_ms, mean_line_deviation, boost_uses).",
+      "additionalProperties": {"type": "number"}
+    },
+    "engine_build": {
+      "type": "string",
+      "description": "tengine build/commit that produced the run — guards against training across incompatible physics."
+    },
+    "$defs_note": {
+      "type": "string",
+      "description": "Informational: the dense sample format is defined under $defs.sample of this schema."
+    }
+  },
+  "$defs": {
+    "sample": {
+      "type": "object",
+      "description": "One per-tick record in the trajectory_artifact. Documents the dense format even though it is stored externally, so capture and training agree on the contract.",
+      "required": ["t_ms"],
+      "properties": {
+        "t_ms": {"type": "number", "description": "Milliseconds since episode start."},
+        "throttle": {"type": "number", "description": "Throttle command in [0,1]."},
+        "steer": {"type": "number", "description": "Steering command in [-1,1] (left negative, right positive)."},
+        "brake": {"type": "number", "description": "Brake command in [0,1]."},
+        "boost": {"type": "boolean", "description": "Boost engaged this tick."},
+        "pos": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": "World position [x,y,z]."},
+        "vel": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": "World velocity [x,y,z]."},
+        "yaw": {"type": "number", "description": "Heading (radians)."},
+        "track_u": {"type": "number", "description": "Normalized progress along the track centerline in [0,1]."},
+        "track_offset": {"type": "number", "description": "Signed lateral offset from the centerline (world units)."}
+      }
+    }
+  }
+}
