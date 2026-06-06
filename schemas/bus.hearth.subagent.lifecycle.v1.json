@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth.subagent.lifecycle.v1.json",
+  "title": "bus.hearth.subagent.lifecycle v1",
+  "description": "Emitted by hearth-loom's claude-hooks binary (cmdNbusSubagentLifecycle) on SubagentStart and SubagentStop hook events. Lets hearth-loom's SubagentLifecycleBridge track spawned and completed subagents cross-project and wire them into the session tree. Published with NERVOUS_SOURCE=/claude-host/<project>.",
+  "type": "object",
+  "required": ["ts", "event", "agent_kind", "session_id", "project"],
+  "additionalProperties": true,
+  "properties": {
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the lifecycle event fired."
+    },
+    "event": {
+      "type": "string",
+      "enum": ["subagent_started", "subagent_stopped"],
+      "description": "Lifecycle phase. subagent_started fires when a subagent session begins; subagent_stopped fires when it ends."
+    },
+    "agent": {
+      "type": "string",
+      "enum": ["claude-code"],
+      "description": "Agent runtime identifier."
+    },
+    "agent_kind": {
+      "type": "string",
+      "enum": ["host_claude_code", "host_codex"],
+      "description": "Host-side agent runtime kind."
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "ULID of the parent orchestrator session that spawned the subagent."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "ULID of the parent session. For host sessions equals agent_id."
+    },
+    "conversation_id": {
+      "type": "string",
+      "description": "ULID of the top-level conversation context."
+    },
+    "subagent_id": {
+      "type": "string",
+      "description": "Session ID of the newly spawned (or stopped) subagent."
+    },
+    "subagent_type": {
+      "type": "string",
+      "description": "Subagent role string (e.g. 'host_subagent'). Empty when not provided by the hook."
+    },
+    "project": {
+      "type": "string",
+      "description": "Canonical project name the parent session is operating in."
+    },
+    "worktree": {
+      "type": "string",
+      "description": "Relative worktree path if the subagent runs in a git worktree (e.g. 'agent-session-mods'). Absent otherwise."
+    },
+    "display": {
+      "type": "string",
+      "description": "Zellij display label of the parent pane (e.g. 'tengine [agent-abc]')."
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Absolute path of the working directory when the lifecycle event fired."
+    },
+    "pane_id_qualified": {
+      "type": "string",
+      "description": "Zellij pane identifier in zellij:session:pane form."
+    },
+    "transcript_path": {
+      "type": "string",
+      "description": "Absolute path to the parent session's .jsonl transcript file."
+    }
+  }
+}
