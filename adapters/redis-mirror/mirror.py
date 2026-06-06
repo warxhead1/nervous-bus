@@ -45,6 +45,12 @@ SCHEMA_RELOAD_INTERVAL_S = 300
 # between a live publish and the mirror reading the same line from debug.jsonl.
 DEDUP_TTL_S = 600
 
+# The hearth-api nbus consumer rebuilds the entire CloudEvent from the stream
+# `_raw` field (serde_json::from_str), so a truncated `_raw` silently drops the
+# event. We therefore store `_raw` in full; this is only a threshold above which
+# we log that an unusually large payload was mirrored (never truncated).
+RAW_WARN_BYTES = 262144  # 256 KiB
+
 _NBUS_ROOT = Path(__file__).parent.parent.parent  # adapters/redis-mirror/../../ == nervous-bus root
 # User-home dir for private/custom schemas and config. Overridable via NERVOUS_HOME env var.
 # Schemas in NERVOUS_HOME/schemas/ are loaded in addition to the repo schemas directory and
@@ -534,7 +540,13 @@ def mirror_event(state: State, raw: str) -> bool:
             else:
                 fields[key] = json.dumps(value) if not isinstance(value, str) else str(value)
 
-        fields["_raw"] = raw[:2000]
+        if len(raw) > RAW_WARN_BYTES:
+            sys.stderr.write(
+                f"[redis-mirror] large _raw {len(raw)}B for {event_type} "
+                f"(stored in full; consumer rebuilds the event from _raw)\n"
+            )
+            sys.stderr.flush()
+        fields["_raw"] = raw
 
         if state.trim_strategy == "MINID":
             state.redis_client.xadd(stream_name, fields, minid=str(state.min_idle_ms), approximate=True)
