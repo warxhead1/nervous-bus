@@ -68,7 +68,15 @@ _nbus_redis_xadd() {
     local raw_json="$1"
     [[ "${NERVOUS_NO_REDIS:-0}" == "1" ]] && return 0
     if _nbus_xadd_python "$raw_json"; then return 0; fi
-    _nbus_xadd_rediscli "$raw_json" || true
+    if _nbus_xadd_rediscli "$raw_json"; then return 0; fi
+    # Neither path reached Redis. The event is still durable in debug.jsonl, but
+    # do NOT fail silently — surface it so service-context delivery gaps are
+    # visible (the root of the gzsv/bt0a "exit 0 on silent loss" bug). Producers
+    # that need at-least-once delivery set NERVOUS_STRICT_REDIS=1 to get a
+    # non-zero exit instead of the fail-soft default.
+    echo "nervous: WARNING: Redis delivery failed for publish (event durable in debug.jsonl)" >&2
+    [[ "${NERVOUS_STRICT_REDIS:-0}" == "1" ]] && return 1
+    return 0
 }
 
 # Primary delivery via python-redis. Exits 0 on delivery (or a confirmed dup),
@@ -114,19 +122,30 @@ except Exception:
 PYEOF
 }
 
-# Fallback delivery via redis-cli (no python dependency). Used when the python
-# path can't reach Redis — typically a systemd service whose python3 lacks the
-# redis module. Mirrors the python path's idempotent claim semantics.
+# Fallback delivery via redis-cli. Used when the python path can't reach Redis —
+# typically a systemd service whose python3 lacks the redis MODULE (the
+# interpreter itself, and stdlib json, are still present). Field extraction uses
+# python stdlib json rather than jq, which service hosts frequently lack and
+# whose absence previously made this fallback a silent no-op. Mirrors the python
+# path's idempotent claim semantics.
 _nbus_xadd_rediscli() {
     command -v redis-cli >/dev/null 2>&1 || return 1
-    command -v jq        >/dev/null 2>&1 || return 1
-    local raw="$1" url ch src ts id
+    local raw="$1" url ch src ts id parsed
     url="${NERVOUS_REDIS_URL:-redis://localhost:6379}"
-    ch="$(printf '%s' "$raw" | jq -r '.type   // empty' 2>/dev/null)" || ch=""
+    parsed="$("${NERVOUS_PYTHON:-python3}" - "$raw" 2>/dev/null <<'PYEOF'
+import sys, json
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    sys.exit(1)
+print(d.get('type', ''))
+print(d.get('source', ''))
+print(d.get('time', ''))
+print(d.get('id', ''))
+PYEOF
+)" || return 1
+    { IFS= read -r ch; IFS= read -r src; IFS= read -r ts; IFS= read -r id; } <<<"$parsed"
     [[ -z "$ch" ]] && return 0
-    src="$(printf '%s' "$raw" | jq -r '.source // empty' 2>/dev/null)" || src=""
-    ts="$( printf '%s' "$raw" | jq -r '.time   // empty' 2>/dev/null)" || ts=""
-    id="$( printf '%s' "$raw" | jq -r '.id     // empty' 2>/dev/null)" || id=""
     # Idempotent claim. SET..NX returns "OK" when claimed, nil (empty) when the
     # key already exists. A non-zero exit means Redis is unreachable — report
     # failure so the event stays in debug.jsonl for the mirror to deliver.
