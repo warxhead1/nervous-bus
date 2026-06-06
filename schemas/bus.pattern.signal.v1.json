@@ -7,7 +7,7 @@
   "required": ["signal_id", "signal_type", "severity", "confidence", "channels", "description"],
   "properties": {
     "signal_id":    {"type": "string", "description": "ULID"},
-    "signal_type":  {"type": "string", "enum": ["anomaly","pattern","correlation","silence","recovery"]},
+    "signal_type":  {"type": "string", "enum": ["anomaly","pattern","correlation","silence","recovery","consumer_degraded"]},
     "severity":     {"type": "string", "enum": ["info","warn","alert","critical"]},
     "confidence":   {"type": "number", "minimum": 0, "maximum": 1},
     "channels":     {"type": "array", "items": {"type": "string"}, "minItems": 1},
