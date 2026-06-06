@@ -133,7 +133,16 @@ BLOCKED-*.md
 
 # Private event contracts — these belong in $NERVOUS_HOME/schemas/ (the local
 # overlay at ~/.config/nervous-bus/schemas/), NEVER in this public repo. See
-# schemas/README.md. tachyonos.* is the private trading/prediction-market
-# engine (tachyonac-engine): PnL, positions, trades, venue/order data.
+# schemas/README.md for the full policy and prefix list.
+#
+# Adding a new private prefix here is MANDATORY when a schema describes
+# anything not meant for public eyes. Update schemas/README.md too.
+#
+# tachyonos.* — private trading/prediction-market engine (tachyonac-engine):
+#   PnL, positions, trades, venue/order data, proprietary strategy params.
 schemas/tachyonos.*.json
 docs/tachyonos-contract.md
+#
+# tengine.diag.* — internal diagnostics: work-tree telemetry, scheduling
+#   internals, TSDL activation details. Not appropriate for public repo.
+schemas/tengine.diag.*.json

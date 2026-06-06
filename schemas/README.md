@@ -9,7 +9,10 @@ ecosystem. One file per channel: `<channel>.v<major>.json`
 
 This repo is **public**. Only schemas for the open ecosystem belong here
 (`agent.*`, `autobench.*`, `bus.*`, `deer-flow.*` public channels,
-`loom.*`, `tengine.*`, kernel channels, etc.).
+`loom.*`, `tengine.session.*`, `tengine.shadergen.*`, `tengine.race.*`,
+`tengine.gpu.*`, `tengine.frame.*`, `tengine.silo.*`, `tengine.code.*`,
+kernel channels, etc.). **Not all `tengine.*` subspaces are public** —
+see the private-prefix table below.
 
 **Private / org-specific contracts do NOT go in this repo.** They live in the
 local overlay `$NERVOUS_HOME/schemas/` (default `~/.config/nervous-bus/schemas/`),
@@ -30,10 +33,15 @@ the overlay, never here.
 | Prefix | Owner | Why private |
 |---|---|---|
 | `tachyonos.*` | tachyonac-engine | Trading / prediction-market: PnL, positions, trades, venue & order data |
+| `tengine.diag.*` | tengine | Internal diagnostics: WT telemetry, scheduling internals, TSDL activation details |
 
-These are `.gitignore`d so they can't be staged accidentally. If you find a
-private schema tracked here, move it to the overlay and delete it from the repo
-(`git rm`). The bus keeps working — the overlay copy serves the same channel.
+**All entries in this table are `.gitignore`d.** They cannot be staged accidentally.
+When adding a new private subsystem: (1) add the glob to `.gitignore`, (2) add a
+row here, (3) install the schema into the overlay with `nervous schema install`.
+
+If you find a private schema already tracked here: move it to the overlay
+(`cp schemas/X.json ~/.config/nervous-bus/schemas/`) then `git rm` it and push.
+The bus keeps working — the overlay copy serves the same channel.
 
 ## Conventions
 
