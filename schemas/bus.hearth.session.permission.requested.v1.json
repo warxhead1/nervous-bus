@@ -4,7 +4,7 @@
   "title": "bus.hearth.session.permission.requested v1",
   "description": "Emitted by hearth-session's permission_publisher when a Claude Code permission prompt is detected on a tmux pane. Published with a 300-second TTL and 10-second dedup window. The Android app renders an Approve/Deny card and fires a push notification; the response is routed back to the correct tmux pane via correlation_id. Auto-mode sessions (permission_mode=acceptEdits|bypassPermissions) are never published.",
   "type": "object",
-  "required": ["correlation_id", "session_id", "pane_id", "project", "project_short", "tool_summary", "prompt_text", "options", "deep_link", "ts", "expires_at"],
+  "required": ["correlation_id", "session_id", "project", "project_short", "tool_summary", "options", "deep_link", "ts", "expires_at"],
   "properties": {
     "correlation_id": {
       "type": "string",
