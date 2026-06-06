@@ -2,26 +2,104 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/agent.session.v1.json",
   "title": "agent.session v1",
-  "description": "Coding agent session lifecycle. Published by the shadow-binary wrapper when any coding agent starts or stops in a pane. Enables the command-center live agent map and deer-flow cross-agent context routing.",
+  "description": "Coding agent session lifecycle events from all sources. Two producers write to nbus:agent.session. (1) The OSC-133 / claude-host adapter (adapters/osc133/) emits rich session events keyed by agent_id/conversation_id — events: started, turn_end, notification, compact. (2) The pane-monitor adapter (zjstatus / nervous-board) emits sparse pane-state events keyed by pane_id — events: stopped, updated. Note: CloudEvent type field is 'agent.session' (no .v1 suffix), so redis-mirror passes these through without schema validation. Consumers should branch on presence of 'agent_id' to distinguish the two producer shapes.",
   "type": "object",
-  "required": ["agent", "event", "project"],
+  "required": ["event"],
+  "additionalProperties": true,
   "properties": {
-    "agent": {
-      "type": "string",
-      "enum": ["claude-code", "opencode", "codex", "gemini", "cursor", "unknown"]
-    },
     "event": {
       "type": "string",
-      "enum": ["started", "stopped", "ended", "model_changed", "context_loaded"]
+      "enum": ["started", "stopped", "turn_end", "notification", "compact", "updated", "ended", "model_changed", "context_loaded"],
+      "description": "Lifecycle event. OSC-133 producer: started, turn_end, notification, compact, ended. Pane-monitor producer: stopped, updated. model_changed and context_loaded are aspirational (not yet emitted)."
     },
-    "project": { "type": "string", "description": "basename of cwd" },
-    "model": { "type": "string", "description": "e.g. claude-sonnet-4-6, gpt-4o" },
-    "pane_id": { "type": "string", "description": "ZELLIJ_PANE_ID if in zellij" },
-    "session_id": { "type": "string", "description": "zellij session name if available" },
-    "saga_id": { "type": "string", "description": "if working a specific plan" },
-    "context_fingerprint": {
+    "agent": {
       "type": "string",
-      "description": "SHA8 of CLAUDE.md + last 5 commit hashes — enables context continuity across agent switches"
+      "description": "Agent runtime kind. OSC-133: 'claude-code'. Pane-monitor: 'claude', 'opencode', 'codex', 'gemini', 'cursor', 'unknown'."
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "UUID of the Claude Code session. Present on OSC-133 events only (started, turn_end, notification, compact, ended)."
+    },
+    "agent_kind": {
+      "type": "string",
+      "enum": ["host_claude_code", "host_codex"],
+      "description": "Host-side agent runtime kind. Present on OSC-133 events only."
+    },
+    "conversation_id": {
+      "type": "string",
+      "description": "UUID of the top-level conversation context. For host sessions equals agent_id."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "UUID of the session context. For OSC-133 events equals agent_id."
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Absolute path of the working directory when the event fired. For worktree agents points into .claude/worktrees/<id>/."
+    },
+    "display": {
+      "type": "string",
+      "description": "Zellij pane display label (e.g. 'nervous-bus', 'home-automation [agent-session-mods]'). Present on OSC-133 events."
+    },
+    "project": {
+      "type": "string",
+      "description": "Project name — basename of the project directory (e.g. 'nervous-bus', 'tengine'). Present on most events."
+    },
+    "transcript_path": {
+      "type": "string",
+      "description": "Absolute path to the Claude Code .jsonl transcript file for this session."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp from the originating adapter. Complement to the CloudEvent 'time' field."
+    },
+    "source_kind": {
+      "type": "string",
+      "description": "How this session was initiated. Observed values: 'resume' (session restored from transcript)."
+    },
+    "worktree": {
+      "type": "string",
+      "description": "Name or relative path of the git worktree the agent is operating in (e.g. 'agent-session-mods', 'agent-session-mods/apps/android'). Absent when not in a worktree."
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable notification message. Present on event='notification' only (e.g. 'Claude is waiting for your input')."
+    },
+    "pane_id": {
+      "type": "string",
+      "description": "Zellij pane identifier (e.g. 'zellij:cc-mobile:1'). Present on pane-monitor events (stopped, updated)."
+    },
+    "model": {
+      "type": "string",
+      "description": "Model identifier (e.g. 'claude-sonnet-4-6'). Present on pane-monitor 'updated' events."
+    },
+    "git_branch": {
+      "type": "string",
+      "description": "Active git branch when the event fired. Present on pane-monitor 'updated' events."
+    },
+    "session_type": {
+      "type": "string",
+      "description": "Session mode. Observed value: 'master_interactive'. Present on pane-monitor 'updated' events."
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this agent session started. Present on pane-monitor 'updated' events."
+    },
+    "tokens_in": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Cumulative input tokens consumed by this session. Present on pane-monitor 'updated' events."
+    },
+    "tokens_out": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Cumulative output tokens produced by this session. Present on pane-monitor 'updated' events."
+    },
+    "bead_id": {
+      "type": "string",
+      "description": "Bead being worked on in this session, if any. Present on pane-monitor 'updated' events; empty string when none."
     }
   }
 }

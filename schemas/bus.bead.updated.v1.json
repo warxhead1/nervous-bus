@@ -2,8 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/bus.bead.updated.v1.json",
   "title": "bus.bead.updated v1",
-  "description": "DEPRECATED (2026-05-16, nervous-bus-immg): aspirational schema not emitted by any active producer. Metadata-change observability is provided by bd hooks directly into deer-flow; the canonical bead lifecycle bus stream is bus.bead.lifecycle.v1. Original description retained below for archival reference. — An existing bead's metadata changed — claim, status, priority, assignee, dependencies. Published by the nbd wrapper on `nbd update`. NOT fired for plain description-text edits; those are intentionally below the noise floor for this channel. The freeform `change` field is the legacy single-string descriptor the wrapper has always emitted; consumers should prefer the structured `previous_*` / `new_*` fields when present and fall back to parsing `change` otherwise.",
-  "deprecated": true,
+  "description": "An existing bead's metadata changed — claim, status, priority, assignee, dependencies. Emitted by bd hooks on 'bd update' and 'bd claim'. NOT fired for plain description-text edits. Note: CloudEvent type is 'bus.bead.updated' (no .v1 suffix) so redis-mirror passes these through without schema validation. The freeform `change` field is the primary descriptor; consumers should prefer the structured `previous_*` / `new_*` fields when present and fall back to parsing `change` otherwise. Observed change values: 'claimed', 'status:<value>', 'updated'.",
   "type": "object",
   "required": ["bead_id", "project", "change"],
   "properties": {

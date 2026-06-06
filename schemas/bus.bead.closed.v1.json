@@ -2,8 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/bus.bead.closed.v1.json",
   "title": "bus.bead.closed v1",
-  "description": "DEPRECATED (2026-05-16, nervous-bus-immg): superseded by bus.bead.lifecycle.v1 with event_type='bead_closed'. Left in place for historical reference; no producer emits this channel.",
-  "deprecated": true,
+  "description": "A bead was closed/completed in a project's .beads/ tracker. Emitted by bd hooks on 'bd close'. Note: CloudEvent type is 'bus.bead.closed' (no .v1 suffix) so redis-mirror passes these through without schema validation. bus.bead.lifecycle.v1 is hearth-loom's own internal lifecycle (container_died, etc.) and is a separate, unrelated stream.",
   "type": "object",
   "required": ["bead_id", "project"],
   "properties": {
