@@ -51,7 +51,7 @@
       "properties": {
         "domain": {
           "type": "string",
-          "enum": ["sph", "sdf", "noise", "phase", "terrain", "thermal", "latent", "tsp"],
+          "enum": ["sph", "sdf", "noise", "phase", "terrain", "thermal", "latent", "tsp", "svdag", "racing"],
           "description": "Kernel domain discriminator."
         },
         "run_id": {

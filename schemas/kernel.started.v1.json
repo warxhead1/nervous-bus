@@ -62,7 +62,9 @@
             "terrain",
             "thermal",
             "latent",
-            "tsp"
+            "tsp",
+            "svdag",
+            "racing"
           ],
           "description": "Kernel domain discriminator."
         },
