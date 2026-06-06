@@ -2,20 +2,18 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/bus.bead.created.v1.json",
   "title": "bus.bead.created v1",
-  "description": "DEPRECATED (2026-05-16, nervous-bus-immg): aspirational schema not emitted by any producer. The canonical bead lifecycle stream is bus.bead.lifecycle.v1; bead creation is currently observed via bd hooks and Forge, not via this bus channel.",
-  "deprecated": true,
+  "description": "A new bead was filed in a project's .beads/ tracker. Emitted by bd hooks on 'bd create'. Note: the CloudEvent type field is 'bus.bead.created' (no .v1 suffix), so redis-mirror currently passes these through without schema validation; consumers reading nbus:bus.bead.created should tolerate forward-compatible additions. The bus.bead.lifecycle.v1 stream carries hearth-loom's own lifecycle events (container_died, etc.) and is a separate, unrelated stream.",
   "type": "object",
   "required": ["bead_id", "project", "title", "type", "priority", "filer"],
   "properties": {
     "bead_id": {
       "type": "string",
-      "pattern": "^[a-z0-9-]+$",
-      "description": "Cross-project bead id (e.g. tengine-9k2x, loom-78wk, nb-plugin-route)"
+      "pattern": "^[a-z0-9.-]+$",
+      "description": "Cross-project bead id (e.g. tengine-9k2x, loom-78wk, nervous-bus-bafq, nervous-bus-71cn.8)"
     },
     "project": {
       "type": "string",
-      "enum": ["tengine", "hearth-loom", "hearth", "deer-flow", "tachyonos", "nervous-bus"],
-      "description": "Which project's .beads/ this bead lives in"
+      "description": "Which project's .beads/ this bead lives in (e.g. nervous-bus, tengine, hearth-loom, bus-redis-delivery). Not enum-constrained — new projects must not require a schema bump."
     },
     "title": { "type": "string", "minLength": 5, "maxLength": 200 },
     "description_excerpt": {
