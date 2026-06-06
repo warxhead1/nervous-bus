@@ -1028,8 +1028,17 @@ def _poll_systemd_services(state: SysmapState) -> None:
             continue
 
         state_str = data.get("ActiveState", "unknown")
-        pid       = int(data.get("MainPID", "0") or "0")
-        tasks     = int(data.get("TasksCurrent", "0") or "0")
+        # MainPID / TasksCurrent are "[not set]" for services with the
+        # corresponding accounting disabled — parse defensively or the
+        # poller thread dies and the whole dashboard freezes at zero.
+        try:
+            pid = int(data.get("MainPID", "0") or "0")
+        except (ValueError, TypeError):
+            pid = 0
+        try:
+            tasks = int(data.get("TasksCurrent", "0") or "0")
+        except (ValueError, TypeError):
+            tasks = 0
 
         # MemoryCurrent: bytes, or "[not set]" / empty when service is inactive
         mem_raw = data.get("MemoryCurrent", "0")
