@@ -146,3 +146,7 @@ docs/tachyonos-contract.md
 # tengine.diag.* — internal diagnostics: work-tree telemetry, scheduling
 #   internals, TSDL activation details. Not appropriate for public repo.
 schemas/tengine.diag.*.json
+#
+# hearth.market.state.* — bridges tachyonos signals into hearth; raw_signal
+#   field can carry private tachyonos payload.
+schemas/hearth.market.state.*.json

@@ -36,7 +36,8 @@ are authoritative and hot-reloaded by redis-mirror every 5 minutes.
   prefixes".** The `.gitignore` blocks the listed prefixes, but new private subsystems
   are not blocked until added. When in doubt: overlay first, public repo never.
   Current private prefixes: `tachyonos.*` (trading engine), `tengine.diag.*`
-  (internal diagnostics). Full list and rationale in `schemas/README.md`.
+  (internal diagnostics), `hearth.market.state.*` (tachyonos bridge, raw_signal
+  leak vector). Full list and rationale in `schemas/README.md`.
 - **NEVER bypass `nervous publish`.** All publishers go through the SDK.
   Direct `zellij pipe` or raw `redis-cli XADD` calls break schema validation and
   observability. tachyonac-engine uses the Go nbus client (`internal/nbus/`), which
