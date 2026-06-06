@@ -16,6 +16,9 @@
     "frame_uri": {"type": "string", "description": "file:// URI of last rendered frame"},
     "latency_ms": {"type": "number"},
     "silo_tester_report": {"type": "object", "description": "Full SiloTesterEnvelope JSON"},
-    "error": {"type": "string"}
+    "error": {"type": "string"},
+    "job_id": {"type": "string", "description": "Stable queue key echoed from the originating autobench.gpu_job; lets consumers correlate result to enqueued job."},
+    "correlation_id": {"type": "string", "description": "Correlation id propagated unchanged from the originating autobench.gpu_job."},
+    "status": {"type": "string", "enum": ["completed", "failed", "timed_out"], "description": "Queue-level disposition of the job, distinct from the rendering verdict: 'completed' ran to a verdict, 'failed' errored before producing one, 'timed_out' exceeded its deadline."}
   }
 }

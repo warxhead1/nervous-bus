@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.gpu.lease.released.v1.json",
+  "title": "tengine.gpu.lease.released v1",
+  "description": "Emitted when a GPU lease ends, freeing the queue for the next holder. Source: /tengine/gpu. 'crash_reaped' is emitted by the reaper on behalf of a dead holder (the holder's pid is gone), distinct from a clean 'shutdown' or a cooperative 'yielded'. Pairs with the tengine.gpu.lease.granted event carrying the same fencing_token.",
+  "type": "object",
+  "required": ["holder", "fencing_token", "reason", "released_at"],
+  "properties": {
+    "holder": {
+      "type": "string",
+      "description": "Identity of the lease holder being released, source-URI style (e.g. 'tengine/interactive_pipeline_lab')."
+    },
+    "fencing_token": {
+      "type": "string",
+      "description": "Fencing token of the released lease; matches the token from tengine.gpu.lease.granted."
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["shutdown", "crash_reaped", "yielded", "error"],
+      "description": "Why the lease ended: 'shutdown' clean exit, 'crash_reaped' reclaimed by the reaper after holder death, 'yielded' cooperatively given up, 'error' aborted due to a fault."
+    },
+    "released_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp at which the lease was released."
+    }
+  }
+}

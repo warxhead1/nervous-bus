@@ -11,6 +11,12 @@
     "case_id": {"type": "string"},
     "frames": {"type": "integer", "default": 60},
     "timeout_s": {"type": "number", "default": 120.0},
-    "reference_image_path": {"type": "string", "description": "Optional path for SSIM comparison"}
+    "reference_image_path": {"type": "string", "description": "Optional path for SSIM comparison"},
+    "job_id": {"type": "string", "description": "Stable queue key for this job; the dedup/idempotency key used by the consumer-group queue and echoed back on the result."},
+    "correlation_id": {"type": "string", "description": "Ties this job to a request/saga spanning multiple events; propagated unchanged to the gpu_result."},
+    "attempt": {"type": "integer", "default": 0, "minimum": 0, "description": "Zero-based retry attempt counter incremented on each requeue after a failure or timeout."},
+    "max_attempts": {"type": "integer", "default": 3, "minimum": 1, "description": "Maximum number of attempts before the job is dead-lettered."},
+    "priority": {"type": "integer", "minimum": 0, "maximum": 4, "description": "Scheduling priority, 0 (lowest) to 4 (highest)."},
+    "source_island": {"type": ["string", "integer"], "description": "Originating evolution island identifier (name or numeric index) for the funsearch/autobench population this job came from."}
   }
 }

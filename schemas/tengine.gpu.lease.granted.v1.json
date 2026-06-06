@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.gpu.lease.granted.v1.json",
+  "title": "tengine.gpu.lease.granted v1",
+  "description": "Emitted when a process acquires the exclusive GPU work-queue lease. Source: /tengine/gpu. The fencing_token is monotonic across grants and lets consumers reject stale heartbeats/results from a previously-evicted holder (fencing-token mutual exclusion). Pair with a later tengine.gpu.lease.released carrying the same fencing_token.",
+  "type": "object",
+  "required": ["holder", "pid", "fencing_token", "started_at"],
+  "properties": {
+    "holder": {
+      "type": "string",
+      "description": "Identity of the lease holder, source-URI style (e.g. 'tengine/interactive_pipeline_lab')."
+    },
+    "pid": {
+      "type": "integer",
+      "description": "OS process id of the holder; used by the reaper to detect crashed holders."
+    },
+    "fencing_token": {
+      "type": "string",
+      "description": "Monotonically increasing token assigned at grant time. Strictly greater than any previously granted token; consumers fence stale writers by comparing tokens."
+    },
+    "pools": {
+      "description": "GPU memory pools claimed by this lease. Either a list of pool names, or a map of pool name to reserved megabytes.",
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        {
+          "type": "object",
+          "additionalProperties": {"type": "integer"}
+        }
+      ]
+    },
+    "vram_budget_mb": {
+      "type": "integer",
+      "description": "Total VRAM budget in megabytes the holder is permitted to use under this lease."
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp at which the lease was granted."
+    }
+  }
+}

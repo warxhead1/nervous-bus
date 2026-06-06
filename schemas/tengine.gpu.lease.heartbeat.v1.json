@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.gpu.lease.heartbeat.v1.json",
+  "title": "tengine.gpu.lease.heartbeat v1",
+  "description": "Periodic liveness signal from the current GPU lease holder. Source: /tengine/gpu. Carries queue observability (depth, in-flight job, ETA) so consumers can monitor scheduler backlog. The fencing_token must match the active grant; consumers reject heartbeats whose token is lower than the latest seen grant.",
+  "type": "object",
+  "required": ["holder", "fencing_token", "queue_depth", "ts"],
+  "properties": {
+    "holder": {
+      "type": "string",
+      "description": "Identity of the lease holder, source-URI style (e.g. 'tengine/interactive_pipeline_lab')."
+    },
+    "fencing_token": {
+      "type": "string",
+      "description": "Fencing token of the lease this heartbeat belongs to; matches the token from tengine.gpu.lease.granted."
+    },
+    "queue_depth": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of jobs currently waiting in the GPU work queue (excludes the in-flight job)."
+    },
+    "current_job_id": {
+      "type": ["string", "null"],
+      "description": "Stable queue key of the job currently executing, or null if the queue is idle."
+    },
+    "eta_hint_ms": {
+      "type": ["integer", "null"],
+      "description": "Best-effort estimated milliseconds until the current job completes, or null when unknown/idle."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp at which this heartbeat was emitted."
+    }
+  }
+}
