@@ -29,11 +29,14 @@ are authoritative and hot-reloaded by redis-mirror every 5 minutes.
   they're internal-only and never cross the bus.
 - **This repo is PUBLIC — private contracts go in `$NERVOUS_HOME/schemas/`, NOT here.**
   Anything sensitive (trading PnL/positions/orders, account/venue data, proprietary
-  params, private integrations) belongs in the local overlay
+  params, private integrations, internal diagnostics) belongs in the local overlay
   (`~/.config/nervous-bus/schemas/`, loaded alongside repo schemas and precedence-wins
-  for the same channel). Install via `nervous schema install <path>`. `tachyonos.*`
-  (tachyonac-engine, trading) is private and `.gitignore`d — never commit it here.
-  See `schemas/README.md` for the full public/private policy and prefix list.
+  for the same channel). Install via `nervous schema install <path>`.
+  **NEVER `git add` a schema without checking `schemas/README.md` § "Known private
+  prefixes".** The `.gitignore` blocks the listed prefixes, but new private subsystems
+  are not blocked until added. When in doubt: overlay first, public repo never.
+  Current private prefixes: `tachyonos.*` (trading engine), `tengine.diag.*`
+  (internal diagnostics). Full list and rationale in `schemas/README.md`.
 - **NEVER bypass `nervous publish`.** All publishers go through the SDK.
   Direct `zellij pipe` or raw `redis-cli XADD` calls break schema validation and
   observability. tachyonac-engine uses the Go nbus client (`internal/nbus/`), which
