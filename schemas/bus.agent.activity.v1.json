@@ -18,8 +18,8 @@
     },
     "agent_kind": {
       "type": "string",
-      "enum": ["host_claude_code", "host_codex", "codex-cli", "claude-code", "claude-code-minimax"],
-      "description": "The host-side agent runtime kind. host_claude_code = Claude Code sessions; host_codex = Codex CLI agents (e.g. home-automation). codex-cli / claude-code / claude-code-minimax are legacy values emitted by the codex-hook binary's detectAgentKind()."
+      "enum": ["host_claude_code", "host_codex", "codex-cli", "claude-code", "claude-code-minimax", "host_subagent", "host_hearthloom"],
+      "description": "The host-side agent runtime kind. host_claude_code = Claude Code top-level sessions; host_subagent = Claude Code dispatched subagents (ParentToolUseID present); host_hearthloom = hearth-loom orchestrated sessions; host_codex = Codex CLI agents. codex-cli / claude-code / claude-code-minimax are legacy values emitted by the codex-hook binary's detectAgentKind()."
     },
     "agent_id": {
       "type": "string",
