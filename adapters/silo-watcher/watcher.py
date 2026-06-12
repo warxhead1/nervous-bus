@@ -215,24 +215,67 @@ def build_frame_metrics_event(silo: str, session_id: str, session_dir: Path) -> 
 
 
 def scan(sessions_root: Path, state: dict, source: str, emit_started_for_existing: bool) -> int:
-    """One pass over sessions_root. Returns count of events emitted."""
+    """One pass over sessions_root. Returns count of events emitted.
+
+    Uses a horizon-mtime strategy instead of an ever-growing seen_dirs list.
+    state["seen_horizon"] = mtime of the newest session dir we've fully processed.
+    We only stat-scan dirs with mtime > (seen_horizon - epsilon) so this stays
+    O(recently_added) rather than O(all_1800_sessions) on every 2-second poll.
+    verified_dirs is kept as a set for sessions started but not yet verified.
+    """
     if not sessions_root.exists():
         return 0
-    seen = set(state["seen_dirs"])
-    verified = set(state["verified_dirs"])
+
+    seen_horizon: float = state.get("seen_horizon", 0.0)
+    verified = set(state.get("verified_dirs", []))
+    # Legacy migration: if old format has seen_dirs but no seen_horizon, compute
+    # horizon from the list so we don't re-emit started events on first upgrade.
+    if "seen_dirs" in state and not state.get("_horizon_migrated"):
+        legacy_seen = set(state.pop("seen_dirs", []))
+        if legacy_seen and sessions_root.exists():
+            max_mtime = 0.0
+            try:
+                with os.scandir(sessions_root) as it:
+                    for e in it:
+                        if e.name in legacy_seen:
+                            try:
+                                max_mtime = max(max_mtime, e.stat().st_mtime)
+                            except OSError:
+                                pass
+            except OSError:
+                pass
+            if max_mtime:
+                seen_horizon = max_mtime
+        state["_horizon_migrated"] = True
+        log(f"migrated seen_dirs → seen_horizon={seen_horizon:.0f} ({len(legacy_seen)} entries)")
+
     emitted = 0
-    for entry in sorted(sessions_root.iterdir()):
-        if not entry.is_dir():
-            continue
-        name = entry.name
-        if not name.startswith("silo_"):
-            continue
+    new_horizon = seen_horizon
+
+    # scandir with stat gives us mtime without a second syscall per entry.
+    # We only need entries newer than seen_horizon (with a 5s slop for clock skew).
+    horizon_cutoff = seen_horizon - 5.0
+    try:
+        with os.scandir(sessions_root) as it:
+            entries = [
+                (e.stat().st_mtime, e.name, Path(e.path))
+                for e in it
+                if e.is_dir(follow_symlinks=False) and e.name.startswith("silo_")
+                and e.stat().st_mtime >= horizon_cutoff
+            ]
+    except OSError:
+        return 0
+
+    entries.sort()  # oldest-first so new_horizon advances monotonically
+
+    for mtime, name, entry in entries:
         parsed = parse_dirname(name)
         if parsed is None:
             continue
         silo, started_at = parsed
 
-        if name not in seen:
+        is_new = mtime > seen_horizon
+        if is_new:
             if emit_started_for_existing:
                 event = {
                     "silo": silo,
@@ -243,7 +286,7 @@ def scan(sessions_root: Path, state: dict, source: str, emit_started_for_existin
                 if publish("tengine.silo.started.v1", event, source):
                     emitted += 1
                     log(f"started: {name} (silo={silo})")
-            seen.add(name)
+            new_horizon = max(new_horizon, mtime)
 
         if name not in verified and (entry / "verification_report.json").exists():
             event = build_verify_event(silo, name, entry)
@@ -262,7 +305,15 @@ def scan(sessions_root: Path, state: dict, source: str, emit_started_for_existin
 
             verified.add(name)
 
-    state["seen_dirs"] = sorted(seen)
+    state["seen_horizon"] = new_horizon
+    # Keep verified_dirs pruned: once a session dir no longer exists it can't
+    # gain a late verification_report.json, so drop it to bound list growth.
+    if verified:
+        try:
+            existing = {e.name for e in os.scandir(sessions_root) if e.is_dir(follow_symlinks=False)}
+        except OSError:
+            existing = set()
+        verified &= existing
     state["verified_dirs"] = sorted(verified)
     return emitted
 
@@ -291,18 +342,27 @@ def main() -> int:
     source = cfg.get("publish", {}).get("source", "/silo-watcher")
 
     state = load_offset(offset_path)
-    bootstrap = not state["seen_dirs"]
+    bootstrap = not state.get("seen_dirs") and not state.get("seen_horizon")
 
     if bootstrap:
-        # First run ever: mark current dirs as seen WITHOUT emitting started events
-        # for them (no retroactive flood). But still watch for new verify reports
-        # appearing in those existing dirs (one-shot backfill of completed runs).
+        # First run ever: set the horizon to the newest existing session mtime
+        # WITHOUT emitting started events (no retroactive flood). Verify events
+        # for already-completed runs DO still fire (one-shot backfill).
         log(f"bootstrap: snapshotting {sessions_root} without emitting started events")
+        max_mtime = 0.0
         if sessions_root.exists():
-            for entry in sessions_root.iterdir():
-                if entry.is_dir() and entry.name.startswith("silo_"):
-                    state["seen_dirs"].append(entry.name)
-            state["seen_dirs"] = sorted(set(state["seen_dirs"]))
+            try:
+                with os.scandir(sessions_root) as it:
+                    for e in it:
+                        if e.is_dir(follow_symlinks=False) and e.name.startswith("silo_"):
+                            try:
+                                max_mtime = max(max_mtime, e.stat().st_mtime)
+                            except OSError:
+                                pass
+            except OSError:
+                pass
+        state["seen_horizon"] = max_mtime
+        state["verified_dirs"] = []
         save_offset(offset_path, state)
 
     log(f"watching {sessions_root} (poll={poll_interval}s, source={source})")

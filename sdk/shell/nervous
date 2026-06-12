@@ -273,6 +273,12 @@ PYEOF
             echo "nervous publish --json: failed to parse event type from payload" >&2
             return 2
         fi
+        local _log_max=524288000
+        if [[ -f "$log" ]]; then
+            local _log_size
+            _log_size=$(stat -c%s "$log" 2>/dev/null || echo 0)
+            if (( _log_size > _log_max )); then mv -f "$log" "${log}.1" 2>/dev/null || true; fi
+        fi
         printf '%s\n' "$payload" >> "$log"
         _nbus_redis_xadd "$payload"
         if [[ -n "${ZELLIJ:-}" ]] && command -v zellij >/dev/null 2>&1 && [[ "${NERVOUS_NO_ZELLIJ:-0}" != "1" ]]; then
@@ -388,6 +394,16 @@ except Exception as e:
     # ────────────────────────────────────────────────────────────────────────────
 
     # Always tee to debug log (durable, easy to subscribe via tail -F).
+    # Rotate at 500 MB: mv → .1, open fresh. Consumers detect inode change and
+    # reopen — same mechanism used by redis-mirror and cc-bus-dashboard.
+    local _log_max=524288000
+    if [[ -f "$log" ]]; then
+        local _log_size
+        _log_size=$(stat -c%s "$log" 2>/dev/null || echo 0)
+        if (( _log_size > _log_max )); then
+            mv -f "$log" "${log}.1" 2>/dev/null || true
+        fi
+    fi
     printf '%s\n' "$envelope" >> "$log"
     # Also write directly to Redis Streams — eliminates the file→mirror→Redis hop.
     _nbus_redis_xadd "$envelope"

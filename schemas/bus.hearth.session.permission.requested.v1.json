@@ -38,8 +38,16 @@
     },
     "options": {
       "type": "array",
-      "items": { "type": "string" },
-      "description": "Option labels from the Claude Code permission prompt (e.g. ['Yes', 'Yes, and don't ask again for this session', 'No'])."
+      "items": {
+        "type": "object",
+        "required": ["label", "is_default", "checked"],
+        "properties": {
+          "label": { "type": "string" },
+          "is_default": { "type": "boolean" },
+          "checked": { "type": "boolean" }
+        }
+      },
+      "description": "Options as structured entries (label + is_default + checked state)."
     },
     "deep_link": {
       "type": "string",
@@ -55,6 +63,37 @@
       "type": "string",
       "format": "date-time",
       "description": "RFC3339 UTC timestamp after which the phone should auto-dismiss this card."
+    },
+    "prompt_type": {
+      "type": "string",
+      "description": "Prompt kind: 'permission' | 'questionnaire' | 'confirmation' | 'workflow'."
+    },
+    "cursor_index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "0-based index of the focused option."
+    },
+    "multi_select": {
+      "type": "boolean",
+      "description": "True for multi-select questionnaires."
+    },
+    "has_freeform": {
+      "type": "boolean",
+      "description": "True when a freeform text-entry option is available."
+    },
+    "notes": {
+      "type": "string",
+      "description": "Freeform note attached to the question."
+    },
+    "question_index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "0-based index of this question in a multi-question set."
+    },
+    "question_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Total number of questions in the set."
     }
   }
 }
