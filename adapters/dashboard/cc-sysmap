@@ -1,7 +1,0 @@
-#!/usr/bin/env python3
-"""cc-sysmap — launcher. See cc_sysmap.py for implementation."""
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import cc_sysmap
-sys.exit(cc_sysmap.main())
