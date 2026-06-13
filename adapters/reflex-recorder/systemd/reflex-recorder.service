@@ -1,0 +1,20 @@
+[Unit]
+Description=nervous-bus Reflexarc reflex-recorder — agent run capture and segmentation
+After=network-online.target redis.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/nervous-bus/adapters/reflex-recorder
+# Pyenv 3.11.13 used — system Python 3.14 lacks redis package. Keep in sync with .python-version.
+ExecStart=%h/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/reflex-recorder/recorder.py
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=reflex-recorder
+TimeoutStopSec=15
+ReadWritePaths=%h/.cache/nervous-bus
+
+[Install]
+WantedBy=default.target
