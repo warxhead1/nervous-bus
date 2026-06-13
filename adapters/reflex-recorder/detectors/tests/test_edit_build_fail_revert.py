@@ -85,13 +85,18 @@ def _insert_run(
     project: str,
     outcome: Optional[str] = "clean",
     labeled_at: Optional[str] = None,
+    close_reason: Optional[str] = "ended",
 ) -> None:
+    # close_reason defaults to "ended" because the real run-store only ever
+    # holds CLOSED runs (the recorder writes row + events atomically at close).
+    # Pass close_reason=None to simulate an (impossible-in-prod) open run and
+    # assert the detector's completeness gate excludes it.
     now = _now_utc()
     conn.execute(
         """INSERT OR REPLACE INTO runs
-           (run_id, project, started, ended, outcome, labeled_at)
-           VALUES (?,?,?,?,?,?)""",
-        (run_id, project, now, now, outcome, labeled_at or now),
+           (run_id, project, started, ended, outcome, labeled_at, close_reason)
+           VALUES (?,?,?,?,?,?,?)""",
+        (run_id, project, now, now, outcome, labeled_at or now, close_reason),
     )
 
 
@@ -353,8 +358,8 @@ class TestPositiveDetection:
         assert len(candidates) == 1
         assert candidates[0].occurrences >= 1
 
-    def test_command_not_found_triggers_automate_rung(self):
-        """'command not found' in build output → AUTOMATE rung."""
+    def test_command_not_found_triggers_eliminate_rung(self):
+        """'command not found' in build output → ELIMINATE rung (one-time PATH fix)."""
         conn = _make_db()
         run_id = "run-cmdnotfound-001"
         _insert_run(conn, run_id, "testproj")
@@ -375,7 +380,7 @@ class TestPositiveDetection:
         candidates = det.run()
 
         assert len(candidates) == 1
-        assert candidates[0].extra["remediation_rung"] == "automate"
+        assert candidates[0].extra["remediation_rung"] == "eliminate"
         assert candidates[0].extra["command_not_found"] is True
 
 
@@ -573,12 +578,12 @@ class TestSignatureFormat:
 
         _add_cycle("run-stable-001", 1)
         det1 = EditBuildFailRevertDetector(conn)
-        cands1 = det1.detect(conn)
+        cands1 = det1.run()  # run() exercises the full contract (hit-recording + dedup)
         sig1 = cands1[0].signature
 
         _add_cycle("run-stable-002", 1)
         det2 = EditBuildFailRevertDetector(conn)
-        cands2 = det2.detect(conn)
+        cands2 = det2.run()
         # Both runs have the same anchor → same signature
         sigs = {c.signature for c in cands2}
         assert sig1 in sigs, f"Signature {sig1} should appear in second scan: {sigs}"
@@ -634,8 +639,8 @@ class TestRemediationLadder:
         assert len(candidates) == 1
         assert candidates[0].extra["remediation_rung"] == "inform"
 
-    def test_automate_rung_on_command_not_found(self):
-        """PATH issue detected → AUTOMATE rung."""
+    def test_eliminate_rung_on_command_not_found(self):
+        """PATH issue detected → ELIMINATE rung (one-time permanent PATH fix)."""
         conn = _make_db()
         run_id = "run-automate-001"
         _insert_run(conn, run_id, "testproj")
@@ -657,10 +662,11 @@ class TestRemediationLadder:
         candidates = det.run()
 
         assert len(candidates) == 1
-        assert candidates[0].extra["remediation_rung"] == "automate"
+        assert candidates[0].extra["remediation_rung"] == "eliminate"
 
-    def test_automate_rung_on_repeated_identical_build(self):
-        """Repeated identical build command across cycles → AUTOMATE rung."""
+    def test_repeated_identical_build_stays_inform(self):
+        """Repeated identical build → INFORM (strong): we don't know WHAT broke, so
+        escalating to AUTOMATE would violate the detector's own ladder rule."""
         conn = _make_db()
         run_id = "run-automate-repeated-001"
         _insert_run(conn, run_id, "testproj")
@@ -689,8 +695,28 @@ class TestRemediationLadder:
         candidates = det.run()
 
         assert len(candidates) == 1
-        assert candidates[0].extra["remediation_rung"] == "automate"
+        assert candidates[0].extra["remediation_rung"] == "inform"
         assert candidates[0].extra["repeated_same_build"] is True
+
+    def test_open_run_excluded_by_completeness_gate(self):
+        """A run with close_reason IS NULL (in-flight) must NOT be scanned —
+        its event stream may be truncated mid-cycle and would fire spuriously."""
+        conn = _make_db()
+        run_id = "run-open-001"
+        _insert_run(conn, run_id, "testproj", close_reason=None)
+
+        fp = "/home/eric/projects/testproj/src/lib.rs"
+        cwd = "/home/eric/projects/testproj"
+        ts, rs, p, c = _edit_event(fp, cwd)
+        _insert_event(conn, run_id, 1, "Edit", ts, rs, p, c)
+        ts2, rs2, p2, c2 = _bash_event("cargo build 2>&1", stdout="error: build failed", cwd=cwd)
+        _insert_event(conn, run_id, 2, "Bash", ts2, rs2, p2, c2)
+        ts3, rs3, p3, c3 = _bash_event("git restore src/lib.rs", cwd=cwd)
+        _insert_event(conn, run_id, 3, "Bash", ts3, rs3, p3, c3)
+
+        det = EditBuildFailRevertDetector(conn)
+        candidates = det.run()
+        assert candidates == [], "open (close_reason NULL) run must be excluded"
 
 
 # ── Tests: recurrence/dedup ───────────────────────────────────────────────────

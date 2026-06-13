@@ -143,13 +143,15 @@ class TestNavEventsHelper(unittest.TestCase):
         self.assertEqual(count, 3)
         self.assertTrue(had_mut)
 
-    def test_counts_bash_before_write(self):
+    def test_bash_not_counted_as_navigation(self):
+        # Bash is excluded from nav-tools (it conflates lookup with execution),
+        # so two Bash calls before a Write yield a nav count of 0.
         _build_run_with_tools(
             self.conn, "r2", "p",
             ["Bash", "Bash", "Write"],
         )
         count, had_mut = _nav_events_before_first_mutation(self.conn, "r2")
-        self.assertEqual(count, 2)
+        self.assertEqual(count, 0)
         self.assertTrue(had_mut)
 
     def test_no_mutation_returns_false(self):
@@ -170,12 +172,13 @@ class TestNavEventsHelper(unittest.TestCase):
         self.assertTrue(had_mut)
 
     def test_mixed_nav_tools(self):
+        # Read + Grep + Glob count (3); Bash is excluded; Edit is the mutation.
         _build_run_with_tools(
             self.conn, "r5", "p",
             ["Read", "Bash", "Grep", "Glob", "Edit"],
         )
         count, had_mut = _nav_events_before_first_mutation(self.conn, "r5")
-        self.assertEqual(count, 4)
+        self.assertEqual(count, 3)
         self.assertTrue(had_mut)
 
 

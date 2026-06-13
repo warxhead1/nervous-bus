@@ -234,17 +234,26 @@ class EditBuildFailRevertDetector(BaseDetector):
     DETECTOR_NAME = "edit_build_fail_revert"
 
     def detect(self, conn: sqlite3.Connection) -> list[PatternCandidate]:
-        """Scan all runs for edit-build-fail-revert thrash cycles.
+        """Scan all CLOSED runs for edit-build-fail-revert thrash cycles.
 
-        Only considers labeled runs (labeled_at IS NOT NULL) for the prevalence
-        denominator, but fires on ALL runs (including unlabeled) so newly
-        recorded sessions are captured immediately.
+        COMPLETENESS GATE: only runs with close_reason IS NOT NULL are scanned,
+        so an in-flight run (mid-edit/build, truncated event stream) cannot
+        produce a spurious cycle.  The run-store only ever holds closed runs
+        (the recorder writes the run row + full event stream atomically at
+        close), so this gate is belt-and-suspenders against any future
+        incremental-write change.  We deliberately do NOT gate on labeled_at:
+        this detector fires per-run on behaviour shape and never reads
+        `outcome`, so the null-vs-clean rule does not apply; firing on a
+        complete-but-not-yet-labeled run is correct and desired (immediate
+        capture).  Cross-run prevalence is handled by BaseDetector.run() via
+        the detector_hits table, not here.
         """
-        # Fetch all run_ids with their projects in chronological order.
+        # Fetch all CLOSED run_ids with their projects in chronological order.
         runs_cur = conn.execute(
             """
             SELECT run_id, project
             FROM runs
+            WHERE close_reason IS NOT NULL
             ORDER BY started
             """
         )
@@ -301,25 +310,42 @@ class EditBuildFailRevertDetector(BaseDetector):
                 area_counts[area] = area_counts.get(area, 0) + 1
             dominant_area = max(area_counts, key=lambda a: area_counts[a])
 
-            # Determine remediation rung
-            has_automate_evidence = any(c.get("command_not_found") for c in cycles)
+            # Determine remediation rung (climb to the HIGHEST achievable).
+            command_not_found = any(c.get("command_not_found") for c in cycles)
             repeated_same_build = _has_repeated_identical_build(cycles)
 
-            if has_automate_evidence:
-                remediation_rung = "automate"
+            if command_not_found:
+                # ELIMINATE — a "command not found" / missing-binary failure has a
+                # known deterministic root cause (the build tool is not on PATH).
+                # The fix is a ONE-TIME permanent PATH correction (shell profile /
+                # the agent-launch env / hookify config), after which this failure
+                # class cannot recur. That removes the cause structurally — strictly
+                # higher than AUTOMATE (a per-invocation pre-check still pays a cost
+                # every run). We therefore do NOT propose a pre-edit hook here.
+                remediation_rung = "eliminate"
                 remediation_note = (
-                    "AUTOMATE: 'command not found' detected — the build tool is not "
-                    "on PATH. A pre-edit hook can check/fix PATH before the agent "
-                    "attempts a build (e.g., ensure ~/.cargo/bin is in PATH before "
-                    "any cargo invocation)."
+                    "ELIMINATE: 'command not found' — the build tool is missing from "
+                    "PATH. Fix PATH ONCE and permanently (add the tool's bin dir, e.g. "
+                    "~/.cargo/bin or the go/node bin, to the shell profile and the "
+                    "agent-launch environment) so this failure class is removed "
+                    "entirely, not pre-checked on every build. No per-run hook needed."
                 )
             elif repeated_same_build:
-                remediation_rung = "automate"
+                # Still INFORM: an identical build command recurring across cycles is
+                # a STRONG signal, but without the error class captured we cannot name
+                # the deterministic fix — escalating to AUTOMATE here would violate the
+                # detector's own rule ("AUTOMATE requires knowing WHAT broke"). We flag
+                # the recurrence and the concrete upgrade path instead.
+                remediation_rung = "inform"
                 remediation_note = (
-                    "AUTOMATE: identical build command repeated across multiple "
-                    "edit-fail-revert cycles. This suggests a known-broken API usage "
-                    "or missing dependency. A pre-commit lint/check skill can catch "
-                    "this before the thrash loop begins."
+                    "INFORM (strong): the SAME build command recurs across multiple "
+                    "edit-fail-revert cycles — a known-broken API/dependency is likely, "
+                    "but the error class is not captured in telemetry, so the "
+                    "deterministic fix cannot yet be named. Surface as pattern.discovered. "
+                    "Upgrade path to AUTOMATE: capture full build stdout/stderr in "
+                    "run_events (raise the tool_response_summary length limit), then a "
+                    "pre-commit lint/check keyed to the captured error class can prevent "
+                    "the loop."
                 )
             else:
                 remediation_rung = "inform"
@@ -367,7 +393,7 @@ class EditBuildFailRevertDetector(BaseDetector):
                         "strong_thrash": len(cycles) >= 2,
                         "dominant_area": dominant_area,
                         "remediation_rung": remediation_rung,
-                        "command_not_found": has_automate_evidence,
+                        "command_not_found": command_not_found,
                         "repeated_same_build": repeated_same_build,
                         "cycles": [
                             {

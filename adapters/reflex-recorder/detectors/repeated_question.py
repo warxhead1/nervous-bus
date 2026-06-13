@@ -190,8 +190,16 @@ _ASK_INFORM_TEMPLATE = (
 def _is_deterministic_question(question_class: str) -> bool:
     """Heuristic: a question class is deterministic if it has no remaining
     placeholders after normalisation, meaning the answer doesn't vary by run.
+
+    <n> (a normalised number) counts as a varying placeholder: a count-sensitive
+    question like "Continue with <n> failures?" is context-dependent and must NOT
+    be treated as deterministically automatable — its answer depends on the run.
     """
-    return "<path>" not in question_class and "<id>" not in question_class
+    return (
+        "<path>" not in question_class
+        and "<id>" not in question_class
+        and "<n>" not in question_class
+    )
 
 
 # ── Detector ──────────────────────────────────────────────────────────────────

@@ -1,16 +1,25 @@
 """detectors/file_reads_to_finding.py — Tier-1 file-reads-to-finding detector.
 
 Measures the navigation cost to the first mutation per run: how many
-Read/Bash/Grep/Glob events fire BEFORE the first Edit/Write ("the finding")?
+Read/Grep/Glob events fire BEFORE the first Edit/Write ("the finding")?
 A high count indicates the agent is over-searching instead of navigating
 deterministically to the right file.
 
+NOTE: Bash is deliberately NOT counted as navigation. Bash conflates file
+lookup (ls/find/rg) with execution (cargo test, git diff, builds); counting it
+inflated the metric with non-navigation work. We count only the unambiguous
+file-navigation tools (Read, Grep, Glob), accepting a slight undercount over a
+polluted signal.
+
 Algorithm
 =========
-1. For each labeled run (labeled_at IS NOT NULL), walk run_events ordered by seq.
-   Count navigation events (Read, Bash, Grep, Glob) before the first mutation
+1. For each labeled run (labeled_at IS NOT NULL), walk run_events ordered by
+   seq.  Count navigation events (Read, Grep, Glob) before the first mutation
    event (Edit, Write).  Runs with zero mutations are skipped (read-only tasks
-   are not a navigation problem).
+   are not a navigation problem).  The labeled_at gate is a quality filter
+   (over-searching on runs that reached a labeled outcome is the cleaner
+   signal); this detector never reads `outcome`, so the null-vs-clean rule is
+   not at issue.
 
 2. Per project, collect the per-run counts and compute p50, p90, max.
    Flag runs that exceed READ_THRESHOLD.
@@ -71,8 +80,10 @@ READ_THRESHOLD: int = 20
 # Prevents single-run noise from becoming a false alarm.
 MIN_FLAGGED_RUNS: int = 2
 
-# Tool names we classify as "navigation" (read-only exploration).
-_NAV_TOOLS: frozenset[str] = frozenset({"Read", "Bash", "Grep", "Glob"})
+# Tool names we classify as "navigation" (unambiguous file lookup).
+# Bash is intentionally excluded — it mixes navigation (ls/find/rg) with
+# execution (builds/tests/git), which inflated the count. See module docstring.
+_NAV_TOOLS: frozenset[str] = frozenset({"Read", "Grep", "Glob"})
 
 # Tool names we classify as "mutation" (first resolving edit = the "finding").
 _MUTATION_TOOLS: frozenset[str] = frozenset({"Edit", "Write"})
@@ -102,8 +113,11 @@ class FileReadsToFindingDetector(BaseDetector):
     def detect(self, conn: sqlite3.Connection) -> list[PatternCandidate]:
         """Compute per-run navigation costs and flag over-searching projects.
 
-        Only considers labeled runs (labeled_at IS NOT NULL) so we gate on
-        outcome quality — unlabeled runs may not yet represent real signal.
+        Only considers labeled runs (labeled_at IS NOT NULL): over-searching on a
+        run that actually reached a labeled outcome is the cleaner signal, and it
+        keeps this detector's denominator stable as labeling backfills. (This
+        detector never reads `outcome` itself — the gate is a quality filter, not
+        an outcome read, so the null-vs-clean rule is not at issue.)
         """
         # 1. Fetch labeled runs that have at least one event.
         labeled_runs = conn.execute(

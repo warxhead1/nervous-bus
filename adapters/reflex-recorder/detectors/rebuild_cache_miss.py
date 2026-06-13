@@ -223,9 +223,17 @@ class RebuildCacheMissDetector(BaseDetector):
           5. Group flagged observations by (project, crate_target) and emit one
              PatternCandidate per group.
 
-        NOTE: only runs with labeled_at IS NOT NULL and outcome != NULL are
-        used for baseline calculation.  Unlabeled / in-flight runs may have
-        truncated event streams and would skew the baseline downward.
+        COMPLETENESS GATE: only CLOSED runs (close_reason IS NOT NULL) feed the
+        baseline and flagging.  The run-store only ever holds closed runs — the
+        recorder writes the run row + its full event stream atomically at close,
+        so an in-flight run has no row and is already excluded by the INNER JOIN.
+        We still gate on close_reason IS NOT NULL explicitly so the invariant is
+        enforced at the query layer and survives any future incremental-write
+        change.  We deliberately do NOT gate on labeled_at: outcome labeling is a
+        separate backfill pass, most complete runs are not-yet-labeled, and the
+        baseline needs event-stream completeness (close_reason), not a label.
+        This detector never reads `outcome`, so the null-vs-clean rule does not
+        apply here.
         """
 
         # ── Step 1: fetch all run_events rows that contain "cargo" ────────────
@@ -236,9 +244,11 @@ class RebuildCacheMissDetector(BaseDetector):
             row[0]
             for row in conn.execute(
                 """
-                SELECT DISTINCT run_id
-                FROM run_events
-                WHERE raw_json LIKE '%cargo%'
+                SELECT DISTINCT re.run_id
+                FROM run_events re
+                JOIN runs r ON r.run_id = re.run_id
+                WHERE re.raw_json LIKE '%cargo%'
+                  AND r.close_reason IS NOT NULL
                 """
             ).fetchall()
         ]

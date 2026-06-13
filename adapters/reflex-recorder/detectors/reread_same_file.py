@@ -7,8 +7,9 @@ reconstructs context by re-reading on every turn.
 
 Algorithm
 =========
-1. For every run_id (gate on labeled_at IS NOT NULL when checking outcome,
-   but detect over ALL runs — unlabeled runs still exhibit the pattern):
+1. For every run_id (this detector never reads `outcome`, so the null-vs-clean
+   rule does not apply; it fires on behaviour shape over all stored — i.e.
+   closed — runs, labeled or not):
 
    a. Query run_events for tool_name = 'Read' events.
    b. Extract the file_path from data.tool_summary (JSON {"file_path": "..."})
@@ -153,16 +154,23 @@ def _extract_file_path(tool_summary: Optional[str], raw_json: Optional[str]) -> 
 def _normalize_path(file_path: str) -> str:
     """Normalize a file path to a stable anchor.
 
-    Strips worktree slug prefixes of the form
-      /.../.claude/worktrees/<slug>/rest/of/path
-    down to /rest/of/path so the same logical file across different worktrees
-    shares one signature anchor.
+    Reduces BOTH worktree and direct-repo paths to the same repo-relative
+    anchor so a file accessed via a worktree in one run and directly in another
+    shares ONE signature (otherwise cross-run dedup splits):
+      /.../projects/<proj>/.claude/worktrees/<slug>/rest/of/path -> rest/of/path
+      /.../projects/<proj>/rest/of/path                          -> rest/of/path
 
-    Falls back to os.path.normpath if no worktree pattern matches.
+    Falls back to os.path.normpath if neither pattern matches.
     """
     norm = os.path.normpath(file_path)
-    # Match .claude/worktrees/<slug>/ or .worktrees/<slug>/
+    # 1. Worktree paths: strip .../.claude/worktrees/<slug>/ (or .worktrees/<slug>/).
     m = re.search(r"(?:\.claude/worktrees|\.worktrees)/[^/]+/(.+)$", norm)
+    if m:
+        return m.group(1)
+    # 2. Direct repo paths: strip the .../projects/<proj>/ prefix so a directly
+    #    accessed file collapses to the SAME repo-relative anchor as its
+    #    worktree-accessed twin. Without this, mixed access yields two anchors.
+    m = re.search(r"/projects/[^/]+/(.+)$", norm)
     if m:
         return m.group(1)
     return norm

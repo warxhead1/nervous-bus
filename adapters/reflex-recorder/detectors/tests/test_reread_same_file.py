@@ -184,9 +184,17 @@ class TestNormalizePath(unittest.TestCase):
         path2 = "/home/eric/projects/foo/.claude/worktrees/wf_xyz/adapters/bar.py"
         self.assertEqual(_normalize_path(path1), _normalize_path(path2))
 
-    def test_non_worktree_path_is_normalized(self):
+    def test_direct_repo_path_collapses_to_repo_relative(self):
+        # A directly-accessed repo path strips the .../projects/<proj>/ prefix to
+        # the repo-relative anchor, so it shares ONE signature with the same file
+        # accessed via a worktree (which strips to the same suffix).
         path = "/home/eric/projects/foo/CLAUDE.md"
-        self.assertEqual(_normalize_path(path), "/home/eric/projects/foo/CLAUDE.md")
+        self.assertEqual(_normalize_path(path), "CLAUDE.md")
+
+    def test_direct_and_worktree_access_share_anchor(self):
+        direct = "/home/eric/projects/foo/adapters/store.py"
+        worktree = "/home/eric/projects/foo/.claude/worktrees/wf_abc/adapters/store.py"
+        self.assertEqual(_normalize_path(direct), _normalize_path(worktree))
 
     def test_dotworktrees_variant_also_stripped(self):
         path = "/home/eric/projects/foo/.worktrees/wf_abc/some/file.py"

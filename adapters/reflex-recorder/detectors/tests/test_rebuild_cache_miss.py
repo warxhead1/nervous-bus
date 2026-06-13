@@ -92,11 +92,14 @@ def _insert_run(
     worktree: str | None = None,
     outcome: str | None = "clean",
     labeled_at: str | None = None,
+    close_reason: str | None = "ended",
 ) -> None:
+    # close_reason defaults to "ended": the real store only holds CLOSED runs.
+    # Pass close_reason=None to assert the completeness gate excludes open runs.
     conn.execute(
         """INSERT OR REPLACE INTO runs
-           (run_id, project, worktree, worktree_slug, outcome, labeled_at, ended)
-           VALUES (?,?,?,?,?,?,?)""",
+           (run_id, project, worktree, worktree_slug, outcome, labeled_at, ended, close_reason)
+           VALUES (?,?,?,?,?,?,?,?)""",
         (
             run_id,
             project,
@@ -105,6 +108,7 @@ def _insert_run(
             outcome,
             labeled_at or _now_utc(),
             _now_utc(),
+            close_reason,
         ),
     )
 
