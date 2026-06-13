@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.agent.run.eval.v1.json",
+  "title": "bus.agent.run.eval v1",
+  "description": "A SYNTHESIS EVALUATION — the verdict the Reflexarc synthesis pass (b7 / mgv7z) reaches about ONE recurring behavioral issue, plus the result of replaying a candidate deterministic fix against history. Emitted once per (issue_signature) per synthesis pass. Member of the bus.agent.* family — flat data-only; the CloudEvents-lite envelope is applied by `nervous publish`.\n\nWHY THIS EXISTS: the Tier-1 detectors raise candidates into the issues/detector_hits tables (Kyoko prevalence + recurrence). Synthesis ranks those issues, climbs each to the highest Remediation-Ladder rung (Eliminate > Automate > Inform), and — critically — GATES a proposed fix behind a replay-eval: a counterfactual re-run proving the fix would have prevented the historical firings WITHOUT falsely suppressing legitimate behavior. run.eval is the durable record of that decision; a `decision==propose_fix` eval is what licenses emitting <project>.pattern.discovered.v1 (and optionally filing a proposal bead).\n\nGROUNDED IN THE LIVE STREAM (2026-06-13): outcome labels are SPARSE (~10% of runs labeled; the rest close on idle_timeout unlabeled). Therefore synthesis MUST rank primarily on deterministic detector signal (prevalence x recurrence x ladder-rung), using outcome labels only as a refinement/confirmation boost — never as a gate. `labeled_support` carries the (small) labeled breakdown explicitly, with unlabeled counted as its own bucket, so a consumer can see how thin the label confirmation is. Runs that fragmented across idle_timeout are expected to be re-stitched (continues_run_id) BEFORE counting, so a single logical run is not double-counted in prevalence/recurrence.",
+  "type": "object",
+  "required": [
+    "eval_id",
+    "project",
+    "issue_signature",
+    "detector",
+    "synthesis_pass_at",
+    "score",
+    "rung",
+    "replay_gate",
+    "decision"
+  ],
+  "properties": {
+    "eval_id": {
+      "type": "string",
+      "description": "ULID for this evaluation record (sortable, monotonic, 26 chars). Primary key; a new eval is produced each synthesis pass that re-evaluates the signature."
+    },
+    "project": {
+      "type": "string",
+      "description": "Project the issue belongs to (repo dir name, or 'main'). The keying axis for cross-run learning, mirrored from the issue."
+    },
+    "issue_signature": {
+      "type": "string",
+      "description": "The stable issue signature being evaluated — '<project>:<detector>:<stable_anchor>', the issues-table primary key. Contains NO run_id and NO timestamp (that is what lets recurrence dedup work). This is the identity a fix is proposed against and that replay is gated on."
+    },
+    "pattern_name": {
+      "type": "string",
+      "description": "Human-readable pattern name (e.g. 'worktree_leak', 'rebuild_cache_miss'), mirrored from the detector candidate."
+    },
+    "detector": {
+      "type": "string",
+      "description": "Detector that raised the issue (DETECTOR_NAME). When multiple detectors corroborate one signature, the primary detector; see `corroborating_detectors`."
+    },
+    "corroborating_detectors": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Other detectors whose hits reinforce this issue (e.g. rebuild_cache_miss + worktree_leak both pointing at un-shared worktree state). Empty/absent when only one detector fired."
+    },
+    "synthesis_pass_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC — when this synthesis pass produced the eval."
+    },
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Composite ranking score (higher = more worth fixing). A monotonic function of score_components; the absolute scale is internal but stable within a label_version of the scoring function. Used to order proposals."
+    },
+    "score_components": {
+      "type": "object",
+      "description": "TRANSPARENT breakdown of `score` so a human/auditor can see WHY an issue ranked. Synthesis must populate every component it used; a consumer can re-derive `score` from these. Keeps the ranking auditable rather than a black box.",
+      "properties": {
+        "prevalence": {"type": "number", "minimum": 0, "maximum": 1, "description": "Kyoko #2: distinct hit runs / total runs for this (project, detector) over the scoring window (0..1)."},
+        "recurrence_count": {"type": "integer", "minimum": 1, "description": "Kyoko #5: issues.recurrence_count — how many times this exact signature has recurred across runs."},
+        "ladder_rung_weight": {"type": "number", "description": "Weight from the achievable remediation rung — Eliminate > Automate > Inform. Higher rungs score higher because they are both more valuable AND more measurable (replay-testable), which self-reinforces climbing the ladder."},
+        "label_confirmation": {"type": "number", "description": "Refinement boost from sparse outcome labels: positive when labeled runs touching this issue skew toward failure outcomes (thrashed/abandoned/reverted), ~0 when unlabeled, slightly negative when labeled clean. NEVER a gate — labels are too sparse to gate on."},
+        "recency": {"type": "number", "description": "Decay factor favoring issues seen recently (issues.last_seen) over stale ones."}
+      },
+      "additionalProperties": true
+    },
+    "window_days": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Rolling window (days) over which prevalence/recency were computed."
+    },
+    "labeled_support": {
+      "type": "object",
+      "description": "EXPLICIT label breakdown of the runs touching this issue, gating on labeled_at (per the run.closed null-vs-clean rule). `unlabeled` is its own bucket and is expected to dominate — synthesis must NOT fold it into clean. Lets a consumer judge how thin the ground-truth confirmation is behind a proposal.",
+      "properties": {
+        "confirmed_failures": {"type": "integer", "minimum": 0, "description": "Runs labeled thrashed/abandoned/reverted that exhibit this issue."},
+        "confirmed_clean": {"type": "integer", "minimum": 0, "description": "Runs labeled clean/landed/corrected that exhibit this issue (a high count here is a SUPPRESSION signal — the behavior may be benign)."},
+        "unlabeled": {"type": "integer", "minimum": 0, "description": "Runs exhibiting the issue that are not yet labeled (labeled_at IS NULL). Usually the majority; carries no outcome signal."}
+      },
+      "additionalProperties": false
+    },
+    "rung": {
+      "type": "string",
+      "enum": ["eliminate", "automate", "inform"],
+      "description": "The HIGHEST achievable Remediation-Ladder rung for this issue's fix, after synthesis climbed it. Eliminate = remove the root cause (e.g. share the cargo cache); Automate = a deterministic guard/skill/setting; Inform = surface to a human. Synthesis must climb as high as the evidence supports."
+    },
+    "rung_descent_reason": {
+      "type": ["string", "null"],
+      "description": "If `rung` is below 'eliminate', the explicit reason the higher rung was not achievable (e.g. 'error class not captured in telemetry, cannot name a deterministic guard'). The Remediation-Ladder discipline: record WHY you fell. null when rung=='eliminate'."
+    },
+    "remediation": {
+      "type": "object",
+      "description": "The concrete proposed fix at `rung`. Mirrors/sharpens the detector's proposed_remediation. `target` is what would be changed if accepted.",
+      "properties": {
+        "proposal": {"type": "string", "description": "Human-readable description of the deterministic fix."},
+        "target": {
+          "type": "object",
+          "description": "Machine-actionable target of the fix — aligns with <project>.pattern.discovered.v1 proposed_patch.",
+          "properties": {
+            "type": {"type": "string", "enum": ["skill", "rule", "code", "config", "env", "doc"], "description": "Kind of change. 'env'/'config' typically Eliminate (e.g. CARGO_TARGET_DIR); 'skill'/'rule' typically Automate; 'doc' typically Inform."},
+            "selector": {"type": "object", "description": "Where the change lands (file path, settings key, hook id, etc.)."},
+            "content": {"type": "string", "description": "Proposed content/patch, when known."}
+          }
+        }
+      }
+    },
+    "replay_gate": {
+      "type": "object",
+      "description": "THE AUTOMATE REPLAY-EVAL GATE — the measurable counterfactual that licenses (or blocks) a fix. Synthesis replays the candidate fix against historical runs and measures whether it would have prevented the issue WITHOUT suppressing legitimate behavior. This is what makes a proposal trustworthy and is the self-reinforcement of the ladder: Eliminate/Automate fixes are replay-testable; an Inform 'fix' is not measurable, so it cannot pass the gate — structurally biasing the system toward higher rungs.",
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["passed", "failed", "not_applicable", "insufficient_history", "pending"],
+          "description": "passed = the simulated fix prevents the historical firings with acceptable false-suppression; failed = it does not prevent them OR suppresses legitimate runs (DO NOT propose); not_applicable = rung==inform (nothing deterministic to replay); insufficient_history = too few historical runs to evaluate; pending = gate not yet run."
+        },
+        "method": {"type": "string", "description": "How the counterfactual was evaluated (e.g. 're-ran the detector against N historical runs with CARGO_TARGET_DIR-shared simulated; counted firings eliminated')."},
+        "runs_evaluated": {"type": "integer", "minimum": 0, "description": "Number of historical (re-stitched) runs the replay was evaluated against."},
+        "would_have_prevented": {"type": "integer", "minimum": 0, "description": "Counterfactual: how many historical firings of this issue the simulated fix would have eliminated."},
+        "false_suppression": {"type": "integer", "minimum": 0, "description": "Runs where the simulated fix would have wrongly suppressed/altered legitimate behavior. A non-trivial value FAILS the gate — guards against overfit fixes that 'work' by breaking valid cases."},
+        "prevention_rate": {"type": "number", "minimum": 0, "maximum": 1, "description": "would_have_prevented / (firings in evaluated window). The headline measurable."},
+        "measurability_note": {"type": "string", "description": "Why this rung is replay-measurable (or, for not_applicable, why it is not). Documents the self-reinforcement."}
+      }
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["propose_fix", "monitor", "suppressed", "needs_more_data"],
+      "description": "The synthesis verdict. propose_fix = replay_gate passed -> emit <project>.pattern.discovered.v1 (+ optionally file a proposal bead). monitor = real but below the prevalence/recurrence bar to act. suppressed = replay_gate failed or confirmed_clean dominates -> explicitly DO NOT propose (the gate did its job). needs_more_data = insufficient_history / too few runs."
+    },
+    "decision_rationale": {
+      "type": "string",
+      "description": "Short justification tying score + replay_gate + labeled_support to the decision, so the call is auditable."
+    },
+    "supersedes_eval_id": {
+      "type": ["string", "null"],
+      "description": "The prior eval_id for this issue_signature, if this pass re-evaluated it; null on first evaluation. Lets consumers track how a verdict evolved (e.g. monitor -> propose_fix as recurrence grew)."
+    },
+    "run_sample": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "A bounded sample of run_ids exhibiting the issue, for evidence/drill-down. Not exhaustive."
+    },
+    "scorer_version": {
+      "type": ["integer", "null"],
+      "description": "Monotonic version of the scoring+gate function that produced this eval. Lets `score` values be compared only within the same scorer_version, and old evals be re-scored when the function changes."
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "1",
+      "description": "Major schema version (semver major only, per repo convention)."
+    }
+  },
+  "additionalProperties": true
+}

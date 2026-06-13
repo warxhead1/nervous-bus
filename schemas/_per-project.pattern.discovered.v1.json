@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "_per-project.pattern.discovered.v1",
-  "description": "Shared base schema. Concrete types: <project>.pattern.discovered.v1. Emitted by Tier 4 / deer-improve / telemetry analysis when a recurring pattern is detected. Typically results in a proposal bead with the proposed patch.",
+  "description": "Shared base schema. Concrete types: <project>.pattern.discovered.v1. Emitted by Tier 4 / deer-improve / telemetry analysis when a recurring pattern is detected. Typically results in a proposal bead with the proposed patch.\n\nReflexarc producers (the Tier-1 detectors via the synthesis pass) populate the OPTIONAL fields below in addition to the original three required ones. They are additive and non-breaking: legacy producers that emit only {project, pattern_name, evidence, occurrences, proposed_patch} remain valid. A Reflexarc pattern.discovered is only emitted after a bus.agent.run.eval.v1 reaches decision==propose_fix (its replay gate passed), and links back via eval_id.",
   "type": "object",
   "required": ["project", "pattern_name", "evidence"],
   "properties": {
@@ -12,10 +12,51 @@
     "proposed_patch": {
       "type": "object",
       "properties": {
-        "type":   { "type": "string", "enum": ["skill", "rule", "code"] },
+        "type":   { "type": "string", "enum": ["skill", "rule", "code", "config", "env", "doc"] },
         "target_selector": { "type": "object" },
         "content": { "type": "string" }
       }
+    },
+    "signature": {
+      "type": "string",
+      "description": "Reflexarc: the stable issue signature '<project>:<detector>:<stable_anchor>' (no run_id, no timestamp) — the issues-table PK this pattern dedups on. Correlates a pattern.discovered to its issue and run.eval."
+    },
+    "detector": {
+      "type": "string",
+      "description": "Reflexarc: the detector (DETECTOR_NAME) that raised the pattern, e.g. 'worktree_leak', 'rebuild_cache_miss'."
+    },
+    "remediation_rung": {
+      "type": "string",
+      "enum": ["eliminate", "automate", "inform"],
+      "description": "Reflexarc: the highest achievable Remediation-Ladder rung for the fix. Eliminate > Automate > Inform. Mirrors run.eval.rung."
+    },
+    "rung_descent_reason": {
+      "type": "string",
+      "description": "Reflexarc: if remediation_rung is below 'eliminate', why the higher rung was not achievable. The ladder discipline: record why you fell."
+    },
+    "proposed_remediation": {
+      "type": "string",
+      "description": "Reflexarc: human-readable description of the deterministic fix (free-text companion to the machine-actionable proposed_patch)."
+    },
+    "prevalence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Reflexarc (Kyoko #2): distinct hit runs / total runs for this (project, detector) over the scoring window."
+    },
+    "recurrence_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Reflexarc (Kyoko #5): how many times this exact signature has recurred across runs (issues.recurrence_count)."
+    },
+    "run_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Reflexarc: a bounded sample of run_ids exhibiting the pattern, for drill-down."
+    },
+    "eval_id": {
+      "type": "string",
+      "description": "Reflexarc: the bus.agent.run.eval.v1 eval_id whose decision==propose_fix licensed emitting this pattern. The audit link from a proposal back to the gated synthesis verdict that justified it."
     }
   }
 }
