@@ -13,6 +13,12 @@ Worktree absolute path reconstruction:
   activity `cwd` is absolute and points into .claude/worktrees/<slug>/...
   We locate the worktrees/ sentinel and truncate at <worktrees_root>/<slug>.
   The raw `worktree` field in activity events is only the bare slug.
+
+PART A enrichment (b3): at run close, derive git_branch from worktree/cwd and
+bead_id best-effort from branch naming conventions.
+
+PART C enrichment (Kyoko b3): fold per-event token fields into run features;
+finalize aggregates at run close.
 """
 from __future__ import annotations
 
@@ -21,6 +27,13 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+
+from enrich import (
+    derive_bead_id,
+    derive_git_branch,
+    finalize_token_features,
+    fold_token_features,
+)
 
 
 # ── ULID (same approach as pattern-bundler, no external dep) ─────────────────
@@ -122,6 +135,10 @@ class OpenRun:
     worktree: Optional[str] = None       # reconstructed absolute path
     git_branch: Optional[str] = None
     continues_run_id: Optional[str] = None  # set if re-opened after idle_timeout
+    # Last seen cwd for git_branch derivation on session runs (where worktree is None)
+    _last_cwd: Optional[str] = field(default=None, repr=False)
+    # Feature accumulator (PART C + future b2 features)
+    features: Dict = field(default_factory=dict)
 
     def fold(self, activity: dict, now: float) -> None:
         """Incorporate one activity event into this run."""
@@ -132,13 +149,42 @@ class OpenRun:
         if not self.git_branch and activity.get("git_branch"):
             self.git_branch = activity["git_branch"]
 
+        # Track last CWD for git_branch derivation on session runs
+        if cwd := activity.get("cwd"):
+            self._last_cwd = cwd
+
         # tool_histogram: only on tool_call events with a tool_name
         if activity.get("event") == "tool_call" and activity.get("tool_name"):
             tool = activity["tool_name"]
             self.tool_histogram[tool] = self.tool_histogram.get(tool, 0) + 1
 
+        # PART C: fold token + tool-error features
+        fold_token_features(self.features, activity)
+
     def to_closed_payload(self, ended: str, close_reason: str) -> dict:
-        """Build the bus.agent.run.closed.v1 data payload."""
+        """Build the bus.agent.run.closed.v1 data payload.
+
+        PART A: derive git_branch (worktree path > cwd fallback) and bead_id
+        (best-effort from branch naming) at close time.
+        PART C: finalize token aggregate features.
+        """
+        # PART A — git_branch derivation at close time
+        # Prefer worktree path first (absolute, survives session restarts);
+        # fall back to cwd for session runs.
+        git_branch = self.git_branch
+        if not git_branch:
+            git_branch = derive_git_branch(
+                worktree_path=self.worktree,
+                cwd=self._last_cwd,
+            )
+
+        # PART A — bead_id best-effort from branch
+        bead_id = derive_bead_id(git_branch)
+
+        # PART C — finalize token aggregates
+        features = dict(self.features)
+        finalize_token_features(features)
+
         return {
             "run_id": self.run_id,
             "run_key": self.run_key,
@@ -156,13 +202,13 @@ class OpenRun:
             "tool_histogram": dict(self.tool_histogram),
             "worktree": self.worktree,
             "worktree_slug": self.worktree_slug,
-            "git_branch": self.git_branch,
-            "bead_id": None,
+            "git_branch": git_branch,
+            "bead_id": bead_id,
             "outcome": None,
             "labeled_at": None,
             "label_version": None,
             "label_history": [],
-            "features": {},
+            "features": features,
             "schema_version": "1",
         }
 
