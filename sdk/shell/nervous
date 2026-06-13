@@ -22,6 +22,14 @@
 #   NERVOUS_PLUGIN   plugin name (default: nervous-bus)
 #   NERVOUS_HOME     user-level config + private schema overlay
 #                    (default: ~/.config/nervous-bus)
+#   NERVOUS_PYTHON   interpreter used for Redis XADD + schema validation
+#                    (default: python3 on PATH)
+#   NERVOUS_STRICT_REDIS       1 = non-zero exit when Redis delivery fails
+#   NERVOUS_STRICT_VALIDATION  1 = non-zero exit when schema validation is
+#                    SKIPPED (jsonschema module absent). Default fail-soft:
+#                    publish prints a machine-readable degradation marker on
+#                    stdout (delivery=file-only validation=skipped ...) and a
+#                    one-time stderr warning, but still exits 0.
 
 set -euo pipefail
 
@@ -326,8 +334,17 @@ PYEOF
             # so a non-zero exit from the validator doesn't abort the script.
             local _validation_result _exit_code
             local _vtmp; _vtmp=$(mktemp)
-            if python3 -c '
-import sys, json, jsonschema
+            if "${NERVOUS_PYTHON:-python3}" -c '
+import sys, json
+# Exit 4 = the jsonschema MODULE is absent on this interpreter (the
+# systemd-service /usr/bin/python3 case). This is a validation-SKIPPED
+# degradation, distinct from a payload violation — surface it loudly so a
+# Rust/Go caller can detect that publish ran without schema enforcement.
+try:
+    import jsonschema
+except ImportError as e:
+    print("module_missing:" + str(e), end="")
+    sys.exit(4)
 schema_file = sys.argv[1]
 envelope_raw = sys.argv[2]
 try:
@@ -381,10 +398,31 @@ except Exception as e:
                 fi
                 echo "[nbus schema] validation failed for $channel: $_detail" >&2
                 return 2
+            elif [[ $_exit_code -eq 4 ]]; then
+                # Exit 4 = jsonschema MODULE absent → validation was SKIPPED.
+                # Mirror the Redis-XADD degradation contract (NERVOUS_STRICT_REDIS):
+                # this is a silent-loss class bug (gzsv/bt0a). The event is still
+                # durable in debug.jsonl, but the publish ran WITHOUT schema
+                # enforcement — surface it so a Rust/Go caller can react instead of
+                # seeing a clean exit 0.
+                #   1) machine-readable marker on stdout (parseable by callers);
+                #   2) loud, one-time stderr warning;
+                #   3) opt-in non-zero exit via NERVOUS_STRICT_VALIDATION=1.
+                echo "delivery=file-only validation=skipped reason=jsonschema_module_missing channel=${channel}"
+                local _vwarn_marker="/tmp/nervous-no-jsonschema-warned"
+                if [[ ! -f "$_vwarn_marker" ]]; then
+                    echo "nervous: WARNING: jsonschema module missing on ${NERVOUS_PYTHON:-python3} — schema validation SKIPPED for this publish (set NERVOUS_PYTHON to an interpreter with jsonschema, or install it). Events still durable in debug.jsonl." >&2
+                    touch "$_vwarn_marker" 2>/dev/null || true
+                fi
+                if [[ "${NERVOUS_STRICT_VALIDATION:-0}" == "1" ]]; then
+                    echo "[nbus schema] strict mode: aborting publish for $channel (validation unavailable)" >&2
+                    return 4
+                fi
             elif [[ $_exit_code -ne 0 ]]; then
                 # Exit 1 = parse/import error, exit 3 = unexpected validator error.
-                # These are infrastructure failures (e.g. missing jsonschema module),
-                # not payload violations. Warn and allow through — never dead-letter.
+                # These are infrastructure failures (not a missing jsonschema
+                # module, which is exit 4 above), not payload violations. Warn and
+                # allow through — never dead-letter.
                 echo "[nbus schema] validator error for $channel (exit $_exit_code): ${_validation_result}" >&2
             fi
         else
