@@ -67,6 +67,12 @@ VALID_CHANNELS: frozenset[str] = frozenset(
         # is emitted by autobench/observability.py:_sandbox_stderr but was
         # previously absent from this frozenset so events were dropped.
         "autobench.sandbox.stderr.v1",
+        # Population-cycle summary (wire-pop Phase 1, nervous-bus-6yut). Names
+        # the advocates + winner of a multi-advocate RSI cycle. Feeds the
+        # MultiAdvocatePanel (nervous-bus-uwdq) — the cycle boundary that lets
+        # the dashboard group iteration.v1 by per-advocate session_id and draw
+        # N parallel trajectories.
+        "autobench.population.summary.v1",
     }
 )
 
@@ -664,6 +670,16 @@ class PulseState:
         self.kernel_snapshot_latest: Optional[dict[str, Any]] = None
         self.kernel_snapshot_count: int = 0
 
+        # --- Multi-advocate population cycle (nervous-bus-uwdq) --------------
+        # Most-recent autobench.population.summary.v1 payload, normalised to a
+        # plain dict. ``None`` until a cycle summary lands — single-advocate
+        # runs never emit one, so the MultiAdvocatePanel stays hidden and the
+        # dashboard renders exactly as before (backward compat). Holds the
+        # cycle_id, the advocate roster (advocate_id → session_id + scores),
+        # and the winner so the panel can group iteration trajectories by
+        # per-advocate session_id and badge the winner.
+        self.population_summary: Optional[dict[str, Any]] = None
+
         # --- ParetoScatter memo (perf) --------------------------------------
         # pareto_points() is O(n) over iteration_summaries and is called twice
         # a second by _tick_aggregates; pareto_classified() then runs an O(n²)
@@ -713,6 +729,16 @@ class PulseState:
         # Budget channels are session-scoped via BudgetGuard.session_id, but
         # they don't represent an autobench RSI session; route them through
         # cost-tracking handlers that don't allocate a Session.
+        if ev_type == "autobench.population.summary.v1":
+            # Population-cycle boundary (wire-pop Phase 1). Records the cycle
+            # membership (advocate_id → session_id) + winner so the
+            # MultiAdvocatePanel can group iteration.v1 trajectories by
+            # per-advocate session_id. The summary's own session_id is the
+            # coordinator (``pop-<cycle_id>``), NOT an advocate — we do NOT
+            # allocate a Session for it.
+            self._apply_population_summary(data)
+            self.events_total += 1
+            return set()
         if ev_type == "autobench.budget.warning.v1":
             self._apply_budget_warning(data)
             self.events_total += 1
@@ -1166,6 +1192,143 @@ class PulseState:
                 self.worker_latencies_ms.append(float(lat))
             except (TypeError, ValueError):
                 pass
+
+    def _apply_population_summary(self, data: dict[str, Any]) -> None:
+        """Record a population-cycle summary (wire-pop Phase 1, nervous-bus-6yut).
+
+        Stores the cycle membership (advocate roster keyed by advocate_id) plus
+        the winner so the MultiAdvocatePanel (nervous-bus-uwdq) can use this as
+        the cycle boundary and group iteration.v1 trajectories by per-advocate
+        ``session_id``. Newest summary always displaces older — the dashboard
+        shows the most-recent cycle. Malformed payloads (no advocates) are
+        ignored so a partial emit can't blank the panel.
+        """
+        advocates_raw = data.get("advocates")
+        if not isinstance(advocates_raw, list) or not advocates_raw:
+            return
+        advocates: list[dict[str, Any]] = []
+        for adv in advocates_raw:
+            if not isinstance(adv, dict):
+                continue
+            sid = adv.get("session_id")
+            aid = adv.get("advocate_id")
+            if not sid or not aid:
+                continue
+            try:
+                final_score = float(adv.get("final_score"))
+            except (TypeError, ValueError):
+                final_score = None
+            try:
+                best_iter = int(adv.get("best_iter"))
+            except (TypeError, ValueError):
+                best_iter = None
+            advocates.append(
+                {
+                    "advocate_id": str(aid),
+                    "session_id": str(sid),
+                    "final_score": final_score,
+                    "best_iter": best_iter,
+                }
+            )
+        if not advocates:
+            return
+        try:
+            winner_score = float(data.get("winner_score"))
+        except (TypeError, ValueError):
+            winner_score = None
+        self.population_summary = {
+            "cycle_id": str(data.get("cycle_id") or ""),
+            "session_id": str(data.get("session_id") or ""),
+            "advocates": advocates,
+            "winner_id": str(data.get("winner_id") or ""),
+            "winner_score": winner_score,
+            "cycle_started_at": data.get("cycle_started_at"),
+            "cycle_ended_at": data.get("cycle_ended_at"),
+        }
+
+    def multi_advocate_view(self) -> Optional[dict[str, Any]]:
+        """Snapshot for the MultiAdvocatePanel — N parallel advocate trajectories.
+
+        Returns ``None`` when no population summary has landed OR when the most
+        recent cycle named only a single advocate. Both cases mean the panel
+        stays hidden and the dashboard renders exactly as a single-session run
+        (backward compat, per nervous-bus-uwdq AC).
+
+        When >1 advocate is present, returns a dict::
+
+            {
+              "cycle_id": str,
+              "winner_id": str,
+              "winner_score": float | None,
+              "advocates": [
+                {
+                  "advocate_id": str,
+                  "session_id": str,
+                  "final_score": float | None,
+                  "best_iter": int | None,
+                  "is_winner": bool,
+                  # live trajectory grouped from this advocate's iteration.v1
+                  # events (NOT the summary) so the panel reflects in-flight
+                  # progress, falling back to final_score when no live
+                  # iterations have been seen for the advocate's session yet.
+                  "scores": [float, ...],
+                  "latest_iter": int | None,
+                  "latest_score": float | None,
+                },
+                ...
+              ],
+            }
+
+        Advocates are ordered by advocate_id for a stable layout; the winner is
+        flagged via ``is_winner`` (the panel renders the badge).
+        """
+        summary = self.population_summary
+        if not summary:
+            return None
+        advocates = summary.get("advocates") or []
+        if len(advocates) <= 1:
+            return None
+        winner_id = summary.get("winner_id") or ""
+        out_advocates: list[dict[str, Any]] = []
+        for adv in sorted(advocates, key=lambda a: str(a.get("advocate_id"))):
+            sid = adv.get("session_id")
+            sess = self.sessions.get(sid) if sid else None
+            # Group this advocate's live trajectory from its own session's
+            # iteration.v1 scores (each advocate has its own session_id).
+            scores: list[float] = []
+            latest_iter: Optional[int] = None
+            latest_score: Optional[float] = None
+            if sess is not None:
+                scores = list(sess.scores)
+                li = sess.latest_iter
+                if li is not None:
+                    latest_iter = li.iteration
+                    latest_score = li.aggregate_score
+            # Fall back to the summary's final_score when no live iteration
+            # data exists yet for this advocate (e.g. replay of just the
+            # summary, or an advocate whose session events haven't arrived).
+            if not scores and adv.get("final_score") is not None:
+                scores = [float(adv["final_score"])]
+            if latest_score is None:
+                latest_score = adv.get("final_score")
+            out_advocates.append(
+                {
+                    "advocate_id": adv.get("advocate_id"),
+                    "session_id": sid,
+                    "final_score": adv.get("final_score"),
+                    "best_iter": adv.get("best_iter"),
+                    "is_winner": adv.get("advocate_id") == winner_id,
+                    "scores": scores,
+                    "latest_iter": latest_iter,
+                    "latest_score": latest_score,
+                }
+            )
+        return {
+            "cycle_id": summary.get("cycle_id") or "",
+            "winner_id": winner_id,
+            "winner_score": summary.get("winner_score"),
+            "advocates": out_advocates,
+        }
 
     def _apply_budget_warning(self, data: dict[str, Any]) -> None:
         """Record a threshold breach + recover ``max_cost_usd``.

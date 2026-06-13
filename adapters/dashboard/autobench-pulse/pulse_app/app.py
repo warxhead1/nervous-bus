@@ -53,6 +53,7 @@ from .widgets import (
     IterationLineageStrip,
     IterationProgressPanel,
     KernelLeaderboard,
+    MultiAdvocatePanel,
     ParetoScatter,
     QueuePressureBar,
     ScoreSpark,
@@ -185,6 +186,11 @@ class PulseApp(App):
         # caught itself being wrong." Sits above the body so it's the first
         # widget the operator sees once the header docks.
         yield AHEPredictionTracker(id="ahe-tracker")
+        # nervous-bus-uwdq: multi-advocate population-cycle view. Hidden
+        # (display:none) for single-advocate runs so the layout is unchanged;
+        # surfaces N parallel advocate trajectories + a winner badge once a
+        # autobench.population.summary.v1 cycle boundary lands.
+        yield MultiAdvocatePanel(id="multi-advocate")
         # KernelArena (nervous-bus-tvfw): the reclaimed centre band — live
         # FunSearch kernel evolution. Leaderboard (what's evolving) + island
         # heatmap (how the island model behaves) + curiosity feed (when
@@ -364,6 +370,14 @@ class PulseApp(App):
         try:
             ahe_panel = self.query_one(AHEPredictionPanel)
             ahe_panel.payload = self.state.ahe_prediction_panel_payload()
+        except Exception:
+            pass
+        # nervous-bus-uwdq: push the multi-advocate population-cycle snapshot.
+        # Cheap (groups N advocate sessions); the panel hides itself when the
+        # view is None / single-advocate so single-session runs pay nothing.
+        try:
+            multi = self.query_one(MultiAdvocatePanel)
+            multi.payload = self.state.multi_advocate_view()
         except Exception:
             pass
         try:

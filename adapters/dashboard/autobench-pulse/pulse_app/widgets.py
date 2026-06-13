@@ -2154,6 +2154,128 @@ class AHEPredictionPanel(Static):
 
 
 # ---------------------------------------------------------------------------- #
+# MultiAdvocatePanel (nervous-bus-uwdq)                                        #
+# ---------------------------------------------------------------------------- #
+
+
+# Width of each advocate's inline score sparkline (cells). Tight so several
+# advocate rows share a column without wrapping in a narrow terminal.
+_ADVOCATE_SPARK_WIDTH: int = 24
+# Winner badge — gold star + label. Rendered inline on the winning advocate's
+# header row so the operator reads the cycle outcome at a glance.
+_WINNER_BADGE = f"[bold {COLOR_AHE_HIT}]★ WINNER[/]"
+
+
+class MultiAdvocatePanel(Static):
+    """Multi-advocate population-cycle view (wire-pop Phase 1, nervous-bus-uwdq).
+
+    The base dashboard renders only the most-recent ``session_id`` — so a
+    multi-advocate population run (N advocates racing the same cycle) would show
+    just one advocate's trajectory. This panel uses
+    ``autobench.population.summary.v1`` as the cycle boundary and groups
+    ``iteration.v1`` events by each advocate's own ``session_id`` to draw N
+    parallel trajectories, with the winning advocate badged.
+
+    Reactive ``payload`` is the dict from ``PulseState.multi_advocate_view`` —
+    ``None`` when no cycle has summarised yet OR when the cycle named a single
+    advocate. In both cases the panel collapses to height 0 (``hidden`` class)
+    so single-session runs render EXACTLY as before (backward compat).
+    """
+
+    DEFAULT_CSS = """
+    MultiAdvocatePanel {
+        height: auto;
+        padding: 0 1;
+        border: round $accent 50%;
+    }
+    MultiAdvocatePanel.hidden {
+        display: none;
+    }
+    """
+
+    payload: reactive[Optional[dict[str, Any]]] = reactive(None, always_update=True)
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__("", markup=True, **kwargs)
+        self.border_title = "Population Cycle"
+        # Start hidden — only multi-advocate cycles surface the panel.
+        self.add_class("hidden")
+        self.update("")
+
+    def watch_payload(self, value: Optional[dict[str, Any]]) -> None:
+        advocates = (value or {}).get("advocates") if value else None
+        if not value or not advocates or len(advocates) <= 1:
+            # No multi-advocate cycle — collapse so the layout is unchanged.
+            self.add_class("hidden")
+            self.update("")
+            return
+        self.remove_class("hidden")
+        self.update(self._render_payload(value))
+
+    def _render_payload(self, payload: dict[str, Any]) -> str:
+        advocates: list[dict[str, Any]] = list(payload.get("advocates") or [])
+        winner_id = str(payload.get("winner_id") or "")
+        cycle_id = str(payload.get("cycle_id") or "")
+        winner_score = payload.get("winner_score")
+
+        lines: list[str] = []
+        # Header: cycle id + advocate count + winner summary.
+        cycle_short = cycle_id[:12] if cycle_id else "?"
+        ws = (
+            f"{float(winner_score):+.3f}"
+            if isinstance(winner_score, (int, float))
+            else "n/a"
+        )
+        lines.append(
+            f"[bold cyan]cycle[/] [dim]{cycle_short}[/]  "
+            f"[dim]{len(advocates)} advocates[/]  "
+            f"[dim]winner[/] [bold {COLOR_AHE_HIT}]{winner_id or '?'}[/] "
+            f"[dim]@[/] [bold]{ws}[/]"
+        )
+
+        # One block per advocate — header row (id + winner badge + score) plus
+        # a trajectory sparkline so all N parallel trajectories read at once.
+        for adv in advocates:
+            aid = str(adv.get("advocate_id") or "?")
+            sid = str(adv.get("session_id") or "")
+            is_winner = bool(adv.get("is_winner"))
+            scores: list[float] = [
+                float(s)
+                for s in (adv.get("scores") or [])
+                if isinstance(s, (int, float))
+            ]
+            latest_iter = adv.get("latest_iter")
+            latest_score = adv.get("latest_score")
+            final_score = adv.get("final_score")
+
+            spark = _sparkline(scores, width=_ADVOCATE_SPARK_WIDTH)
+            spark_color = COLOR_AHE_HIT if is_winner else COLOR_ACCENT
+
+            score_val = latest_score if latest_score is not None else final_score
+            score_s = (
+                f"{float(score_val):+.3f}"
+                if isinstance(score_val, (int, float))
+                else "n/a"
+            )
+            iter_s = (
+                f"iter {int(latest_iter)}"
+                if isinstance(latest_iter, int)
+                else "iter —"
+            )
+            badge = f"  {_WINNER_BADGE}" if is_winner else ""
+            id_color = COLOR_AHE_HIT if is_winner else "cyan"
+
+            lines.append(
+                f"[bold {id_color}]{aid}[/]{badge}  "
+                f"[dim]{iter_s}[/]  [bold]{score_s}[/]  "
+                f"[dim]{sid[:12]}[/]"
+            )
+            lines.append(f"  [{spark_color}]{spark}[/]")
+
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------- #
 # QueuePressureBar (nervous-bus-m3so)                                          #
 # ---------------------------------------------------------------------------- #
 
