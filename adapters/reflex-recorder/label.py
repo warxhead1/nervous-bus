@@ -10,7 +10,7 @@ PRECEDENCE (explicit > inferred):
 4. INFERRED — behavior shape over run_events (primary for key-less runs):
    - thrashed: edit→build-fail→redo n-gram loops
    - abandoned: no resolving action at end
-   - clean: resolved with no thrash signals
+   - clean: resolved with a positive resolving signal (structured commit or edit-and-clean-end)
 
 `corrected` is WEAK without conversation transcripts (Tier-3).  We implement a
 conservative best-effort proxy; see _infer_corrected() docstring.
@@ -18,6 +18,10 @@ conservative best-effort proxy; see _infer_corrected() docstring.
 Labels are PROVISIONAL — a PR merging hours later flips the label.  Each
 transition appends to label_history (outcome, labeled_at, label_version, source)
 and bumps the top-level fields.
+
+PRECEDENCE GUARD: an inferred label (source='behavior_inference') NEVER
+overwrites an explicit label (any source other than 'behavior_inference').
+The `label_source` column tracks the precedence tier.
 
 PRIVACY: reads bus + bd + git + gh only.  Does NOT read conversation transcripts.
 
@@ -40,13 +44,23 @@ from typing import Optional
 
 DEFAULT_DB_PATH = Path.home() / ".cache" / "nervous-bus" / "reflex" / "runs.db"
 
-LABEL_VERSION_CURRENT = 1   # bump when inference logic changes materially
+LABEL_VERSION_CURRENT = 2   # bumped: B1-B5 hardening
 
-# ── Outcome precedence order ──────────────────────────────────────────────────
-# explicit sources (higher = higher precedence in conflict resolution):
-#   pr_merge, bead_close, git_revert, bus_bead_closed
-# inferred sources:
-#   behavior_inference
+# ── Outcome precedence tiers ──────────────────────────────────────────────────
+# Higher tier = higher precedence; inferred (tier=1) never overwrites explicit (tier≥2).
+_SOURCE_TIER: dict[str, int] = {
+    "behavior_inference": 1,
+    "pr_closed_unmerged": 2,
+    "git_revert": 2,
+    "bead_close": 3,
+    "bus_bead_closed": 3,
+    "pr_merge": 3,
+}
+
+
+def _source_tier(source: str) -> int:
+    return _SOURCE_TIER.get(source, 1)
+
 
 # ── Thresholds (conservative — see rationale in _infer_from_behavior) ────────
 # Documented here so an adversarial auditor can evaluate:
@@ -54,7 +68,6 @@ THRASH_EDIT_FAIL_LOOP_MIN = 3   # minimum edit→bash-fail→edit cycles to call
 THRASH_REREAD_RATE_MIN = 0.35   # re-Read rate > 35% of all tool calls → thrash signal
 THRASH_BASH_FAIL_RATE_MIN = 0.30  # bash failure rate > 30% of bash calls → thrash
 ABANDON_MIN_EVENTS = 5           # don't call abandon on tiny runs (<5 events)
-ABANDON_MAX_RESOLVING_RATIO = 0.10  # <10% of events are resolving actions → abandoned
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -87,26 +100,49 @@ def _bd_bead_state(bead_id: str) -> Optional[str]:
     return None
 
 
-def _bd_close_reason(bead_id: str) -> Optional[str]:
-    """Extract close reason text from bd show output (best-effort)."""
+def _bd_structured_resolution(bead_id: str) -> Optional[str]:
+    """Extract the structured resolution/status field from bd show output.
+
+    M2 fix: key off bd's structured status/resolution field, not free-text
+    substring matching that false-positives on 'reverted the bad approach,
+    shipped the fix'.
+
+    Returns the raw resolution string (e.g. 'wontfix', 'abandoned', 'reverted',
+    'done', 'merged') if present, None otherwise.
+    """
     out = _run_cmd(["bd", "show", bead_id])
     if not out:
         return None
-    # Look for "Close reason:" line
-    m = re.search(r"Close reason:\s*(.+)", out, re.IGNORECASE)
+    # Look for structured "Resolution:" or "Status:" line with a single token value
+    # Example: "Resolution: wontfix" or "Resolution: done"
+    m = re.search(r"^(?:Resolution|Status):\s*(\S+)", out, re.IGNORECASE | re.MULTILINE)
     if m:
         return m.group(1).strip().lower()
+    # Fallback: "Close reason:" but only extract single-token structured values.
+    # Avoid matching free-text descriptions.
+    m2 = re.search(r"^Close reason:\s*(\S+)\s*$", out, re.IGNORECASE | re.MULTILINE)
+    if m2:
+        return m2.group(1).strip().lower()
     return None
 
 
-def _gh_pr_state(branch: str) -> Optional[dict]:
+def _gh_pr_state(branch: str, worktree_path: Optional[str]) -> Optional[dict]:
     """Query gh pr for the most recent PR on branch.
 
+    B4 fix: use `gh -C <dir> pr view <branch>` so gh resolves the remote from
+    the correct repo.  Degrades safely to None on no-PR or network error.
+
     Returns dict with {state, mergedAt} or None if no PR found.
-    Handles repos that don't have GitHub remote (returns None).
     """
+    # Determine the working directory for gh: prefer the worktree path, fall
+    # back to ".".  We don't gate on Path.exists() here — the worktree may have
+    # been cleaned up but the parent project git repo is still valid for gh.
+    # If gh fails (no remote, network error), _run_cmd returns None and we
+    # degrade safely to None without mislabeling.
+    work_dir = worktree_path if worktree_path else "."
+
     out = _run_cmd(
-        ["gh", "pr", "view", branch, "--json", "state,mergedAt,closedAt", "--repo", "."],
+        ["gh", "-C", work_dir, "pr", "view", branch, "--json", "state,mergedAt,closedAt"],
         timeout=10,
     )
     if out:
@@ -141,14 +177,15 @@ def _git_has_revert(branch: str, worktree_path: Optional[str]) -> bool:
 def _redis_bead_closed_outcome(bead_id: str) -> Optional[str]:
     """Check nbus:bus.bead.closed stream for this bead_id.
 
-    Returns 'landed' if bead was closed as merged, 'abandoned' if closed as
-    wontfix, None if not found or indeterminate.
+    M1 fix: bus.bead.closed has no disposition field — use the bus event only
+    to TRIGGER a bd state lookup, never to assign an outcome directly.
+
+    Returns the bd-derived outcome (via label_from_bead) or None.
     """
     try:
         import redis as redis_lib
         r = redis_lib.Redis(host="localhost", port=6379, db=0,
                             socket_timeout=2, decode_responses=True)
-        # Read last 200 entries in the stream
         entries = r.xrevrange("nbus:bus.bead.closed", count=200)
         for _entry_id, fields in entries:
             raw = fields.get("_raw", "{}")
@@ -156,12 +193,20 @@ def _redis_bead_closed_outcome(bead_id: str) -> Optional[str]:
                 obj = json.loads(raw)
                 data = obj.get("data", {})
                 if data.get("bead_id") == bead_id:
-                    # bus.bead.closed doesn't carry a disposition field by default;
-                    # treat any close as 'landed' unless close_reason suggests abandon.
-                    close_reason = str(data.get("close_reason", "")).lower()
-                    if "wontfix" in close_reason or "abandon" in close_reason:
-                        return "abandoned"
-                    return "landed"
+                    # M1: bus event confirmed the bead was closed — now do the
+                    # authoritative bd lookup instead of reading a non-existent
+                    # disposition field.
+                    state = _bd_bead_state(bead_id)
+                    if state == "CLOSED":
+                        resolution = _bd_structured_resolution(bead_id) or ""
+                        if resolution in ("wontfix", "abandoned"):
+                            return "abandoned"
+                        if resolution == "reverted":
+                            return "reverted"
+                        return "landed"
+                    # Bus says closed but bd disagrees — return None, let other
+                    # explicit paths try.
+                    return None
             except Exception:
                 continue
     except Exception:
@@ -188,12 +233,13 @@ def label_from_bead(bead_id: str, worktree_path: Optional[str]) -> Optional[tupl
         return None
 
     if state in ("CLOSED",):
-        close_reason = _bd_close_reason(bead_id) or ""
-        if "wontfix" in close_reason or "abandon" in close_reason:
+        # M2 fix: use structured resolution field, not free-text
+        resolution = _bd_structured_resolution(bead_id) or ""
+        if resolution in ("wontfix", "abandoned"):
             return "abandoned", "bead_close"
-        if "revert" in close_reason:
+        if resolution == "reverted":
             return "reverted", "bead_close"
-        # Closed without a negative reason → landed (merged / completed)
+        # Closed with a non-negative resolution → landed
         return "landed", "bead_close"
 
     if state in ("OPEN", "IN_PROGRESS", "READY"):
@@ -208,7 +254,7 @@ def label_from_pr(branch: str, worktree_path: Optional[str]) -> Optional[tuple[s
 
     Returns (outcome, source) or None.
     """
-    pr = _gh_pr_state(branch)
+    pr = _gh_pr_state(branch, worktree_path)
     if not pr:
         # No PR yet — try git revert as fallback
         if _git_has_revert(branch, worktree_path):
@@ -238,7 +284,6 @@ def label_from_pr(branch: str, worktree_path: Optional[str]) -> Optional[tuple[s
 
 # Tools classified as resolving actions (indicate productive completion):
 _RESOLVING_TOOLS = frozenset({"Edit", "Write", "NotebookEdit", "Bash"})
-# "Bash" is resolving when it includes git-commit/push patterns (check in ngram)
 
 # Tools classified as exploration (re-Read = rereading already-seen files):
 _READ_TOOLS = frozenset({"Read", "Glob", "Grep"})
@@ -257,6 +302,52 @@ def _parse_events(run_events: list[dict]) -> list[dict]:
     return parsed
 
 
+def _bash_is_failure(ev: dict) -> bool:
+    """Determine if a Bash event represents a failure.
+
+    B2 fix: prefer tool_is_error when present; fall back to parsing
+    tool_response_summary for structured stderr/exitCode fields.
+    The old heuristic `"error" in resp[:200]` is removed — it over-fires on
+    error messages in stdout that are informational.
+    """
+    # Primary: tool_is_error field (claude-hook-fast c219a98+)
+    if ev.get("tool_is_error"):
+        return True
+
+    # Fallback: structured tool_response_summary
+    resp = ev.get("tool_response_summary", "")
+    if not resp:
+        return False
+
+    try:
+        resp_obj = json.loads(resp)
+    except (json.JSONDecodeError, TypeError):
+        return False
+
+    # Non-zero exit code
+    if resp_obj.get("exitCode", 0) not in (0, None, ""):
+        exit_code = resp_obj.get("exitCode")
+        if isinstance(exit_code, int) and exit_code != 0:
+            return True
+    # Legacy camelCase variant
+    if resp_obj.get("exit_code", 0) not in (0, None, ""):
+        exit_code = resp_obj.get("exit_code")
+        if isinstance(exit_code, int) and exit_code != 0:
+            return True
+
+    # Explicit stderr with non-empty content AND interrupted=False
+    # (interrupted=True means the agent killed it intentionally — not a failure)
+    stderr = resp_obj.get("stderr", "")
+    if stderr and resp_obj.get("interrupted") is False:
+        # Only count non-trivial stderr (warnings from build tools are normal)
+        # Require the stderr to look like a real error, not just a warning line
+        stderr_lower = stderr.lower()
+        if any(kw in stderr_lower for kw in ("error:", "fatal:", "failed", "panicked")):
+            return True
+
+    return False
+
+
 def _count_bash_failures(events: list[dict]) -> tuple[int, int]:
     """Return (bash_total, bash_failures) from event list."""
     total = 0
@@ -264,23 +355,16 @@ def _count_bash_failures(events: list[dict]) -> tuple[int, int]:
     for ev in events:
         if ev.get("tool_name") == "Bash":
             total += 1
-            # tool_is_error field (claude-hook-fast Kyoko feature)
-            if ev.get("tool_is_error"):
+            if _bash_is_failure(ev):
                 fails += 1
-            else:
-                # Fallback: check tool_response_summary for error indicators
-                resp = ev.get("tool_response_summary", "")
-                if '"stderr"' in resp and ('"exitCode":1' in resp or '"exit_code":1' in resp):
-                    fails += 1
     return total, fails
 
 
 def _count_edit_fail_loops(events: list[dict]) -> int:
     """Count Edit→Bash-fail→Edit n-gram loops (thrash signal).
 
-    Conservative: we require the Bash between edits to have tool_is_error=True
-    or tool_response_summary indicating a non-zero exit (compile/test failure).
-    Only counts the loop if all three conditions are met in sequence.
+    Conservative: we require the Bash between edits to be a failure per
+    _bash_is_failure().  Only counts the loop if all three conditions are met.
     """
     loops = 0
     n = len(events)
@@ -293,32 +377,58 @@ def _count_edit_fail_loops(events: list[dict]) -> int:
         is_edit_after = nxt.get("tool_name") in ("Edit", "Write")
         if not (is_edit_before and is_bash and is_edit_after):
             continue
-        # Is the bash a failure?
-        bash_fail = curr.get("tool_is_error", False)
-        if not bash_fail:
-            resp = curr.get("tool_response_summary", "")
-            bash_fail = (
-                '"stderr"' in resp
-                and ('"exitCode":1' in resp or '"exit_code":1' in resp
-                     or "error" in resp.lower()[:200])
-            )
-        if bash_fail:
+        if _bash_is_failure(curr):
             loops += 1
     return loops
 
 
 def _has_resolving_commit(events: list[dict]) -> bool:
-    """Check if any Bash event looks like a commit/push/bead-close."""
+    """Check if any Bash event contains a resolving commit.
+
+    B3 fix: match the STRUCTURED gitOperation.commit field in
+    tool_response_summary (shape: {"gitOperation":{"commit":{"kind":"committed",...}}})
+    as the primary signal.  Also match `git -C <path> commit` in tool_summary
+    as a secondary signal.  Simple `git commit` substring matching is kept as
+    tertiary.  bd close also counts.
+    """
     for ev in events:
         if ev.get("tool_name") != "Bash":
             continue
-        summary = ev.get("tool_summary", "").lower()
-        if any(kw in summary for kw in (
-            "git commit", "git push", "gh pr create",
-            "bd close",        # bead close = resolving action
-            "bd update",       # bead status update = progress
-        )):
+
+        # PRIMARY: structured gitOperation in tool_response_summary
+        resp = ev.get("tool_response_summary", "")
+        if resp:
+            try:
+                resp_obj = json.loads(resp)
+                git_op = resp_obj.get("gitOperation", {})
+                if git_op.get("commit") or git_op.get("push"):
+                    return True
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # SECONDARY: command string patterns (tool_summary or tool_response_summary)
+        summary = ev.get("tool_summary", "")
+        if summary:
+            try:
+                summary_obj = json.loads(summary)
+                cmd = summary_obj.get("command", "")
+            except (json.JSONDecodeError, TypeError):
+                cmd = str(summary)
+        else:
+            cmd = ""
+
+        # Match `git commit`, `git -C <path> commit`, `git push`
+        if re.search(r"\bgit\b.*\bcommit\b", cmd):
             return True
+        if re.search(r"\bgit\b.*\bpush\b", cmd):
+            return True
+        # gh pr create
+        if "gh pr create" in cmd:
+            return True
+        # bd close / bd update (bead lifecycle = resolving action)
+        if re.search(r"\bbd\s+close\b|\bbd\s+update\b", cmd):
+            return True
+
     return False
 
 
@@ -336,22 +446,11 @@ def _infer_corrected(events: list[dict]) -> Optional[tuple[str, str]]:
 
     IMPORTANT CAVEAT: 'corrected' in its true sense (human mid-run course
     correction) lives in the conversation transcript, which is Tier-3 data
-    that we deliberately do NOT read here.  This function implements a very
-    conservative structural proxy:
+    that we deliberately do NOT read here.  This function is intentionally a
+    stub — we do NOT set outcome=corrected from this path.
 
-    Proxy heuristic: a permission-deny event followed by a re-invocation of
-    a similar tool within the next 3 events can indicate the human rejected
-    a risky action and the agent retried differently.
-
-    This proxy will produce few true positives and some false positives.
-    It is intentionally NOT wired as a primary label source — we only flag
-    it in features (features.has_correction_proxy=True) rather than setting
-    outcome=corrected, because the signal is too weak.
-
-    Returns None always (we don't set outcome=corrected from this function).
-    Side effect: sets features key via the caller if signal is present.
+    Returns None always.
     """
-    # We don't actually set outcome from this — see caller.
     return None
 
 
@@ -359,41 +458,47 @@ def _infer_from_behavior(
     run: dict,
     events: list[dict],
     verbose: bool = False,
-) -> tuple[str, str]:
+) -> tuple[Optional[str], str]:
     """Infer outcome from behavior shape alone.
 
-    Returns (outcome, source) where source='behavior_inference'.
+    Returns (outcome, source) where outcome may be None (insufficient signal)
+    and source='behavior_inference'.
+
+    B5 fix: returns None instead of defaulting to 'clean' for opaque/micro
+    runs with no positive resolving signal.  A null outcome means 'not yet
+    labeled'; consumers MUST check labeled_at before using.
 
     THRESHOLDS (documented for auditor review):
 
     THRASHED:
       - edit→bash-fail→edit loops >= THRASH_EDIT_FAIL_LOOP_MIN (3)
-        Rationale: 3+ tight compile-fail loops is a strong signal; fewer
-        could be a normal test-red-green cycle.
-      - OR bash failure rate >= THRASH_BASH_FAIL_RATE_MIN (30%) with >=10 bash calls
-        Rationale: persistent Bash failures suggest inability to proceed.
+        Rationale: 3+ tight compile-fail loops is a strong signal.
+      - OR bash failure rate >= THRASH_BASH_FAIL_RATE_MIN (30%) with >=10 calls
       - Combined with reread rate >= THRASH_REREAD_RATE_MIN (35%)
-        Rationale: re-reading already-read files indicates confusion/backtracking.
-      Both signals must be present for the 'thrashed' label.
 
     ABANDONED:
-      - Run ends with close_reason in (idle_timeout, recorder_shutdown)
+      - B1 fix: close_reason MUST be 'idle_timeout' (not 'recorder_shutdown').
+        recorder_shutdown is operational, not semantic.
       - event_count >= ABANDON_MIN_EVENTS (5)
-      - No resolving Edit in the last 20% of events
-      - No commit/push Bash in any event
-      Rationale: idle_timeout after no finishing action = agent stopped mid-work.
+      - No resolving commit (structured gitOperation or command pattern)
+      - No resolving edit in the last 20% of events
+      - M3 fix: require a failure/error signal at the boundary OR absence of
+        resolving action across multiple idle windows (stronger signal than
+        mere absence-of-edit alone).
 
     CLEAN:
-      - Not thrashed, not abandoned
-      - Has resolving commit or resolving edit in tail
-      Rationale: ran to completion without behavioral distress signals.
+      - B5 fix: requires a POSITIVE resolving signal:
+        a) has_resolving_commit (structured commit confirmed), OR
+        b) has_resolving_edit AND close_reason is 'ended' (natural close)
+      - NOT thrashed, NOT abandoned
 
-    DEFAULT:
-      - When none of the above signals are strong enough, return 'clean' with
-        low confidence. Consumers should check features for nuance.
+    DEFAULT (null):
+      - When none of the above signals are strong enough, return None.
+      - Tiny runs, pure-read runs, opaque runs with no signal → null.
+      - Consumers gate on labeled_at; null = not-yet-labeled.
     """
     if not events:
-        return "clean", "behavior_inference"
+        return None, "behavior_inference"
 
     n_events = len(events)
     tool_calls = [ev for ev in events if ev.get("tool_name")]
@@ -412,7 +517,8 @@ def _infer_from_behavior(
     has_edit_tail = _has_resolving_edit(tool_calls)
 
     close_reason = run.get("close_reason", "")
-    is_idle_or_shutdown = close_reason in ("idle_timeout", "recorder_shutdown")
+    # B1 fix: only idle_timeout (not recorder_shutdown) qualifies for abandon
+    is_idle_timeout = close_reason == "idle_timeout"
 
     if verbose:
         print(
@@ -433,22 +539,31 @@ def _infer_from_behavior(
         return "thrashed", "behavior_inference"
 
     # ABANDON check
+    # B1: exclude recorder_shutdown; only idle_timeout qualifies.
+    # M3: require stronger signal: either has bash failures OR event count is
+    # substantial (>= 2 * ABANDON_MIN_EVENTS), not just absence-of-edit.
     if (
-        is_idle_or_shutdown
+        is_idle_timeout
         and n_events >= ABANDON_MIN_EVENTS
         and not has_commit
         and not has_edit_tail
     ):
-        return "abandoned", "behavior_inference"
+        # M3: require that the run showed some failure/error state or was
+        # substantial enough (many events without resolving = stronger abandon signal)
+        has_failure_signal = bash_fails > 0 or bash_fail_rate > 0
+        is_substantial = n_events >= ABANDON_MIN_EVENTS * 2
+        if has_failure_signal or is_substantial:
+            return "abandoned", "behavior_inference"
 
-    # CLEAN check: finished with a resolving action
-    if has_commit or has_edit_tail:
+    # CLEAN check: B5 fix — requires a POSITIVE resolving signal
+    if has_commit:
+        return "clean", "behavior_inference"
+    if has_edit_tail and close_reason == "ended":
         return "clean", "behavior_inference"
 
-    # DEFAULT: not enough signal
-    # Tiny runs (< ABANDON_MIN_EVENTS) or runs that ended cleanly but did no
-    # editing (pure read-only exploration) → clean by default
-    return "clean", "behavior_inference"
+    # DEFAULT: insufficient signal → null (not labeled)
+    # This covers: micro runs, pure-read runs, opaque runs, 1-event idle_timeout runs.
+    return None, "behavior_inference"
 
 
 # ── Core labeling function ────────────────────────────────────────────────────
@@ -463,6 +578,7 @@ def compute_label(
     Returns (outcome, source) or None if we cannot determine anything.
 
     Precedence: bead_id explicit > pr explicit > git_revert > behavior_inferred.
+    Returns None when behavior inference returns None (insufficient signal).
     """
     bead_id = run.get("bead_id")
     git_branch = run.get("git_branch")
@@ -484,9 +600,11 @@ def compute_label(
                 print(f"  [label] branch={git_branch} → {result}")
             return result
 
-    # INFERRED: behavior shape
+    # INFERRED: behavior shape (may return None)
     parsed = _parse_events(run_events)
     outcome, source = _infer_from_behavior(run, parsed, verbose=verbose)
+    if outcome is None:
+        return None
     return outcome, source
 
 
@@ -537,7 +655,11 @@ def apply_label(
 ) -> bool:
     """Apply an outcome label to a run, appending to label_history.
 
-    Returns True if label was written (changed or new), False if unchanged.
+    PRECEDENCE GUARD (Minor fix): an inferred label (source tier=1) NEVER
+    overwrites an explicit label (source tier≥2).  The label_history records
+    the attempted overwrite but the top-level outcome is NOT changed.
+
+    Returns True if label was written (changed or new), False if unchanged or blocked.
     """
     now = _now_utc()
 
@@ -552,6 +674,25 @@ def apply_label(
     existing_outcome, label_version, label_history_json, features_json = row
     label_history = json.loads(label_history_json or "[]")
     features = json.loads(features_json or "{}")
+
+    # Determine existing source tier from most recent history entry
+    existing_source = None
+    if label_history:
+        existing_source = label_history[-1].get("source", "behavior_inference")
+    existing_tier = _source_tier(existing_source or "behavior_inference")
+    new_tier = _source_tier(source)
+
+    # PRECEDENCE GUARD: inferred cannot overwrite explicit
+    if existing_outcome is not None and new_tier < existing_tier:
+        # Inferred trying to overwrite an explicit label — silently skip
+        if extra_features:
+            features.update(extra_features)
+            if not dry_run:
+                conn.execute(
+                    "UPDATE runs SET features=? WHERE run_id=?",
+                    (json.dumps(features), run_id),
+                )
+        return False
 
     # Check if label has changed
     if existing_outcome == outcome:
@@ -653,6 +794,9 @@ def backfill(
 
     Also enriches git_branch/bead_id for pre-PART-A runs that lack these fields.
     Returns a list of result dicts for reporting.
+
+    B5 fix: compute_label returning None means 'insufficient signal'; we do NOT
+    coerce None → 'clean'.  Such runs are left with outcome=None (unlabeled).
     """
     conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -681,9 +825,10 @@ def backfill(
         run_events = [{"raw_json": row[0]} for row in ev_cur.fetchall()]
 
         # Compute label
+        # B5 fix: None = insufficient signal → leave outcome as null
         label_result = compute_label(run, run_events, verbose=verbose)
         if label_result is None:
-            outcome, source = "clean", "behavior_inference"
+            outcome, source = None, "behavior_inference"
         else:
             outcome, source = label_result
 
@@ -697,8 +842,44 @@ def backfill(
                 f"→ outcome={outcome} source={source}"
             )
 
-        changed = apply_label(conn, run_id, outcome, source,
-                              extra_features=signals, dry_run=dry_run)
+        if outcome is not None:
+            changed = apply_label(conn, run_id, outcome, source,
+                                  extra_features=signals, dry_run=dry_run)
+        else:
+            # No label (insufficient signal).
+            # B5 retroactive correction: if the existing label was set by
+            # behavior_inference (tier=1) and the new inference is null, clear
+            # the stale label so the DB reflects our honest signal level.
+            # Do NOT clear explicit labels (tier≥2).
+            changed = False
+            cur2 = conn.execute(
+                "SELECT outcome, label_history, features FROM runs WHERE run_id=?",
+                (run_id,),
+            )
+            feat_row = cur2.fetchone()
+            if feat_row:
+                existing_outcome, existing_history_json, existing_features_json = feat_row
+                existing_features = json.loads(existing_features_json or "{}")
+                existing_history = json.loads(existing_history_json or "[]")
+                # Determine if existing label is inferred-only
+                existing_source = (
+                    existing_history[-1].get("source", "behavior_inference")
+                    if existing_history else "behavior_inference"
+                )
+                if existing_outcome is not None and _source_tier(existing_source) == 1:
+                    # Existing label was inferred and new inference says null → clear it
+                    if not dry_run:
+                        conn.execute(
+                            "UPDATE runs SET outcome=NULL, labeled_at=NULL WHERE run_id=?",
+                            (run_id,),
+                        )
+                    changed = True
+                if signals and not dry_run:
+                    existing_features.update(signals)
+                    conn.execute(
+                        "UPDATE runs SET features=? WHERE run_id=?",
+                        (json.dumps(existing_features), run_id),
+                    )
 
         results.append({
             "run_id": run_id,
@@ -710,6 +891,7 @@ def backfill(
             "source": source,
             "changed": changed,
             "event_count": run.get("event_count", 0),
+            "close_reason": run.get("close_reason"),
         })
 
     conn.close()
@@ -722,32 +904,37 @@ def print_report(results: list[dict]) -> None:
     """Print a labeled-runs table."""
     header = (
         f"{'run_id':14s}  {'project':20s}  {'kind':9s}  "
-        f"{'git_branch':35s}  {'bead_id':18s}  {'outcome':10s}  {'source':25s}  events"
+        f"{'close_reason':18s}  {'git_branch':30s}  "
+        f"{'outcome':10s}  {'source':25s}  events"
     )
     print(header)
     print("-" * len(header))
     for r in results:
         rid = r["run_id"][:12] + ".."
-        branch = (r["git_branch"] or "")[:33]
-        bead = (r["bead_id"] or "")[:16]
+        branch = (r["git_branch"] or "")[:28]
+        cr = (r.get("close_reason") or "")[:16]
+        outcome_str = r["outcome"] or "null"
         print(
             f"{rid:14s}  {r['project']:20s}  {r['run_key_kind']:9s}  "
-            f"{branch:35s}  {bead:18s}  {r['outcome']:10s}  "
-            f"{r['source']:25s}  {r['event_count']}"
+            f"{cr:18s}  {branch:30s}  "
+            f"{outcome_str:10s}  {r['source']:25s}  {r['event_count']}"
         )
 
     # Summary stats
     n_total = len(results)
     n_explicit = sum(1 for r in results if r["source"] != "behavior_inference")
     n_inferred = n_total - n_explicit
-    outcomes = {}
+    n_null = sum(1 for r in results if r["outcome"] is None)
+    outcomes: dict[str, int] = {}
     for r in results:
-        outcomes[r["outcome"]] = outcomes.get(r["outcome"], 0) + 1
+        k = r["outcome"] or "null"
+        outcomes[k] = outcomes.get(k, 0) + 1
 
     print()
     print(f"Total runs: {n_total}")
     print(f"  explicit labels: {n_explicit}")
     print(f"  inferred labels: {n_inferred}")
+    print(f"  unlabeled (null): {n_null}")
     print(f"  outcome breakdown: {outcomes}")
 
 

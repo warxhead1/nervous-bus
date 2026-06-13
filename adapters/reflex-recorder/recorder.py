@@ -178,6 +178,33 @@ class Recorder:
             on_run_closed=on_run_closed,
         )
 
+        # B1 fix: rebuild _last_closed_id from the DB so continues_run_id
+        # survives recorder restarts.  Without this, every restart wipes the
+        # in-memory map and any new event on an existing run_key starts with
+        # continues_run_id=None instead of pointing at the pre-restart run.
+        self._rebuild_last_closed_id()
+
+    def _rebuild_last_closed_id(self) -> None:
+        """Rebuild _last_closed_id from the DB at startup.
+
+        B1 fix: queries runs.db for the most recently closed run_id per run_key
+        so that continues_run_id linkage works across recorder restarts.
+        Only considers runs closed with reasons other than recorder_shutdown to
+        avoid re-stitching a shutdown-closed run as the predecessor (those are
+        operational closes, not semantic pauses).
+        """
+        try:
+            rows = self.store.latest_run_id_per_key()
+            self.segmenter._last_closed_id.update(rows)
+            if rows:
+                sys.stderr.write(
+                    f"[reflex-recorder] rebuilt _last_closed_id: {len(rows)} run_keys\n"
+                )
+                sys.stderr.flush()
+        except Exception as e:
+            sys.stderr.write(f"[reflex-recorder] _rebuild_last_closed_id failed: {e}\n")
+            sys.stderr.flush()
+
     def _on_run_closed(self, payload: dict) -> None:
         """Called by the segmenter when a run is closed."""
         run_id = payload["run_id"]

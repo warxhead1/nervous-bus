@@ -228,11 +228,14 @@ class TestInferAbandon(unittest.TestCase):
         outcome, source = _infer_from_behavior(run, events, verbose=False)
         self.assertEqual(outcome, "abandoned")
 
-    def test_positive_abandon_recorder_shutdown_no_resolving(self):
+    def test_recorder_shutdown_no_resolving_not_abandoned(self):
+        """B1 fix: recorder_shutdown is operational, NOT semantic.
+        Must never produce 'abandoned' — that's the B1 blocker fix."""
         run = _make_run(close_reason="recorder_shutdown", event_count=10)
         events = [_read() for _ in range(5)] + [_bash() for _ in range(5)]
         outcome, source = _infer_from_behavior(run, events, verbose=False)
-        self.assertEqual(outcome, "abandoned")
+        self.assertNotEqual(outcome, "abandoned",
+            "recorder_shutdown must NOT produce 'abandoned' (B1 fix)")
 
     def test_negative_abandon_too_few_events(self):
         """Runs with < ABANDON_MIN_EVENTS (5) events are not labeled abandoned."""
@@ -278,12 +281,15 @@ class TestInferClean(unittest.TestCase):
         outcome, source = _infer_from_behavior(run, events, verbose=False)
         self.assertEqual(outcome, "clean")
 
-    def test_clean_small_run_default(self):
-        """Small run (< 5 events) with no resolving action defaults to clean."""
+    def test_small_run_no_signal_is_null(self):
+        """B5 fix: small run (< 5 events) with no resolving action → null, not 'clean'.
+        Requiring a POSITIVE resolving signal to assert 'clean' prevents poisoning
+        the training set with opaque micro-runs."""
         run = _make_run(close_reason="idle_timeout", event_count=2)
         events = [_bash(), _read()]
         outcome, source = _infer_from_behavior(run, events, verbose=False)
-        self.assertEqual(outcome, "clean")
+        self.assertIsNone(outcome,
+            "Micro/opaque runs with no signal must be null (B5 fix)")
 
 
 # ── Explicit source precedence ────────────────────────────────────────────────

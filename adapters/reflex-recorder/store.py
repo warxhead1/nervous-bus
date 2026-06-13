@@ -192,3 +192,30 @@ class SQLiteStore:
 
     def event_count(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM run_events").fetchone()[0]
+
+    def latest_run_id_per_key(self) -> dict[str, str]:
+        """Return {run_key: run_id} for the most recently closed run per run_key.
+
+        B1 fix: used at startup to rebuild the segmenter's _last_closed_id map
+        so continues_run_id linkage survives recorder restarts.
+
+        Excludes recorder_shutdown-closed runs from consideration — those are
+        operational closes, not semantic pauses; stitching a continuation through
+        a shutdown would incorrectly inherit a recorder_shutdown run as predecessor.
+        Idle_timeout and ended closes are valid predecessors.
+        """
+        cur = self._conn.execute(
+            """
+            SELECT run_key, run_id
+            FROM runs
+            WHERE close_reason != 'recorder_shutdown'
+               OR close_reason IS NULL
+            ORDER BY ended DESC
+            """,
+        )
+        # Keep only the first (most recent) run_id per run_key
+        result: dict[str, str] = {}
+        for run_key, run_id in cur.fetchall():
+            if run_key and run_key not in result:
+                result[run_key] = run_id
+        return result
