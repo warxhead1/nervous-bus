@@ -190,3 +190,92 @@ def test_panel_payload_includes_required_keys():
     assert "watermark" in payload
     assert "history_dots" in payload
     assert isinstance(payload["history_dots"], list)
+
+
+# ---- nervous-bus-eylh: merged panel (current stake + history strip) ---------
+
+
+@pytest.mark.asyncio
+async def test_merged_panel_renders_current_stake_and_history_strip():
+    """The consolidated panel shows BOTH the top stake strip AND the bottom
+    recent-prediction lifecycle strip (the former AHEPredictionTracker), so no
+    information either panel showed is lost."""
+    s = PulseState()
+    # Several predictions so the history strip has multiple lifecycle rows.
+    s.apply(_prediction_evt(iteration=0))
+    s.apply(_prediction_evt(iteration=1))
+    s.apply(_prediction_evt(iteration=2))
+
+    panel = AHEPredictionPanel()
+    app = _SingleWidgetApp(panel)
+    async with app.run_test() as pilot:
+        panel.payload = s.ahe_prediction_panel_payload()
+        records = s.recent_predictions(limit=5)
+        progress = {
+            (r.session_id, r.iteration): s.prediction_case_progress(r)
+            for r in records
+        }
+        panel.case_progress = progress
+        panel.records = records
+        await pilot.pause()
+        rendered = panel._render_full()
+        # TOP STRIP — current stake content (watermark line + history dots).
+        assert "watermark" in rendered.lower()
+        assert "history" in rendered.lower()
+        # BOTTOM STRIP — the merged lifecycle history with its section rule.
+        assert "recent predictions" in rendered.lower()
+        # Lifecycle rows carry the per-prediction header (iter N → N+1) and the
+        # confidence/predicted detail the tracker used to show.
+        assert "confidence" in rendered.lower()
+        assert "predicted" in rendered.lower()
+        # One header arrow per recent prediction (≥2 visible).
+        assert rendered.count("→") >= 2
+
+
+@pytest.mark.asyncio
+async def test_merged_panel_history_strip_absent_without_records():
+    """With no records fed, the panel renders only the top strip (back-compat
+    with the original AHEPredictionPanel-only callers)."""
+    s = PulseState()
+    s.apply(_prediction_evt(iteration=0))
+    panel = AHEPredictionPanel()
+    app = _SingleWidgetApp(panel)
+    async with app.run_test() as pilot:
+        panel.payload = s.ahe_prediction_panel_payload()
+        await pilot.pause()
+        rendered = panel._render_full()
+        # No history section rule when records are empty.
+        assert "recent predictions" not in rendered.lower()
+        # Top strip still present.
+        assert "watermark" in rendered.lower()
+
+
+@pytest.mark.asyncio
+async def test_merged_panel_history_only_renders_when_no_live_stake():
+    """When there's no in-flight stake but records exist, the panel still shows
+    the history strip below the idle placeholder (so verified/refuted outcomes
+    don't vanish once the live prediction resolves)."""
+    from pulse_app.state import PredictionRecord, PREDICTION_STATUS_CONFIRMED
+
+    panel = AHEPredictionPanel()
+    app = _SingleWidgetApp(panel)
+    async with app.run_test() as pilot:
+        panel.payload = None  # no current stake
+        rec = PredictionRecord(
+            session_id=SID,
+            iteration=3,
+            confidence=0.8,
+            predicted_score_delta=0.05,
+            status=PREDICTION_STATUS_CONFIRMED,
+            actual_score_delta=0.06,
+            score_delta_error=0.01,
+            confidence_calibration=0.9,
+        )
+        panel.records = [rec]
+        await pilot.pause()
+        rendered = panel._render_full()
+        # Idle top + history bottom both present.
+        assert "no falsifiable prediction" in rendered.lower()
+        assert "recent predictions" in rendered.lower()
+        # The confirmed-outcome detail (actual/error/calibration) survives.
+        assert "calibration" in rendered.lower()

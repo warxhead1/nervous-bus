@@ -875,6 +875,73 @@ def _truncate(text: str, limit: int = _MAX_REASON_LEN) -> str:
     return flat[: limit - 1] + "…"
 
 
+def _render_prediction_lifecycle_row(
+    rec: Any,
+    case_progress: dict[tuple[str, int], tuple[int, int]] | None = None,
+) -> list[str]:
+    """Render one prediction as a two-line lifecycle block (header + status).
+
+    nervous-bus-eylh: shared by ``AHEPredictionTracker`` AND the merged
+    ``AHEPredictionPanel`` history strip so both surfaces speak an identical
+    visual contract. Returns ``[header, status_line]``. ``case_progress`` maps
+    ``(session_id, iteration) → (done, total)`` for the pending progress hint.
+    """
+    case_progress = case_progress or {}
+    status = getattr(rec, "status", "pending")
+    glyph = _PREDICTION_GLYPH.get(status, "·")
+    color = _PREDICTION_COLOR.get(status, "white")
+    label = _PREDICTION_LABEL.get(status, status)
+
+    iteration = int(getattr(rec, "iteration", 0))
+    confidence = float(getattr(rec, "confidence", 0.0))
+    predicted = _format_delta(float(getattr(rec, "predicted_score_delta", 0.0)))
+
+    # Header line — bold cyan iteration arrow, dim confidence, predicted delta
+    # right-padded for vertical alignment across rows.
+    header = (
+        f"[bold cyan]iter {iteration} → {iteration + 1}[/]   "
+        f"[dim]confidence[/] [bold]{confidence:.2f}[/]  "
+        f"[dim]predicted[/] [bold]{predicted}[/]"
+    )
+
+    # Status line varies per state.
+    if status == "pending":
+        sid = str(getattr(rec, "session_id", ""))
+        done, total = case_progress.get((sid, iteration), (0, 0))
+        if total > 0:
+            progress = f"{done}/{total} cases done"
+        else:
+            progress = "waiting for iter cases"
+        status_line = (
+            f"  [{color}]{glyph}[/] [{color}]{label}[/] [dim]— {progress}[/]"
+        )
+    elif status == "refuted_live":
+        reason = _truncate(getattr(rec, "refutation_reason", ""))
+        # Refutation reason inherits the watch tier — same yellow family
+        # as the status glyph, so the eye reads the row as one signal.
+        status_line = (
+            f"  [{color}]{glyph} {label}[/][dim]:[/] "
+            f"[{COLOR_QUEUE_PRESSURE_WATCH}]{reason}[/]"
+        )
+    else:
+        actual = getattr(rec, "actual_score_delta", None)
+        error = getattr(rec, "score_delta_error", None)
+        calibration = getattr(rec, "confidence_calibration", None)
+        actual_s = _format_delta(actual)
+        error_s = f"{error:.3f}" if isinstance(error, (int, float)) else "n/a"
+        calib_s = (
+            f"{calibration:.2f}" if isinstance(calibration, (int, float)) else "n/a"
+        )
+        status_line = (
+            f"  [{color}]{glyph} {label}[/][dim]:[/] "
+            f"[dim]actual[/] [bold]{actual_s}[/]  "
+            f"[dim]error[/] [bold]{error_s}[/]  "
+            f"[dim]calibration[/] [bold]{calib_s}[/]"
+        )
+
+    return [header, status_line]
+
+
 class AHEPredictionTracker(Static):
     """Live lifecycle viewer for AHE predictions.
 
@@ -974,63 +1041,10 @@ class AHEPredictionTracker(Static):
         return "\n".join(lines)
 
     def _render_one(self, rec: Any) -> list[str]:
-        status = getattr(rec, "status", "pending")
-        glyph = _PREDICTION_GLYPH.get(status, "·")
-        color = _PREDICTION_COLOR.get(status, "white")
-        label = _PREDICTION_LABEL.get(status, status)
-
-        iteration = int(getattr(rec, "iteration", 0))
-        confidence = float(getattr(rec, "confidence", 0.0))
-        predicted = _format_delta(float(getattr(rec, "predicted_score_delta", 0.0)))
-
-        # Header line — bold cyan iteration arrow, dim confidence, predicted delta
-        # right-padded for vertical alignment across rows.
-        header = (
-            f"[bold cyan]iter {iteration} → {iteration + 1}[/]   "
-            f"[dim]confidence[/] [bold]{confidence:.2f}[/]  "
-            f"[dim]predicted[/] [bold]{predicted}[/]"
-        )
-
-        # Status line varies per state.
-        if status == "pending":
-            sid = str(getattr(rec, "session_id", ""))
-            done, total = self.case_progress.get((sid, iteration), (0, 0))
-            if total > 0:
-                progress = f"{done}/{total} cases done"
-            else:
-                progress = "waiting for iter cases"
-            status_line = (
-                f"  [{color}]{glyph}[/] [{color}]{label}[/] [dim]— {progress}[/]"
-            )
-        elif status == "refuted_live":
-            reason = _truncate(getattr(rec, "refutation_reason", ""))
-            # Refutation reason inherits the watch tier — same yellow family
-            # as the status glyph, so the eye reads the row as one signal.
-            status_line = (
-                f"  [{color}]{glyph} {label}[/][dim]:[/] "
-                f"[{COLOR_QUEUE_PRESSURE_WATCH}]{reason}[/]"
-            )
-        else:
-            actual = getattr(rec, "actual_score_delta", None)
-            error = getattr(rec, "score_delta_error", None)
-            calibration = getattr(rec, "confidence_calibration", None)
-            actual_s = _format_delta(actual)
-            error_s = (
-                f"{error:.3f}" if isinstance(error, (int, float)) else "n/a"
-            )
-            calib_s = (
-                f"{calibration:.2f}"
-                if isinstance(calibration, (int, float))
-                else "n/a"
-            )
-            status_line = (
-                f"  [{color}]{glyph} {label}[/][dim]:[/] "
-                f"[dim]actual[/] [bold]{actual_s}[/]  "
-                f"[dim]error[/] [bold]{error_s}[/]  "
-                f"[dim]calibration[/] [bold]{calib_s}[/]"
-            )
-
-        return [header, status_line]
+        # nervous-bus-eylh: delegate to the shared module-level renderer so the
+        # tracker rows and the merged AHEPredictionPanel history strip stay in
+        # lockstep.
+        return _render_prediction_lifecycle_row(rec, self.case_progress)
 
 
 # ---------------------------------------------------------------------------- #
@@ -1918,16 +1932,38 @@ _REFUTATION_BORDER_RESTORE: str = "$warning 60%"
 
 
 class AHEPredictionPanel(Static):
-    """Live AHE prediction panel — shows the staked prediction + watermark.
+    """Live AHE prediction panel — current stake (top strip) + history (bottom).
 
-    Surfaces the differentiator the existing ``AHEPredictionTracker`` only
-    half-shows: this panel renders the IN-FLIGHT prediction with its full
-    contract (predicted score delta, per-verdict class changes, confidence,
-    watermark of remaining slack) plus a history strip of recent outcomes.
+    nervous-bus-eylh — CONSOLIDATION DECISION (option a: MERGE).
 
-    The widget is fed via reactive ``payload`` — a plain dict produced by
-    ``PulseState.ahe_prediction_panel_payload`` (computed each render tick).
-    Empty payload renders an idle placeholder.
+    Before this bead the dashboard mounted TWO widgets stacked in ``compose()``:
+    ``AHEPredictionPanel`` (this one — the IN-FLIGHT prediction: predicted
+    score delta, per-verdict class changes, confidence, watermark thermometer,
+    refutation flash) directly above ``AHEPredictionTracker`` (the HISTORICAL
+    run of the last 5 predictions with per-record actual / error / calibration
+    and lifecycle glyphs). Both showed AHE prediction state at different depths,
+    which read as duplicate panels in a live cycle.
+
+    Reviewing the rendered layout: the panel's "current" content and the
+    tracker's "history" content are complementary, not redundant, so we MERGE
+    rather than drop either. This single panel now renders:
+
+      * TOP STRIP — the current iteration's stake + watermark thermometer +
+        status + parse badge + history-dots row (the original Panel content).
+      * BOTTOM STRIP — the full lifecycle list of recent predictions with
+        per-record actual / error / calibration (the original Tracker content),
+        rendered via the SHARED ``_render_prediction_lifecycle_row`` helper so
+        the two strips speak an identical visual contract.
+
+    The separate ``AHEPredictionTracker`` is no longer mounted (its class is
+    retained for unit tests + as the row renderer's home). No information that
+    either panel previously surfaced is lost.
+
+    The widget is fed via reactive ``payload`` (top strip) — a plain dict from
+    ``PulseState.ahe_prediction_panel_payload`` — plus reactive ``records`` /
+    ``case_progress`` (bottom strip) — the same data the tracker consumed from
+    ``PulseState.recent_predictions`` / ``prediction_case_progress``. Empty
+    payload AND no records renders an idle placeholder.
 
     FIX 1 (live-refutation flash + bell): when ``payload['prediction'].status``
     transitions to ``refuted_live`` the border cycles through red → orange →
@@ -1958,6 +1994,14 @@ class AHEPredictionPanel(Static):
     # bold red and the widget toggles a CSS class so a stylesheet pulse rule
     # can pick it up. Tests assert this transitions from False → True.
     zero_pulse: reactive[bool] = reactive(False)
+    # nervous-bus-eylh: bottom-strip data merged in from the retired
+    # AHEPredictionTracker. ``records`` is a NEWEST-FIRST list of
+    # PredictionRecord (or any object exposing the same attrs); ``case_progress``
+    # maps (session_id, iteration) → (done, total) for the pending hint.
+    records: reactive[list[Any]] = reactive(list, always_update=True)
+    case_progress: reactive[dict[tuple[str, int], tuple[int, int]]] = reactive(
+        dict, always_update=True
+    )
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__("", markup=True, **kwargs)
@@ -1972,15 +2016,20 @@ class AHEPredictionPanel(Static):
         # FIX 1: bumped each time a refutation flash is triggered. Tests
         # subscribe by polling this counter instead of mocking the timer API.
         self.flash_count: int = 0
+        # nervous-bus-eylh: cache the latest top-strip payload so a records-only
+        # update (bottom strip) can re-render the combined panel without losing
+        # the current stake.
+        self._payload: Optional[dict[str, Any]] = None
         self.update(self._render_idle())
 
     def watch_payload(self, value: Optional[dict[str, Any]]) -> None:
+        self._payload = value
         if not value or not value.get("prediction"):
             self.watermark_value = 0
             self.watermark_initial = 0
             self.zero_pulse = False
             self._prev_status = None
-            self.update(self._render_idle())
+            self.update(self._render_full())
             return
         rec = value["prediction"]
         status = str(getattr(rec, "status", "pending"))
@@ -2001,7 +2050,17 @@ class AHEPredictionPanel(Static):
         ):
             self.trigger_refutation_flash()
         self._prev_status = status
-        self.update(self._render_payload(value))
+        self.update(self._render_full())
+
+    def watch_records(self, _value: list[Any]) -> None:
+        # nervous-bus-eylh: bottom-strip (history) changed — re-render the
+        # combined panel preserving the cached top-strip payload.
+        self.update(self._render_full())
+
+    def watch_case_progress(
+        self, _value: dict[tuple[str, int], tuple[int, int]]
+    ) -> None:
+        self.update(self._render_full())
 
     # -------------------------------------------------- FIX 1 helpers ----
     def trigger_refutation_flash(self) -> None:
@@ -2066,6 +2125,46 @@ class AHEPredictionPanel(Static):
             pass
 
     # -------------------------------------------------- render helpers ---
+    def _render_full(self) -> str:
+        """Combine the current-stake top strip with the history bottom strip.
+
+        nervous-bus-eylh: the merged panel renders the live prediction (or the
+        idle placeholder when none is staked) on top, then — separated by a
+        thin rule — the recent-prediction lifecycle list absorbed from the
+        retired AHEPredictionTracker. When neither half has anything to show
+        the panel collapses to the bare idle placeholder.
+        """
+        payload = self._payload
+        if payload and payload.get("prediction"):
+            top = self._render_payload(payload)
+        else:
+            top = self._render_idle()
+        history = self._render_history_detail()
+        if not history:
+            return top
+        return f"{top}\n[dim]── recent predictions ──[/]\n{history}"
+
+    def _render_history_detail(self) -> str:
+        """Render the recent-prediction lifecycle list (former Tracker body).
+
+        Reuses the shared ``_render_prediction_lifecycle_row`` helper so the
+        history rows are byte-identical to what the standalone tracker showed —
+        per-record actual / error / calibration, lifecycle glyphs, and pending
+        case-progress. Empty when no records have been fed.
+        """
+        rows = list(self.records or [])[:PREDICTION_TRACKER_LIMIT]
+        if not rows:
+            return ""
+        lines: list[str] = []
+        for rec in rows:
+            lines.extend(
+                _render_prediction_lifecycle_row(rec, self.case_progress)
+            )
+            lines.append("")  # spacer between predictions
+        if lines and lines[-1] == "":
+            lines.pop()
+        return "\n".join(lines)
+
     def _render_idle(self) -> str:
         return (
             "[bold cyan]AHE Prediction[/]\n"

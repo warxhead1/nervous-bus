@@ -39,7 +39,6 @@ from .source import (
 from .state import PulseState
 from .widgets import (
     AHEPredictionPanel,
-    AHEPredictionTracker,
     BurnGauge,
     CycleOutcomeBanner,
     FailureCodeSidebar,
@@ -179,13 +178,13 @@ class PulseApp(App):
         # above the body so the boundary moment is the first thing the
         # operator sees once the header docks.
         yield DivergenceHighlights(id="divergence-ribbon")
-        # nervous-bus-a5mx: the AHE prediction panel — our differentiator —
-        # lives above the tracker so the staked claim is the headline read.
+        # nervous-bus-a5mx + nervous-bus-eylh: the single merged AHE prediction
+        # panel — our differentiator. Top strip shows the IN-FLIGHT staked
+        # claim (predicted delta, watermark thermometer, status); bottom strip
+        # shows the recent-prediction lifecycle history (the former
+        # AHEPredictionTracker). One panel, no duplicate. Sits above the body so
+        # it's the first widget the operator sees once the header docks.
         yield AHEPredictionPanel(id="ahe-prediction-panel")
-        # AHE prediction tracker — the visual win condition for "the system
-        # caught itself being wrong." Sits above the body so it's the first
-        # widget the operator sees once the header docks.
-        yield AHEPredictionTracker(id="ahe-tracker")
         # nervous-bus-uwdq: multi-advocate population-cycle view. Hidden
         # (display:none) for single-advocate runs so the layout is unchanged;
         # surfaces N parallel advocate trajectories + a winner badge once a
@@ -445,13 +444,16 @@ class PulseApp(App):
         """Refresh tree + sparkline (cheap)."""
         self._tick_divergence()
     def _tick_predictions(self) -> None:
-        """Push the most recent predictions into the AHE tracker.
+        """Push the most recent predictions into the merged AHE panel.
 
-        Cheap (≤5 records); we run it from the 10 Hz render tick so a
-        prediction emission is reflected next frame.
+        nervous-bus-eylh: the standalone AHEPredictionTracker was consolidated
+        into AHEPredictionPanel's bottom strip; this tick now feeds the panel's
+        ``records`` / ``case_progress`` (history) reactives. Cheap (≤5 records);
+        we run it from the 10 Hz render tick so a prediction emission is
+        reflected next frame.
         """
         try:
-            tracker = self.query_one(AHEPredictionTracker)
+            panel = self.query_one(AHEPredictionPanel)
         except Exception:
             return
         records = self.state.recent_predictions(limit=5)
@@ -463,8 +465,8 @@ class PulseApp(App):
                 )
             except Exception:
                 continue
-        tracker.case_progress = progress
-        tracker.records = records
+        panel.case_progress = progress
+        panel.records = records
 
     def _tick_tree(self) -> None:
         """Refresh tree + sparkline (cheap)."""

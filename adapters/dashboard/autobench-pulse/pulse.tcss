@@ -53,17 +53,16 @@ HeaderStats {
     background: $boost;
 }
 
-/* AHE prediction tracker — the falsifiability panel. Border style mirrors
- * ScoreSpark's warning-tinted round border because "we caught ourselves
- * being wrong" is the same family of signal as "score moved" — both are
- * load-bearing self-observation. */
-AHEPredictionTracker {
+/* AHE prediction panel — the falsifiability surface. nervous-bus-eylh merged
+ * the former AHEPredictionTracker into this single panel (current stake on top,
+ * recent-prediction history below), so this rule now caps the combined panel's
+ * height and keeps it scrollable when several predictions stack. */
+#ahe-prediction-panel {
     height: auto;
-    min-height: 1;
-    max-height: 8;
-    padding: 0 1;
+    min-height: 6;
+    max-height: 16;
+    overflow-y: auto;
     margin: 0 0 1 0;
-    border: round $warning;
 }
 
 /* KernelArena (nervous-bus-tvfw): the reclaimed centre band. A horizontal
