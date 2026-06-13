@@ -379,6 +379,17 @@ def classify_project(
 ) -> list[dict]:
     """Classify every worktree-dispatch branch in a project's repo.
 
+    ⚠️  SURVIVORSHIP BIAS — read before trusting the aggregate.  This scans
+    branches that STILL EXIST.  Projects that delete merged worktree branches
+    (e.g. tachyonac-engine, deer-flow) leave only the empty/abandoned failures
+    behind, so a branch-population scan over-reports 'abandoned_empty' (observed:
+    tachyonac 100%, deer-flow 68% empty — an artifact, not a true waste rate).
+    Projects that keep landed branches (tengine) give a representative scan.
+    For an UNBIASED dispatch-outcome rate, measure over the RUN-STORE instead —
+    every run is recorded at dispatch time, immune to later branch deletion —
+    via label.py's label_from_git_merge (run-keyed).  Use this scan for triage
+    and per-branch drill-down, not for cross-project rate comparison.
+
     Returns a list of dicts (BranchOutcome + branch name), one per branch.
     When verify=True, every medium-confidence 'git_discarded_unmerged' verdict
     is pickaxe-checked (verify_discarded_landed): confirmed-landed flips to
