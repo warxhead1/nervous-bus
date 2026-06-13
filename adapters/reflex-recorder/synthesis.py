@@ -1434,33 +1434,44 @@ def run_synthesis(
         )
 
         # ── Step 6: Persist eval ──────────────────────────────────────────
-        eval_id = _make_ulid()
         prior_eval = get_prior_eval(conn, signature)
         supersedes_eval_id = prior_eval["eval_id"] if prior_eval else None
 
-        # Fix 8: idempotency on material-change signal — skip re-persist when:
-        # same decision AND same score band (rounded to 2dp) AND same rung AND
-        # same replay status AND same recurrence (for propose_fix).
-        # This prevents a new row every synthesis pass when nothing changed.
+        # Fix 8 (corrected): idempotency on a material-change signal. When nothing
+        # material changed we do NOT write a new run_evals row, re-publish, or
+        # re-snapshot (prevents per-pass table growth + duplicate emissions) and we
+        # reuse the prior eval_id — BUT we still surface the standing verdict in
+        # result.evals so a dry-run always shows the CURRENT evals (an unchanged
+        # verdict is still a verdict; skipping the append entirely made the pass
+        # display "No issues" on every run after the first). Material change =
+        # decision, score band (2dp), rung, replay status, or (for propose_fix)
+        # recurrence moved.
+        material_change = True
         if prior_eval:
-            prior_decision = prior_eval.get("decision")
-            prior_score = prior_eval.get("score")
-            prior_rung = prior_eval.get("rung")
-            prior_replay_status = prior_eval.get("replay_status")
-            same_decision = prior_decision == decision
             same_score = (
-                prior_score is not None
-                and round(prior_score, 2) == round(score, 2)
+                prior_eval.get("score") is not None
+                and round(prior_eval["score"], 2) == round(score, 2)
             )
-            same_rung = prior_rung == rung
-            same_replay = prior_replay_status == replay.status
-            # For propose_fix, also check recurrence hasn't grown
             recurrence_ok = (
                 decision != "propose_fix"
                 or prior_eval.get("recurrence_count_at_apply") == issue.get("recurrence_count")
             )
-            if same_decision and same_score and same_rung and same_replay and recurrence_ok:
-                continue
+            if (
+                prior_eval.get("decision") == decision
+                and same_score
+                and prior_eval.get("rung") == rung
+                and prior_eval.get("replay_status") == replay.status
+                and recurrence_ok
+            ):
+                material_change = False
+
+        # Reuse the prior eval_id when unchanged so the standing verdict is stable;
+        # mint a new one only on a material change (which supersedes the prior).
+        if material_change:
+            eval_id = _make_ulid()
+        else:
+            eval_id = prior_eval["eval_id"]
+            supersedes_eval_id = prior_eval.get("supersedes_eval_id")
 
         # Gather run_sample from detector_hits
         run_sample = [
@@ -1492,30 +1503,31 @@ def run_synthesis(
             run_sample=run_sample,
             synthesis_pass_at=synthesis_pass_at,
         )
-        persist_eval(conn, eval_payload)
+        if material_change:
+            persist_eval(conn, eval_payload)
+            # Snapshot recurrence_count_at_apply in issues table
+            if decision == "propose_fix":
+                conn.execute(
+                    """
+                    UPDATE issues
+                    SET recurrence_count_at_apply = ?
+                    WHERE signature = ?
+                    """,
+                    (issue.get("recurrence_count", 1), signature),
+                )
+        # Always surface the standing verdict (persisted or not) for display/return.
         result.evals.append(eval_payload)
-
-        # Snapshot recurrence_count_at_apply in issues table
-        if decision == "propose_fix":
-            conn.execute(
-                """
-                UPDATE issues
-                SET recurrence_count_at_apply = ?
-                WHERE signature = ?
-                """,
-                (issue.get("recurrence_count", 1), signature),
-            )
 
         # ── Emit bus.agent.run.eval.v1 ────────────────────────────────────
         eval_channel = "bus.agent.run.eval.v1"
         # Strip internal 'issue' key before publishing
         publish_eval = {k: v for k, v in eval_payload.items() if k != "issue"}
-        if not dry_run:
+        if not dry_run and material_change:
+            # Publish only on material change — an unchanged verdict was already
+            # published by the pass that minted it (idempotent emission).
             err = _publish(eval_channel, publish_eval, dry_run=False)
             if err:
                 result.publish_errors.append(f"eval {eval_id}: {err}")
-        else:
-            pass  # DRY-RUN: nothing to shell out to
 
         # ── Emit <project>.pattern.discovered.v1 (propose_fix only) ──────
         if decision == "propose_fix" and candidate:
@@ -1529,7 +1541,7 @@ def run_synthesis(
             result.pattern_discovered_payloads.append(
                 {"channel": pd_channel, "payload": pd_payload}
             )
-            if not dry_run:
+            if not dry_run and material_change:
                 err = _publish(pd_channel, pd_payload, dry_run=False)
                 if err:
                     result.publish_errors.append(f"pattern.discovered {eval_id}: {err}")

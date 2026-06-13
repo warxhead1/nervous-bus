@@ -1306,6 +1306,45 @@ class TestHardeningAcceptance:
             "despite no material change (idempotency regression)"
         )
 
+    def test_unchanged_pass_still_surfaces_standing_verdicts(self):
+        """A re-pass with NO material change must still SURFACE the standing
+        verdicts in result.evals (and the result must be stable), even though it
+        writes no new run_eval rows. Regression: idempotency previously `continue`d
+        past result.evals.append, so every dry-run after the first displayed
+        "No issues found" despite live issues — masking all standing verdicts.
+        """
+        conn = _make_conn()
+        sig = "proj:worktree_leak:/p/.worktrees/stable"
+        wt = "/p/.worktrees/stable"
+        for i in range(3):
+            rid = f"R{i}"
+            _insert_run(conn, rid, project="proj", outcome="clean",
+                        labeled_at=f"2026-06-0{i+1}T00:00:00Z", worktree=wt,
+                        started=f"2026-06-0{i+1}T00:00:00Z",
+                        ended=f"2026-06-0{i+1}T01:00:00Z")
+            _insert_hit(conn, rid, sig, detector="worktree_leak", project="proj",
+                        ts=f"2026-06-0{i+1}T00:30:00Z")
+        _insert_issue(conn, sig, project="proj", detector="worktree_leak",
+                      recurrence_count=3)
+
+        r1 = syn.run_synthesis(conn, dry_run=True)
+        rows1 = conn.execute("SELECT COUNT(*) FROM run_evals").fetchone()[0]
+        r2 = syn.run_synthesis(conn, dry_run=True)
+        rows2 = conn.execute("SELECT COUNT(*) FROM run_evals").fetchone()[0]
+
+        # Both passes surface the same standing verdict(s)...
+        assert len(r1.evals) >= 1, "first pass must surface the verdict"
+        assert len(r2.evals) == len(r1.evals), (
+            f"re-pass surfaced {len(r2.evals)} evals vs {len(r1.evals)} — an "
+            "unchanged verdict must still be displayed, not skipped"
+        )
+        # ...with a STABLE eval_id (reused, not re-minted)...
+        assert r2.evals[0]["eval_id"] == r1.evals[0]["eval_id"], (
+            "unchanged verdict must reuse the prior eval_id"
+        )
+        # ...while NOT growing the persisted table.
+        assert rows2 == rows1, "unchanged re-pass must not write a new run_eval row"
+
     # ── Test 7: stitch handles cycle without double-count ─────────────────────
 
     def test_stitch_cycle_no_double_count(self):
