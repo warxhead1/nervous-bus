@@ -42,7 +42,7 @@ CONSUMER_GROUP = "reflex-recorder"
 CONSUMER_NAME = f"reflex-recorder-{os.getpid()}"
 STREAM_NAME = "nbus:all"
 ACTIVITY_TYPE = "bus.agent.activity.v1"
-PUBLISH_CHANNEL = "bus.agent.run.closed"
+PUBLISH_CHANNEL = "bus.agent.run.closed.v1"
 
 DEFAULT_IDLE_TIMEOUT_S = 900.0   # 15 min
 DEFAULT_METRICS_INTERVAL_S = 60.0
