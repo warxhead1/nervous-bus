@@ -10,6 +10,9 @@
 #   nervous publish tengine.session.frame --subject silo_racing_X '{"fps":47.3}'
 #   nervous tail tengine.session            # subscribe (requires plugin running)
 #   nervous schemas                         # list known channels (repo + user-home)
+#   nervous schemas --cluster autobench     # filter by taxonomy cluster
+#   nervous schemas --search prediction     # substring match on channel name
+#   nervous schemas --clusters              # list clusters + counts (CHANNELS.md)
 #   nervous schema install <path>           # install private/custom schema to user-home
 #   nervous schema list                     # list user-home schemas
 #   nervous setup                           # bootstrap NERVOUS_HOME directory structure
@@ -22,6 +25,14 @@
 #   NERVOUS_PLUGIN   plugin name (default: nervous-bus)
 #   NERVOUS_HOME     user-level config + private schema overlay
 #                    (default: ~/.config/nervous-bus)
+#   NERVOUS_PYTHON   interpreter used for Redis XADD + schema validation
+#                    (default: python3 on PATH)
+#   NERVOUS_STRICT_REDIS       1 = non-zero exit when Redis delivery fails
+#   NERVOUS_STRICT_VALIDATION  1 = non-zero exit when schema validation is
+#                    SKIPPED (jsonschema module absent). Default fail-soft:
+#                    publish prints a machine-readable degradation marker on
+#                    stdout (delivery=file-only validation=skipped ...) and a
+#                    one-time stderr warning, but still exits 0.
 
 set -euo pipefail
 
@@ -326,8 +337,17 @@ PYEOF
             # so a non-zero exit from the validator doesn't abort the script.
             local _validation_result _exit_code
             local _vtmp; _vtmp=$(mktemp)
-            if python3 -c '
-import sys, json, jsonschema
+            if "${NERVOUS_PYTHON:-python3}" -c '
+import sys, json
+# Exit 4 = the jsonschema MODULE is absent on this interpreter (the
+# systemd-service /usr/bin/python3 case). This is a validation-SKIPPED
+# degradation, distinct from a payload violation — surface it loudly so a
+# Rust/Go caller can detect that publish ran without schema enforcement.
+try:
+    import jsonschema
+except ImportError as e:
+    print("module_missing:" + str(e), end="")
+    sys.exit(4)
 schema_file = sys.argv[1]
 envelope_raw = sys.argv[2]
 try:
@@ -381,10 +401,31 @@ except Exception as e:
                 fi
                 echo "[nbus schema] validation failed for $channel: $_detail" >&2
                 return 2
+            elif [[ $_exit_code -eq 4 ]]; then
+                # Exit 4 = jsonschema MODULE absent → validation was SKIPPED.
+                # Mirror the Redis-XADD degradation contract (NERVOUS_STRICT_REDIS):
+                # this is a silent-loss class bug (gzsv/bt0a). The event is still
+                # durable in debug.jsonl, but the publish ran WITHOUT schema
+                # enforcement — surface it so a Rust/Go caller can react instead of
+                # seeing a clean exit 0.
+                #   1) machine-readable marker on stdout (parseable by callers);
+                #   2) loud, one-time stderr warning;
+                #   3) opt-in non-zero exit via NERVOUS_STRICT_VALIDATION=1.
+                echo "delivery=file-only validation=skipped reason=jsonschema_module_missing channel=${channel}"
+                local _vwarn_marker="/tmp/nervous-no-jsonschema-warned"
+                if [[ ! -f "$_vwarn_marker" ]]; then
+                    echo "nervous: WARNING: jsonschema module missing on ${NERVOUS_PYTHON:-python3} — schema validation SKIPPED for this publish (set NERVOUS_PYTHON to an interpreter with jsonschema, or install it). Events still durable in debug.jsonl." >&2
+                    touch "$_vwarn_marker" 2>/dev/null || true
+                fi
+                if [[ "${NERVOUS_STRICT_VALIDATION:-0}" == "1" ]]; then
+                    echo "[nbus schema] strict mode: aborting publish for $channel (validation unavailable)" >&2
+                    return 4
+                fi
             elif [[ $_exit_code -ne 0 ]]; then
                 # Exit 1 = parse/import error, exit 3 = unexpected validator error.
-                # These are infrastructure failures (e.g. missing jsonschema module),
-                # not payload violations. Warn and allow through — never dead-letter.
+                # These are infrastructure failures (not a missing jsonschema
+                # module, which is exit 4 above), not payload violations. Warn and
+                # allow through — never dead-letter.
                 echo "[nbus schema] validator error for $channel (exit $_exit_code): ${_validation_result}" >&2
             fi
         else
@@ -446,19 +487,129 @@ cmd_tail() {
 }
 
 cmd_schemas() {
+    # Discovery over the channel taxonomy (see schemas/CHANNELS.md).
+    #   nervous schemas                       list all channels (repo + user-home)
+    #   nervous schemas --cluster autobench   only channels in a cluster
+    #   nervous schemas --search prediction   substring match on channel name
+    #   nervous schemas --clusters            list cluster names + counts
+    # Cluster classification mirrors tools/gen_channels_md.py (imported below so
+    # the CLI and CHANNELS.md never drift).
+    local cluster="" search="" list_clusters=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --cluster)  cluster="${2:?usage: nervous schemas --cluster <name>}"; shift 2 ;;
+            --search)   search="${2:?usage: nervous schemas --search <keyword>}"; shift 2 ;;
+            --clusters) list_clusters=true; shift ;;
+            -h|--help)
+                sed -n 's/^    #   //p' < <(grep -A4 'Discovery over the channel' "$0") 2>/dev/null
+                echo "usage: nervous schemas [--cluster <name>] [--search <kw>] [--clusters]" >&2
+                return 0 ;;
+            *) echo "nervous schemas: unknown flag $1" >&2; return 2 ;;
+        esac
+    done
+
     local repo_dir
     repo_dir="$(dirname "$(readlink -f "$0")")/../../schemas"
     if [[ ! -d "$repo_dir" ]]; then
         echo "no schemas directory: $repo_dir" >&2
         exit 2
     fi
-    find "$repo_dir" -maxdepth 1 -name '*.json' -printf '%f\n' 2>/dev/null | sort
     local user_dir="${NERVOUS_HOME}/schemas"
-    if [[ -d "$user_dir" ]] && [[ -n "$(find "$user_dir" -maxdepth 1 -name '*.json' 2>/dev/null)" ]]; then
-        echo ""
-        echo "# user schemas (${user_dir}):"
-        find "$user_dir" -maxdepth 1 -name '*.json' -printf '%f\n' 2>/dev/null | sort
+
+    # Plain list (no filters): preserve the original behaviour exactly.
+    if [[ -z "$cluster" && -z "$search" && "$list_clusters" == "false" ]]; then
+        find "$repo_dir" -maxdepth 1 -name '*.json' -printf '%f\n' 2>/dev/null | sort
+        if [[ -d "$user_dir" ]] && [[ -n "$(find "$user_dir" -maxdepth 1 -name '*.json' 2>/dev/null)" ]]; then
+            echo ""
+            echo "# user schemas (${user_dir}):"
+            find "$user_dir" -maxdepth 1 -name '*.json' -printf '%f\n' 2>/dev/null | sort
+        fi
+        return 0
     fi
+
+    # Filtered / cluster modes — delegate classification to the generator module
+    # so the rules are defined in exactly one place.
+    local tools_dir
+    tools_dir="$(dirname "$(readlink -f "$0")")/../../tools"
+    CLUSTER_FILTER="$cluster" SEARCH_FILTER="$search" LIST_CLUSTERS="$list_clusters" \
+    GEN_MODULE_DIR="$tools_dir" \
+    "${NERVOUS_PYTHON:-python3}" - "$repo_dir" "$user_dir" <<'PYEOF'
+import os, sys
+from pathlib import Path
+
+sys.path.insert(0, os.environ["GEN_MODULE_DIR"])
+try:
+    from gen_channels_md import classify, CLUSTERS, NAME_RE
+except Exception as e:
+    print(f"nervous schemas: cannot load taxonomy rules: {e}", file=sys.stderr)
+    sys.exit(2)
+
+repo_dir = Path(sys.argv[1])
+user_dir = Path(sys.argv[2])
+cluster = os.environ.get("CLUSTER_FILTER", "").strip()
+search = os.environ.get("SEARCH_FILTER", "").strip().lower()
+list_clusters = os.environ.get("LIST_CLUSTERS", "false") == "true"
+
+# Gather channels: repo first, then user-home overlay (mark overlay).
+channels = []  # (channel, is_user)
+seen = set()
+for d, is_user in ((repo_dir, False), (user_dir, True)):
+    if not d.is_dir():
+        continue
+    for p in sorted(d.glob("*.json")):
+        ch = p.name[:-len(".json")]
+        if ch in seen:
+            continue
+        seen.add(ch)
+        channels.append((ch, is_user))
+
+if list_clusters:
+    counts = {name: 0 for name, _ in CLUSTERS}
+    for ch, _ in channels:
+        counts[classify(ch)] += 1
+    for name, desc in CLUSTERS:
+        print(f"{name:<20} {counts[name]:>4}  {desc}")
+    sys.exit(0)
+
+# Resolve a fuzzy cluster name (case-insensitive substring against cluster names).
+target_cluster = None
+if cluster:
+    names = [name for name, _ in CLUSTERS]
+    exact = [n for n in names if n.lower() == cluster.lower()]
+    partial = [n for n in names if cluster.lower() in n.lower()]
+    if exact:
+        target_cluster = exact[0]
+    elif len(partial) == 1:
+        target_cluster = partial[0]
+    elif len(partial) > 1:
+        print(f"ambiguous --cluster '{cluster}': matches {partial}", file=sys.stderr)
+        sys.exit(2)
+    else:
+        print(f"unknown cluster '{cluster}'. Known: {names}", file=sys.stderr)
+        sys.exit(2)
+
+out = []
+for ch, is_user in channels:
+    if target_cluster and classify(ch) != target_cluster:
+        continue
+    if search and search not in ch.lower():
+        continue
+    out.append((ch, is_user))
+
+if not out:
+    what = []
+    if target_cluster:
+        what.append(f"cluster={target_cluster}")
+    if search:
+        what.append(f"search={search}")
+    print(f"no channels match {' '.join(what)}", file=sys.stderr)
+    sys.exit(0)
+
+for ch, is_user in out:
+    tag = " (user)" if is_user else ""
+    warn = " [!naming]" if not NAME_RE.match(ch) else ""
+    print(f"{ch}{tag}{warn}")
+PYEOF
 }
 
 cmd_setup() {
