@@ -4,8 +4,15 @@ Abstraction layer so a dolt backend can swap in later (the Reflexarc eventual
 target) without touching recorder.py.
 
 Tables:
-  runs        — one row per closed bus.agent.run.closed.v1 payload
-  run_events  — ordered raw activity events per run_id (for b3 feature/label backfill)
+  runs           — one row per closed bus.agent.run.closed.v1 payload
+  run_events     — ordered raw activity events per run_id (for b3 feature/label backfill)
+  detector_hits  — one row per detector firing per run (Kyoko #2 prevalence)
+  issues         — deduped cross-run issue registry (Kyoko #5 recurrence)
+
+The detector_hits and issues tables are created by
+detectors/base.py::ensure_detector_schema(), called lazily at first
+SQLiteStore._init_schema() — so the tables appear the first time either the
+recorder or a detector opens the DB.
 
 Store path: ~/.cache/nervous-bus/reflex/runs.db (configurable via REFLEX_DB_PATH).
 """
@@ -93,6 +100,19 @@ class SQLiteStore:
 
     def _init_schema(self) -> None:
         self._conn.executescript(_SCHEMA_SQL)
+        # Lazily add detector_hits + issues tables (defined in detectors/base.py).
+        # We import here to avoid a circular import at module load time.
+        try:
+            import sys
+            from pathlib import Path as _Path
+            _det_dir = _Path(__file__).parent / "detectors"
+            if str(_det_dir.parent) not in sys.path:
+                sys.path.insert(0, str(_det_dir.parent))
+            from detectors.base import ensure_detector_schema
+            ensure_detector_schema(self._conn)
+        except ImportError:
+            # detectors/ not yet present (e.g. unit tests for store only)
+            pass
 
     def save_run(self, payload: dict) -> None:
         """Persist a closed run payload to the runs table."""
