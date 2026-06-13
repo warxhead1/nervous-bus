@@ -953,8 +953,16 @@ class TestHardeningAcceptance:
 
     def test_schema_validates_all_decision_rung_combos(self):
         """Every (decision, rung) combo must produce a payload that validates
-        against bus.agent.run.eval.v1.json (Draft202012)."""
+        against bus.agent.run.eval.v1.json (Draft202012).
+
+        Contract rules enforced by the schema:
+        - decision=='propose_fix'          → 'remediation' AND 'pattern_name' required
+        - rung in ('automate','inform')    → rung_descent_reason must be a non-null string
+        - rung=='eliminate'                → rung_descent_reason must be null
+        - rung in ('eliminate','automate') → replay_gate.status must NOT be 'not_applicable'
+        """
         import jsonschema
+        from detectors.base import PatternCandidate
 
         schema_path = (
             Path(__file__).parent.parent.parent.parent
@@ -969,14 +977,16 @@ class TestHardeningAcceptance:
 
         for decision in ("propose_fix", "monitor", "suppressed", "needs_more_data"):
             for rung in ("eliminate", "automate", "inform"):
-                # Build appropriate replay status per rung/decision
+                # --- replay status ---
+                # Eliminate/automate must NOT use 'not_applicable'; inform MAY use it.
                 if rung == "inform":
                     replay_status = "not_applicable"
-                elif decision in ("propose_fix",):
+                elif decision == "propose_fix":
                     replay_status = "passed"
                 elif decision == "suppressed":
                     replay_status = "failed"
                 else:
+                    # monitor / needs_more_data with eliminate or automate rung
                     replay_status = "insufficient_history"
 
                 replay = syn.ReplayResult(
@@ -988,6 +998,7 @@ class TestHardeningAcceptance:
                     ),
                     prevention_rate=0.8 if replay_status == "passed" else 0.0,
                 )
+
                 issue = {
                     "signature": f"proj:{rung}_det:anchor",
                     "project": "proj",
@@ -997,12 +1008,32 @@ class TestHardeningAcceptance:
                 }
                 ls = {"confirmed_failures": 1, "confirmed_clean": 0, "unlabeled": 5}
                 score, comps = syn.score_issue(issue, 0.4, ls, rung, 30)
+
+                # --- rung_descent_reason ---
+                # eliminate → null (schema requires it); automate/inform → non-null string
                 rung_descent = None if rung == "eliminate" else f"Test rung descent for {rung}."
+
+                # --- candidate (required for propose_fix to satisfy 'remediation') ---
+                # When decision=='propose_fix', the schema requires 'remediation'.
+                # build_eval_payload only adds it when candidate.proposed_remediation is set.
+                candidate = None
+                if decision == "propose_fix":
+                    candidate = PatternCandidate(
+                        project="proj",
+                        pattern_name=f"{rung}_pattern",
+                        signature=issue["signature"],
+                        detector=issue["detector"],
+                        occurrences=3,
+                        evidence=["test-evidence"],
+                        run_ids=[],
+                        proposed_remediation=f"Test remediation for rung={rung}.",
+                        extra={"remediation_rung": rung},
+                    )
 
                 payload = syn.build_eval_payload(
                     eval_id=syn._make_ulid(),
                     issue=issue,
-                    candidate=None,
+                    candidate=candidate,
                     score=score,
                     score_components=comps,
                     rung=rung,
@@ -1022,6 +1053,64 @@ class TestHardeningAcceptance:
                     f"Schema errors for decision={decision!r} rung={rung!r}: "
                     f"{[str(e) for e in errors]}"
                 )
+
+    def test_real_synthesis_dry_run_emits_schema_valid_payloads(self):
+        """Run the REAL run_synthesis(dry_run=True) against a constructed fixture
+        store and validate that EVERY emitted run.eval payload conforms to
+        schemas/bus.agent.run.eval.v1.json (Draft202012).
+
+        This proves synthesis.py itself emits schema-valid output — not just
+        hand-built payloads in test_schema_validates_all_decision_rung_combos.
+        """
+        import jsonschema
+
+        schema_path = (
+            Path(__file__).parent.parent.parent.parent
+            / "schemas"
+            / "bus.agent.run.eval.v1.json"
+        )
+        if not schema_path.exists():
+            pytest.skip(f"Schema file not found: {schema_path}")
+        with open(schema_path) as f:
+            schema = json.load(f)
+        validator = jsonschema.Draft202012Validator(schema)
+
+        conn = _make_conn()
+        sig = "proj:worktree_leak:/p/.worktrees/wt-schema-check"
+        wt = "/p/.worktrees/wt-schema-check"
+
+        # Seed 3 labeled runs hitting the same worktree_leak signature
+        for i in range(3):
+            rid = f"RS{i}"
+            _insert_run(
+                conn, rid, project="proj",
+                outcome="clean",
+                labeled_at=f"2026-06-0{i+1}T02:00:00Z",
+                started=f"2026-06-0{i+1}T00:00:00Z",
+                ended=f"2026-06-0{i+1}T01:00:00Z",
+                worktree=wt,
+                worktree_slug="wt-schema-check",
+            )
+            _insert_hit(conn, rid, sig, detector="worktree_leak", project="proj",
+                        ts=f"2026-06-0{i+1}T00:30:00Z")
+        _insert_issue(conn, sig, project="proj", detector="worktree_leak",
+                      recurrence_count=3)
+
+        # Run synthesis in dry-run mode (no nervous publish)
+        result = syn.run_synthesis(conn, dry_run=True)
+
+        # Must produce at least one eval
+        assert len(result.evals) >= 1, "synthesis must produce at least one eval"
+
+        # Every eval payload must validate against the schema
+        for ev in result.evals:
+            pub_payload = {k: v for k, v in ev.items() if k != "issue"}
+            errors = list(validator.iter_errors(pub_payload))
+            assert errors == [], (
+                f"synthesis.py emitted an invalid run.eval payload "
+                f"(decision={ev.get('decision')!r} rung={ev.get('rung')!r}): "
+                f"{[str(e) for e in errors]}"
+            )
 
     # ── Test 2: worktree replay non-tautology ────────────────────────────────
 

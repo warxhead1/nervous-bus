@@ -454,16 +454,46 @@ class TestRecurrenceAndDedup(unittest.TestCase):
         self.assertIsNotNone(issue)
         self.assertEqual(issue["recurrence_count"], 1)
 
-    def test_second_scan_increments_recurrence(self):
+    def test_second_scan_stable_recurrence(self):
+        """CONTRACT (2026-06): second pass over the SAME run_id must NOT inflate
+        recurrence_count.  A hit for (run_id, detector, signature) is idempotent;
+        re-running detect() on the same data leaves the count at 1.
+        """
+        det1 = RereadSameFileDetector(self.conn)
+        det1.run()
+        issue1 = det1.get_issue(self._expected_sig())
+        self.assertIsNotNone(issue1)
+        self.assertEqual(issue1["recurrence_count"], 1, "first scan → recurrence_count=1")
+
+        # Second scan over SAME run_id — count must stay at 1
+        det2 = RereadSameFileDetector(self.conn)
+        det2.run()
+
+        issue2 = det2.get_issue(self._expected_sig())
+        self.assertEqual(
+            issue2["recurrence_count"], 1,
+            "second pass over identical data must NOT inflate recurrence_count",
+        )
+
+    def test_new_run_increments_recurrence(self):
+        """A genuinely new run_id re-reading the same file DOES increment recurrence_count."""
         det1 = RereadSameFileDetector(self.conn)
         det1.run()
 
-        # Second scan (same DB, same run still present)
+        # Add a new run re-reading the same file
+        _insert_run(self.conn, "run-rec-002", "myproj")
+        _insert_read_events(
+            self.conn, "run-rec-002", "myproj", self.file_path, count=REREAD_THRESHOLD + 1
+        )
+
         det2 = RereadSameFileDetector(self.conn)
         det2.run()
 
         issue = det2.get_issue(self._expected_sig())
-        self.assertEqual(issue["recurrence_count"], 2)
+        self.assertEqual(
+            issue["recurrence_count"], 2,
+            "new run_id firing same file-path signature must increment recurrence_count",
+        )
 
     def test_second_run_same_file_also_deduped(self):
         """Adding a second run with the same file → same signature, higher recurrence."""

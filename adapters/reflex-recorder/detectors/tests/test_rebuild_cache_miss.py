@@ -433,13 +433,47 @@ class TestRecurrenceAndDedup(unittest.TestCase):
         self.assertIsNotNone(issue)
         self.assertEqual(issue["recurrence_count"], 1)
 
-    def test_second_run_increments_recurrence(self):
+    def test_second_pass_stable_recurrence(self):
+        """CONTRACT (2026-06): second pass over the SAME run_id must NOT inflate
+        recurrence_count.  A hit for (run_id, detector, signature) is idempotent.
+        """
         det1 = RebuildCacheMissDetector(self.conn)
         det1.run()
+        issue1 = det1.get_issue(self._signature())
+        self.assertEqual(issue1["recurrence_count"], 1, "first pass → recurrence_count=1")
+
+        # Second pass over the SAME run_id — count must stay at 1
+        det2 = RebuildCacheMissDetector(self.conn)
+        det2.run()
+        issue2 = det2.get_issue(self._signature())
+        self.assertEqual(
+            issue2["recurrence_count"], 1,
+            "second pass over identical data must NOT inflate recurrence_count",
+        )
+
+    def test_new_run_increments_recurrence(self):
+        """A genuinely new run_id for the same crate DOES increment recurrence_count."""
+        det1 = RebuildCacheMissDetector(self.conn)
+        det1.run()
+
+        # Add a second slow build for the same crate
+        _insert_run(self.conn, "run-rec-2", "tengine", worktree=_WORKTREE_CWD)
+        _insert_events(
+            self.conn,
+            "run-rec-2",
+            [
+                (1, 5000.0, _make_bash_event("cargo build -p tengine-dgc-hal", cwd=_WORKTREE_CWD)),
+                (2, 5000.0 + _SLOW_GAP, _make_bash_event("ls", cwd=_WORKTREE_CWD)),
+            ],
+        )
+
         det2 = RebuildCacheMissDetector(self.conn)
         det2.run()
         issue = det2.get_issue(self._signature())
-        self.assertEqual(issue["recurrence_count"], 2)
+        self.assertEqual(
+            issue["recurrence_count"], 2,
+            "new run_id firing same signature must increment recurrence_count",
+        )
 
 
 # ── Ladder rung in extra ──────────────────────────────────────────────────────

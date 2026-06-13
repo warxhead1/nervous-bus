@@ -1,12 +1,16 @@
 """detectors/worktree_leak.py — Tier-1 worktree-leak detector.
 
-Detects a worktree that is integrated (branch merged OR bead closed / outcome
-is a terminal-success state) but whose directory still exists on disk.
+Detects a worktree that is confirmed merged (outcome is a terminal-merge state
+AND labeled_at IS NOT NULL) but whose directory still exists on disk.
 
 Algorithm
 =========
-1. Query runs with outcome IN ('clean', 'abandoned') AND worktree IS NOT NULL.
-   Those outcomes mean the work is done; the worktree *should* have been cleaned.
+1. Query runs with outcome IN ('clean', 'landed', 'corrected')
+   AND labeled_at IS NOT NULL AND worktree IS NOT NULL.
+   These outcomes mean the work was successfully merged/landed; the worktree
+   *should* have been cleaned up.  'abandoned' is excluded because it does not
+   imply a successful merge.  labeled_at IS NOT NULL enforces null-vs-clean
+   discipline — an outcome label is only trusted when the labeler has confirmed it.
 
 2. For each unique (project, worktree) from those runs:
    a. Check if the directory still exists on disk (os.path.isdir).

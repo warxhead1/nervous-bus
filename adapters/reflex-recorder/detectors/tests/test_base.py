@@ -281,7 +281,13 @@ class TestRunOrchestration(unittest.TestCase):
         self.assertIsNotNone(issue)
         self.assertEqual(issue["recurrence_count"], 1)
 
-    def test_run_increments_recurrence_on_repeat(self):
+    def test_run_recurrence_invariant_across_same_data(self):
+        """CONTRACT (2026-06): recurrence_count is INVARIANT across repeated passes
+        over the SAME (run_id, detector, signature).  Calling run() twice with the
+        same run_id must leave recurrence_count at 1 — the hit is already recorded.
+
+        Recurrence only grows when a genuinely NEW run_id fires the same signature.
+        """
         class _RepeatDetector(BaseDetector):
             DETECTOR_NAME = "repeat_det"
             def detect(self, conn):
@@ -292,14 +298,49 @@ class TestRunOrchestration(unittest.TestCase):
                     detector="repeat_det",
                     occurrences=1,
                     evidence=["ev"],
-                    run_ids=["run-x"],
+                    run_ids=["run-x"],  # same run_id every call
                 )]
 
         det = _RepeatDetector(self.conn)
         det.run()
+        issue_after_pass1 = det.get_issue("sig-repeat")
+        self.assertEqual(issue_after_pass1["recurrence_count"], 1, "first pass creates issue with count 1")
+
+        # Second pass over SAME data — must NOT inflate recurrence_count
         det.run()
-        issue = det.get_issue("sig-repeat")
-        self.assertEqual(issue["recurrence_count"], 2)
+        issue_after_pass2 = det.get_issue("sig-repeat")
+        self.assertEqual(
+            issue_after_pass2["recurrence_count"], 1,
+            "second pass over identical (run_id, signature) must NOT inflate recurrence_count",
+        )
+
+    def test_run_recurrence_increments_on_new_run(self):
+        """Recurrence DOES grow when a NEW run_id fires the same signature."""
+        run_counter = [0]
+
+        class _NewRunDetector(BaseDetector):
+            DETECTOR_NAME = "new_run_det"
+            def detect(self, conn):
+                run_id = f"run-new-{run_counter[0]}"
+                run_counter[0] += 1
+                return [PatternCandidate(
+                    project="p",
+                    pattern_name="pat",
+                    signature="sig-new",
+                    detector="new_run_det",
+                    occurrences=1,
+                    evidence=["ev"],
+                    run_ids=[run_id],
+                )]
+
+        det = _NewRunDetector(self.conn)
+        det.run()  # fires with run-new-0
+        det.run()  # fires with run-new-1 (genuinely new)
+        issue = det.get_issue("sig-new")
+        self.assertEqual(
+            issue["recurrence_count"], 2,
+            "two distinct run_ids firing the same signature must give recurrence_count=2",
+        )
 
 
 if __name__ == "__main__":

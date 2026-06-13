@@ -724,8 +724,11 @@ class TestRemediationLadder:
 class TestRecurrenceAndDedup:
     """Kyoko recurrence: same signature increments recurrence_count across scans."""
 
-    def test_recurrence_increments_across_two_scans(self):
-        """Running the detector twice on the same data increments recurrence_count."""
+    def test_recurrence_stable_across_repeated_scans(self):
+        """CONTRACT (2026-06): recurrence_count is INVARIANT across repeated passes
+        over the SAME run_id.  Two passes over one run → count stays at 1.
+        Only a genuinely new run_id firing the same signature increments it.
+        """
         conn = _make_db()
         run_id = "run-recur-001"
         _insert_run(conn, run_id, "myproject")
@@ -745,12 +748,32 @@ class TestRecurrenceAndDedup:
         assert len(cands1) == 1
         sig = cands1[0].signature
         issue1 = det1.get_issue(sig)
-        assert issue1["recurrence_count"] == 1
+        assert issue1["recurrence_count"] == 1, "first scan creates issue with count 1"
 
+        # Second pass over SAME run_id data — recurrence_count must NOT change
         det2 = EditBuildFailRevertDetector(conn)
-        cands2 = det2.run()
+        det2.run()
         issue2 = det2.get_issue(sig)
-        assert issue2["recurrence_count"] == 2
+        assert issue2["recurrence_count"] == 1, (
+            "second pass over identical data must NOT inflate recurrence_count"
+        )
+
+        # Add a genuinely new run with the same thrash pattern → count must grow
+        run_id2 = "run-recur-002"
+        _insert_run(conn, run_id2, "myproject")
+        ts4, rs4, p4, c4 = _edit_event(fp, cwd, project="myproject")
+        _insert_event(conn, run_id2, 1, "Edit", ts4, rs4, p4, c4)
+        ts5, rs5, p5, c5 = _bash_event("cargo build 2>&1", stdout="error: build failed", cwd=cwd, project="myproject")
+        _insert_event(conn, run_id2, 2, "Bash", ts5, rs5, p5, c5)
+        ts6, rs6, p6, c6 = _bash_event("git restore src/foo.rs", cwd=cwd, project="myproject")
+        _insert_event(conn, run_id2, 3, "Bash", ts6, rs6, p6, c6)
+
+        det3 = EditBuildFailRevertDetector(conn)
+        det3.run()
+        issue3 = det3.get_issue(sig)
+        assert issue3["recurrence_count"] == 2, (
+            "new run_id firing same signature must increment recurrence_count"
+        )
 
     def test_different_projects_different_signatures(self):
         """Same thrash pattern on different projects → different signatures."""

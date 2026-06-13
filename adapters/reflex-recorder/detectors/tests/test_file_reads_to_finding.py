@@ -390,15 +390,48 @@ class TestRecurrenceAndDedup(unittest.TestCase):
         self.assertIsNotNone(issue)
         self.assertEqual(issue["recurrence_count"], 1)
 
-    def test_second_scan_increments_recurrence(self):
+    def test_second_scan_stable_recurrence(self):
+        """CONTRACT (2026-06): second pass over the SAME run_ids must NOT inflate
+        recurrence_count.  The hit for each (run_id, detector, signature) is already
+        recorded; re-running detect() on identical data leaves the count at 1.
+        """
         det1 = FileReadsToFindingDetector(self.conn)
-        det1.run()
+        cands1 = det1.run()
+        self.assertEqual(len(cands1), 1)
+        sig = cands1[0].signature
+        issue1 = det1.get_issue(sig)
+        self.assertEqual(issue1["recurrence_count"], 1, "first scan → recurrence_count=1")
+
+        # Second scan over SAME data — count must stay at 1
+        det2 = FileReadsToFindingDetector(self.conn)
+        cands2 = det2.run()
+        self.assertEqual(len(cands2), 1)
+        issue2 = det2.get_issue(cands2[0].signature)
+        self.assertEqual(
+            issue2["recurrence_count"], 1,
+            "second pass over identical data must NOT inflate recurrence_count",
+        )
+
+    def test_new_run_increments_recurrence(self):
+        """A genuinely new run_id firing the same signature DOES increment recurrence_count."""
+        nav = READ_THRESHOLD + 1
+        det1 = FileReadsToFindingDetector(self.conn)
+        cands1 = det1.run()
+        sig = cands1[0].signature
+
+        # Add a new run that also exceeds the threshold
+        _build_run_with_tools(
+            self.conn, "recur-extra", "recurproject",
+            _nav_then_edit(nav),
+        )
 
         det2 = FileReadsToFindingDetector(self.conn)
-        candidates2 = det2.run()
-        self.assertEqual(len(candidates2), 1)
-        issue = det2.get_issue(candidates2[0].signature)
-        self.assertEqual(issue["recurrence_count"], 2)
+        det2.run()
+        issue = det2.get_issue(sig)
+        self.assertEqual(
+            issue["recurrence_count"], 2,
+            "a new distinct run_id must increment recurrence_count",
+        )
 
     def test_signature_dedup_same_project_same_detector(self):
         """Two scans produce the same signature → same issue row."""

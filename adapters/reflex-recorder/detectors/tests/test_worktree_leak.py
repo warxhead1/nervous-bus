@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS runs (
     git_branch    TEXT,
     bead_id       TEXT,
     outcome       TEXT,
+    labeled_at    TEXT,
     ended         TEXT NOT NULL,
     close_reason  TEXT
 );
@@ -52,13 +53,24 @@ def _make_db() -> sqlite3.Connection:
 
 def _insert_run(
     conn, run_id, project, worktree=None, outcome="clean",
-    worktree_slug=None, git_branch=None, bead_id=None
+    worktree_slug=None, git_branch=None, bead_id=None,
+    labeled_at="AUTO",
 ):
+    """Insert a run into the test DB.
+
+    labeled_at="AUTO" (default) → set to now (so outcome is trusted).
+    labeled_at=None             → NULL in DB (outcome NOT trusted by detector).
+    labeled_at=<str>            → use that literal value.
+
+    The WorktreeLeakDetector now requires labeled_at IS NOT NULL to trust
+    any outcome (null-vs-clean discipline, 2026-06 contract).
+    """
+    la = _now_utc() if labeled_at == "AUTO" else labeled_at
     conn.execute(
         """INSERT OR REPLACE INTO runs
-           (run_id, project, worktree, worktree_slug, git_branch, bead_id, outcome, ended)
-           VALUES (?,?,?,?,?,?,?,?)""",
-        (run_id, project, worktree, worktree_slug, git_branch, bead_id, outcome, _now_utc()),
+           (run_id, project, worktree, worktree_slug, git_branch, bead_id, outcome, labeled_at, ended)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (run_id, project, worktree, worktree_slug, git_branch, bead_id, outcome, la, _now_utc()),
     )
 
 
@@ -338,16 +350,36 @@ class TestPrevalenceAndRecurrenceIntegration(unittest.TestCase):
         ):
             return det.run(), det
 
-    def test_recurrence_increments_across_scans(self):
-        _insert_run(self.conn, "run-p1", "proj", worktree=self.wt_path, outcome="clean")
-        _, det1 = self._run_detector()
-        issue = det1.get_issue(f"proj:worktree_leak:{self.wt_path}")
-        self.assertEqual(issue["recurrence_count"], 1)
+    def test_recurrence_stable_across_repeated_scans(self):
+        """CONTRACT (2026-06): recurrence_count is INVARIANT across repeated passes
+        over the SAME data.  It only grows when a genuinely NEW run_id fires.
 
-        # Second scan (still leaked)
+        Two passes over one run → recurrence_count stays at 1.
+        Adding a second distinct run and re-scanning → recurrence_count becomes 2.
+        """
+        _insert_run(self.conn, "run-p1", "proj", worktree=self.wt_path, outcome="clean")
+
+        # Pass 1
+        _, det1 = self._run_detector()
+        issue1 = det1.get_issue(f"proj:worktree_leak:{self.wt_path}")
+        self.assertEqual(issue1["recurrence_count"], 1, "first scan must create issue with count 1")
+
+        # Pass 2 — same data, no new run_id → recurrence_count must NOT change
         _, det2 = self._run_detector()
         issue2 = det2.get_issue(f"proj:worktree_leak:{self.wt_path}")
-        self.assertEqual(issue2["recurrence_count"], 2)
+        self.assertEqual(
+            issue2["recurrence_count"], 1,
+            "second pass over identical data must NOT inflate recurrence_count",
+        )
+
+        # Now add a genuinely new run and re-scan → count must grow
+        _insert_run(self.conn, "run-p2", "proj", worktree=self.wt_path, outcome="clean")
+        _, det3 = self._run_detector()
+        issue3 = det3.get_issue(f"proj:worktree_leak:{self.wt_path}")
+        self.assertEqual(
+            issue3["recurrence_count"], 2,
+            "a new distinct run_id firing the same signature must increment recurrence_count",
+        )
 
     def test_prevalence_rate(self):
         # 4 runs for this project; 2 of them triggered the worktree_leak detector
@@ -365,20 +397,30 @@ class TestPrevalenceAndRecurrenceIntegration(unittest.TestCase):
 
 
 class TestAbandonedOutcomeAlsoDetected(unittest.TestCase):
-    """'abandoned' outcome is also a terminal state that should be detected."""
+    """'abandoned' is NOT a terminal-merge outcome; it must NOT fire.
+
+    CONTRACT CHANGE (2026-06): the detector fires only on
+    outcome IN ('clean','landed','corrected') AND labeled_at IS NOT NULL.
+    'abandoned' means the work was dropped without merging, not that the
+    worktree was cleaned up by a successful landing — so it is no longer
+    treated as a leak indicator.
+
+    'landed' and 'corrected' ARE terminal-merge outcomes and MUST fire.
+    """
 
     def setUp(self):
         self.conn = _make_db()
         self.tmpdir = tempfile.mkdtemp()
         self.wt_path = os.path.join(self.tmpdir, ".claude", "worktrees", "agent-aband")
         os.makedirs(self.wt_path)
+
+    def test_abandoned_does_NOT_fire(self):
+        """'abandoned' outcome must not trigger the worktree-leak detector."""
         _insert_run(
             self.conn, "run-ab1", "proj",
             worktree=self.wt_path,
             outcome="abandoned",
         )
-
-    def test_fires_on_abandoned(self):
         det = WorktreeLeakDetector(self.conn)
         with patch(
             "detectors.worktree_leak._git_worktree_paths",
@@ -388,7 +430,46 @@ class TestAbandonedOutcomeAlsoDetected(unittest.TestCase):
             return_value=self.tmpdir,
         ):
             candidates = det.run()
-        self.assertEqual(len(candidates), 1)
+        self.assertEqual(
+            candidates, [],
+            "'abandoned' must NOT fire — it is not a confirmed-merge outcome",
+        )
+
+    def test_landed_fires(self):
+        """'landed' (confirmed merged) must fire when labeled_at is set."""
+        _insert_run(
+            self.conn, "run-land1", "proj",
+            worktree=self.wt_path,
+            outcome="landed",
+        )
+        det = WorktreeLeakDetector(self.conn)
+        with patch(
+            "detectors.worktree_leak._git_worktree_paths",
+            return_value={self.wt_path, self.tmpdir},
+        ), patch(
+            "detectors.worktree_leak._infer_repo_root",
+            return_value=self.tmpdir,
+        ):
+            candidates = det.run()
+        self.assertEqual(len(candidates), 1, "'landed' must fire")
+
+    def test_corrected_fires(self):
+        """'corrected' (confirmed merged after correction) must fire when labeled_at is set."""
+        _insert_run(
+            self.conn, "run-corr1", "proj",
+            worktree=self.wt_path,
+            outcome="corrected",
+        )
+        det = WorktreeLeakDetector(self.conn)
+        with patch(
+            "detectors.worktree_leak._git_worktree_paths",
+            return_value={self.wt_path, self.tmpdir},
+        ), patch(
+            "detectors.worktree_leak._infer_repo_root",
+            return_value=self.tmpdir,
+        ):
+            candidates = det.run()
+        self.assertEqual(len(candidates), 1, "'corrected' must fire")
 
     def tearDown(self):
         import shutil
@@ -396,7 +477,11 @@ class TestAbandonedOutcomeAlsoDetected(unittest.TestCase):
 
 
 class TestNonTerminalOutcomeNotDetected(unittest.TestCase):
-    """Runs with in-progress or NULL outcome must not fire."""
+    """Runs with in-progress, NULL outcome, or NULL labeled_at must not fire.
+
+    CONTRACT (2026-06): fires only on outcome IN ('clean','landed','corrected')
+    AND labeled_at IS NOT NULL.  Any run that fails either condition is excluded.
+    """
 
     def setUp(self):
         self.conn = _make_db()
@@ -405,7 +490,12 @@ class TestNonTerminalOutcomeNotDetected(unittest.TestCase):
         os.makedirs(self.wt_path)
 
     def test_no_fire_on_null_outcome(self):
-        _insert_run(self.conn, "run-ip1", "proj", worktree=self.wt_path, outcome=None)
+        """outcome=NULL (even with labeled_at set) must not fire."""
+        _insert_run(
+            self.conn, "run-ip1", "proj",
+            worktree=self.wt_path, outcome=None,
+            labeled_at=_now_utc(),
+        )
         det = WorktreeLeakDetector(self.conn)
         with patch("detectors.worktree_leak._git_worktree_paths", return_value={self.wt_path}), \
              patch("detectors.worktree_leak._infer_repo_root", return_value=self.tmpdir):
@@ -413,12 +503,30 @@ class TestNonTerminalOutcomeNotDetected(unittest.TestCase):
         self.assertEqual(candidates, [])
 
     def test_no_fire_on_in_progress_outcome(self):
-        _insert_run(self.conn, "run-ip2", "proj", worktree=self.wt_path, outcome="in_progress")
+        """outcome='in_progress' (not in terminal set) must not fire."""
+        _insert_run(
+            self.conn, "run-ip2", "proj",
+            worktree=self.wt_path, outcome="in_progress",
+            labeled_at=_now_utc(),
+        )
         det = WorktreeLeakDetector(self.conn)
         with patch("detectors.worktree_leak._git_worktree_paths", return_value={self.wt_path}), \
              patch("detectors.worktree_leak._infer_repo_root", return_value=self.tmpdir):
             candidates = det.run()
         self.assertEqual(candidates, [])
+
+    def test_no_fire_on_null_labeled_at(self):
+        """outcome='clean' but labeled_at IS NULL must not fire (null-vs-clean discipline)."""
+        _insert_run(
+            self.conn, "run-ip3", "proj",
+            worktree=self.wt_path, outcome="clean",
+            labeled_at=None,
+        )
+        det = WorktreeLeakDetector(self.conn)
+        with patch("detectors.worktree_leak._git_worktree_paths", return_value={self.wt_path}), \
+             patch("detectors.worktree_leak._infer_repo_root", return_value=self.tmpdir):
+            candidates = det.run()
+        self.assertEqual(candidates, [], "labeled_at=NULL must exclude the run even if outcome='clean'")
 
     def tearDown(self):
         import shutil

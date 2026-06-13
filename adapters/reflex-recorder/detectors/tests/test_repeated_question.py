@@ -473,19 +473,46 @@ class TestRecurrenceDedup(unittest.TestCase):
         _insert_ask_user_event(self.conn, "run-rec2", 1, "Should I commit now?")
         self.question_class = "should i commit now"
 
-    def test_recurrence_count_increments(self):
+    def test_recurrence_count_stable_across_same_data(self):
+        """CONTRACT (2026-06): recurrence_count is INVARIANT across repeated passes
+        over the SAME (run_id, detector, signature).  Two passes over the same two
+        runs leave the count at 1.  Only a genuinely new run_id increments it.
+        """
         sig = f"recproject:repeated_question:{self.question_class}"
 
         det1 = RepeatedQuestionDetector(self.conn)
         det1.run()
         issue1 = det1.get_issue(sig)
         self.assertIsNotNone(issue1)
-        self.assertEqual(issue1["recurrence_count"], 1)
+        self.assertEqual(issue1["recurrence_count"], 1, "first scan → recurrence_count=1")
+
+        # Second pass over the SAME two run_ids — count must NOT change
+        det2 = RepeatedQuestionDetector(self.conn)
+        det2.run()
+        issue2 = det2.get_issue(sig)
+        self.assertEqual(
+            issue2["recurrence_count"], 1,
+            "second pass over identical data must NOT inflate recurrence_count",
+        )
+
+    def test_recurrence_count_increments_on_new_run(self):
+        """A genuinely new run_id asking the same question DOES increment recurrence_count."""
+        sig = f"recproject:repeated_question:{self.question_class}"
+
+        det1 = RepeatedQuestionDetector(self.conn)
+        det1.run()
+
+        # Add a third run that asks the same question
+        _insert_run(self.conn, "run-rec3", "recproject")
+        _insert_ask_user_event(self.conn, "run-rec3", 1, "Should I commit now?")
 
         det2 = RepeatedQuestionDetector(self.conn)
         det2.run()
         issue2 = det2.get_issue(sig)
-        self.assertEqual(issue2["recurrence_count"], 2)
+        self.assertEqual(
+            issue2["recurrence_count"], 2,
+            "new run_id firing same question class must increment recurrence_count",
+        )
 
     def test_issue_has_correct_detector_name(self):
         det = RepeatedQuestionDetector(self.conn)
