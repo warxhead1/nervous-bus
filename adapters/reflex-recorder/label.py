@@ -52,6 +52,17 @@ _SOURCE_TIER: dict[str, int] = {
     "behavior_inference": 1,
     "pr_closed_unmerged": 2,
     "git_revert": 2,
+    # git-ancestry attribution (git_outcome.py) — explicit, between PR and bead.
+    # High-confidence git evidence (merge recorded, patch present, pickaxe-confirmed)
+    # ranks with PR-merge; the empty-branch and pickaxe-discard signals are
+    # explicit ground truth too.
+    "git_merged_into_main": 3,
+    "git_squash_equiv": 3,
+    "git_partial_squash": 2,
+    "git_pickaxe_landed": 3,
+    "git_revert_on_main": 3,
+    "git_empty_branch": 2,
+    "git_discarded_verified": 2,
     "bead_close": 3,
     "bus_bead_closed": 3,
     "pr_merge": 3,
@@ -278,6 +289,74 @@ def label_from_pr(branch: str, worktree_path: Optional[str]) -> Optional[tuple[s
         return "reverted", "git_revert"
 
     return None
+
+
+# ── Explicit labeling from local git ancestry (no PR required) ────────────────
+
+#: Branch-name shapes that indicate a local worktree dispatch (agent/workflow).
+_DISPATCH_BRANCH_RE = re.compile(r"^(worktree-agent-|worktree-wf[_-]|agent-|wf[_-])")
+
+
+def _project_repo_root(run: dict) -> Optional[str]:
+    """Resolve the MAIN repo path for a run (where `main` lives), not the worktree.
+
+    Prefers stripping a `.../.claude/worktrees/<slug>` suffix off the run's
+    worktree path; falls back to ~/projects/<project>.  Returns None if neither
+    looks like a git repo.
+    """
+    wt = run.get("worktree")
+    if wt:
+        m = re.match(r"^(.*?)/\.claude/worktrees/", wt)
+        if m and Path(m.group(1), ".git").exists():
+            return m.group(1)
+    project = run.get("project")
+    if project:
+        cand = Path.home() / "projects" / project
+        if (cand / ".git").exists():
+            return str(cand)
+    return None
+
+
+def label_from_git_merge(
+    git_branch: str, run: dict, *, verify_discards: bool = True,
+) -> Optional[tuple[str, str]]:
+    """Derive outcome from local git ancestry for a worktree-dispatched branch.
+
+    Fills label.py's blind spot for projects that squash-merge agent worktrees
+    locally with NO GitHub PR (e.g. tengine): `gh pr view` finds nothing, but
+    git ancestry + main's squash trail recover landed/empty/discarded.
+
+    Only worktree-dispatch branch shapes are considered.  Returns a terminal
+    (outcome, source) only for HIGH-confidence verdicts; pending and
+    weak/ambiguous discards return None (never poison the store on patch-id
+    alone).  When verify_discards, a medium-confidence discard is pickaxe-checked
+    (follows the code through rebase/squash/reword) before being trusted.
+    """
+    if not git_branch or not _DISPATCH_BRANCH_RE.match(git_branch):
+        return None
+    repo = _project_repo_root(run)
+    if not repo:
+        return None
+    try:
+        import git_outcome as go
+    except ImportError:
+        return None
+
+    live = go.live_worktree_branches(repo)
+    bo = go.classify_branch_outcome(repo, git_branch, worktree_live=(git_branch in live))
+
+    if bo.outcome is None:          # pending / in-flight — no terminal label
+        return None
+    if bo.source == "git_discarded_unmerged":
+        if not verify_discards:
+            return None             # medium confidence; don't write on patch-id alone
+        landed = go.verify_discarded_landed(repo, git_branch)
+        if landed is True:
+            return "landed", "git_pickaxe_landed"
+        if landed is False:
+            return "abandoned", "git_discarded_verified"
+        return None                 # ambiguous (partial / unprobeable) — abstain
+    return bo.outcome, bo.source
 
 
 # ── Inferred labeling from behavior shape ─────────────────────────────────────
@@ -598,6 +677,13 @@ def compute_label(
         if result:
             if verbose:
                 print(f"  [label] branch={git_branch} → {result}")
+            return result
+
+        # EXPLICIT: local git ancestry (squash/merge with no PR — tengine pattern)
+        result = label_from_git_merge(git_branch, run)
+        if result:
+            if verbose:
+                print(f"  [label] git-ancestry branch={git_branch} → {result}")
             return result
 
     # INFERRED: behavior shape (may return None)
