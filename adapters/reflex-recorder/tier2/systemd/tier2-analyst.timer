@@ -1,0 +1,15 @@
+[Unit]
+Description=Reflexarc Tier-2 off-peak analyst — fires once per day at 02:30 UTC
+Requires=tier2-analyst.service
+
+[Timer]
+# Fire at 02:30 UTC daily (off-peak: 01:00–05:59 window).
+# RandomizedDelaySec spreads the start within a ±15 min window so multiple
+# projects running the timer don't all hit the LLM endpoint simultaneously.
+OnCalendar=*-*-* 02:30:00 UTC
+RandomizedDelaySec=900
+Persistent=true
+Unit=tier2-analyst.service
+
+[Install]
+WantedBy=timers.target
