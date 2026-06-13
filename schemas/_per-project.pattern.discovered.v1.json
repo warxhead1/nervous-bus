@@ -58,5 +58,18 @@
       "type": "string",
       "description": "Reflexarc: the bus.agent.run.eval.v1 eval_id whose decision==propose_fix licensed emitting this pattern. The audit link from a proposal back to the gated synthesis verdict that justified it."
     }
-  }
+  },
+  "allOf": [
+    {
+      "description": "Make the Automate gate non-bypassable at the pattern.discovered boundary: any Reflexarc emission (recognised by carrying detector/signature/remediation_rung) MUST link back to its gated eval and issue. Legacy producers emitting only {project, pattern_name, evidence, occurrences, proposed_patch} carry none of these fields and stay valid — additive, non-breaking.",
+      "if": {
+        "anyOf": [
+          {"required": ["detector"]},
+          {"required": ["signature"]},
+          {"required": ["remediation_rung"]}
+        ]
+      },
+      "then": {"required": ["eval_id", "signature"]}
+    }
+  ]
 }

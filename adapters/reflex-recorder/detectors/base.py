@@ -66,6 +66,9 @@ CREATE TABLE IF NOT EXISTS detector_hits (
 CREATE INDEX IF NOT EXISTS idx_dh_signature  ON detector_hits(signature);
 CREATE INDEX IF NOT EXISTS idx_dh_project_det ON detector_hits(project, detector, ts);
 CREATE INDEX IF NOT EXISTS idx_dh_run_id     ON detector_hits(run_id);
+-- NOTE: The UNIQUE INDEX idx_dh_unique is created by _ensure_detector_hits_unique_index()
+-- (called from ensure_detector_schema) rather than here, because existing DBs may have
+-- duplicate rows that must be deduplicated first. (Fix 4)
 
 CREATE TABLE IF NOT EXISTS issues (
     signature                  TEXT PRIMARY KEY,
@@ -88,8 +91,60 @@ def ensure_detector_schema(conn: sqlite3.Connection) -> None:
     Idempotent — uses CREATE TABLE IF NOT EXISTS throughout.
     Called from SQLiteStore._init_schema (patched in store.py) and from
     test fixtures that open a fresh in-memory DB.
+
+    Fix 4: also ensures the UNIQUE INDEX on detector_hits(run_id, detector,
+    signature). If the index cannot be created because pre-existing duplicate
+    rows violate uniqueness (i.e. an older DB), we deduplicate first (keeping
+    the lowest id per group) then retry. This makes the migration safe on live
+    DBs without requiring a separate migration script.
     """
     conn.executescript(_DETECTOR_SCHEMA_SQL)
+    _ensure_detector_hits_unique_index(conn)
+
+
+def _ensure_detector_hits_unique_index(conn: sqlite3.Connection) -> None:
+    """Create UNIQUE INDEX on detector_hits(run_id, detector, signature).
+
+    Handles pre-existing duplicates by deduplicating (keep min id) before
+    creating the index. Idempotent: silently returns if index already exists.
+    """
+    # Check if index already exists
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_dh_unique'"
+    ).fetchone()
+    if exists:
+        return
+
+    # Try to create directly first (fast path for new/clean DBs)
+    try:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_dh_unique "
+            "ON detector_hits(run_id, detector, signature)"
+        )
+        return
+    except Exception:
+        pass  # Likely duplicate rows — fall through to dedup
+
+    # Dedup: keep the row with the minimum id per (run_id, detector, signature)
+    try:
+        conn.execute(
+            """
+            DELETE FROM detector_hits
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM detector_hits
+                GROUP BY run_id, detector, signature
+            )
+            """
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_dh_unique "
+            "ON detector_hits(run_id, detector, signature)"
+        )
+    except Exception:
+        # If dedup also fails (e.g. read-only DB), silently continue.
+        # record_hit will use INSERT OR IGNORE which is safe with or without the index.
+        pass
 
 
 # ── PatternCandidate ──────────────────────────────────────────────────────────
@@ -180,13 +235,17 @@ class BaseDetector(ABC):
         candidates = self.detect(c)
         now = _now_utc()
         for candidate in candidates:
+            new_hit_count = 0
             for run_id in candidate.run_ids:
-                self.record_hit(run_id, candidate.signature, candidate.project, ts=now)
+                is_new = self.record_hit(run_id, candidate.signature, candidate.project, ts=now)
+                if is_new:
+                    new_hit_count += 1
             self.find_or_create_issue(
                 signature=candidate.signature,
                 project=candidate.project,
                 evidence=candidate.evidence,
                 ts=now,
+                new_hit_count=new_hit_count,
             )
         return candidates
 
@@ -198,20 +257,41 @@ class BaseDetector(ABC):
         signature: str,
         project: str,
         ts: Optional[str] = None,
-    ) -> None:
-        """Write one entry to detector_hits.
+    ) -> bool:
+        """Write one entry to detector_hits if not already present.
 
-        Idempotent per (run_id, detector, signature) — duplicate entries are
-        allowed (XACK replay safety) but prevalence() counts distinct run days,
-        not raw rows, so duplicates do not inflate the rate.
+        Uses a SELECT-then-INSERT-OR-IGNORE pattern so re-running synthesis
+        never double-counts hits. The UNIQUE INDEX (if present) enforces this
+        at the DB level; the SELECT handles the case where the index doesn't
+        exist yet (e.g., legacy DB where deduplication is pending).
+
+        Returns True if the hit was NEW, False if it was a duplicate (already
+        recorded in a prior pass). Callers use this to avoid inflating
+        recurrence_count on every synthesis pass.
         """
-        self._conn.execute(
+        # Fast path: check if already present (works with or without unique index)
+        existing = self._conn.execute(
             """
-            INSERT INTO detector_hits (run_id, detector, signature, project, ts)
-            VALUES (?, ?, ?, ?, ?)
+            SELECT 1 FROM detector_hits
+            WHERE run_id = ? AND detector = ? AND signature = ?
+            LIMIT 1
             """,
-            (run_id, self.DETECTOR_NAME, signature, project, ts or _now_utc()),
-        )
+            (run_id, self.DETECTOR_NAME, signature),
+        ).fetchone()
+        if existing is not None:
+            return False  # duplicate
+
+        try:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO detector_hits (run_id, detector, signature, project, ts)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (run_id, self.DETECTOR_NAME, signature, project, ts or _now_utc()),
+            )
+            return True
+        except Exception:
+            return False
 
     # ── Kyoko layer: prevalence ───────────────────────────────────────────────
 
@@ -263,14 +343,21 @@ class BaseDetector(ABC):
         project: str,
         evidence: list[str],
         ts: Optional[str] = None,
+        new_hit_count: int = 1,
     ) -> dict:
         """Upsert an issue row by stable signature.
 
         On first occurrence  → INSERT with recurrence_count=1.
-        On repeat occurrence → UPDATE last_seen + recurrence_count++.
+        On repeat occurrence → UPDATE last_seen. Only increment recurrence_count
+        by `new_hit_count` (the number of genuinely new hits returned by
+        record_hit this pass). If new_hit_count==0 (all hits were duplicates of
+        a prior pass), last_seen is updated but recurrence_count is unchanged —
+        preventing per-pass inflation when run_synthesis runs multiple times on
+        the same data.
+
         recurrence_count_at_apply is never modified here; it is set by the
         remediation layer (b7+) when a fix is applied, snapshotting the count
-        so subsequent hits become regression evidence.
+        so subsequent hits become regression evidence rather than noise.
 
         Returns the current issue row as a dict.
         """
@@ -283,6 +370,8 @@ class BaseDetector(ABC):
         ).fetchone()
 
         if existing is None:
+            # First time seeing this signature — start at 1 regardless of
+            # new_hit_count (the INSERT itself is the first recurrence).
             self._conn.execute(
                 """
                 INSERT INTO issues
@@ -293,7 +382,9 @@ class BaseDetector(ABC):
                 (signature, project, self.DETECTOR_NAME, now, now, evidence_json),
             )
         else:
-            new_count = existing[0] + 1
+            # Only add new_hit_count to recurrence — zero means no new hits
+            # (idempotent re-pass), so leave recurrence_count unchanged.
+            new_count = existing[0] + new_hit_count
             self._conn.execute(
                 """
                 UPDATE issues

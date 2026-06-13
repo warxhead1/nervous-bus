@@ -54,8 +54,10 @@ from typing import Optional
 from detectors.base import BaseDetector, PatternCandidate
 
 
-# Outcomes that indicate the work is done and the worktree should be gone.
-_TERMINAL_OUTCOMES = ("clean", "abandoned")
+# Outcomes that indicate the work is confirmed merged/done.
+# Aligned with _worktree_leak_replay TERMINAL set (Fix 2 / Fix 12):
+# only confirmed-merged outcomes, not 'abandoned' (which does not imply merge).
+_TERMINAL_OUTCOMES = ("clean", "landed", "corrected")
 
 # Automate-rung remediation template
 _REMEDIATION_TEMPLATE = (
@@ -172,6 +174,7 @@ class WorktreeLeakDetector(BaseDetector):
                    GROUP_CONCAT(outcome, '|') AS outcomes
             FROM runs
             WHERE outcome IN ({placeholders})
+              AND labeled_at IS NOT NULL
               AND worktree IS NOT NULL
               AND worktree != ''
             GROUP BY project, worktree
@@ -257,6 +260,14 @@ class WorktreeLeakDetector(BaseDetector):
                         "git_branch": row.get("git_branch"),
                         "bead_id": row.get("bead_id"),
                         "repo_root": repo_root,
+                        "remediation_rung": "automate",
+                        "remediation_rung_justification": (
+                            "The proposed fix is an autonomous hook that runs "
+                            "`git worktree remove --force` on bead-close / PR-merge. "
+                            "This is Automate-rung (a deterministic guard, not Eliminate) "
+                            "because we cannot prevent worktrees from being created — "
+                            "only clean them up automatically when no longer needed."
+                        ),
                     },
                 )
             )
