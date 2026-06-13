@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.agent.run.closed.v1.json",
+  "title": "bus.agent.run.closed v1",
+  "description": "A segmented agent RUN summary, emitted by the reflex-recorder (Reflexarc) when a run closes (session end / idle-timeout / loom-exec end). A 'run' is the unit of cross-run behavioral learning: an ordered span of bus.agent.activity.v1 events sharing one run-key.\n\nSEGMENTATION MODEL (hardened against the live stream, 2026-06-13 audit): the live firehose is effectively single-agent_kind (host_claude_code) and parent-id-collapsed — a single host conversation_id is reused across many parallel-dispatched subagent/workflow shards (observed: one conversation_id spanning 26 worktrees), with agent_id==session_id==conversation_id all set to the parent host session ULID. Therefore conversation_id ALONE is NOT a valid run key. The run is segmented on the composite (conversation_id, worktree_slug): host main-tree work keys on conversation_id; each dispatched worktree shard keys on its worktree slug. host_subagent / host_hearthloom / host_codex are currently UNOBSERVED in the activity stream — the recorder must not depend on them.\n\nMember of the bus.agent.* family — flat data-only style; the CloudEvents-lite envelope is applied by `nervous publish`. b2 adds behavioral features under `features`; b3 backfills `outcome` (+ label_history). LABEL CONVENTION: outcome==null means NOT YET LABELED (transient); a non-null outcome (incl. \"clean\") means labeled. Consumers MUST gate on `labeled_at != null` before trusting `outcome` — do not treat null as \"clean\".",
+  "type": "object",
+  "required": [
+    "run_id",
+    "run_key_kind",
+    "run_key",
+    "project",
+    "agent_kind",
+    "started",
+    "ended",
+    "event_count",
+    "tool_histogram"
+  ],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "description": "ULID for this run (sortable, monotonic, 26 chars). Stable primary key in the run-store."
+    },
+    "run_key_kind": {
+      "type": "string",
+      "enum": ["session", "worktree", "loom_exec", "codex"],
+      "description": "How the recorder distinguished this run. session = host conversation with NO worktree (run_key = conversation_id). worktree = a dispatched subagent/workflow shard distinguished by its worktree slug, since parallel shards share the parent conversation_id (run_key = conversation_id + '#' + worktree_slug). loom_exec = hearth-loom run keyed on execution_id (CURRENTLY UNOBSERVED in activity — loomie tool-calls may flow only as dispatch markers; treat as a known v1 gap). codex = Codex runtime (CURRENTLY UNOBSERVED). The recorder MUST NOT assume loom_exec/codex events carry standard id fields."
+    },
+    "run_key": {
+      "type": "string",
+      "description": "The composite key this run was segmented on. For run_key_kind=session: the conversation_id. For run_key_kind=worktree: conversation_id + '#' + worktree_slug (the slug is the ONLY field in the live stream that separates parallel shards sharing a parent conversation). This is the dedupe/identity key for re-opening an in-progress run."
+    },
+    "host_conversation_id": {
+      "type": "string",
+      "description": "The parent host conversation_id (ULID), retained for correlation now that run_key is a composite. Multiple runs (parallel shards) may share one host_conversation_id."
+    },
+    "project": {
+      "type": "string",
+      "description": "Project the agent operated in (repo dir name, or 'main' for host-level). The keying axis for cross-run learning."
+    },
+    "agent_kind": {
+      "type": "string",
+      "description": "Runtime that produced the run. Mirrors bus.agent.activity.v1 agent_kind. NOTE: the live stream is overwhelmingly host_claude_code; do not rely on host_subagent/host_hearthloom/host_codex being populated. Not enum-locked so new runtimes don't force a schema bump."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "ULID of the session context from activity. WARNING: for parallel shards this equals the parent host session ULID and is NOT unique per run — never use as a run key."
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "ULID from activity. WARNING: collapsed to the parent host session ULID for shards; not unique per run."
+    },
+    "started": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC — timestamp of the first activity event in the run."
+    },
+    "ended": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC — timestamp the run was closed (last event, idle-timeout boundary, or explicit end)."
+    },
+    "close_reason": {
+      "type": "string",
+      "enum": ["ended", "idle_timeout", "loom_exec_end", "recorder_shutdown"],
+      "description": "Why the recorder closed the run. idle_timeout is the fallback for runs that never emit an explicit end — see continues_run_id for re-stitching idle-split fragments."
+    },
+    "continues_run_id": {
+      "type": ["string", "null"],
+      "description": "If this run is the continuation of an idle_timeout-split predecessor on the same run_key, the predecessor's run_id; else null. Lets downstream re-stitch one logical run that fragmented across a thinking pause / long build / user-away gap, so inferred thrashed/abandoned labels aren't corrupted by fragmentation."
+    },
+    "event_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of bus.agent.activity.v1 events folded into this run."
+    },
+    "tool_histogram": {
+      "type": "object",
+      "description": "Map of tool_name -> invocation count across the run (e.g. {\"Read\": 12, \"Edit\": 4, \"Bash\": 7}). The minimal behavioral feature available at close; richer features go under `features` (b2). May be empty {} for runtimes whose tool-calls don't flow through activity (e.g. loom_exec dispatch markers) — a documented v1 gap.",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "features": {
+      "type": "object",
+      "description": "Designated home for b2 behavioral-feature enrichment (n-grams, revert-rate, re-read-rate, file-reads-to-finding, etc.). Nesting enrichment here keeps the top-level contract stable. Producers should write features here rather than at top level so a typo'd top-level field is more conspicuous.",
+      "additionalProperties": true
+    },
+    "worktree": {
+      "type": ["string", "null"],
+      "description": "RECONSTRUCTED ABSOLUTE PATH of the git worktree this run operated in (the recorder derives it from the activity `cwd`, which is absolute and points into .claude/worktrees/<slug>/...). null for host main-tree runs. Load-bearing: the worktree-leak and rebuild-cache-miss detectors join this against `git worktree list` (absolute paths) — it MUST be absolute, not the raw slug. See worktree_slug for the raw value."
+    },
+    "worktree_slug": {
+      "type": ["string", "null"],
+      "description": "The raw worktree slug as it appears in the source activity events (e.g. 'wf_6068cb05-64b-8', 'agent-a273f362…'). The de-facto shard/subagent identity (the activity stream carries no subagent shuttle id). Component of run_key for run_key_kind=worktree."
+    },
+    "git_branch": {
+      "type": ["string", "null"],
+      "description": "Git branch the run was on, when known. Correlation key for PR/merge outcome labeling."
+    },
+    "bead_id": {
+      "type": ["string", "null"],
+      "description": "Bead this run was executing, if derivable from branch/activity. Correlation key for bead-close outcome labeling."
+    },
+    "outcome": {
+      "enum": ["landed", "abandoned", "reverted", "thrashed", "corrected", "clean", null],
+      "description": "Outcome label. NULL at close = NOT YET LABELED (transient); backfilled by the labeling pass (b3). landed/abandoned/reverted/clean from explicit ground truth (PR/bead/git); thrashed/corrected inferred from behavior shape when no explicit signal. \"clean\" (labeled, no friction) is distinct from null (unlabeled) — gate on labeled_at."
+    },
+    "labeled_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "RFC3339 UTC when `outcome` was last set/changed; null while unlabeled. Consumers MUST require this non-null before trusting `outcome`."
+    },
+    "label_version": {
+      "type": ["integer", "null"],
+      "description": "Monotonic version of the outcome label; null until first labeled. Increments on each transition."
+    },
+    "label_history": {
+      "type": "array",
+      "description": "Ordered history of label transitions, so 'landed then reverted within 24h' (a core thrash signal) is representable. Append-only; the top-level outcome/labeled_at mirror the latest entry.",
+      "items": {
+        "type": "object",
+        "required": ["outcome", "labeled_at"],
+        "properties": {
+          "outcome": {"enum": ["landed", "abandoned", "reverted", "thrashed", "corrected", "clean"]},
+          "labeled_at": {"type": "string", "format": "date-time"},
+          "label_version": {"type": "integer"},
+          "source": {"type": "string", "description": "What produced this label (e.g. 'pr_merge', 'bead_close', 'git_revert', 'behavior_inference')."}
+        }
+      }
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "1",
+      "description": "Major schema version (semver major only, per repo convention)."
+    }
+  },
+  "additionalProperties": true
+}
