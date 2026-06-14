@@ -507,6 +507,40 @@ def test_test_file_globs_python_convention(tmp_path):
     assert not any("test_" in f for f in files)
 
 
+# ── NEW: dual_write_excludes vetoes generic scan + strategy candidates ──────────
+
+def test_dual_write_excludes_vetoes_generic_scan(tmp_path):
+    """A by-design phrasing matched by the generic _DUAL_WRITE scan is dropped when
+    it matches dual_write_excludes (e.g. 'autoingest keeps them in sync')."""
+    profile = ProjectProfile(
+        project="kb", source_exts=(".rs",),
+        dual_write_excludes=(r"autoingest`?\s+keeps\s+them\s+in\s+sync",),
+    )
+    _mk(tmp_path, "src/tier.rs", "// Keep the dedup index in sync so dups are caught.\nfn f(){}\n")
+    _mk(tmp_path, "src/plugins.rs", "//! `kb autoingest` keeps them in sync.\nfn g(){}\n")
+    hits = dual_scan(str(tmp_path), profile=profile)
+    anchors = [h.anchor for h in hits if h.kind == "dual_write"]
+    assert any("tier.rs" in a for a in anchors)        # real signal kept
+    assert not any("plugins.rs" in a for a in anchors)  # designed-sync vetoed
+
+
+def test_dual_write_excludes_vetoes_strategy_candidate(tmp_path):
+    """The veto also applies to a STRATEGY-produced candidate, not just the
+    generic scan (a class mention on a read-path line is dropped)."""
+    profile = ProjectProfile(
+        project="deer-flow", source_exts=(".py",),
+        dual_source_fingerprints=(CommentRegexStrategy(
+            name="router", pattern=r"\bDatabaseRouter\b"),),
+        dual_write_excludes=(r"try\s+DatabaseRouter\s+first",),
+    )
+    _mk(tmp_path, "a.py", "# DatabaseRouter — dual-write during migration\nx=1\n")
+    _mk(tmp_path, "b.py", "# Try DatabaseRouter first, then fall back to sqlite\ny=2\n")
+    hits = dual_scan(str(tmp_path), profile=profile)
+    anchors = [h.anchor for h in hits if h.kind == "dual_write"]
+    assert any("a.py" in a for a in anchors)        # write-path mention kept
+    assert not any("b.py" in a for a in anchors)    # read-path fallback vetoed
+
+
 # ── NEW: dual_source worktree-copy dedup (Task 1a hermetic proof) ───────────────
 
 def test_dual_source_worktree_copies_collapse_to_one(tmp_path):

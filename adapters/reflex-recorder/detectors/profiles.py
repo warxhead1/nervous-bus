@@ -308,6 +308,14 @@ class ProjectProfile:
                            Only consulted when ``sync_map_enabled`` is True.
     extra_anti_fence     : extra regexes marking lines that look like a fence but
                            describe correct current code / generic guidance.
+    dual_write_excludes  : regexes vetoing a dual-write/dual-source candidate whose
+                           LINE (or multi-line window) matches a by-design / not-debt
+                           phrasing. Applied to BOTH the generic ``_DUAL_WRITE``
+                           comment scan AND every strategy's candidate, so a project
+                           can suppress e.g. "kb autoingest keeps them in sync"
+                           (designed sync), "legacy dual-write" null-check
+                           backward-compat comments, or "Try DatabaseRouter first"
+                           read-path fallbacks. Empty by default.
     test_file_globs      : path substrings marking TEST files to exclude from the
                            dual_source scan (synthetic structs + test dual-write
                            comments are noise: ``nbus_test.go``,
@@ -342,6 +350,7 @@ class ProjectProfile:
     sync_map_enabled: bool = False
     sync_map_excludes: tuple[str, ...] = ()
     extra_anti_fence: tuple[str, ...] = ()
+    dual_write_excludes: tuple[str, ...] = ()
     test_file_globs: tuple[str, ...] = (
         "/tests/", "/test/", "_test.", "test_", "/testdata/", ".test.",
         "_spec.", ".spec.",
@@ -365,6 +374,23 @@ class ProjectProfile:
     def should_skip(self, path_str: str) -> bool:
         """True if *path_str* matches any skip glob (substring match)."""
         return any(g in path_str for g in self.skip_globs)
+
+    def dual_write_excluded(self, text: str) -> bool:
+        """True if *text* (a dual-write line or joined comment window) matches any
+        ``dual_write_excludes`` regex — a by-design / not-debt phrasing to drop."""
+        if not self.dual_write_excludes:
+            return False
+        for rx in self._compiled_dw_excludes():
+            if rx.search(text):
+                return True
+        return False
+
+    def _compiled_dw_excludes(self):
+        cache = getattr(self, "_dw_ex_cache", None)
+        if cache is None:
+            cache = tuple(re.compile(rx, re.I) for rx in self.dual_write_excludes)
+            object.__setattr__(self, "_dw_ex_cache", cache)
+        return cache
 
     def is_test_file(self, path_str: str) -> bool:
         """True if *path_str* is a test file (excluded from dual_source).

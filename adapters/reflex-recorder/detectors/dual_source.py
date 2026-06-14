@@ -176,7 +176,12 @@ def scan(repo_root: str, *, profile: ProjectProfile = DEFAULT_PROFILE) -> list[D
     for strat in strategies:
         try:
             for c in strat.find(ctx):
-                _add(c.kind, c.anchor, c.detail, list(c.evidence))
+                # Profile-level veto: a by-design phrasing in the candidate's
+                # evidence/detail (e.g. read-path fallback, designed sync) is dropped.
+                vetoed = profile.dual_write_excluded(
+                    " ".join([c.detail] + list(c.evidence)))
+                if not vetoed:
+                    _add(c.kind, c.anchor, c.detail, list(c.evidence))
         except Exception:
             continue  # one broken strategy never sinks the scan
 
@@ -191,10 +196,14 @@ def scan(repo_root: str, *, profile: ProjectProfile = DEFAULT_PROFILE) -> list[D
              f"hand-maintained sync map {mp} ({rel})",
              [f"{rel}: {mp} bridges two representations — collapse to one source"])
 
-    # 3) dual-write comments (generic, project-agnostic phrasing)
+    # 3) dual-write comments (generic, project-agnostic phrasing) — subject to the
+    #    profile's by-design veto so e.g. "kb autoingest keeps them in sync" or a
+    #    "legacy dual-write" backward-compat null-check comment is dropped.
     for rel, txt in texts:
         for i, ln in enumerate(txt.splitlines()):
             if _DUAL_WRITE.search(ln) and len(ln) < 200:
+                if profile.dual_write_excluded(ln):
+                    continue
                 _add("dual_write", f"{rel}:{i + 1}",
                      f"dual-write at {rel}:{i + 1}",
                      [f"{rel}:{i + 1}  {ln.strip()[:160]}"])
