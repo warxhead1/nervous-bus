@@ -37,6 +37,21 @@ from detectors.rebuild_cache_miss import RebuildCacheMissDetector
 
 
 # ---------------------------------------------------------------------------
+# Hermetic detector set
+# ---------------------------------------------------------------------------
+# These tests exercise synthesis LOGIC (stitch/score/gate/idempotency) against
+# synthetic seeded detector_hits + issues. They must not depend on whichever
+# private overlay ($NERVOUS_HOME/adapters/reflex-*) or source trees happen to
+# exist on the host: filesystem code-scanner detectors (stale_fence,
+# dual_source, ...) would scan real repos mid-test and inject host-dependent,
+# non-idempotent rows. Pin DETECTOR_CLASSES to the built-ins so the unit under
+# test is isolated and deterministic everywhere.
+@pytest.fixture(autouse=True)
+def _pin_builtin_detectors(monkeypatch):
+    monkeypatch.setattr(syn, "DETECTOR_CLASSES", list(syn._BUILTIN_DETECTOR_CLASSES))
+
+
+# ---------------------------------------------------------------------------
 # Fixture helpers
 # ---------------------------------------------------------------------------
 
@@ -834,7 +849,13 @@ class TestPatternDiscoveredSchemaValidation:
 
 class TestDryRun:
     def test_dry_run_no_nervous_publish(self):
-        """DRY-RUN must never call subprocess (no nervous publish)."""
+        """DRY-RUN must never shell out to `nervous publish`.
+
+        Note: code-scanner detectors (stale_fence, dual_source, ...) legitimately
+        invoke `subprocess.run` for git during synthesis' detection-only re-run,
+        so a blanket assert_not_called() is wrong. The dry-run contract is
+        specifically that the EMIT path (`nervous publish`) never fires.
+        """
         conn = _make_conn()
         sig = "proj:worktree_leak:/p/.worktrees/wt1"
         _insert_run(conn, "R1", project="proj", outcome="clean",
@@ -850,8 +871,14 @@ class TestDryRun:
 
         with patch("subprocess.run") as mock_run:
             result = syn.run_synthesis(conn, dry_run=True)
-            # subprocess.run must NOT have been called
-            mock_run.assert_not_called()
+            # No call may be a `nervous publish` invocation. Detector git calls
+            # are allowed; the emit path is not.
+            publish_calls = [
+                c for c in mock_run.call_args_list
+                if c.args and isinstance(c.args[0], (list, tuple))
+                and list(c.args[0][:2]) == ["nervous", "publish"]
+            ]
+            assert publish_calls == [], f"dry-run emitted: {publish_calls}"
 
     def test_emit_calls_nervous_publish(self):
         """With dry_run=False (--emit), nervous publish IS called for propose_fix."""
