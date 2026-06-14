@@ -58,6 +58,7 @@ from detectors.rebuild_cache_miss import RebuildCacheMissDetector
 from detectors.repeated_question import RepeatedQuestionDetector
 from detectors.edit_build_fail_revert import EditBuildFailRevertDetector
 from detectors.reread_same_file import RereadSameFileDetector
+from adapter_api import load_adapters
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -122,13 +123,46 @@ RECENCY_HALF_LIFE_DAYS: float = 14.0
 SCORER_VERSION: int = 1
 
 # Detector registry — explicit import list (small + auditable).
-DETECTOR_CLASSES: list[type[BaseDetector]] = [
+# Built-in detectors shipped with the public engine:
+#   - generic tier (project-agnostic): worktree_leak, reread_same_file, repeated_question
+#   - rust/cargo ecosystem tier (any worktree-based Rust project): rebuild_cache_miss,
+#     edit_build_fail_revert — these key on `cargo` alone, NOT any single project.
+# Project-SPECIFIC detectors are contributed by private adapters in
+# $NERVOUS_HOME/adapters/reflex-<project>/ and appended below.
+_BUILTIN_DETECTOR_CLASSES: list[type[BaseDetector]] = [
     WorktreeLeakDetector,
     RebuildCacheMissDetector,
     RepeatedQuestionDetector,
     EditBuildFailRevertDetector,
     RereadSameFileDetector,
 ]
+
+
+def assemble_detector_classes() -> list[type[BaseDetector]]:
+    """Built-in detectors + every private adapter's detectors.
+
+    Also attaches adapter-provided eval replays (replays() maps DETECTOR_NAME →
+    replay fn) onto the matching detector class. A broken/absent overlay yields
+    just the built-ins — the engine never hard-depends on private code.
+    """
+    classes: list[type[BaseDetector]] = list(_BUILTIN_DETECTOR_CLASSES)
+    replays: dict[str, object] = {}
+    for adapter in load_adapters():
+        try:
+            classes.extend(adapter.detectors())
+            replays.update(adapter.replays())
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"[synthesis] adapter {getattr(adapter, 'name', '?')} "
+                  f"contribution failed: {exc}", file=sys.stderr)
+    by_name = {c.DETECTOR_NAME: c for c in classes}
+    for name, fn in replays.items():
+        if name in by_name:
+            by_name[name].replay = fn  # type: ignore[attr-defined]
+    return classes
+
+
+# Assembled once at import; call assemble_detector_classes() to refresh.
+DETECTOR_CLASSES: list[type[BaseDetector]] = assemble_detector_classes()
 
 # ---------------------------------------------------------------------------
 # run_evals schema
@@ -1299,6 +1333,18 @@ def run_synthesis(
                 proj = proj_row[0]
                 logical_run_ids_by_project.setdefault(proj, set()).add(logical_id)
                 break  # all members same project
+
+    # ── Step 0.5: Ingest adapter signals ───────────────────────────────────
+    # Private adapters may pull non-activity cost signals (e.g. tengine's build
+    # reports) into the store before detectors key on them. Never fatal.
+    for adapter in load_adapters():
+        for ingester in (adapter.signals() or []):
+            try:
+                ingester.ingest(conn)
+            except Exception as exc:
+                print(f"[synthesis] WARNING: signal {getattr(ingester, 'name', '?')} "
+                      f"(adapter {getattr(adapter, 'name', '?')}) failed: {exc}",
+                      file=sys.stderr)
 
     # ── Step 1: Run all detectors ──────────────────────────────────────────
     for DetectorClass in DETECTOR_CLASSES:

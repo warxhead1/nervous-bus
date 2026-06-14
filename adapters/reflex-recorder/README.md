@@ -4,6 +4,25 @@ Reflexarc FLYWHEEL (b2): captures `bus.agent.activity.v1` events from `nbus:all`
 segments them into runs using the hardened composite-key model, persists to SQLite,
 and emits `bus.agent.run.closed.v1` on each run close.
 
+## Engine vs. adapters (the public/private split)
+
+This directory is the **generic Reflexarc engine** and is PUBLIC. It ships:
+- the pipeline (`recorder`/`segment`/`enrich`/`store`/`query`),
+- outcome attribution (`label`/`git_outcome`),
+- **generic** detectors (`worktree_leak`, `reread_same_file`, `repeated_question`,
+  `file_reads_to_finding`) and **rust-ecosystem** detectors (`rebuild_cache_miss`,
+  `edit_build_fail_revert` — they key on `cargo` alone, not any one project),
+- the inductive trajectory profiler (`tier2/trajectory_profile.py`),
+- the **project-adapter contract** (`adapter_api.py`) + a scaffold
+  (`templates/reflex-adapter/`).
+
+Anything specific to ONE project — its build/run command taxonomy, bespoke
+detectors, extra cost signals (build reports, GPU diagnostics) — is PRIVATE and
+lives in the overlay at `$NERVOUS_HOME/adapters/reflex-<project>/adapter.py`
+(default `~/.config/nervous-bus/adapters/`). The engine discovers them at runtime
+via `adapter_api.load_adapters()`; with no overlay it runs generic-only. See
+`templates/reflex-adapter/README.md` to build one. Reference: `reflex-tengine`.
+
 ## Segmentation model
 
 **run_key_kind=session**: host main-tree work, no worktree context.
