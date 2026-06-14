@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.drift.detected.v1.json",
+  "title": "hearth.drift.detected v1",
+  "description": "Emitted by hearth-api when an internal consistency invariant is observed to have diverged at runtime. Two surfaces emit on this channel today: (1) 'session_count' — the SSE session snapshot and the HTTP /api/sessions cache disagree on how many sessions are visible (the two paths apply ghost/history/sub-agent filters independently and are only kept in sync by hand; divergence means a phone client oscillates between counts); (2) 'kb_scoring' — reserved for a future runtime check that hearth-api's mirrored kb scoring constants no longer match kb's published values. The compile-time drift_canary_* tests in kb_relevance.rs catch scoring drift in CI; this channel surfaces drift that only manifests at runtime. Non-sensitive internal diagnostics — safe for the public bus.",
+  "type": "object",
+  "required": ["surface", "expected", "observed", "ts"],
+  "additionalProperties": false,
+  "properties": {
+    "surface": {
+      "type": "string",
+      "enum": ["session_count", "kb_scoring"],
+      "description": "Which invariant diverged. 'session_count' = SSE vs HTTP session-list disagreement; 'kb_scoring' = hearth-api kb scoring mirror vs kb authoritative values."
+    },
+    "expected": {
+      "type": "number",
+      "description": "The reference / authoritative value (for session_count: the HTTP-cache session count; for kb_scoring: kb's published constant)."
+    },
+    "observed": {
+      "type": "number",
+      "description": "The divergent value actually produced by the other code path (for session_count: the SSE snapshot count)."
+    },
+    "delta": {
+      "type": "number",
+      "description": "observed - expected. Optional convenience field; consumers may compute it themselves."
+    },
+    "detail": {
+      "type": "string",
+      "description": "Optional human-readable context, e.g. 'sse=12 http=14; 2 history-mode sessions excluded from SSE only'."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the divergence was observed."
+    }
+  }
+}
