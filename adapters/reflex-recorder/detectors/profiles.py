@@ -153,24 +153,114 @@ class CommentRegexStrategy(DualSourceStrategy):
     ``pattern`` is a dual-source signal (e.g. a project-specific
     "legacy stream"/"transitional dual-write" phrasing not covered by the
     generic dual-write comment scan).
+
+    ``anti`` (optional) is a regex that VETOES a matched line — for project
+    fingerprints whose phrasing collides with a by-design pattern (e.g.
+    tachyonac's "writes to both <table> and <table>" is debt, but "writes it to
+    both nbus:<channel> and nbus:all" is intentional fanout). A line matching
+    ``pattern`` but also ``anti`` is dropped.
     """
 
-    def __init__(self, *, name: str, pattern: str, kind: str = "dual_write"):
+    def __init__(self, *, name: str, pattern: str, kind: str = "dual_write",
+                 anti: Optional[str] = None):
         self.name = name
         self.kind = kind
         self._rx = re.compile(pattern, re.I)
+        self._anti = re.compile(anti, re.I) if anti else None
 
     def find(self, ctx: ScanContext) -> list[DualCandidate]:
         out: list[DualCandidate] = []
         for rel, txt in ctx.texts:
             for i, ln in enumerate(txt.splitlines()):
                 if len(ln) < 200 and self._rx.search(ln):
+                    if self._anti and self._anti.search(ln):
+                        continue
                     out.append(DualCandidate(
                         kind=self.kind,
                         anchor=f"{rel}:{i + 1}",
                         detail=f"{self.name} at {rel}:{i + 1}",
                         evidence=[f"{rel}:{i + 1}  {ln.strip()[:160]}"],
                     ))
+        return out
+
+
+class MultiLineCommentStrategy(DualSourceStrategy):
+    """A dual-write fingerprint that spans CONSECUTIVE comment lines.
+
+    Go godoc (and Rust/`//!` doc blocks) routinely split a "writes to both X and
+    Y" sentence across two lines — the second table name lands on the next
+    comment line. A single-line scan classifies that as NOISE. This strategy
+    joins each comment line with the next ``lookahead`` comment lines (default 2)
+    and matches ``pattern`` against the joined window, so::
+
+        // computes the Brier score, and writes to both contract_settlement_scores and
+        // convergence_learning_records to close the loop.
+
+    is caught (the canonical tachyonac ``scorer.go`` case). The anchor is the
+    line where the match BEGINS so it stays stable across edits below it.
+
+    Generic + parameterized: ``lookahead`` and ``pattern`` are supplied by the
+    profile; no project name is hardcoded. ``anti`` vetoes a window (e.g. the
+    ``nbus:all`` fanout phrasing) exactly as in :class:`CommentRegexStrategy`.
+    """
+
+    # Default: "writes to both <a> and <b>" (allow an optional pronoun: "writes
+    # IT to both"), possibly split after "and".
+    DEFAULT_PATTERN = r"writes?\s+(?:\w+\s+)?to\s+both\b.{0,80}\band\b.{0,120}"
+    # The lead trigger that must START on the anchor line (so the same multi-line
+    # match is not re-emitted from every earlier comment line in the block).
+    DEFAULT_LEAD = r"writes?\s+(?:\w+\s+)?to\s+both\b"
+
+    def __init__(self, *, name: str, pattern: Optional[str] = None,
+                 lead: Optional[str] = None, lookahead: int = 2,
+                 kind: str = "dual_write", anti: Optional[str] = None):
+        self.name = name
+        self.kind = kind
+        self.lookahead = max(1, lookahead)
+        self._rx = re.compile(pattern or self.DEFAULT_PATTERN, re.I | re.S)
+        self._lead = re.compile(lead or self.DEFAULT_LEAD, re.I)
+        self._anti = re.compile(anti, re.I) if anti else None
+        self._is_comment = re.compile(r"^\s*(//|#|\*|/\*|--|;|!)")
+
+    def _strip_comment(self, ln: str) -> str:
+        # Drop a leading comment marker so joined text reads as prose.
+        return re.sub(r"^\s*(//+!?|#|\*|/\*|--|;)\s?", " ", ln).rstrip()
+
+    def find(self, ctx: ScanContext) -> list[DualCandidate]:
+        out: list[DualCandidate] = []
+        for rel, txt in ctx.texts:
+            lines = txt.splitlines()
+            for i, ln in enumerate(lines):
+                if not self._is_comment.match(ln):
+                    continue
+                # The lead trigger must START on THIS line — otherwise the same
+                # multi-line match would be re-emitted from every earlier comment
+                # line whose joined window happens to reach the trigger.
+                if not self._lead.search(self._strip_comment(ln)):
+                    continue
+                # Join this comment line with up to `lookahead` following comment
+                # lines (stop at the first non-comment line).
+                window_parts = [self._strip_comment(ln)]
+                for k in range(1, self.lookahead + 1):
+                    j = i + k
+                    if j >= len(lines) or not self._is_comment.match(lines[j]):
+                        break
+                    window_parts.append(self._strip_comment(lines[j]))
+                if len(window_parts) < 2:
+                    continue  # single-line case is the CommentRegexStrategy's job
+                window = " ".join(window_parts)
+                if len(window) > 400:
+                    window = window[:400]
+                if not self._rx.search(window):
+                    continue
+                if self._anti and self._anti.search(window):
+                    continue
+                out.append(DualCandidate(
+                    kind=self.kind,
+                    anchor=f"{rel}:{i + 1}",
+                    detail=f"{self.name} (multi-line) at {rel}:{i + 1}",
+                    evidence=[f"{rel}:{i + 1}  {window.strip()[:200]}"],
+                ))
         return out
 
 
@@ -206,10 +296,30 @@ class ProjectProfile:
     dual_source_fingerprints : ordered list of pluggable :class:`DualSourceStrategy`
                            objects. ALL run; their candidates are unioned and
                            deduped by (kind, anchor). Empty => generic overlap.
+    sync_map_enabled     : whether the generic ``X_TO_Y`` sync-map scan runs at
+                           all. DEFAULT **OFF**: the cross-project probe proved
+                           sync-map detection is nearly all false-positive outside
+                           tengine (color-space / pose / dispatch / lookup tables
+                           dominate). tengine flips it ON; every other profile
+                           leaves it off. A profile that turns it on SHOULD also
+                           supply ``sync_map_excludes`` for its domain anti-maps.
     sync_map_excludes    : extra regexes excluding domain ``X_TO_Y`` constants that
                            are NOT hand-sync bridges (hearth: color-space maps).
+                           Only consulted when ``sync_map_enabled`` is True.
     extra_anti_fence     : extra regexes marking lines that look like a fence but
                            describe correct current code / generic guidance.
+    test_file_globs      : path substrings marking TEST files to exclude from the
+                           dual_source scan (synthetic structs + test dual-write
+                           comments are noise: ``nbus_test.go``,
+                           ``test_*_dual_write.py`` inflate FP). Defaults cover the
+                           common ``/tests/``, ``/test/``, ``_test.``, ``test_``
+                           conventions; a profile appends project-specific names.
+    require_named_replacement_file : raise stale_fence precision by only flagging a
+                           fence that NAMES a replacement file/module when that file
+                           actually EXISTS on disk (hearth ``DEPRECATED: Use
+                           engine.rs`` → check ``engine.rs`` is present). Off by
+                           default (generic repos rarely name a file); hearth turns
+                           it on (25%→~90% fence precision per the probe).
     """
 
     project: str = "unknown"
@@ -229,8 +339,14 @@ class ProjectProfile:
         "_v2", "_new", "_legacy", "_old", "_safe", "_impl2", "_giga", "_ex",
     )
     dual_source_fingerprints: tuple[DualSourceStrategy, ...] = ()
+    sync_map_enabled: bool = False
     sync_map_excludes: tuple[str, ...] = ()
     extra_anti_fence: tuple[str, ...] = ()
+    test_file_globs: tuple[str, ...] = (
+        "/tests/", "/test/", "_test.", "test_", "/testdata/", ".test.",
+        "_spec.", ".spec.",
+    )
+    require_named_replacement_file: bool = False
 
     def __post_init__(self) -> None:
         # Default to a generic field-overlap strategy when none supplied, so the
@@ -249,6 +365,24 @@ class ProjectProfile:
     def should_skip(self, path_str: str) -> bool:
         """True if *path_str* matches any skip glob (substring match)."""
         return any(g in path_str for g in self.skip_globs)
+
+    def is_test_file(self, path_str: str) -> bool:
+        """True if *path_str* is a test file (excluded from dual_source).
+
+        Substring match against ``test_file_globs`` (handles both directory
+        conventions like ``/tests/`` and filename conventions like ``_test.go``
+        / ``test_foo.py``). Uses the basename for the filename-style markers so a
+        directory named ``latest/`` does not trip ``test_``.
+        """
+        from os.path import basename
+        base = basename(path_str)
+        for g in self.test_file_globs:
+            if g.startswith("/") or g.endswith("/"):
+                if g in path_str:
+                    return True
+            elif g in base:
+                return True
+        return False
 
 
 # ── DEFAULT (zero-config) ─────────────────────────────────────────────────────
@@ -285,6 +419,10 @@ TENGINE_PROFILE = ProjectProfile(
             min_overlap=4,
         ),
     ),
+    # tengine is the ONE project where sync maps are real signal
+    # (SCHEMA_BUFFER_TO_EXTGPUINFO etc. are hand-maintained address bridges).
+    # Every other profile leaves sync_map_enabled at its False default.
+    sync_map_enabled=True,
     sync_map_excludes=(),
     extra_anti_fence=(),
 )

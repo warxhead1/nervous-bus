@@ -25,9 +25,10 @@ from detectors.stale_fence import (  # noqa: E402
     scan as fence_scan, is_stale_candidate, _STRONG_FENCE, _ANTI_FENCE,
 )
 from detectors.dual_source import scan as dual_scan  # noqa: E402
+from detectors.stale_fence import is_stale_candidate as fence_is_candidate  # noqa: E402
 from detectors.profiles import (  # noqa: E402
     ProjectProfile, StructOverlapStrategy, CommentRegexStrategy,
-    ScanContext, DEFAULT_PROFILE, TENGINE_PROFILE,
+    MultiLineCommentStrategy, ScanContext, DEFAULT_PROFILE, TENGINE_PROFILE,
 )
 from detectors import langpacks  # noqa: E402
 
@@ -251,13 +252,15 @@ def test_shared_scalars_not_dual_source(tmp_path):
 # ── sync maps + dual-write + color-space anti-pattern ──────────────────────────
 
 def test_sync_map_precision(tmp_path):
-    _mk(tmp_path, "csrc/maps.h", """\
+    """Sync-map detection is OPT-IN (TENGINE_PROFILE turns it on). When on, the
+    X_TO_Y bridge fires but unit/enum/offset constants are excluded."""
+    _mk(tmp_path, "crates/tengine-dgc-hal/csrc/maps.h", """\
         static const int SCHEMA_BUFFER_TO_EXTGPUINFO[8] = {0};
         #define RAD_TO_DEG 57.29578f
         #define VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE 2
         static const int GIGAHEADER_INIT_TIME_TO_LISTEN_MS_OFFSET = 40;
     """)
-    hits = dual_scan(str(tmp_path), profile=DEFAULT_PROFILE)
+    hits = dual_scan(str(tmp_path), profile=TENGINE_PROFILE)
     maps = {h.anchor for h in hits if h.kind == "sync_map"}
     assert "SCHEMA_BUFFER_TO_EXTGPUINFO" in maps
     assert "RAD_TO_DEG" not in maps
@@ -265,15 +268,33 @@ def test_sync_map_precision(tmp_path):
     assert not any(m.endswith("_OFFSET") for m in maps)
 
 
+def test_sync_map_opt_in_off_by_default(tmp_path):
+    """The probe proved sync maps are nearly all FP outside tengine, so the
+    DEFAULT (and every non-tengine) profile emits ZERO sync_map hits even when a
+    perfect X_TO_Y bridge name is present."""
+    _mk(tmp_path, "src/maps.rs", """\
+        const SCHEMA_BUFFER_TO_EXTGPUINFO: [u32; 8] = [0; 8];
+    """)
+    hits = dual_scan(str(tmp_path), profile=DEFAULT_PROFILE)
+    assert not [h for h in hits if h.kind == "sync_map"]
+    # but the SAME repo under a profile with sync_map_enabled=True DOES fire
+    on = ProjectProfile(project="x", source_exts=(".rs",), sync_map_enabled=True)
+    hits_on = dual_scan(str(tmp_path), profile=on)
+    assert any(h.kind == "sync_map" and h.anchor == "SCHEMA_BUFFER_TO_EXTGPUINFO"
+               for h in hits_on)
+
+
 def test_colorspace_maps_not_sync(tmp_path):
-    """hearth ANTI: color-space / pose maps are NOT hand-sync bridges."""
+    """hearth ANTI: color-space / pose maps are NOT hand-sync bridges — even with
+    sync_map_enabled they must be excluded."""
     _mk(tmp_path, "src/color.rs", """\
         const LINEAR_SRGB_TO_DISPLAY: [[f32; 3]; 3] = [[0.0; 3]; 3];
         const BLAZEPOSE_TO_COCO: [usize; 17] = [0; 17];
         const ALPHA_TO_COVERAGE: u32 = 1;
         const SCHEMA_TABLE_TO_MIRROR_INDEX: [u32; 4] = [0; 4];
     """)
-    hits = dual_scan(str(tmp_path), profile=DEFAULT_PROFILE)
+    on = ProjectProfile(project="x", source_exts=(".rs",), sync_map_enabled=True)
+    hits = dual_scan(str(tmp_path), profile=on)
     maps = {h.anchor for h in hits if h.kind == "sync_map"}
     assert not any("SRGB" in m or "BLAZEPOSE" in m or "ALPHA_TO_COVERAGE" in m for m in maps)
 
@@ -346,6 +367,177 @@ def test_worktree_copies_skipped_and_deduped(tmp_path):
     # exactly one — the canonical src/world.py, not the worktree copies
     assert len(deprecated) == 1
     assert deprecated[0].file == "src/world.py"
+
+
+# ── NEW: multi-line Go godoc dual-write strategy (tachyonac scorer.go shape) ────
+
+def test_multiline_comment_strategy_go_godoc(tmp_path):
+    """"writes to both X and\\n// Y" splits across two comment lines — the
+    single-line scan misses it; MultiLineCommentStrategy joins the window."""
+    profile = ProjectProfile(
+        project="tachyonac", source_exts=(".go",),
+        dual_source_fingerprints=(MultiLineCommentStrategy(name="multi-table write"),),
+    )
+    _mk(tmp_path, "internal/observatory/scorer.go", """\
+        // ScoreSettlement reads our most recent estimate,
+        // computes the Brier score, and writes to both contract_settlement_scores and
+        // convergence_learning_records to close the loop.
+        type Scorer struct {
+            db int
+        }
+    """)
+    hits = dual_scan(str(tmp_path), profile=profile)
+    dw = [h for h in hits if h.kind == "dual_write" and "scorer.go" in h.anchor]
+    assert dw, "multi-line writes-to-both must be caught"
+    # anchor is the line where the match BEGINS (the 'writes to both' line)
+    assert dw[0].anchor.endswith(":2")
+
+
+def test_multiline_strategy_single_line_still_matches(tmp_path):
+    """The same strategy also catches a fully single-line 'writes to both X and Y'
+    when the second clause is on the NEXT comment line OR the same — here split."""
+    profile = ProjectProfile(
+        project="x", source_exts=(".go",),
+        dual_source_fingerprints=(MultiLineCommentStrategy(name="w", lookahead=2),),
+    )
+    _mk(tmp_path, "a.go", """\
+        // writes to both alpha_table and
+        // beta_table for the migration window.
+        func f() {}
+    """)
+    hits = dual_scan(str(tmp_path), profile=profile)
+    assert any(h.kind == "dual_write" for h in hits)
+
+
+def test_multiline_strategy_anti_veto(tmp_path):
+    """A by-design fanout phrasing ('to both nbus:<ch> and nbus:all') is vetoed."""
+    profile = ProjectProfile(
+        project="x", source_exts=(".go",),
+        dual_source_fingerprints=(MultiLineCommentStrategy(
+            name="w", anti=r"nbus:all"),),
+    )
+    _mk(tmp_path, "pub.go", """\
+        // writes it to both nbus:notify and
+        // nbus:all as the designed fanout.
+        func pub() {}
+    """)
+    hits = dual_scan(str(tmp_path), profile=profile)
+    assert not [h for h in hits if h.kind == "dual_write"]
+
+
+def test_comment_regex_strategy_anti_veto(tmp_path):
+    """CommentRegexStrategy anti drops a fingerprint-matched but by-design line."""
+    profile = ProjectProfile(
+        project="x", source_exts=(".go",),
+        dual_source_fingerprints=(CommentRegexStrategy(
+            name="both-write", pattern=r"to both \w+", anti=r"nbus:all"),),
+    )
+    _mk(tmp_path, "a.go", """\
+        // writes to both legacy_table and the new one  -> debt
+        // writes it to both nbus:x and nbus:all          -> by-design
+        func f() {}
+    """)
+    hits = dual_scan(str(tmp_path), profile=profile)
+    anchors = [h.anchor for h in hits if h.kind == "dual_write"]
+    assert any(a.endswith(":1") for a in anchors)      # debt line kept
+    assert not any(a.endswith(":2") for a in anchors)  # fanout line vetoed
+
+
+# ── NEW: named-replacement-file-exists fence refinement (hearth) ────────────────
+
+def test_named_replacement_file_exists_required(tmp_path):
+    """With require_named_replacement_file ON, a fence naming a PRESENT file fires;
+    a fence naming an ABSENT file does NOT (lifts hearth precision 25%→~90%)."""
+    profile = ProjectProfile(
+        project="hearth", source_exts=(".rs",),
+        require_named_replacement_file=True,
+    )
+    # present replacement -> real stale path
+    _mk(tmp_path, "crates/v/src/pipeline.rs", """\
+        //! DEPRECATED: Use engine.rs instead.
+        pub fn old() {}
+    """)
+    _mk(tmp_path, "crates/v/src/engine.rs", "pub fn new_engine() {}\n")
+    # absent replacement -> already resolved, must NOT fire
+    _mk(tmp_path, "crates/w/src/old2.rs", """\
+        //! DEPRECATED: Use gone_module.rs instead.
+        pub fn old2() {}
+    """)
+    hits = fence_scan(str(tmp_path), profile=profile, blame=False)
+    present = [h for h in hits if "pipeline.rs" in h.file]
+    absent = [h for h in hits if "old2.rs" in h.file]
+    assert present and present[0].named_file == "engine.rs"
+    assert present[0].named_file_exists is True
+    assert fence_is_candidate(present[0], require_named_replacement_file=True)
+    # the absent-file fence is parsed but is NOT a candidate under the flag
+    assert absent and absent[0].named_file_exists is False
+    assert not fence_is_candidate(absent[0], require_named_replacement_file=True)
+    # ...and WITHOUT the flag, the named-alt/later-fix base rule still governs
+    # (engine.rs fence has no _v2 alt and blame=False so later_fixes=0 -> base False)
+    assert not fence_is_candidate(present[0], require_named_replacement_file=False)
+
+
+# ── NEW: test_file_globs exclusion ──────────────────────────────────────────────
+
+def test_test_file_globs_exclude_dual_source(tmp_path):
+    """Test files (nbus_test.go default + a profile-added name) are excluded from
+    dual_source so synthetic test dual-writes don't inflate FP."""
+    profile = ProjectProfile(
+        project="tachyonac", source_exts=(".go",),
+        dual_source_fingerprints=(CommentRegexStrategy(
+            name="legacy", pattern=r"dual-write"),),
+    )
+    _mk(tmp_path, "internal/publisher.go", "// real dual-write bridge\nfunc f(){}\n")
+    _mk(tmp_path, "internal/nbus_test.go", "// test dual-write fixture\nfunc T(){}\n")
+    hits = dual_scan(str(tmp_path), profile=profile)
+    files = {h.anchor.split(":")[0] for h in hits if h.kind == "dual_write"}
+    assert "internal/publisher.go" in files
+    assert not any("nbus_test.go" in f for f in files)
+
+
+def test_test_file_globs_python_convention(tmp_path):
+    """Python test_*_dual_write.py is excluded by the default test_ filename glob."""
+    profile = ProjectProfile(project="deer-flow", source_exts=(".py",))
+    _mk(tmp_path, "app/router.py", "# dual-write during migration\nx=1\n")
+    _mk(tmp_path, "app/test_telemetry_router.py", "# dual-write fixture\ny=2\n")
+    _mk(tmp_path, "app/test_code_graph_dual_write.py", "# dual-write fixture\nz=3\n")
+    hits = dual_scan(str(tmp_path), profile=profile)
+    files = {h.anchor.split(":")[0] for h in hits if h.kind == "dual_write"}
+    assert "app/router.py" in files
+    assert not any("test_" in f for f in files)
+
+
+# ── NEW: dual_source worktree-copy dedup (Task 1a hermetic proof) ───────────────
+
+def test_dual_source_worktree_copies_collapse_to_one(tmp_path):
+    """A dual-write comment duplicated across two worktree-copy paths collapses to
+    a single hit (skip_globs drops .claude/worktrees + .worktrees; content-hash
+    dedup is belt-and-suspenders)."""
+    body = "// keep the cache and the index in sync\nfunc f(){}\n"
+    _mk(tmp_path, "internal/cache.go", body)
+    _mk(tmp_path, ".claude/worktrees/wt-a/internal/cache.go", body)
+    _mk(tmp_path, ".worktrees/wt-b/internal/cache.go", body)
+    profile = ProjectProfile(project="x", source_exts=(".go",))
+    hits = dual_scan(str(tmp_path), profile=profile)
+    dw = [h for h in hits if h.kind == "dual_write"]
+    assert len(dw) == 1
+    assert dw[0].anchor.startswith("internal/cache.go:")
+
+
+# ── NEW: Go parser handles LIVE-shape structs (tabs, tags, embedded fields) ──────
+
+def test_langpack_go_live_shape(tmp_path):
+    """Real Go: tab indent, struct tags, embedded field, pointer/slice types."""
+    recs = dict(langpacks.extract_all(
+        "type macroData struct {\n"
+        "\tFedFundsRate  float64 `json:\"fed_funds_rate\"`\n"
+        "\tDXY           float64\n"
+        "\tFetchedAt     time.Time\n"
+        "\tRates         []float64\n"
+        "\tDB            *pgxpool.Pool\n"
+        "}\n", ".go"))
+    assert "macroData" in recs
+    assert {"FedFundsRate", "DXY", "FetchedAt", "Rates", "DB"} <= recs["macroData"]
 
 
 def test_zero_config_defaults_any_repo(tmp_path):

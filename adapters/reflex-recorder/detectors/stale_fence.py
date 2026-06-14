@@ -65,6 +65,14 @@ _ANTI_FENCE = re.compile(
 # Comment-line heuristic (we only want fences in COMMENTS, not string literals).
 _COMMENT = re.compile(r"^\s*(//|#|\*|/\*|--|;)")
 
+# A replacement FILE/MODULE named in a fence: "DEPRECATED: Use engine.rs",
+# "use source/kernel.rs instead", "see foo/bar.py". We capture path-like tokens
+# with a source extension so we can check the file exists on disk (a fence that
+# names a still-present replacement is a high-confidence stale path).
+_NAMED_FILE = re.compile(
+    r"(?ix)\b(?:use|see|prefer|moved\s+to|replaced\s+by)\b[^\n]{0,60}?"
+    r"\b([\w./\-]+\.(?:rs|go|py|c|h|cc|cpp|hpp|ts|tsx|js|glsl|slang|comp))\b")
+
 # Symbol-at-or-below-fence: the code def the fence guards. Generic across langs.
 _SYMBOL = re.compile(
     r"(?x)\b(?:"
@@ -90,6 +98,8 @@ class FenceHit:
     introduced_date: str
     later_fixes: int     # # of fix/perf commits to this file AFTER the fence landed
     strong: bool
+    named_file: Optional[str] = None        # replacement file/module named in the fence
+    named_file_exists: Optional[bool] = None  # whether that file is present on disk
 
 
 def _iter_source(repo: Path, profile: ProjectProfile) -> Iterable[Path]:
@@ -103,6 +113,38 @@ def _iter_source(repo: Path, profile: ProjectProfile) -> Iterable[Path]:
             if profile.should_skip(str(p)):
                 continue
             yield p
+
+
+def _resolve_named_file(repo: Path, fence_file_rel: str, named: str) -> bool:
+    """True if *named* (a file/module mentioned in a fence) exists on disk.
+
+    Tries, in order: relative to the fence file's own directory (``Use engine.rs``
+    almost always means the sibling), relative to the repo root, and finally a
+    basename match anywhere in the tree (bounded). Conservative: a bare basename
+    that matches SOMEWHERE counts, because the fence asserting "use engine.rs"
+    only makes sense if some engine.rs exists.
+    """
+    named = named.strip().lstrip("./")
+    fence_dir = (repo / fence_file_rel).parent
+    # 1) sibling / relative-to-fence-dir
+    if (fence_dir / named).exists():
+        return True
+    # 2) relative to repo root
+    if (repo / named).exists():
+        return True
+    # 3) basename match anywhere (bounded scan)
+    base = os.path.basename(named)
+    if base and base != named:
+        # path with dirs given but not found above -> treat as absent
+        return False
+    found = 0
+    for p in repo.rglob(base):
+        if p.is_file():
+            return True
+        found += 1
+        if found > 50:
+            break
+    return False
 
 
 def _next_symbol(lines: list[str], idx: int) -> str:
@@ -214,6 +256,13 @@ def scan(
             window = " ".join(lines[max(0, i - 1): i + 3])
             alt_m = named_alt_re.search(window)
             alt = alt_m.group(0) if alt_m else None
+            # A replacement FILE named in the fence (e.g. "Use engine.rs").
+            named_file: Optional[str] = None
+            file_exists: Optional[bool] = None
+            fm = _NAMED_FILE.search(window)
+            if fm:
+                named_file = fm.group(1)
+                file_exists = _resolve_named_file(repo, rel, named_file)
             symbol = _next_symbol(lines, i + 1)
             sha, date, later = "", "", 0
             if blame:
@@ -223,14 +272,31 @@ def scan(
                 file=rel, line=i + 1, text=ln.strip()[:200],
                 symbol=symbol, named_alt=alt, introduced=sha, introduced_date=date,
                 later_fixes=later, strong=strong,
+                named_file=named_file, named_file_exists=file_exists,
             ))
     return hits
 
 
-def is_stale_candidate(h: FenceHit) -> bool:
-    """A fence worth surfacing: strong language AND (a named alternative still
-    exists OR the justifying bug likely got fixed later). High precision."""
-    return h.strong and (h.named_alt is not None or h.later_fixes >= 1)
+def is_stale_candidate(h: FenceHit, *, require_named_replacement_file: bool = False) -> bool:
+    """A fence worth surfacing: strong language AND a corroborating signal.
+
+    Base signal (high precision): strong fence language AND (a named alternative
+    symbol exists OR the justifying bug likely got fixed later).
+
+    When *require_named_replacement_file* is True (a profile flag), the fence MUST
+    additionally name a replacement file that EXISTS on disk. The probe showed
+    this lifts hearth fence precision 25%→~90%: ``DEPRECATED: Use engine.rs`` is
+    real debt only because ``engine.rs`` is present; a fence naming a file that no
+    longer exists is already-resolved and should not fire.
+    """
+    if not h.strong:
+        return False
+    if require_named_replacement_file:
+        # A present named replacement file IS the corroboration (it proves the
+        # deprecated path's successor still exists); the alt-symbol/later-fix
+        # signals are not required in this mode.
+        return h.named_file is not None and h.named_file_exists is True
+    return h.named_alt is not None or h.later_fixes >= 1
 
 
 class GenericStaleFenceDetector(BaseDetector):
@@ -255,8 +321,9 @@ class GenericStaleFenceDetector(BaseDetector):
         project = self._profile.project
         head = _git(Path(self._repo), "rev-parse", "--short", "HEAD").strip() or "WORKTREE"
         out: list[PatternCandidate] = []
+        require_file = self._profile.require_named_replacement_file
         for h in scan(self._repo, profile=self._profile):
-            if not is_stale_candidate(h):
+            if not is_stale_candidate(h, require_named_replacement_file=require_file):
                 continue
             anchor = f"{h.file}:{h.symbol or h.line}"
             ev = [
@@ -265,6 +332,9 @@ class GenericStaleFenceDetector(BaseDetector):
             ]
             if h.named_alt:
                 ev.append(f"named replacement present: {h.named_alt}")
+            if h.named_file:
+                ev.append(f"names replacement file {h.named_file} "
+                          f"({'present' if h.named_file_exists else 'absent'} on disk)")
             if h.later_fixes:
                 ev.append(f"{h.later_fixes} fix/perf commit(s) to this file since the "
                           f"fence landed — its reason may be stale")
@@ -277,6 +347,8 @@ class GenericStaleFenceDetector(BaseDetector):
                     f"callers to {h.named_alt or 'the live path'} and delete the "
                     f"deprecated path."),
                 extra={"file": h.file, "line": h.line, "symbol": h.symbol,
-                       "named_alt": h.named_alt, "later_fixes": h.later_fixes},
+                       "named_alt": h.named_alt, "later_fixes": h.later_fixes,
+                       "named_file": h.named_file,
+                       "named_file_exists": h.named_file_exists},
             ))
         return out

@@ -112,8 +112,11 @@ def _iter_source(repo: Path, profile: ProjectProfile) -> Iterable[Path]:
         for p in root.rglob("*"):
             if not p.is_file() or p.suffix not in profile.source_exts:
                 continue
-            # dual_source never scans test files (synthetic structs are noise).
-            if profile.should_skip(str(p)) or "/tests/" in str(p) or "/test/" in str(p):
+            # dual_source never scans test files (synthetic structs + test
+            # dual-write comments are noise). The set of test markers is
+            # profile-supplied (test_file_globs) so projects can add bespoke
+            # names (nbus_test.go, test_*_dual_write.py).
+            if profile.should_skip(str(p)) or profile.is_test_file(str(p)):
                 continue
             yield p
 
@@ -177,8 +180,11 @@ def scan(repo_root: str, *, profile: ProjectProfile = DEFAULT_PROFILE) -> list[D
         except Exception:
             continue  # one broken strategy never sinks the scan
 
-    # 2) sync maps (excluding unit conversions / VK enums / color-space / offsets)
-    for mp, rel in sync_maps.items():
+    # 2) sync maps — OPT-IN per profile. The probe proved X_TO_Y is nearly all
+    #    false-positive outside tengine (color-space / pose / dispatch / lookup
+    #    tables), so the generic default leaves sync_map_enabled OFF; tengine (the
+    #    one project with real hand-maintained address bridges) turns it on.
+    for mp, rel in (sync_maps.items() if profile.sync_map_enabled else ()):
         if _NOT_SYNC_MAP.search(mp) or any(rx.search(mp) for rx in sync_excludes):
             continue
         _add("sync_map", mp,
