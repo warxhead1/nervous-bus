@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bus.workflow.agent.dispatch.v1",
+  "title": "Workflow agent dispatch",
+  "description": "One per agent() spawned by the Workflow tool. Workflow-runtime agents do NOT fire Claude Code's Agent/Task PreToolUse or SubagentStart hooks, so they are invisible to the live bus per-agent. This channel is reconstructed by the reflexarc workflow_dispatch ingester reading the on-disk workflow journal + agent transcripts (complete across all phases, never pruned), giving full per-agent dispatch visibility — the prompt the orchestrator handed each workflow agent, its label, and lineage back to the parent session.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["ts", "wf_run_id", "agent_id", "prompt"],
+  "properties": {
+    "ts": {"type": "string", "description": "RFC3339 UTC dispatch timestamp (agent transcript line-0 timestamp)."},
+    "event": {"type": "string", "const": "workflow_agent_dispatch"},
+    "wf_run_id": {"type": "string", "description": "Workflow run id, e.g. wf_7d1067aa-116."},
+    "agent_id": {"type": "string", "description": "Stable per-agent hex id (equals the transcript agentId)."},
+    "slug": {"type": "string", "description": "Per-RUN human slug shared across the run's agents (e.g. 'buzzing-leaping-bentley'). NOT a per-agent label — the agent() label lives only in the workflow JS source, not on disk; the prompt is the authoritative per-agent signal."},
+    "agent_type": {"type": "string", "description": "From agent-<hex>.meta.json, e.g. 'workflow-subagent'."},
+    "model": {"type": "string", "description": "Model the agent ran under, when resolvable from the transcript."},
+    "parent_session_id": {"type": "string", "description": "The orchestrator session that launched the workflow (transcript sessionId)."},
+    "project": {"type": "string", "description": "Project slug derived from the agent cwd."},
+    "cwd": {"type": "string", "description": "Working directory the agent ran in."},
+    "git_branch": {"type": "string", "description": "Git branch at dispatch."},
+    "prompt": {"type": "string", "description": "The dispatch prompt handed to the agent, bounded for bus transport. The full untruncated prompt is at transcript_path line 0."},
+    "prompt_chars": {"type": "integer", "minimum": 0, "description": "Full (untruncated) prompt length in characters — so consumers know how much the bound clipped."},
+    "transcript_path": {"type": "string", "description": "Absolute path to the agent transcript whose line 0 holds the full prompt (the join target for deep analysis)."},
+    "schema_version": {"type": "string"}
+  }
+}
