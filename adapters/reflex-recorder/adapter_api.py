@@ -125,6 +125,38 @@ class ProjectAdapter(ABC):
         """Map DETECTOR_NAME → replay(conn, signature, ...) for eval scoring."""
         return {}
 
+    def project_profile(self):
+        """Return this project's :class:`ProjectProfile` for the GENERIC
+        structural-debt detectors (stale_fence, dual_source), or None to use the
+        engine's zero-config DEFAULT_PROFILE.
+
+        This is the thin per-project SEMANTIC layer: which dirs to walk, which
+        migration-twin suffixes name a deferred path, and the dual-source
+        FINGERPRINT shape (tengine: ``*_addr`` device-address tables). The
+        generic detectors live in the engine and run on ANY repo; the profile
+        only sharpens precision.
+        """
+        return None
+
+
+def profile_for(project: str, adapters: Optional[list["ProjectAdapter"]] = None):
+    """Resolve the ProjectProfile for *project* (adapter's, or DEFAULT_PROFILE).
+
+    Importing DEFAULT_PROFILE lazily keeps adapter_api free of a hard dep on the
+    detectors package (which imports back into adapter_api in some setups).
+    """
+    from detectors.profiles import DEFAULT_PROFILE  # local import: avoid cycle
+    adapters = adapters if adapters is not None else load_adapters()
+    a = adapter_for(project, adapters)
+    if a is not None:
+        try:
+            prof = a.project_profile()
+            if prof is not None:
+                return prof
+        except Exception:
+            pass
+    return DEFAULT_PROFILE
+
 
 # ── discovery / registry ─────────────────────────────────────────────────────
 
