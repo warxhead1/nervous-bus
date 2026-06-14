@@ -1,0 +1,18 @@
+[Unit]
+Description=Reflexarc Tier-2 off-peak deer-flow analyst over labeled runs
+After=network-online.target redis.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/nervous-bus/adapters/reflex-recorder/tier2
+# Pyenv 3.11.13 — keep in sync with rest of reflex-recorder stack
+ExecStart=%h/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/reflex-recorder/tier2/analyst.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tier2-analyst
+TimeoutSec=600
+ReadWritePaths=%h/.cache/nervous-bus
+
+[Install]
+WantedBy=default.target

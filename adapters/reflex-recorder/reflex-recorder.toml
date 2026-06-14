@@ -1,0 +1,24 @@
+# reflex-recorder.toml — configuration for the Reflexarc run capture adapter
+
+[redis]
+url = "redis://localhost:6379"
+db = 0
+connect_timeout_s = 5.0
+
+[recorder]
+# Idle timeout: close a run after this many seconds with no new events
+idle_timeout_s = 900.0
+
+# How often to log metrics to stderr
+metrics_interval_s = 60.0
+
+# How often to check for idle runs (must be << idle_timeout_s)
+tick_interval_s = 30.0
+
+# Redis XREADGROUP read parameters
+stream_read_count = 200
+stream_block_ms = 2000
+
+[store]
+# SQLite database path (default: ~/.cache/nervous-bus/reflex/runs.db)
+# db_path = "~/.cache/nervous-bus/reflex/runs.db"

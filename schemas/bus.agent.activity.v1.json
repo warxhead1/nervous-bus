@@ -77,6 +77,43 @@
     "iter": {
       "type": "integer",
       "description": "Iteration number within the agent session. Present on a subset of events."
+    },
+    "input_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Input tokens for the LLM turn that produced this tool call, read from the transcript by claude-hook-fast. Reflexarc folds these into run.closed `features` (tokens_input_total) for cost/efficiency signals."
+    },
+    "output_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Output tokens for the LLM turn that produced this tool call (from the transcript)."
+    },
+    "cache_read_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Prompt-cache read tokens for the turn. Omitted when 0. Feeds cache_hit_rate in run.closed features."
+    },
+    "cache_write_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Prompt-cache creation tokens for the turn. Omitted when 0."
+    },
+    "model": {
+      "type": "string",
+      "description": "Model id that produced the turn (e.g. 'claude-opus-4-8', 'claude-sonnet-4-6'), from the transcript. Feeds run.closed features.primary_model."
+    },
+    "tool_use_id": {
+      "type": "string",
+      "description": "Stable tool-call id ('toolu_...') from the hook stdin. Used to dedupe activity on re-ingestion."
+    },
+    "tool_is_error": {
+      "type": "boolean",
+      "description": "Whether the tool call resulted in an error, from the hook stdin (Claude Code ~2.1+). Feeds run.closed features.tool_error_rate without transcript mining."
+    },
+    "tool_error_type": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "Short label for the error class (e.g. 'exit_code'), parsed from tool_response. Present only when tool_is_error is true."
     }
   },
   "additionalProperties": true

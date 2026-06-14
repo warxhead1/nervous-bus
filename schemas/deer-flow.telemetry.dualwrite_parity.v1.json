@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.telemetry.dualwrite_parity.v1.json",
+  "title": "deer-flow.telemetry.dualwrite_parity v1",
+  "description": "Postgres mirror divergence signal during the deer-flow SQLite->PostgreSQL dual-write migration. Emitted by DatabaseRouter when a Postgres write fails while the corresponding SQLite write succeeded, meaning the Postgres mirror is measurably falling behind. The local SQLite save is never blocked (that invariant is intentional); this event makes the otherwise-silent drift observable so Reflexarc / deer-watch can track migration health and gate promotion. pg_write_failures is the cumulative lag count per db since process start. Migration health only — carries no row payloads, so it is public.",
+  "type": "object",
+  "required": ["db", "pg_write_failures", "pg_writes_attempted"],
+  "properties": {
+    "db": {
+      "type": "string",
+      "description": "logical telemetry DB whose mirror diverged",
+      "enum": ["probes", "audits", "code_graph"]
+    },
+    "repo": {
+      "type": ["string", "null"],
+      "description": "per-repo schema owner for code_graph (e.g. code_graph_deer_flow); null for single-schema dbs"
+    },
+    "pg_write_failures": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "cumulative failed Postgres writes for this db since process start — how far the mirror may be lagging SQLite"
+    },
+    "pg_writes_attempted": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "cumulative attempted Postgres writes for this db since process start"
+    },
+    "parity_check": {
+      "type": "string",
+      "description": "parity verdict; this channel only ever emits on divergence",
+      "enum": ["diverged"]
+    },
+    "last_error": {
+      "type": "string",
+      "description": "stringified most-recent Postgres exception (truncated to 500 chars)"
+    },
+    "table": {
+      "type": "string",
+      "description": "schema-qualified table the failing write targeted, if known"
+    }
+  }
+}
