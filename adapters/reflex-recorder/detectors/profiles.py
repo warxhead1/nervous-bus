@@ -264,6 +264,104 @@ class MultiLineCommentStrategy(DualSourceStrategy):
         return out
 
 
+class ChannelSchemaStrategy(DualSourceStrategy):
+    """Phantom-contract fingerprint: a bus channel is EMITTED but no schema file
+    covers it.
+
+    The dual-source here is the *contract*: a producer asserts a channel exists,
+    but ``schemas/`` has no matching ``<channel>[.vN].json`` — so validation
+    silently no-ops (redis-mirror logs an ``unknown_channels`` warning and lets
+    the event through unchecked). This is the recurrence-tracked, any-project
+    sibling of the one-shot CI ``schema-coverage`` gate: the gate scans a fixed
+    producer set (hearth-loom + deer-flow); this scans whatever roots the profile
+    names — e.g. the ``autobench`` kernel loops the gate never looks at.
+
+    Generic + parameterized; all project specifics live in the profile:
+
+    emit_patterns     : regexes, each with ONE capture group = the channel
+                        literal, one per publish dialect — shell
+                        ``nervous publish <c>``, python ``self._publish("c")``,
+                        a Go envelope ``Type: "c"``.
+    schemas_subdir    : dir under ``repo_root`` holding ``<channel>[.vN].json``.
+    allowlist_relpath : optional file of exempt channels (one per line, ``#``
+                        comments) — reuses the existing schema-coverage allowlist
+                        so the two gates can't disagree.
+
+    Anchor is the channel name (stable across edits / file moves), so surviving
+    phantom contracts climb ``recurrence_count`` instead of re-minting.
+    """
+
+    name = "channel_schema_gap"
+
+    def __init__(self, *, emit_patterns: tuple[str, ...],
+                 schemas_subdir: str = "schemas",
+                 allowlist_relpath: Optional[str] = None,
+                 name: str = "channel_schema_gap"):
+        self.name = name
+        self.schemas_subdir = schemas_subdir
+        self.allowlist_relpath = allowlist_relpath
+        self._rx = [re.compile(p) for p in emit_patterns]
+
+    @staticmethod
+    def _base(channel: str) -> str:
+        """Strip a trailing ``.v<N>`` so ``foo.bar.v1`` → ``foo.bar``."""
+        head, _, tail = channel.rpartition(".")
+        if head and tail.startswith("v") and tail[1:].isdigit():
+            return head
+        return channel
+
+    def _schema_bases(self, schemas_dir: Path) -> set[str]:
+        bases: set[str] = set()
+        if not schemas_dir.is_dir():
+            return bases
+        for p in schemas_dir.glob("*.json"):
+            if p.name.startswith("_"):
+                continue
+            stem = p.name[: -len(".json")]
+            bases.add(stem)             # fully-qualified, e.g. kernel.started.v1
+            bases.add(self._base(stem))  # unversioned, e.g. kernel.started
+        return bases
+
+    def _allowlist(self, repo_root: Path) -> set[str]:
+        if not self.allowlist_relpath:
+            return set()
+        path = repo_root / self.allowlist_relpath
+        if not path.is_file():
+            return set()
+        out: set[str] = set()
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw.split("#", 1)[0].strip()
+            if line:
+                out.add(line)
+        return out
+
+    def find(self, ctx: ScanContext) -> list[DualCandidate]:
+        bases = self._schema_bases(ctx.repo_root / self.schemas_subdir)
+        allow = self._allowlist(ctx.repo_root)
+        # channel -> first (rel, line) seen; one candidate per channel.
+        seen: dict[str, tuple[str, int]] = {}
+        for rel, txt in ctx.texts:
+            for i, ln in enumerate(txt.splitlines(), 1):
+                for rx in self._rx:
+                    for m in rx.finditer(ln):
+                        ch = m.group(1)
+                        if ch in seen or ch in allow:
+                            continue
+                        if ch in bases or self._base(ch) in bases:
+                            continue
+                        seen[ch] = (rel, i)
+        out: list[DualCandidate] = []
+        for ch, (rel, line) in sorted(seen.items()):
+            out.append(DualCandidate(
+                kind="channel_schema_gap",
+                anchor=ch,
+                detail=f"channel '{ch}' is emitted ({rel}:{line}) but no schema "
+                       f"covers it in {self.schemas_subdir}/ — unvalidated phantom contract",
+                evidence=[f"{rel}:{line}"],
+            ))
+        return out
+
+
 # Generic field-overlap: any two structs sharing many identical meaningful field
 # names are parallel representations — regardless of project. Higher threshold
 # than a project-specific fingerprint because, without semantic narrowing, more

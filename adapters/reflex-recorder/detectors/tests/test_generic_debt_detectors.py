@@ -212,6 +212,70 @@ def test_custom_channel_schema_strategy_admitted(tmp_path):
     assert "kernel.session" not in gaps
 
 
+# ── the PROMOTED ChannelSchemaStrategy (engine palette) ─────────────────────────
+
+def _channel_profile(allowlist_relpath=None):
+    from detectors.profiles import ChannelSchemaStrategy
+    _CH = r"([a-z0-9_]+(?:\.[a-z0-9_]+)+)"
+    return ProjectProfile(
+        project="nervous-bus", scan_roots=("src",), source_exts=(".py", ".sh"),
+        dual_source_fingerprints=(ChannelSchemaStrategy(
+            emit_patterns=(
+                rf'_publish\(\s*["\']{_CH}["\']',
+                rf'publish\w*\(\s*["\']{_CH}["\']',
+                rf'nervous\s+publish\s+["\']?{_CH}',
+            ),
+            allowlist_relpath=allowlist_relpath,
+        ),),
+    )
+
+
+def test_channel_schema_gap_flags_unschemad_and_respects_versioning(tmp_path):
+    """A versioned schema file covers both the bare and .vN channel spellings;
+    an emit with no schema is a phantom contract."""
+    _mk(tmp_path, "schemas/kernel.started.v1.json", "{}")
+    _mk(tmp_path, "src/loop.py", """\
+        def run(self):
+            self._publish("kernel.started.v1", {})   # exact .v1 -> covered
+            self._publish("kernel.started", {})        # versionless -> covered
+            self._publish("tsp.kernel.started.v1", {}) # legacy, no schema -> GAP
+    """)
+    gaps = {h.anchor for h in dual_scan(str(tmp_path), profile=_channel_profile())
+            if h.kind == "channel_schema_gap"}
+    assert gaps == {"tsp.kernel.started.v1"}
+
+
+def test_channel_schema_gap_multidialect_and_dedup(tmp_path):
+    """Shell `nervous publish`, `publish_to_bus(...)`, and `_publish(...)` all
+    extract; the same channel emitted twice yields ONE candidate."""
+    _mk(tmp_path, "src/a.sh", 'nervous publish legacy.alpha.v1 "$payload"\n')
+    _mk(tmp_path, "src/b.py", """\
+        def go(self):
+            publish_to_bus("legacy.beta.v1", {})
+            self._publish("legacy.beta.v1", {})   # duplicate -> still one candidate
+    """)
+    hits = [h for h in dual_scan(str(tmp_path), profile=_channel_profile())
+            if h.kind == "channel_schema_gap"]
+    gaps = sorted(h.anchor for h in hits)
+    assert gaps == ["legacy.alpha.v1", "legacy.beta.v1"]
+    assert len(hits) == 2  # beta deduped despite two emit sites
+
+
+def test_channel_schema_gap_allowlist_exempts(tmp_path):
+    """A channel listed in the reused schema-coverage allowlist is not flagged."""
+    _mk(tmp_path, "schemas/.keep", "")
+    _mk(tmp_path, "tools/allow.txt", "# exempt\nlegacy.exempt.v1  # tracked by bead\n")
+    _mk(tmp_path, "src/p.py", """\
+        def go(self):
+            self._publish("legacy.exempt.v1", {})   # allowlisted -> ok
+            self._publish("legacy.flagged.v1", {})   # not -> GAP
+    """)
+    prof = _channel_profile(allowlist_relpath="tools/allow.txt")
+    gaps = {h.anchor for h in dual_scan(str(tmp_path), profile=prof)
+            if h.kind == "channel_schema_gap"}
+    assert gaps == {"legacy.flagged.v1"}
+
+
 # ── the tengine *_addr fingerprint (reference profile) ──────────────────────────
 
 def test_tengine_addr_fingerprint(tmp_path):
