@@ -220,3 +220,34 @@ journalctl --user -u nervous-transcript-snapshot.service -n 50
 
 Stdlib only (no `pip`), no network. The destination is a durable archive
 that retains content even after the worktree is reaped.
+
+## Struggle Ledger
+
+`struggle_ledger.py` answers a different question than the quality detectors: not
+"did the agent verify its work?" but **"what are the agents fighting, is it shared,
+and has it been fixed?"** — the lived friction the verified-% scorecards throw away.
+
+It reads the durable transcript archive (mirrored by `transcript_snapshot.py`),
+classifies records against `StruggleClass` patterns (generic friction shipped by the
+engine — cargo build-lock, address-in-use, OOM — plus project-specific ones a private
+adapter contributes via `ProjectAdapter.struggle_classes()`, so proprietary tool names
+stay private), and for each struggle builds a longitudinal record:
+
+- events, distinct sessions/agents, first/last seen, daily sparkline
+- **status** — `open` (still happening) / `dormant` / `resolved`
+- **fix verdict** — correlates the friction curve against remediation events
+  (fix-commits, bead closes) to score whether a claimed fix actually dropped it:
+  `fixed` / `partial_still_open` / `unfixed_open` / `unfixed_no_attempt` /
+  `resolved_no_fix_found`. Picks the remediation that best explains the decline
+  (largest before→after drop), not merely the latest.
+
+```bash
+python3 struggle_ledger.py                      # whole-fleet ledger
+python3 struggle_ledger.py --project tengine     # one project
+python3 struggle_ledger.py --struggle gpu_lock_wait --project tengine  # drill-in: timeline + examples + fix
+python3 struggle_ledger.py --json                # machine-readable
+```
+
+The fix-correlation is an honest heuristic (keyword-matched remediations, ±7-day
+before/after windows, edge-truncation flagged) — a starting signal for "is this wall
+still standing", not a proof.
