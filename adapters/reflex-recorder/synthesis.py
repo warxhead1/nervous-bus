@@ -60,6 +60,8 @@ from detectors.edit_build_fail_revert import EditBuildFailRevertDetector
 from detectors.reread_same_file import RereadSameFileDetector
 from detectors.red_baseline_dispatch import RedBaselineDispatchDetector
 from detectors.unverified_completion import UnverifiedCompletionDetector
+from detectors.directive_ground_truth_mismatch import DirectiveGroundTruthMismatchDetector
+from detectors.inherited_rationalization import InheritedRationalizationDetector
 from adapter_api import load_adapters
 
 # ---------------------------------------------------------------------------
@@ -139,6 +141,8 @@ _BUILTIN_DETECTOR_CLASSES: list[type[BaseDetector]] = [
     RereadSameFileDetector,
     RedBaselineDispatchDetector,
     UnverifiedCompletionDetector,
+    DirectiveGroundTruthMismatchDetector,
+    InheritedRationalizationDetector,
 ]
 
 
