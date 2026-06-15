@@ -13,11 +13,17 @@ This directory is the **generic Reflexarc engine** and is PUBLIC. It ships:
   `file_reads_to_finding`) and **rust-ecosystem** detectors (`rebuild_cache_miss`,
   `edit_build_fail_revert` — they key on `cargo` alone, not any one project),
 - **orchestration-quality** detectors (`red_baseline_dispatch`,
-  `unverified_completion`) built on the dispatch-lineage substrate
+  `unverified_completion`, `directive_ground_truth_mismatch`,
+  `inherited_rationalization`) built on the dispatch-lineage substrate
   (`detectors/dispatch_lineage.py`): they reason about how runs were *spawned* —
-  fan-outs launched on a red/unestablished baseline (A1) and delegated agents that
-  shipped code edits with no build/test (the grounded MAST "no-verification-step"
-  mode). See the spec in the kb vault (`reflexarc-orchestration-detectors.md`),
+  fan-outs launched on a red/unestablished baseline (A1), a dispatch prompt
+  asserting a clean baseline that reality contradicts (A2), delegated agents that
+  shipped code edits with no build/test (grounded MAST "no-verification-step", F1),
+  and sibling cohorts that converged on a seeded bad outcome (C1, session-scoped
+  via the cohort→child-outcome join). The substrate is truncation-tolerant
+  (bounded summaries are regex-recovered) and joins lineage at SESSION scope
+  (delegated agents are folded into the parent session, split across idle runs).
+  See the spec in the kb vault (`reflexarc-orchestration-detectors.md`),
 - the inductive trajectory profiler (`tier2/trajectory_profile.py`),
 - the **project-adapter contract** (`adapter_api.py`) + a scaffold
   (`templates/reflex-adapter/`).

@@ -59,6 +59,35 @@ DEFAULT_COHORT_WINDOW_S = 90.0
 
 # ── Unified dispatch record ─────────────────────────────────────────────────────
 
+# ── Truncation-tolerant field extraction ────────────────────────────────────────
+#
+# tool_summary / tool_response_summary are BOUNDED (Bash 200c, dispatch tools
+# 1000c). When the underlying JSON is longer than the bound it is cut mid-string,
+# so json.loads (what _parse_summary does) FAILS and returns {} — silently losing
+# fields that are textually present. The fields we join on (agentId, model, name)
+# appear BEFORE the long prompt, so they survive truncation as raw text. These
+# helpers recover them: try the parsed dict first, then regex the raw string.
+
+def _summary_field(raw: str, key: str) -> str:
+    """Extract a string field from a possibly-truncated summary JSON string."""
+    if not raw:
+        return ""
+    parsed = _parse_summary(raw)
+    val = parsed.get(key)
+    if isinstance(val, str) and val:
+        return val
+    m = re.search(r'"' + re.escape(key) + r'"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
+    return m.group(1) if m else ""
+
+
+def _summary_contains(raw: str, *needles: str) -> bool:
+    """True if any needle appears in the raw summary string (truncation-proof)."""
+    if not raw:
+        return False
+    low = raw.lower()
+    return any(n.lower() in low for n in needles)
+
+
 @dataclass
 class Dispatch:
     """One Agent/Task dispatch extracted from a parent run's activity stream.
@@ -107,19 +136,22 @@ def parse_dispatches(events: list[dict]) -> list[Dispatch]:
     for ev in events:
         if ev.get("tool_name") not in DISPATCH_TOOLS:
             continue
-        ts = _parse_summary(ev.get("tool_summary", ""))
-        rs = _parse_summary(ev.get("tool_response_summary", ""))
+        raw_ts = ev.get("tool_summary", "") or ""
+        raw_rs = ev.get("tool_response_summary", "") or ""
+        # Truncation-tolerant: these fields precede the long prompt, so regex
+        # recovers them even when the bounded JSON is cut and json.loads fails.
         out.append(
             Dispatch(
                 seq=ev.get("seq", 0),
                 ts=ev.get("ts", "") or "",
                 tool_name=ev.get("tool_name", ""),
-                child_agent_id=str(rs.get("agentId", "") or ""),
-                prompt=str(ts.get("prompt", "") or ""),
-                model=str(ts.get("model", "") or ""),
-                name=str(ts.get("name", "") or ""),
-                isolation=str(ts.get("isolation", "") or ""),
-                description=str(ts.get("description", "") or rs.get("description", "") or ""),
+                child_agent_id=_summary_field(raw_rs, "agentId"),
+                prompt=_summary_field(raw_ts, "prompt"),
+                model=_summary_field(raw_ts, "model"),
+                name=_summary_field(raw_ts, "name"),
+                isolation=_summary_field(raw_ts, "isolation"),
+                description=(_summary_field(raw_ts, "description")
+                            or _summary_field(raw_rs, "description")),
             )
         )
     return out
@@ -274,6 +306,58 @@ def load_run_events(conn, run_id: str) -> list[dict]:
     return out
 
 
+def session_run_ids(conn) -> dict[str, list[str]]:
+    """Map session_id -> [run_id, ...] from the runs table.
+
+    The segmenter splits one host session into several idle-bounded runs, so a
+    fan-out dispatch and the child worktree activity it spawned usually land in
+    DIFFERENT runs of the same session. Lineage joins (cohort -> child outcome)
+    must therefore pool a session's runs, not look within one run. Runs with a
+    NULL session_id are skipped (nothing to pool them by).
+    """
+    out: dict[str, list[str]] = {}
+    for session_id, run_id in conn.execute(
+        "SELECT session_id, run_id FROM runs WHERE session_id IS NOT NULL ORDER BY started"
+    ).fetchall():
+        out.setdefault(session_id, []).append(run_id)
+    return out
+
+
+def load_session_events(conn, run_ids: list[str]) -> list[dict]:
+    """Pool every run's events for one session, ordered globally by time.
+
+    Per-run `seq` resets to 1 in each idle-split run, so it cannot order a pooled
+    session. We order by event_ts (the recorder's wall-clock) and reassign a
+    monotonic synthetic `seq` so downstream cohort grouping / backscans see one
+    coherent timeline.
+    """
+    if not run_ids:
+        return []
+    placeholders = ",".join("?" * len(run_ids))
+    cur = conn.execute(
+        f"SELECT event_ts, raw_json FROM run_events "
+        f"WHERE run_id IN ({placeholders}) ORDER BY event_ts, seq",
+        run_ids,
+    )
+    out: list[dict] = []
+    for i, (event_ts, raw_json) in enumerate(cur.fetchall()):
+        try:
+            raw = json.loads(raw_json)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        data = raw.get("data", {})
+        out.append({
+            "seq": i,
+            "tool_name": data.get("tool_name", ""),
+            "cwd": data.get("cwd", ""),
+            "tool_summary": data.get("tool_summary", ""),
+            "tool_response_summary": data.get("tool_response_summary", ""),
+            "project": data.get("project", ""),
+            "ts": data.get("ts", "") or raw.get("time", "") or event_ts,
+        })
+    return out
+
+
 def has_code_edit(events: list[dict]) -> bool:
     """True if the run made any code modification (Edit/Write tool call)."""
     return any(e.get("tool_name") in ("Edit", "Write") for e in events)
@@ -350,3 +434,140 @@ def segment_by_worktree(events: list[dict]) -> dict[str, WorktreeSegment]:
             if _is_build_command(ts.get("command", "") or ""):
                 seg.build_test_count += 1
     return segments
+
+
+# ── Per-subagent outcome derivation ─────────────────────────────────────────────
+#
+# The recorder emits no per-subagent close or outcome (delegated agents are folded
+# into the parent host run; only host sessions close, always on idle_timeout). The
+# proper fix is a SubagentStop emission (bead nervous-bus-jvzkn.8). Until then we
+# DERIVE a per-subagent outcome from the segment's own trajectory — grounded,
+# signal-based, and honest: we report what the agent DID (verified / left red /
+# unverified / committed), not a success/fail verdict (which needs the parent's
+# acceptance check we don't have).
+
+# Bash command fragments indicating the agent committed its work.
+_COMMIT_KEYWORDS = ("git commit", "git push")
+
+
+@dataclass
+class SubagentOutcome:
+    """Derived outcome signals for one delegated agent (worktree segment)."""
+    slug: str
+    child_agent_id: str
+    project: str
+    edit_count: int
+    build_test_count: int
+    last_test_status: str        # "passed" | "failed" | "none"
+    committed: bool
+    outcome_class: str           # see _classify below
+    event_count: int
+
+    @property
+    def is_clean_finish(self) -> bool:
+        """A finish we'd trust: edited, last test passed, work committed."""
+        return self.outcome_class == "verified" and self.committed
+
+
+def _last_test_status_in_segment(events: list[dict]) -> str:
+    """Status of the LAST build/test in a segment: passed/failed/none."""
+    for e in reversed(events):
+        if e.get("tool_name") != "Bash":
+            continue
+        ts = _parse_summary(e.get("tool_summary", ""))
+        if not _is_build_command(ts.get("command", "") or ""):
+            continue
+        rs = _parse_summary(e.get("tool_response_summary", ""))
+        if _has_fail_output(rs.get("stdout", "") or "", rs.get("stderr", "") or ""):
+            return "failed"
+        return "passed"
+    return "none"
+
+
+def _segment_committed(events: list[dict]) -> bool:
+    for e in events:
+        if e.get("tool_name") != "Bash":
+            continue
+        # Truncation-tolerant: a long `git commit -m "..."` truncates the bounded
+        # tool_summary JSON, so match the substring on the raw string.
+        if _summary_contains(e.get("tool_summary", ""), *_COMMIT_KEYWORDS):
+            return True
+    return False
+
+
+def _classify(edit_count: int, last_test_status: str, committed: bool) -> str:
+    """Map signals to a derived outcome class.
+
+    readonly   — made no code edits (investigation / read-only agent)
+    left_red   — edited code and its LAST build/test was failing (shipped red)
+    unverified — edited code and ran NO build/test at all (the F1 case)
+    verified   — edited code and its last build/test passed
+    """
+    if edit_count == 0:
+        return "readonly"
+    if last_test_status == "failed":
+        return "left_red"
+    if last_test_status == "none":
+        return "unverified"
+    return "verified"
+
+
+def derive_subagent_outcomes(
+    events: list[dict],
+    project: str = "",
+) -> dict[str, SubagentOutcome]:
+    """Derive a per-delegated-agent outcome record for every worktree segment.
+
+    Built on segment_by_worktree; adds last-test status, commit signal, and a
+    derived outcome class. `project` falls back to each event's own project tag
+    when not supplied.
+    """
+    out: dict[str, SubagentOutcome] = {}
+    for slug, seg in segment_by_worktree(events).items():
+        proj = project or (seg.events[0].get("project", "") if seg.events else "")
+        last_status = _last_test_status_in_segment(seg.events)
+        committed = _segment_committed(seg.events)
+        out[slug] = SubagentOutcome(
+            slug=slug,
+            child_agent_id=seg.child_agent_id,
+            project=proj,
+            edit_count=seg.edit_count,
+            build_test_count=seg.build_test_count,
+            last_test_status=last_status,
+            committed=committed,
+            outcome_class=_classify(seg.edit_count, last_status, committed),
+            event_count=len(seg.events),
+        )
+    return out
+
+
+# ── Cohort → child join ─────────────────────────────────────────────────────────
+
+@dataclass
+class CohortChild:
+    """One dispatch joined to the delegated agent it spawned (if recoverable)."""
+    dispatch: Dispatch
+    outcome: Optional[SubagentOutcome]   # None if no worktree segment matched
+
+    @property
+    def matched(self) -> bool:
+        return self.outcome is not None
+
+
+def join_cohort_to_children(
+    cohort: list[Dispatch],
+    outcomes: dict[str, SubagentOutcome],
+) -> list[CohortChild]:
+    """Join a fan-out cohort to its children via child_agent_id == segment slug.
+
+    `outcomes` is the dict from derive_subagent_outcomes (keyed by slug). The
+    match is dispatch.child_agent_id == outcome.child_agent_id (the slug stripped
+    of its `agent-` prefix). A dispatch whose child ran in the main tree (no
+    worktree) or whose response summary was truncated before agentId yields a
+    CohortChild with outcome=None — surfaced, not silently dropped.
+    """
+    by_child = {o.child_agent_id: o for o in outcomes.values()}
+    joined: list[CohortChild] = []
+    for d in cohort:
+        joined.append(CohortChild(dispatch=d, outcome=by_child.get(d.child_agent_id)))
+    return joined
