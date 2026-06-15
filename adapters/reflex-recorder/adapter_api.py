@@ -35,8 +35,9 @@ import os
 import re
 import sys
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Pattern
 
 # Engine directory — added to sys.path so discovered adapters can
 # ``from detectors.base import BaseDetector`` / ``from adapter_api import ...``
@@ -76,6 +77,63 @@ class CommandTaxonomy:
         if self.WAIT.search(c):
             return "wait"
         return "act"
+
+
+# ── struggle classes (friction telemetry) ───────────────────────────────────
+
+@dataclass
+class StruggleClass:
+    """One recurring *friction* pattern an agent fights — a struggle, not an outcome.
+
+    The Struggle Ledger (``struggle_ledger.py``) matches each class against the text
+    of transcript records (a command, a tool result, an assistant line) and tracks
+    every hit longitudinally: how often, across how many sessions, and — the point —
+    whether it is still happening or was fixed. A class is project-agnostic friction
+    (cargo build-lock, address-in-use) when shipped by the engine, or project-specific
+    (a GPU device-lost / lock-contention pattern) when contributed by a private adapter
+    via :meth:`ProjectAdapter.struggle_classes` — so proprietary tool names stay private.
+
+    ``fix_keywords`` are the terms that, appearing in a commit/bead-close message, mark
+    a plausible remediation of THIS struggle (used to score whether a fix actually
+    dropped the friction). Defaults to the name's tokens.
+    """
+    name: str
+    pattern: Pattern
+    description: str = ""
+    kind: str = "friction"          # friction | contention | crash | retry | wait
+    fix_keywords: tuple = ()
+
+    def keywords(self) -> tuple:
+        return self.fix_keywords or tuple(t for t in self.name.split("_") if len(t) > 2)
+
+
+def generic_struggle_classes() -> list[StruggleClass]:
+    """Cross-ecosystem friction patterns the engine ships for ANY project.
+
+    Project-specific struggles (e.g. a bespoke GPU harness's lock/device-lost) belong
+    in that project's private adapter, NOT here.
+    """
+    return [
+        StruggleClass(
+            "cargo_build_lock",
+            re.compile(r"Blocking waiting for file lock on (?:package cache|build directory|artifact)", re.I),
+            "parallel builds contending on the cargo cache/target lock", "contention",
+            fix_keywords=("cargo", "lock", "build", "cache", "serialize", "target")),
+        StruggleClass(
+            "address_in_use",
+            re.compile(r"address already in use|EADDRINUSE|bind(?:\(\))?:.{0,20}in use|port .{0,12}in use", re.I),
+            "a port/socket is already bound (stale process / double-start)", "contention",
+            fix_keywords=("port", "socket", "bind", "address", "reclaim", "stale")),
+        StruggleClass(
+            "resource_busy",
+            re.compile(r"device or resource busy|resource temporarily unavailable", re.I),
+            "an OS resource is contended (fd/device/mount)", "contention"),
+        StruggleClass(
+            "oom",
+            re.compile(r"\bOOMKilled\b|out of memory|Cannot allocate memory|fatal runtime.*memory", re.I),
+            "out-of-memory kill", "crash",
+            fix_keywords=("memory", "oom", "alloc", "heap")),
+    ]
 
 
 # ── signal ingester ──────────────────────────────────────────────────────────
@@ -124,6 +182,15 @@ class ProjectAdapter(ABC):
     def replays(self) -> dict[str, Callable]:
         """Map DETECTOR_NAME → replay(conn, signature, ...) for eval scoring."""
         return {}
+
+    def struggle_classes(self) -> list["StruggleClass"]:
+        """Project-specific friction patterns for the Struggle Ledger.
+
+        E.g. a GPU project's device-lost / lock-contention / busy-wait signatures —
+        which name proprietary tools and so MUST stay in the private overlay. The
+        engine's generic_struggle_classes() are always included alongside these.
+        """
+        return []
 
     def project_profile(self):
         """Return this project's :class:`ProjectProfile` for the GENERIC
@@ -226,3 +293,21 @@ def taxonomy_for(project: str, adapters: Optional[list[ProjectAdapter]] = None) 
     adapters = adapters if adapters is not None else load_adapters()
     a = adapter_for(project, adapters)
     return a.taxonomy() if a else CommandTaxonomy()
+
+
+def struggle_classes_for(project: str,
+                         adapters: Optional[list[ProjectAdapter]] = None) -> list[StruggleClass]:
+    """Generic friction classes + any the project's private adapter contributes.
+
+    Generic classes always apply; the adapter's project-specific ones are appended
+    (a project with no overlay gets exactly the generic set).
+    """
+    adapters = adapters if adapters is not None else load_adapters()
+    classes = list(generic_struggle_classes())
+    a = adapter_for(project, adapters)
+    if a is not None:
+        try:
+            classes.extend(a.struggle_classes())
+        except Exception:
+            pass
+    return classes
