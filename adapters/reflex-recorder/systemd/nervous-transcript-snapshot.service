@@ -1,0 +1,17 @@
+[Unit]
+Description=nervous-bus transcript snapshotter — mirror Claude Code JSONL transcripts to durable cache
+After=default.target
+
+[Service]
+Type=oneshot
+# %h expands to the user's home directory at unit-load time.
+# /usr/bin/env python3 ensures we use the user's PATH, which is what lets
+# pyenv-managed 3.11 win over the system 3.14 (and keeps us on stdlib only).
+ExecStart=/usr/bin/env python3 %h/projects/nervous-bus/adapters/reflex-recorder/transcript_snapshot.py --once
+WorkingDirectory=%h/projects/nervous-bus/adapters/reflex-recorder
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nervous-transcript-snapshot
+
+[Install]
+WantedBy=default.target

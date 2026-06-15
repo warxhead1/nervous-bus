@@ -175,3 +175,48 @@ systemctl --user status reflex-recorder.service
 
 Idle-split runs set `continues_run_id` to the prior run_id so fragments can be
 re-stitched downstream.
+
+## Transcript snapshotter
+
+`transcript_snapshot.py` incrementally mirrors Claude Code's per-session
+`*.jsonl` transcripts from `~/.claude/projects/` into a durable cache at
+`~/.cache/nervous-bus/reflex/transcripts/`. Worktree dirs (munged names
+containing the literal substring `worktrees`) are processed first because
+Claude Code deletes them whole when the worktree is reaped, losing the
+delegated agent's full transcript.
+
+The mirror is *append-only with rotation recovery* — a 2-line src file is
+appended to byte-for-byte; a rotation (inode change or shrink) is detected
+and re-copied; the destination is *never* shrunk or pruned (a vanished src
+file is a normal event, not an error and not a deletion in dst).
+
+```bash
+# One pass (used by the systemd timer):
+python3 adapters/reflex-recorder/transcript_snapshot.py --once
+
+# Manifest summary (mirrored files + total bytes):
+python3 adapters/reflex-recorder/transcript_snapshot.py --stats
+
+# Poll loop (foreground; the timer unit replaces this in production):
+python3 adapters/reflex-recorder/transcript_snapshot.py --watch 60
+```
+
+State on disk:
+
+- `<dst>/<munged-dir>/<sessionid>.jsonl` — byte-for-byte mirror of the src file.
+- `<dst>/.manifest.json` — `relpath -> {"inode": int, "size": int}`; the
+  incremental copy baseline. Atomic write (temp file + `os.replace`).
+
+Enable the systemd user timer (every 2 min, catches up after sleep):
+
+```bash
+cp adapters/reflex-recorder/systemd/nervous-transcript-snapshot.{service,timer} \
+    ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now nervous-transcript-snapshot.timer
+systemctl --user list-timers nervous-transcript-snapshot.timer
+journalctl --user -u nervous-transcript-snapshot.service -n 50
+```
+
+Stdlib only (no `pip`), no network. The destination is a durable archive
+that retains content even after the worktree is reaped.
