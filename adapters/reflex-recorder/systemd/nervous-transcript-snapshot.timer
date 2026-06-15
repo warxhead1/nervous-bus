@@ -1,0 +1,23 @@
+# Install:
+#   systemctl --user enable --now nervous-transcript-snapshot.timer
+#   systemctl --user list-timers nervous-transcript-snapshot.timer
+#   journalctl --user -u nervous-transcript-snapshot.service -n 50
+
+[Unit]
+Description=nervous-bus transcript snapshotter timer — every 2 minutes
+# Requires=network-online.target is intentionally omitted: the snapshotter
+# reads local fs only and never touches the network. Less coupling = faster
+# start, fewer failure modes.
+
+[Timer]
+# Don't fire instantly on boot — give the home dir 2 min to settle (e.g.
+# NFS mount, encrypted home, slow disk).
+OnBootSec=2min
+# The actual cadence: every 2 min after the last successful run.
+OnUnitActiveSec=2min
+# Catch up on missed runs after a sleep/hibernate.
+Persistent=true
+Unit=nervous-transcript-snapshot.service
+
+[Install]
+WantedBy=timers.target
