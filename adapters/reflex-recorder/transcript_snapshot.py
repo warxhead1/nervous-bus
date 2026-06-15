@@ -250,6 +250,7 @@ def _watch(src_root: str, dst_root: str, seconds: float) -> None:
             stats = {"files_seen": 0, "files_new": 0, "files_appended": 0,
                      "files_recopied": 0, "bytes_copied": 0,
                      "errors": [f"top: {type(e).__name__}: {e}"]}
+        stats.pop("process_order", None)  # keep journals lean
         print(json.dumps(stats, sort_keys=True), flush=True)
         time.sleep(seconds)
 
@@ -269,7 +270,9 @@ def main(argv: List[str]) -> int:
 
     try:
         if args.once:
-            print(json.dumps(sync_once(args.src, args.dst), sort_keys=True))
+            stats = sync_once(args.src, args.dst)
+            stats.pop("process_order", None)  # tests use the return value; keep journals lean
+            print(json.dumps(stats, sort_keys=True))
             return 0
         if args.stats:
             print_stats(args.dst)
