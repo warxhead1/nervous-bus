@@ -231,10 +231,64 @@ def _is_build_command(cmd: str) -> bool:
     return any(kw in lower for kw in BUILD_KEYWORDS)
 
 
+# ── Verification predicate (project-extensible) ──────────────────────────────────
+#
+# "Did the agent run a verification?" is project-specific: tengine verifies via
+# silo_tester / shadergen check-shader / gpu_verify_lock.sh / tsdl_validate — none
+# of which the generic BUILD_KEYWORDS recognize. Detectors inject a project-aware
+# predicate (built from the adapter taxonomy, see detectors/verification.py) so the
+# substrate stays pure and adapter-free. The DEFAULT is the generic build/test
+# floor — passing nothing reproduces the old behavior, keeping existing tests valid.
+#
+# Signature: is_verify(cmd: str, project: str) -> bool.
+
+VerifyPredicate = "callable[[str, str], bool]"
+
+
+def default_verify(cmd: str, project: str = "") -> bool:
+    """Generic build/test floor — project is ignored."""
+    return _is_build_command(cmd)
+
+
+# Code file extensions: editing one of these is what creates a verification
+# obligation. Edits confined to non-code artifacts (docs, planning, beads) do not.
+_CODE_EXTS = {
+    ".rs", ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".cu", ".cuh",
+    ".slang", ".wgsl", ".glsl", ".comp", ".frag", ".vert", ".hlsl",
+    ".go", ".py", ".ts", ".tsx", ".js", ".jsx", ".java", ".rb",
+    ".tsdl", ".toml", ".json", ".yaml", ".yml", ".sh", ".build", "build.rs",
+}
+# Clearly-non-code path markers (docs / planning / task-tracking / logs).
+_NONCODE_DIR_MARKERS = ("/.planning/", "/.beads/", "/knowledge/", "/docs/")
+_NONCODE_EXTS = {".md", ".txt", ".rst", ".log", ".csv", ".lock"}
+
+
+def is_code_path(path: str) -> bool:
+    """Whether editing this path creates a verification obligation.
+
+    Conservative: an unrecoverable/empty path is treated as code (we'd rather ask
+    'did you verify?' than silently exempt). Only clearly-non-code paths (docs,
+    .planning, .beads, .md/.txt/...) return False.
+    """
+    p = (path or "").lower()
+    if not p:
+        return True  # unknown (e.g. truncated) — assume code, stay conservative
+    if any(m in p for m in _NONCODE_DIR_MARKERS):
+        return False
+    base = p.rsplit("/", 1)[-1]
+    ext = "." + base.rsplit(".", 1)[-1] if "." in base else ""
+    if ext in _NONCODE_EXTS:
+        return False
+    if ext in _CODE_EXTS:
+        return True
+    return True  # default conservative
+
+
 def last_test_signal_before(
     events: list[dict],
     seq: int,
     max_lookback: int = 200,
+    is_verify=default_verify,
 ) -> BaselineSignal:
     """Scan backward from `seq` for the most recent build/test invocation.
 
@@ -242,7 +296,8 @@ def last_test_signal_before(
     strictly before `seq` are considered (the baseline as of the dispatch). We
     look back at most `max_lookback` tool calls — far enough to cross a normal
     edit/verify stretch, bounded so an enormous run doesn't get O(n) re-scanned
-    per dispatch.
+    per dispatch. `is_verify(cmd, project)` decides what counts as a build/test
+    (project-aware; default = generic floor).
     """
     # events are assumed ordered by seq ascending.
     before = [e for e in events if e.get("seq", 0) < seq]
@@ -253,9 +308,8 @@ def last_test_signal_before(
         scanned += 1
         if ev.get("tool_name") != "Bash":
             continue
-        ts = _parse_summary(ev.get("tool_summary", ""))
-        cmd = ts.get("command", "") or ""
-        if not _is_build_command(cmd):
+        cmd = _summary_field(ev.get("tool_summary", ""), "command")
+        if not is_verify(cmd, ev.get("project", "")):
             continue
         rs = _parse_summary(ev.get("tool_response_summary", ""))
         stdout = rs.get("stdout", "") or ""
@@ -363,13 +417,13 @@ def has_code_edit(events: list[dict]) -> bool:
     return any(e.get("tool_name") in ("Edit", "Write") for e in events)
 
 
-def ran_build_or_test(events: list[dict]) -> bool:
+def ran_build_or_test(events: list[dict], is_verify=default_verify) -> bool:
     """True if the run invoked any build/test command at least once."""
     for e in events:
         if e.get("tool_name") != "Bash":
             continue
-        ts = _parse_summary(e.get("tool_summary", ""))
-        if _is_build_command(ts.get("command", "") or ""):
+        cmd = _summary_field(e.get("tool_summary", ""), "command")
+        if is_verify(cmd, e.get("project", "")):
             return True
     return False
 
@@ -397,10 +451,16 @@ def worktree_slug_of(cwd: str) -> Optional[str]:
 
 @dataclass
 class WorktreeSegment:
-    """One delegated agent's slice of a parent run, keyed by worktree slug."""
+    """One delegated agent's slice of a parent run, keyed by worktree slug.
+
+    edit_count counts ALL Edit/Write calls; code_edit_count counts only edits to
+    code files (is_code_path) — the ones that create a verification obligation.
+    An agent that edited only docs/.planning has code_edit_count == 0.
+    """
     slug: str
     events: list[dict] = field(default_factory=list)
     edit_count: int = 0
+    code_edit_count: int = 0
     build_test_count: int = 0
 
     @property
@@ -410,11 +470,12 @@ class WorktreeSegment:
         return self.slug[len("agent-"):] if self.slug.startswith("agent-") else self.slug
 
 
-def segment_by_worktree(events: list[dict]) -> dict[str, WorktreeSegment]:
+def segment_by_worktree(events: list[dict], is_verify=default_verify) -> dict[str, WorktreeSegment]:
     """Group a run's events into per-worktree-slug delegated-agent segments.
 
     Events not in any worktree (the orchestrator's own main-tree work) are
     omitted — this function returns only the delegated-agent segments.
+    `is_verify(cmd, project)` decides what counts as a build/test (project-aware).
     """
     segments: dict[str, WorktreeSegment] = {}
     for e in events:
@@ -429,9 +490,11 @@ def segment_by_worktree(events: list[dict]) -> dict[str, WorktreeSegment]:
         tn = e.get("tool_name")
         if tn in ("Edit", "Write"):
             seg.edit_count += 1
+            if is_code_path(_summary_field(e.get("tool_summary", ""), "file_path")):
+                seg.code_edit_count += 1
         elif tn == "Bash":
-            ts = _parse_summary(e.get("tool_summary", ""))
-            if _is_build_command(ts.get("command", "") or ""):
+            cmd = _summary_field(e.get("tool_summary", ""), "command")
+            if is_verify(cmd, e.get("project", "")):
                 seg.build_test_count += 1
     return segments
 
@@ -462,6 +525,7 @@ class SubagentOutcome:
     committed: bool
     outcome_class: str           # see _classify below
     event_count: int
+    code_edit_count: int = 0
 
     @property
     def is_clean_finish(self) -> bool:
@@ -469,13 +533,13 @@ class SubagentOutcome:
         return self.outcome_class == "verified" and self.committed
 
 
-def _last_test_status_in_segment(events: list[dict]) -> str:
+def _last_test_status_in_segment(events: list[dict], is_verify=default_verify) -> str:
     """Status of the LAST build/test in a segment: passed/failed/none."""
     for e in reversed(events):
         if e.get("tool_name") != "Bash":
             continue
-        ts = _parse_summary(e.get("tool_summary", ""))
-        if not _is_build_command(ts.get("command", "") or ""):
+        cmd = _summary_field(e.get("tool_summary", ""), "command")
+        if not is_verify(cmd, e.get("project", "")):
             continue
         rs = _parse_summary(e.get("tool_response_summary", ""))
         if _has_fail_output(rs.get("stdout", "") or "", rs.get("stderr", "") or ""):
@@ -495,16 +559,19 @@ def _segment_committed(events: list[dict]) -> bool:
     return False
 
 
-def _classify(edit_count: int, last_test_status: str, committed: bool) -> str:
+def _classify(code_edit_count: int, edit_count: int, last_test_status: str) -> str:
     """Map signals to a derived outcome class.
 
-    readonly   — made no code edits (investigation / read-only agent)
+    readonly   — made no edits at all (investigation / read-only agent)
+    docs       — edited only non-code artifacts (docs/.planning) — no test owed
     left_red   — edited code and its LAST build/test was failing (shipped red)
     unverified — edited code and ran NO build/test at all (the F1 case)
     verified   — edited code and its last build/test passed
     """
     if edit_count == 0:
         return "readonly"
+    if code_edit_count == 0:
+        return "docs"
     if last_test_status == "failed":
         return "left_red"
     if last_test_status == "none":
@@ -515,27 +582,31 @@ def _classify(edit_count: int, last_test_status: str, committed: bool) -> str:
 def derive_subagent_outcomes(
     events: list[dict],
     project: str = "",
+    is_verify=default_verify,
 ) -> dict[str, SubagentOutcome]:
     """Derive a per-delegated-agent outcome record for every worktree segment.
 
     Built on segment_by_worktree; adds last-test status, commit signal, and a
-    derived outcome class. `project` falls back to each event's own project tag
-    when not supplied.
+    derived outcome class. `project` falls back to each event's own project tag.
+    `is_verify(cmd, project)` is the project-aware build/test predicate — pass the
+    adapter-built verifier so a project's bespoke harness (tengine: silo_tester,
+    shadergen, tsdl_validate, ...) counts as verification.
     """
     out: dict[str, SubagentOutcome] = {}
-    for slug, seg in segment_by_worktree(events).items():
+    for slug, seg in segment_by_worktree(events, is_verify=is_verify).items():
         proj = project or (seg.events[0].get("project", "") if seg.events else "")
-        last_status = _last_test_status_in_segment(seg.events)
+        last_status = _last_test_status_in_segment(seg.events, is_verify=is_verify)
         committed = _segment_committed(seg.events)
         out[slug] = SubagentOutcome(
             slug=slug,
             child_agent_id=seg.child_agent_id,
             project=proj,
             edit_count=seg.edit_count,
+            code_edit_count=seg.code_edit_count,
             build_test_count=seg.build_test_count,
             last_test_status=last_status,
             committed=committed,
-            outcome_class=_classify(seg.edit_count, last_status, committed),
+            outcome_class=_classify(seg.code_edit_count, seg.edit_count, last_status),
             event_count=len(seg.events),
         )
     return out

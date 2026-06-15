@@ -44,6 +44,7 @@ from detectors.dispatch_lineage import (
     parse_dispatches,
     session_run_ids,
 )
+from detectors.verification import build_verifier
 
 # A cohort must have at least this many OBSERVABLE (matched) children to judge
 # convergence — two siblings agreeing is the minimum signal of a shared pattern.
@@ -64,13 +65,14 @@ class InheritedRationalizationDetector(BaseDetector):
 
     def detect(self, conn: sqlite3.Connection) -> list[PatternCandidate]:
         project_of = dict(conn.execute("SELECT run_id, project FROM runs").fetchall())
+        is_verify = build_verifier()
         candidates: list[PatternCandidate] = []
 
         for session_id, run_ids in session_run_ids(conn).items():
             events = load_session_events(conn, run_ids)
             if not events:
                 continue
-            outcomes = derive_subagent_outcomes(events)
+            outcomes = derive_subagent_outcomes(events, is_verify=is_verify)
             if not outcomes:
                 continue
 

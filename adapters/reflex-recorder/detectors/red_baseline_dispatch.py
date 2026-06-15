@@ -47,6 +47,7 @@ from detectors.dispatch_lineage import (
     load_run_events,
     parse_dispatches,
 )
+from detectors.verification import build_verifier
 
 # A fan-out must be at least this wide for an ABSENT baseline to be worth flagging.
 # A single delegated agent with no prior test is routine; >=3 parallel agents with
@@ -69,6 +70,7 @@ class RedBaselineDispatchDetector(BaseDetector):
             """
         )
         runs = [(r[0], r[1]) for r in runs_cur.fetchall()]
+        is_verify = build_verifier()
 
         candidates: list[PatternCandidate] = []
         for run_id, project in runs:
@@ -83,7 +85,7 @@ class RedBaselineDispatchDetector(BaseDetector):
             for cohort in cohorts:
                 first = cohort[0]
                 width = len(cohort)
-                signal = last_test_signal_before(events, first.seq)
+                signal = last_test_signal_before(events, first.seq, is_verify=is_verify)
 
                 if signal.status == "failed":
                     kind = "red"

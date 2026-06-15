@@ -37,6 +37,7 @@ from detectors.dispatch_lineage import (
     load_run_events,
     parse_dispatches,
 )
+from detectors.verification import build_verifier
 
 # Prompt phrasings that assert a clean / known-failing baseline. Kept conservative
 # (high precision) — we only fire when the prompt AFFIRMATIVELY claims state.
@@ -73,6 +74,7 @@ class DirectiveGroundTruthMismatchDetector(BaseDetector):
             "SELECT run_id, project FROM runs WHERE close_reason IS NOT NULL ORDER BY started"
         ).fetchall()
 
+        is_verify = build_verifier()
         candidates: list[PatternCandidate] = []
         for run_id, project in runs:
             events = load_run_events(conn, run_id)
@@ -93,7 +95,7 @@ class DirectiveGroundTruthMismatchDetector(BaseDetector):
                         break
                 if not claim:
                     continue
-                signal = last_test_signal_before(events, cohort[0].seq)
+                signal = last_test_signal_before(events, cohort[0].seq, is_verify=is_verify)
                 if signal.status != "failed":
                     continue
 

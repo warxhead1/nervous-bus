@@ -45,6 +45,7 @@ from detectors.dispatch_lineage import (
     load_run_events,
     segment_by_worktree,
 )
+from detectors.verification import build_verifier
 
 # Minimum distinct Edit/Write calls in a delegated segment for an unverified
 # finish to be worth flagging. 1-2 edits is often a doc tweak or trivial fix;
@@ -67,32 +68,36 @@ class UnverifiedCompletionDetector(BaseDetector):
             """
         )
         runs = [(r[0], r[1]) for r in runs_cur.fetchall()]
+        is_verify = build_verifier()
 
         candidates: list[PatternCandidate] = []
         for run_id, project in runs:
             events = load_run_events(conn, run_id)
             if not events:
                 continue
-            segments = segment_by_worktree(events)
+            segments = segment_by_worktree(events, is_verify=is_verify)
+            # Flag only delegated agents that edited CODE (a verification
+            # obligation) and ran no build/test. Doc/.planning-only agents
+            # (code_edit_count == 0) are exempt — they owe no test.
             flagged = [
                 seg for seg in segments.values()
-                if seg.edit_count >= EDIT_THRESHOLD and seg.build_test_count == 0
+                if seg.code_edit_count >= EDIT_THRESHOLD and seg.build_test_count == 0
             ]
             if not flagged:
                 continue
 
-            flagged.sort(key=lambda s: s.edit_count, reverse=True)
-            total_edits = sum(s.edit_count for s in flagged)
+            flagged.sort(key=lambda s: s.code_edit_count, reverse=True)
+            total_edits = sum(s.code_edit_count for s in flagged)
             signature = f"{project}:{self.DETECTOR_NAME}"
 
             evidence = [
                 f"project={project}",
                 f"run_id={run_id}",
                 f"unverified_agents={len(flagged)}",
-                f"total_unverified_edits={total_edits}",
+                f"total_unverified_code_edits={total_edits}",
             ]
             for seg in flagged[:6]:
-                evidence.append(f"{seg.slug}: edits={seg.edit_count} build_test=0")
+                evidence.append(f"{seg.slug}: code_edits={seg.code_edit_count} build_test=0")
 
             candidates.append(PatternCandidate(
                 project=project,
@@ -113,13 +118,14 @@ class UnverifiedCompletionDetector(BaseDetector):
                 ),
                 extra={
                     "unverified_agents": len(flagged),
-                    "total_unverified_edits": total_edits,
+                    "total_unverified_code_edits": total_edits,
                     "remediation_rung": "automate",
                     "segments": [
                         {
                             "slug": s.slug,
                             "child_agent_id": s.child_agent_id,
                             "edit_count": s.edit_count,
+                            "code_edit_count": s.code_edit_count,
                             "build_test_count": s.build_test_count,
                         }
                         for s in flagged[:20]
