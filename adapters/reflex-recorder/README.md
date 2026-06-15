@@ -12,6 +12,12 @@ This directory is the **generic Reflexarc engine** and is PUBLIC. It ships:
 - **generic** detectors (`worktree_leak`, `reread_same_file`, `repeated_question`,
   `file_reads_to_finding`) and **rust-ecosystem** detectors (`rebuild_cache_miss`,
   `edit_build_fail_revert` — they key on `cargo` alone, not any one project),
+- **orchestration-quality** detectors (`red_baseline_dispatch`,
+  `unverified_completion`) built on the dispatch-lineage substrate
+  (`detectors/dispatch_lineage.py`): they reason about how runs were *spawned* —
+  fan-outs launched on a red/unestablished baseline (A1) and delegated agents that
+  shipped code edits with no build/test (the grounded MAST "no-verification-step"
+  mode). See the spec in the kb vault (`reflexarc-orchestration-detectors.md`),
 - the inductive trajectory profiler (`tier2/trajectory_profile.py`),
 - the **project-adapter contract** (`adapter_api.py`) + a scaffold
   (`templates/reflex-adapter/`).

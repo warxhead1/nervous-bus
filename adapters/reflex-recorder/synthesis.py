@@ -58,6 +58,8 @@ from detectors.rebuild_cache_miss import RebuildCacheMissDetector
 from detectors.repeated_question import RepeatedQuestionDetector
 from detectors.edit_build_fail_revert import EditBuildFailRevertDetector
 from detectors.reread_same_file import RereadSameFileDetector
+from detectors.red_baseline_dispatch import RedBaselineDispatchDetector
+from detectors.unverified_completion import UnverifiedCompletionDetector
 from adapter_api import load_adapters
 
 # ---------------------------------------------------------------------------
@@ -135,6 +137,8 @@ _BUILTIN_DETECTOR_CLASSES: list[type[BaseDetector]] = [
     RepeatedQuestionDetector,
     EditBuildFailRevertDetector,
     RereadSameFileDetector,
+    RedBaselineDispatchDetector,
+    UnverifiedCompletionDetector,
 ]
 
 
