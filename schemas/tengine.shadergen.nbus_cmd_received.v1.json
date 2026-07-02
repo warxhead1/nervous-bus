@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.shadergen.nbus_cmd_received.v1.json",
+  "title": "tengine.shadergen.nbus_cmd_received v1",
+  "description": "An inbound tengine.cmd.* bus event was processed by the silo. External consumers write tengine.cmd.* events to the debug.jsonl journal; the silo polls the journal and converts matching lines into socket commands. Producer: registry handle NBUS_CMD_RECEIVED in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs.",
+  "type": "object",
+  "required": ["cmd", "ok", "error"],
+  "properties": {
+    "cmd": {
+      "type": "string",
+      "description": "The shadergen REPL command string that was converted from the inbound bus event."
+    },
+    "ok": {
+      "type": "boolean",
+      "description": "Whether the command executed successfully."
+    },
+    "error": {
+      "type": ["string", "null"],
+      "description": "Error message when ok is false; null when ok is true."
+    }
+  }
+}

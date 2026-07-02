@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/tengine.silo.verify.v1.json",
   "title": "tengine.silo.verify v1",
-  "description": "Fires when verification_report.json appears in a silo session dir — the run completed cleanly. Subset of the full report (which can be 100KB+); session_dir holds the full artifact set for deep-dives.",
+  "description": "Fires when verification_report.json appears in a silo session dir — the run completed cleanly. Subset of the full report (which can be 100KB+); session_dir holds the full artifact set for deep-dives. Producer: the silo-watcher nervous-bus adapter (~/.config/nervous-bus/adapters/silo-watcher/watcher.py::build_verify_event, systemd --user unit nervous-silo-watcher.service — confirmed running as of 2026-07-02), NOT tengine's own EventChannel registry; this is an out-of-repo directory-poll adapter that lives in the private overlay config tree. RE-VERIFIED 2026-07-02 (ecosystem-audit-p2): an earlier audit pass flagged this schema as dead/orphaned with a mismatched Android consumer (apps/android HearthViewModel.kt ~line 8848). That flag does not hold up under direct inspection: the producer is active and this schema's field names (silo, avg_fps, min_fps, anomaly_count) match both the live payload AND the Android consumer, which reads 'silo_name' with a fallback to 'silo' — so the consumer resolves correctly against this producer today. Flagging here only so a human can double-check this conclusion; no functional fix was needed.",
   "type": "object",
   "required": ["silo", "session_id", "success", "message"],
   "properties": {

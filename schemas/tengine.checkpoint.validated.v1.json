@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.checkpoint.validated.v1.json",
+  "title": "tengine.checkpoint.validated v1",
+  "description": "Readiness-probe verdict after a checkpoint restore. Reserved for the readiness-probe follow-on to the warmup-snapshot-cache surface (epic 9neza, kudbl) — declared in the registry so `shadergen contracts events` shows the full surface, may not yet have an active emitter. Producer: registry handle CHECKPOINT_VALIDATED in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs. CloudEvents subject is the chain name (e.g. 'svdag').",
+  "type": "object",
+  "required": ["chain", "wt", "verdict", "probe", "frames_to_ready"],
+  "properties": {
+    "chain": {
+      "type": "string",
+      "description": "Warmup chain name this verdict belongs to (e.g. 'svdag')."
+    },
+    "wt": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Work-type id the verdict applies to."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["known_good", "rejected", "candidate"],
+      "description": "Readiness-probe verdict after restore."
+    },
+    "probe": {
+      "type": "string",
+      "description": "Identifier or description of the readiness probe that produced this verdict."
+    },
+    "frames_to_ready": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of frames after restore before the WT was confirmed ready."
+    }
+  }
+}

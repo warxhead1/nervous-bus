@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.checkpoint.restored.v1.json",
+  "title": "tengine.checkpoint.restored v1",
+  "description": "Snapshot blob pre-seeded into GPU pool buffers before frame work, emitted by the C courier (ext_checkpoint_cache.c, bead lkxk4). Part of the warmup-snapshot-cache surface (epic 9neza, kudbl). Producer: registry handle CHECKPOINT_RESTORED in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs. CloudEvents subject is the chain name (e.g. 'svdag').",
+  "type": "object",
+  "required": ["chain", "key_spirv", "key_seed", "payload_bytes", "restored_frame", "wt"],
+  "properties": {
+    "chain": {
+      "type": "string",
+      "description": "Warmup chain name this snapshot belongs to (e.g. 'svdag')."
+    },
+    "key_spirv": {
+      "type": "string",
+      "description": "Cache key component derived from the SPIR-V shader hash in effect at restore time."
+    },
+    "key_seed": {
+      "type": "string",
+      "description": "Cache key component derived from the world-generation seed in effect at restore time."
+    },
+    "payload_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Size of the restored snapshot blob, in bytes."
+    },
+    "restored_frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index at which the snapshot was seeded into GPU pool buffers."
+    },
+    "wt": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Work-type id the snapshot was restored for (e.g. 645 for svdag_noise_direct)."
+    }
+  }
+}

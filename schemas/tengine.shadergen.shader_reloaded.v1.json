@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.shadergen.shader_reloaded.v1.json",
+  "title": "tengine.shadergen.shader_reloaded v1",
+  "description": "Hot-reload completed; count = shaders recompiled. Producer: registry handle SHADER_RELOADED in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs.",
+  "type": "object",
+  "required": ["count", "duration_ms", "reload_status"],
+  "properties": {
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of shaders recompiled in this hot-reload pass."
+    },
+    "duration_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Wall-clock duration of the reload pass, in milliseconds."
+    },
+    "reload_status": {
+      "type": "string",
+      "description": "Outcome of the reload (e.g. 'ok', 'error'). Shares vocabulary with the reload_status field on tengine.shadergen.sync."
+    }
+  }
+}

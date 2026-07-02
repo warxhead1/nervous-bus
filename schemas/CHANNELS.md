@@ -4,15 +4,15 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**255 channels** across 5 clusters.
+**291 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
-| [Session Lifecycle](#session-lifecycle) | 15 | agent session lifecycle, heartbeats, thread/run start-stop |
+| [Session Lifecycle](#session-lifecycle) | 19 | agent session lifecycle, heartbeats, thread/run start-stop |
 | [Autobench](#autobench) | 53 | autobench.* evolution loop (case/judge/improver/budget/...) |
-| [Hearth](#hearth) | 48 | hearth-loom PR pipeline, bead lifecycle, loom executions |
-| [Tengine](#tengine) | 23 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 116 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Hearth](#hearth) | 49 | hearth-loom PR pipeline, bead lifecycle, loom executions |
+| [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
+| [Cross-cutting](#cross-cutting) | 128 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -27,6 +27,9 @@ _agent session lifecycle, heartbeats, thread/run start-stop_
 | `agent.session.v1` | agent.session v1 |
 | `bus.agent.activity.v1` | bus.agent.activity v1 |
 | `bus.agent.heartbeat.v1` | bus.agent.heartbeat v1 |
+| `bus.agent.run.closed.v1` | bus.agent.run.closed v1 |
+| `bus.agent.run.eval.v1` | bus.agent.run.eval v1 |
+| `bus.agent.watchdog.v1` | bus.agent.watchdog v1 |
 | `deer-flow.council.session.v1` | deer-flow.council.session v1 |
 | `deer-flow.forge.session.council_linked.v1` | deer-flow.forge.session.council_linked v1 |
 | `deer-flow.forge.session.created.v1` | deer-flow.forge.session.created v1 |
@@ -34,6 +37,7 @@ _agent session lifecycle, heartbeats, thread/run start-stop_
 | `deer-flow.forge.session.transitioned.v1` | deer-flow.forge.session.transitioned v1 |
 | `hearth.session.completed.v1` | hearth.session.completed v1 |
 | `kb.session.context.v1` | KB Session Context |
+| `kb.session.harvest.v1` | kb.session.harvest v1 |
 | `kb.session.indexed.v1` | KB Session Indexed |
 
 ## Autobench
@@ -130,6 +134,7 @@ _hearth-loom PR pipeline, bead lifecycle, loom executions_
 | `hearth-loom.bench.completed.v1` | hearth-loom.bench.completed v1 |
 | `hearth.command.design_request.v1` | hearth.command.design_request v1 |
 | `hearth.design.generated.v1` | hearth.design.generated v1 |
+| `hearth.drift.detected.v1` | hearth.drift.detected v1 |
 | `hearth.ember.insight.v1` | hearth.ember.insight v1 |
 | `hearth.ember.learning.insight.v1` | hearth.ember.learning.insight v1 |
 | `hearth.inference.error.v1` | hearth.inference.error v1 |
@@ -157,7 +162,13 @@ _tengine shadergen + silo session telemetry_
 
 | Channel | Description |
 | --- | --- |
+| `tengine.checkpoint.captured.v1` | tengine.checkpoint.captured v1 |
+| `tengine.checkpoint.restored.v1` | tengine.checkpoint.restored v1 |
+| `tengine.checkpoint.validated.v1` | tengine.checkpoint.validated v1 |
+| `tengine.checkpoint.warmup_chain_timing.v1` | tengine.checkpoint.warmup_chain_timing v1 |
 | `tengine.code.changed.v1` | tengine.code.changed v1 |
+| `tengine.contract.state.v1` | tengine.contract.state v1 |
+| `tengine.contract.violation.v1` | tengine.contract.violation v1 |
 | `tengine.frame.metrics.v1` | tengine.frame.metrics v1 |
 | `tengine.gpu.lease.granted.v1` | tengine.gpu.lease.granted v1 |
 | `tengine.gpu.lease.heartbeat.v1` | tengine.gpu.lease.heartbeat v1 |
@@ -165,20 +176,33 @@ _tengine shadergen + silo session telemetry_
 | `tengine.race.brain.v1` | tengine.race.brain v1 |
 | `tengine.race.episode.v1` | tengine.race.episode v1 |
 | `tengine.race.event.v1` | tengine.race.event v1 |
+| `tengine.session.biome_palette_loaded.v1` | tengine.session.biome_palette_loaded v1 |
 | `tengine.session.client_connected.v1` | tengine.session.client_connected v1 |
 | `tengine.session.client_disconnected.v1` | tengine.session.client_disconnected v1 |
 | `tengine.session.client_identified.v1` | tengine.session.client_identified v1 |
 | `tengine.session.fps_drop.v1` | tengine.session.fps_drop v1 |
 | `tengine.session.frame.v1` | tengine.session.frame v1 |
+| `tengine.session.frame_milestone.v1` | tengine.session.frame_milestone v1 |
+| `tengine.session.snapshot_ready.v1` | tengine.session.snapshot_ready v1 |
 | `tengine.session.start.v1` | tengine.session.start v1 |
 | `tengine.session.stop.v1` | tengine.session.stop v1 |
+| `tengine.session.warmup_complete.v1` | tengine.session.warmup_complete v1 |
 | `tengine.shadergen.cmd.v1` | tengine.shadergen.cmd v1 |
+| `tengine.shadergen.diagnose_completed.v1` | tengine.shadergen.diagnose_completed v1 |
+| `tengine.shadergen.eval.completed.v1` | tengine.shadergen.eval.completed v1 |
+| `tengine.shadergen.eval.requested.v1` | tengine.shadergen.eval.requested v1 |
 | `tengine.shadergen.multiverse.v1` | tengine.shadergen.multiverse v1 |
+| `tengine.shadergen.nbus_cmd_received.v1` | tengine.shadergen.nbus_cmd_received v1 |
 | `tengine.shadergen.screenshot.v1` | tengine.shadergen.screenshot v1 |
+| `tengine.shadergen.shader_reloaded.v1` | tengine.shadergen.shader_reloaded v1 |
+| `tengine.shadergen.snap_completed.v1` | tengine.shadergen.snap_completed v1 |
 | `tengine.shadergen.sync.v1` | tengine.shadergen.sync v1 |
 | `tengine.silo.started.v1` | tengine.silo.started v1 |
 | `tengine.silo.verify.v1` | tengine.silo.verify v1 |
 | `tengine.stream.dump_ready.v1` | tengine.stream.dump_ready v1 |
+| `tengine.telemetry.effect_summary.v1` | tengine.telemetry.effect_summary v1 |
+| `tengine.telemetry.probe_record.v1` | tengine.telemetry.probe_record v1 |
+| `tengine.telemetry.scheduler_gate.v1` | tengine.telemetry.scheduler_gate v1 |
 | `tengine.test.v1` | tengine.test.v1 |
 
 ## Cross-cutting
@@ -234,6 +258,11 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `bus.tengine.wave.gate.pending.v1` | bus.tengine.wave.gate.pending v1 |
 | `bus.tengine.worktree.leakage.v1` | bus.tengine.worktree.leakage v1 |
 | `bus.triage.findings.v1` | bus.triage.findings v1 |
+| `bus.workflow.agent.dispatch.v1` | Workflow agent dispatch |
+| `career-ops.application.submitted.v1` | career-ops.application.submitted v1 |
+| `career-ops.posting.evaluated.v1` | career-ops.posting.evaluated v1 |
+| `career-ops.scanner.cycle_completed.v1` | career-ops.scanner.cycle_completed v1 |
+| `career-ops.steering.answered.v1` | career-ops.steering.answered v1 |
 | `codeforces_problem.v1` ⚠️ | CodeforcesProblem |
 | `deer-flow.agent.message.v1` | deer-flow.agent.message v1 |
 | `deer-flow.agent.thread.v1` | deer-flow.agent.thread v1 |
@@ -273,6 +302,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `deer-flow.stack-tuner.stage.done.v1` | deer-flow.stack-tuner.stage.done v1 |
 | `deer-flow.stack-tuner.stage.start.v1` | deer-flow.stack-tuner.stage.start v1 |
 | `deer-flow.subagent.lifecycle.v1` | deer-flow.subagent.lifecycle v1 |
+| `deer-flow.telemetry.dualwrite_parity.v1` | deer-flow.telemetry.dualwrite_parity v1 |
 | `deer-flow.tool.call.v1` | deer-flow.tool.call v1 |
 | `deer-flow.tool.usage.v1` | deer-flow.tool.usage v1 |
 | `funsearch.artifact.v1` | funsearch.artifact v1 |
@@ -281,17 +311,23 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `funsearch.engine_render.completed.v1` | funsearch.engine_render.completed.v1 |
 | `funsearch.engine_render.requested.v1` | funsearch.engine_render.requested.v1 |
 | `funsearch.review.v1` | funsearch.review.v1 |
+| `jobops.application.updated.v1` | jobops.application.updated v1 |
+| `jobops.contact.added.v1` | jobops.contact.added v1 |
+| `jobops.content.queued.v1` | jobops.content.queued v1 |
+| `jobops.outreach.logged.v1` | jobops.outreach.logged v1 |
 | `kb.artifact.linked.v1` | KB Artifact Linked |
 | `kb.decay.applied.v1` | KB Decay Applied |
 | `kb.entry.created.v1` | KB Entry Created |
 | `kb.entry.vetted.v1` | KB Entry Vetted |
 | `kb.guidance.provided.v1` | KB Guidance Provided |
+| `kb.ingest.tengine.completed.v1` | kb.ingest.tengine.completed v1 |
 | `kb.knowledge.gap.v1` | KB Knowledge Gap |
 | `kb.plan.researched.v1` | KB Plan Researched |
 | `kb.plan.updated.v1` | KB Plan Updated |
 | `kb.review.approved.v1` | KB Review Approved |
 | `kb.review.rejected.v1` | KB Review Rejected |
 | `kb.review.requested.v1` | KB Review Requested |
+| `kb.tier.changed.v1` | kb.tier.changed v1 |
 | `kernel.best_fitness_improved.v1` | kernel.best_fitness_improved v1 |
 | `kernel.candidate.evaluated.v1` | kernel.candidate.evaluated.v1 v1 |
 | `kernel.completed.v1` | kernel.completed.v1 v1 |

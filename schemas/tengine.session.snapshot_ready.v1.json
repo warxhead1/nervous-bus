@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.session.snapshot_ready.v1.json",
+  "title": "tengine.session.snapshot_ready v1",
+  "description": "Session end: all ~35 session artifact JSON files are written and discoverable via session_dir. Emitted after all JSON dumps are written, to notify external consumers the artifact set is ready for reading (Phase 3 — Session snapshot bridge). Producer: registry handle SESSION_SNAPSHOT_READY in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs. CloudEvents subject is '{session_id}'.",
+  "type": "object",
+  "required": [
+    "session_dir", "artifacts", "session_id", "silo",
+    "frames_rendered", "reload_generation", "tsdl_snapshot_stale"
+  ],
+  "properties": {
+    "session_dir": {
+      "type": "string",
+      "description": "Absolute path to the session directory containing all artifact files."
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Filenames of the session artifact JSON files written to session_dir."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Session-dir basename, stable correlation id for this silo run."
+    },
+    "silo": {
+      "type": "string",
+      "description": "Silo identifier as configured."
+    },
+    "frames_rendered": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total frames rendered over the session lifetime."
+    },
+    "reload_generation": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Final hot-reload generation counter at session end."
+    },
+    "tsdl_snapshot_stale": {
+      "type": "boolean",
+      "description": "Whether the TSDL snapshot bundled in the artifacts is stale relative to the live TSDL source at session end."
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.checkpoint.captured.v1.json",
+  "title": "tengine.checkpoint.captured v1",
+  "description": "Snapshot blob captured to the CAS (content-addressed store) after WT 645 (svdag_noise_direct) reached ready, emitted by the C courier (ext_checkpoint_cache.c, bead lkxk4). Part of the warmup-snapshot-cache surface (epic 9neza, kudbl). Producer: registry handle CHECKPOINT_CAPTURED in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs. CloudEvents subject is the chain name (e.g. 'svdag').",
+  "type": "object",
+  "required": ["chain", "key_spirv", "key_seed", "payload_bytes", "checksum", "slot", "path_hash"],
+  "properties": {
+    "chain": {
+      "type": "string",
+      "description": "Warmup chain name this snapshot belongs to (e.g. 'svdag')."
+    },
+    "key_spirv": {
+      "type": "string",
+      "description": "Cache key component derived from the SPIR-V shader hash in effect at capture time."
+    },
+    "key_seed": {
+      "type": "string",
+      "description": "Cache key component derived from the world-generation seed in effect at capture time."
+    },
+    "payload_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Size of the captured snapshot blob, in bytes."
+    },
+    "checksum": {
+      "type": "string",
+      "description": "Content checksum of the snapshot blob, used to verify integrity on restore."
+    },
+    "slot": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU pool buffer slot the snapshot was captured from."
+    },
+    "path_hash": {
+      "type": "string",
+      "description": "Hash of the CAS storage path for this blob."
+    }
+  }
+}

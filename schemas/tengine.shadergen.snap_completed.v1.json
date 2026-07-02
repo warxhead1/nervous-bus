@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.shadergen.snap_completed.v1.json",
+  "title": "tengine.shadergen.snap_completed v1",
+  "description": "Snap cycle (reload+step+screenshot+compare) finished. Producer: registry handle SNAP_COMPLETED in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs. CloudEvents subject is 'frame_{frame}'.",
+  "type": "object",
+  "required": ["ssim", "status", "before_path", "after_path", "frame"],
+  "properties": {
+    "ssim": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Structural similarity index between before/after screenshots (1.0 = identical)."
+    },
+    "status": {
+      "type": "string",
+      "description": "Outcome of the snap comparison (e.g. 'match', 'diff', 'error')."
+    },
+    "before_path": {
+      "type": "string",
+      "description": "Absolute path to the pre-reload screenshot on disk."
+    },
+    "after_path": {
+      "type": "string",
+      "description": "Absolute path to the post-reload screenshot on disk."
+    },
+    "frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index at which the snap cycle completed."
+    }
+  }
+}
