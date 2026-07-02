@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.session.harvest.v1.json",
+  "title": "kb.session.harvest v1",
+  "description": "Emitted (best-effort, never fails the command) by `kb harvest` after a session transcript has been distilled and written to the vault as a new entry. Source: kb/src/commands/harvest.rs.",
+  "type": "object",
+  "required": ["session_id", "project", "entry_id", "path", "content_hash"],
+  "properties": {
+    "session_id": { "type": "string", "description": "Claude Code session id the transcript was harvested from." },
+    "project": { "type": "string", "description": "Project the harvested entry is filed under." },
+    "entry_id": { "type": "string", "description": "Vault entry id assigned to the harvested content." },
+    "path": { "type": "string", "description": "Absolute path to the written vault markdown file." },
+    "content_hash": { "type": "string", "description": "Content hash of the harvested body, used for dedup detection downstream." }
+  }
+}

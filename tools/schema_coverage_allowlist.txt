@@ -59,3 +59,12 @@ deer-flow.stack-tuner.cycle.completed.v1
 # Internal-only test events that live in source code only for UI/dev testing.
 # Never cross the bus to real consumers.
 bus.test.approval.requested.v1  # smoke-test fixture, internal only, never crosses bus to real consumers
+
+# ─── overlay-private schemas (intentionally NOT in this repo) ───────────────
+# scripts/eval_contract/svdag_eval_consumer.py:57-58 explicitly documents this
+# channel's schema as living in $NERVOUS_HOME/schemas (the private config.toml
+# overlay, e.g. ~/.config/nervous-bus/schemas/), NEVER the public repo — it
+# carries per-injection render-quality telemetry that reveals tengine render
+# internals. Confirmed already schema-backed there
+# (~/.config/nervous-bus/schemas/tengine.render.quality.v1.json).
+tengine.render.quality.v1

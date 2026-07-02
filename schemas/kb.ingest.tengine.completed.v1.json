@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.ingest.tengine.completed.v1.json",
+  "title": "kb.ingest.tengine.completed v1",
+  "description": "Emitted once per `kb ingest tengine` live run (never on --dry-run, so downstream consumers are never misled by would-write counts as if real) after the ingest pass finishes scanning tengine memory files. Source: kb/src/ingest/tengine.rs (end of the ingest driver, right before pillar routing).",
+  "type": "object",
+  "required": ["files_scanned", "would_write", "yaml_parsed", "bold_parsed", "missing_frontmatter", "errors"],
+  "properties": {
+    "files_scanned": { "type": "integer", "minimum": 0, "description": "Total files walked in this pass." },
+    "would_write": { "type": "integer", "minimum": 0, "description": "Number of vault entries written (this event only fires on live runs, so this count is real)." },
+    "yaml_parsed": { "type": "integer", "minimum": 0, "description": "Files parsed via the YAML frontmatter dialect." },
+    "bold_parsed": { "type": "integer", "minimum": 0, "description": "Files parsed via the bold-header dialect." },
+    "missing_frontmatter": { "type": "integer", "minimum": 0, "description": "Files with no recognizable frontmatter of either dialect." },
+    "errors": { "type": "integer", "minimum": 0, "description": "Files skipped due to a parse/read error." }
+  }
+}

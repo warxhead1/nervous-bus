@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.agent.watchdog.v1.json",
+  "title": "bus.agent.watchdog v1",
+  "description": "Fire-and-forget alert emitted by tengine's agent_flow_watchdog.py when a live agent transcript trips one of the 7 flow_analyze pathology flags (a-g, e.g. instrument-bypass, silo-launch-without-verify). Always also appended to ~/.tengine/agent_watchdog.jsonl; this bus emit is the live-fanout copy (skipped when NERVOUS_WATCHDOG_DISABLE=1 or `nervous` is not on PATH). Source: scripts/dispatch/agent_flow_watchdog.py.",
+  "type": "object",
+  "required": ["session_id", "display", "worktree", "flags", "flags_summary", "transcript_path"],
+  "properties": {
+    "session_id": { "type": "string", "description": "Claude Code session id of the flagged agent." },
+    "display": { "type": "string", "description": "Human-readable display name for the session (title/summary)." },
+    "worktree": { "type": "string", "description": "Worktree path or slug the agent is running in." },
+    "flags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Pathology flags fired this cycle, from flow_analyze's 7-flag (a-g) taxonomy (e.g. instrument-bypass)."
+    },
+    "flags_summary": { "type": "string", "description": "Comma-joined flags, convenience field for log lines." },
+    "total_tool_calls": { "type": ["integer", "null"], "description": "Tool calls observed in the analyzed tail window." },
+    "silo_launches": { "type": ["integer", "null"], "description": "GPU silo launches observed in the tail window." },
+    "instrument_calls": { "type": ["integer", "null"], "description": "Instrument/verification tool calls observed in the tail window." },
+    "transcript_path": { "type": "string", "description": "Absolute path to the JSONL transcript that was analyzed." }
+  }
+}

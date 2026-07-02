@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.shadergen.eval.completed.v1.json",
+  "title": "tengine.shadergen.eval.completed v1",
+  "description": "Response to tengine.shadergen.eval.requested.v1, correlated by correlation_id. Emitted by scripts/eval_contract/svdag_eval_consumer.py after run_eval() finishes (or rejects/times out/errors). status='ok' carries screenshot_path + timing; any other status carries `error`.",
+  "type": "object",
+  "required": ["correlation_id", "candidate_id", "status", "completed_at"],
+  "properties": {
+    "correlation_id": { "type": "string", "description": "Matches the correlation_id of the originating eval.requested event." },
+    "candidate_id": { "type": "string", "description": "Matches the candidate_id of the originating eval.requested event." },
+    "domain": { "type": "string", "description": "Kernel domain echoed from the request." },
+    "silo": { "type": "string", "description": "Silo echoed from the request." },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "rejected", "timeout", "render_error"],
+      "description": "ok: rendered successfully. rejected: malformed request or unknown silo/splice_target. timeout: run_eval exceeded EVAL_TIMEOUT_S. render_error: driver raised."
+    },
+    "completed_at": { "type": "string", "format": "date-time", "description": "RFC3339 UTC timestamp the response was produced." },
+    "screenshot_path": { "type": "string", "description": "Present when status=ok: path to the rendered PNG." },
+    "frame": { "type": "integer", "description": "Frame budget actually used." },
+    "bytes": { "type": "integer", "description": "Screenshot byte size, when available from the driver." },
+    "build_ms": { "type": "number", "description": "SVDAG build time in milliseconds, when available." },
+    "render_ms": { "type": "number", "description": "Render time in milliseconds, when available." },
+    "error": { "type": "string", "description": "Present when status != ok: failure detail." }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.tier.changed.v1.json",
+  "title": "kb.tier.changed v1",
+  "description": "Emitted once per entry transition by `kb tier-promote` (live runs only — never on --dry-run). Real tier transitions (inbox->graded, graded->promoted, promoted->graded) and dedup-collision skips both ride this channel, discriminated by `transition`. A frequent dedup_skipped stream signals duplicate content repeatedly re-promoted; a dedup_skipped event with no matching on-disk duplicate flags the ephemeral dedup index diverging from indexed/. Source: kb/src/commands/tier.rs (run_promote).",
+  "type": "object",
+  "required": ["entry_id", "title", "project", "from", "to", "confidence", "transition"],
+  "properties": {
+    "entry_id": { "type": "string", "description": "Vault entry id being transitioned." },
+    "title": { "type": "string", "description": "Entry title." },
+    "project": { "type": "string", "description": "Project the vault entry belongs to." },
+    "from": { "type": "string", "description": "Source tier (e.g. inbox, graded, promoted/indexed)." },
+    "to": { "type": "string", "description": "Destination tier." },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1, "description": "Grading confidence driving the transition decision." },
+    "transition": {
+      "type": "string",
+      "enum": ["graded", "promoted", "demoted", "dedup_skipped"],
+      "description": "graded: inbox->graded (field rewrite, no move). promoted: graded->promoted (move inbox->indexed + rewrite + history). demoted: promoted->graded (move indexed->inbox + rewrite + history). dedup_skipped: would-have-promoted but a same content_hash entry already exists at the destination — left in place."
+    },
+    "dedup_target": {
+      "type": "string",
+      "description": "Present only when transition=dedup_skipped: path of the existing entry that blocked the move."
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.shadergen.eval.requested.v1.json",
+  "title": "tengine.shadergen.eval.requested v1",
+  "description": "Native (tengine-private) request contract for the svdag evolve->render->score loop, consumed by scripts/eval_contract/svdag_eval_consumer.py. Splices candidate shader code into a known splice target (currently compute_density), renders SvdagRacing, and answers with tengine.shadergen.eval.completed.v1 (correlated by correlation_id). Mirrors the public funsearch.engine_render.requested.v1 contract but keeps tengine-specific fields (silo, splice_target).",
+  "type": "object",
+  "required": ["correlation_id", "silo", "candidate_id", "splice_target", "candidate_code", "requested_at"],
+  "properties": {
+    "correlation_id": { "type": "string", "description": "Caller-assigned id correlating this request with its eval.completed response." },
+    "silo": { "type": "string", "description": "Target silo to render against. Only 'SvdagRacing' is currently accepted; other values are rejected." },
+    "candidate_id": { "type": "string", "description": "Identifier of the candidate shader/kernel being evaluated." },
+    "splice_target": { "type": "string", "description": "Named splice site the candidate code is injected into (currently only 'compute_density' is known)." },
+    "candidate_code": { "type": "string", "description": "Candidate shader source to splice and compile." },
+    "requested_at": { "type": "string", "format": "date-time", "description": "RFC3339 UTC timestamp the request was issued." },
+    "domain": { "type": "string", "description": "Optional kernel domain hint (e.g. svdag)." },
+    "frame": { "type": "integer", "description": "Optional frame budget override for the render/build wait; defaults to the consumer's DEFAULT_FRAME." },
+    "camera": { "type": "object", "description": "Optional camera pose override for the render." }
+  }
+}
