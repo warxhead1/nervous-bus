@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/jobops.outreach.logged.v1.json",
+  "title": "jobops.outreach.logged v1",
+  "description": "Emitted by job-ops (internal/bus/publish.go, EventOutreachLogged) when a networking/outreach touchpoint with a contact is logged. Backfilled schema — channel had live Redis traffic with no registered schema.",
+  "type": "object",
+  "required": ["id", "contact_name", "event_type", "channel", "outcome"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Outreach log entry identifier."
+    },
+    "contact_name": {
+      "type": "string",
+      "description": "Name of the contact this outreach was directed at."
+    },
+    "event_type": {
+      "type": "string",
+      "description": "Kind of outreach event (e.g. 'message_sent', 'call', 'meeting')."
+    },
+    "channel": {
+      "type": "string",
+      "description": "Medium used for the outreach (e.g. 'email', 'linkedin', 'phone')."
+    },
+    "outcome": {
+      "type": "string",
+      "description": "Result of the outreach (e.g. 'no_response', 'replied', 'scheduled')."
+    },
+    "follow_up_date": {
+      "type": "string",
+      "description": "Date to follow up on this outreach, if scheduled."
+    }
+  }
+}

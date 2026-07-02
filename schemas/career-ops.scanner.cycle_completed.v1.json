@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/career-ops.scanner.cycle_completed.v1.json",
+  "title": "career-ops.scanner.cycle_completed v1",
+  "description": "Emitted by scan.mjs (the zero-token portal scanner) after a full scan cycle across tracked_companies finishes. Mirrors the console summary block scan.mjs prints ('Portal Scan — <date>'). Consumers use this to track scan cadence and new-posting throughput without parsing logs.",
+  "type": "object",
+  "required": ["companies_scanned", "total_found", "new_offers"],
+  "additionalProperties": false,
+  "properties": {
+    "companies_scanned": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Count of non-board tracked_companies entries scanned this cycle."
+    },
+    "boards_scanned": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Count of job-board (_isBoard) entries scanned this cycle."
+    },
+    "total_found": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total raw postings returned by providers before any filtering."
+    },
+    "filtered_title": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Postings dropped by title filter."
+    },
+    "filtered_location": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Postings dropped by location filter."
+    },
+    "filtered_salary": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Postings dropped by salary filter."
+    },
+    "filtered_content": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Postings dropped by content filter."
+    },
+    "duplicates": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Postings skipped as already-seen duplicates."
+    },
+    "expired_verified": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Postings dropped after Playwright liveness verification found them expired."
+    },
+    "migrated": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Postings rediscovered at a new URL and migrated forward."
+    },
+    "new_offers": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Net new offers written to the Pending section after all filtering and verification."
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Wall-clock duration of the scan cycle in milliseconds."
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "true if the cycle ran with --dry-run (no files written)."
+    }
+  }
+}

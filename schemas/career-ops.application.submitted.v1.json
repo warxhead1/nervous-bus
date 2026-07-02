@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/career-ops.application.submitted.v1.json",
+  "title": "career-ops.application.submitted v1",
+  "description": "Emitted by career-ops when the user confirms an application has actually been submitted (post the mandatory human-review gate — career-ops never auto-submits). Marks the applications.md tracker row transitioning to the 'Applied' canonical state. Consumers use this for outreach cadence tracking and dashboarding.",
+  "type": "object",
+  "required": ["company", "role_title", "status"],
+  "additionalProperties": false,
+  "properties": {
+    "company": {
+      "type": "string",
+      "maxLength": 300,
+      "description": "Company name, matching the Company column in data/applications.md."
+    },
+    "role_title": {
+      "type": "string",
+      "maxLength": 300,
+      "description": "Role title, matching the Role column in data/applications.md."
+    },
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 5,
+      "description": "Fit score out of 5 recorded at evaluation time."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["Applied"],
+      "description": "Canonical applications.md state this event transitions the row into."
+    },
+    "tracker_row": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The '#' row number in data/applications.md."
+    },
+    "url": {
+      "type": "string",
+      "maxLength": 2000,
+      "description": "Posting URL that was applied to."
+    },
+    "method": {
+      "type": "string",
+      "enum": ["ats_form", "email", "referral", "portal_manual"],
+      "description": "How the application was submitted."
+    },
+    "report": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "Relative path to the dossier/report file backing this application, e.g. reports/001-scalar-2026-06-26.md."
+    }
+  }
+}

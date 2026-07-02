@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/jobops.contact.added.v1.json",
+  "title": "jobops.contact.added v1",
+  "description": "Emitted by job-ops (internal/bus/publish.go, EventContactAdded) when a new networking contact is added to the tracker. Backfilled schema — channel had live Redis traffic with no registered schema.",
+  "type": "object",
+  "required": ["id", "name", "company", "relationship", "priority"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Contact identifier."
+    },
+    "name": {
+      "type": "string",
+      "description": "Contact's name."
+    },
+    "company": {
+      "type": "string",
+      "description": "Company the contact is associated with."
+    },
+    "relationship": {
+      "type": "string",
+      "description": "Relationship to the contact (e.g. 'recruiter', 'hiring manager', 'referral')."
+    },
+    "priority": {
+      "type": "integer",
+      "description": "Outreach priority ranking."
+    }
+  }
+}

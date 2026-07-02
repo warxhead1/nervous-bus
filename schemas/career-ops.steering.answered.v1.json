@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/career-ops.steering.answered.v1.json",
+  "title": "career-ops.steering.answered v1",
+  "description": "Emitted by career-ops when the user answers a behavioural-steering clarifying question (e.g. target geography, salary floor, role-fit tradeoffs) during a session. These answers feed the auto-memory layer at ~/.claude/projects/.../memory/ that is reserved for behavioural steering only. Consumers use this to keep steering state in sync without re-reading transcripts. SENSITIVE-DATA NOTE: this event lands in the shared nervous-bus debug log (~/.cache/nervous-bus/debug.jsonl — world-tailed into Redis for any consumer). Publishers MUST NOT put verbatim personal detail (exact salary figures, addresses, full risk-tolerance narrative) in `answer`; prefer a short category-level label plus a `memory_file` pointer to the durable, access-controlled record. `answer` is intentionally optional and length-capped to discourage using it as a verbatim-content sink.",
+  "type": "object",
+  "required": ["question", "category"],
+  "additionalProperties": false,
+  "properties": {
+    "question": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "The clarifying/steering question posed to the user."
+    },
+    "answer": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "Optional short paraphrase/label of the answer (NOT verbatim sensitive detail — see schema-level SENSITIVE-DATA NOTE). Use `memory_file` to point at the full, access-controlled record instead of inlining it here."
+    },
+    "category": {
+      "type": "string",
+      "enum": ["geography", "salary", "role_fit", "consulting_path", "outreach_tone", "risk_tolerance", "other"],
+      "description": "Which steering dimension this answer updates."
+    },
+    "session_id": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "Identifier of the career-ops conversation/session this exchange occurred in."
+    },
+    "memory_file": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "Auto-memory file the answer was written into, if any (e.g. user_job_search.md). Preferred over `answer` for anything sensitive."
+    },
+    "supersedes": {
+      "type": "boolean",
+      "description": "true if this answer overrides a previously recorded steering value for the same category."
+    }
+  }
+}
