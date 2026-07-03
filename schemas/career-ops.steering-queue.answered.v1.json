@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/career-ops.steering-queue.answered.v1.json",
+  "title": "career-ops.steering-queue.answered v1",
+  "description": "Emitted by job-search-se's server/steeringRoutes.js when a career-ops-queue entry (career-ops/data/steering-queue.json) is answered via the SteeringView UI. Pairs with career-ops.steering-queue.requested.v1's id as the correlation key so hearth-api can clear the phone notification card raised on request. Distinct from career-ops.steering.answered.v1, which is an unrelated behavioural-memory-steering concept.",
+  "type": "object",
+  "required": ["id", "answer"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "steering-queue.json entry id — matches the id from the paired requested.v1 event."
+    },
+    "answer": {
+      "type": "string",
+      "maxLength": 2000,
+      "description": "Eric's answer, as recorded in steering-queue.json."
+    }
+  }
+}

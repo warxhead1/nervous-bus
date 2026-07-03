@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/career-ops.steering-queue.requested.v1.json",
+  "title": "career-ops.steering-queue.requested v1",
+  "description": "Emitted by career-ops's steering-ask.mjs (career-ops/data/steering-queue.json's write path) every time a new async human-decision entry is queued — by the scanner, the brainstormer framework, or any future caller. Distinct from career-ops.steering.answered.v1, which is an unrelated behavioural-memory-steering concept (target geography/salary/etc, feeding auto-memory). This channel exists so Eric learns of a pending career-ops decision via a real notification instead of manually opening data/steering-queue.json.",
+  "type": "object",
+  "required": ["id", "question"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "steering-queue.json entry id (8-char hex), used as the notification's correlation/dedup key."
+    },
+    "question": {
+      "type": "string",
+      "maxLength": 2000,
+      "description": "The question posed to Eric."
+    },
+    "context": {
+      "type": "string",
+      "maxLength": 4000,
+      "description": "Supporting context/rationale for the question."
+    },
+    "options": {
+      "type": ["array", "null"],
+      "items": { "type": "string", "maxLength": 200 },
+      "maxItems": 10,
+      "description": "Suggested answer options, or null for free-text."
+    },
+    "urgency": {
+      "type": "string",
+      "enum": ["low", "medium", "high"],
+      "description": "Mirrors steering-queue.json's urgency field; high maps to a critical-priority push."
+    }
+  }
+}
