@@ -84,14 +84,13 @@ pub enum NativePublishError {
 }
 
 fn default_source() -> String {
-    std::env::var("NERVOUS_SOURCE")
-        .unwrap_or_else(|_| {
-            let basename = std::path::Path::new(".")
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown".into());
-            format!("/{}", basename)
-        })
+    std::env::var("NERVOUS_SOURCE").unwrap_or_else(|_| {
+        let basename = std::path::Path::new(".")
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".into());
+        format!("/{}", basename)
+    })
 }
 
 fn ulid() -> String {
@@ -111,12 +110,18 @@ fn iso_now() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     let secs = now.as_secs() as i64;
-    chrono::Utc.timestamp_opt(secs, 0).single()
+    chrono::Utc
+        .timestamp_opt(secs, 0)
+        .single()
         .map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string())
         .unwrap_or_else(|| "1970-01-01T00:00:00Z".into())
 }
 
-fn make_envelope(channel: &str, payload: &(impl Serialize + ?Sized), source: &str) -> Result<String, serde_json::Error> {
+pub(crate) fn make_envelope(
+    channel: &str,
+    payload: &(impl Serialize + ?Sized),
+    source: &str,
+) -> Result<String, serde_json::Error> {
     let id = ulid();
     let time = iso_now();
     let data = serde_json::to_string(payload)?;
@@ -173,7 +178,10 @@ pub fn publish<T: Serialize + ?Sized>(_channel: &str, _payload: &T) -> Result<()
 }
 
 #[cfg(feature = "native")]
-pub fn native_publish<T: Serialize + ?Sized>(channel: &str, payload: &T) -> Result<(), NativePublishError> {
+pub fn native_publish<T: Serialize + ?Sized>(
+    channel: &str,
+    payload: &T,
+) -> Result<(), NativePublishError> {
     let source = default_source();
     let envelope = make_envelope(channel, payload, &source).map_err(NativePublishError::Serde)?;
     let log_path = debug_log_path();
@@ -207,7 +215,10 @@ pub fn native_publish<T: Serialize + ?Sized>(channel: &str, payload: &T) -> Resu
 }
 
 #[cfg(not(feature = "native"))]
-pub fn native_publish<T: Serialize + ?Sized>(_channel: &str, _payload: &T) -> Result<(), NativePublishError> {
+pub fn native_publish<T: Serialize + ?Sized>(
+    _channel: &str,
+    _payload: &T,
+) -> Result<(), NativePublishError> {
     Err(NativePublishError::Io(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "native feature not enabled — rebuild with --features native",
@@ -252,7 +263,10 @@ pub mod listener {
         where
             F: Fn(CloudEvent) + Send + Sync + 'static,
         {
-            self.watchers.lock().unwrap().insert(pattern.to_string(), Box::new(callback));
+            self.watchers
+                .lock()
+                .unwrap()
+                .insert(pattern.to_string(), Box::new(callback));
             self
         }
 
@@ -275,7 +289,9 @@ pub mod listener {
                     return false;
                 }
             }
-            if parts.len() > event_parts.len() && !parts[parts.len() - 1].chars().all(|c| c == '*' || c == '#') {
+            if parts.len() > event_parts.len()
+                && !parts[parts.len() - 1].chars().all(|c| c == '*' || c == '#')
+            {
                 return false;
             }
             true
@@ -285,11 +301,29 @@ pub mod listener {
             let raw: serde_json::Value = serde_json::from_str(line).ok()?;
             let obj = raw.as_object()?;
             let channel = obj.get("type")?.as_str()?.to_string();
-            let id = obj.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let source = obj.get("source").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let time = obj.get("time").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let id = obj
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let source = obj
+                .get("source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let time = obj
+                .get("time")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let data = obj.get("data").cloned().unwrap_or(serde_json::Value::Null);
-            Some(CloudEvent { id, source, channel, time, data })
+            Some(CloudEvent {
+                id,
+                source,
+                channel,
+                time,
+                data,
+            })
         }
 
         fn read_events(path: &Path) -> Vec<CloudEvent> {
@@ -418,17 +452,34 @@ pub mod listener {
     }
 }
 
+/// Real Redis Streams consumer-group transport (`XREADGROUP`/`XACK`/
+/// `XAUTOCLAIM`) — see [`streams`] module docs. Enabled via the `streams`
+/// feature; pulls in `redis` + `tokio` (not part of the default feature set,
+/// which stays dependency-light for callers that only need `publish`).
+#[cfg(feature = "streams")]
+pub mod streams;
+
 #[cfg(not(feature = "listener"))]
 pub mod listener {
-    use super::*;
-
+    // Pre-existing bug fix (unrelated to the `streams` feature added here):
+    // this stub previously returned `Result<_, notify::Error>`, but `notify`
+    // is only a dependency when the `listener` feature is enabled — so
+    // `cargo build`/`cargo build --features streams` with default features
+    // (`listener` off) failed to compile at all. `std::io::Error` keeps the
+    // stub's `Err` variant meaningful without depending on `notify`.
     pub struct Listener;
     impl Listener {
-        pub fn new() -> std::io::Result<Self> { Ok(Self) }
-        pub fn subscribe(&mut self, _: &str, _: impl Fn(()) + Send + Sync + 'static) -> &mut Self { self }
+        pub fn new() -> std::io::Result<Self> {
+            Ok(Self)
+        }
+        pub fn subscribe(&mut self, _: &str, _: impl Fn(()) + Send + Sync + 'static) -> &mut Self {
+            self
+        }
         pub fn stop(&self) {}
         pub fn run(&self) {}
-        pub fn tail(&self, _: &str) -> Result<Vec<String>, notify::Error> { Ok(vec![]) }
+        pub fn tail(&self, _: &str) -> std::io::Result<Vec<String>> {
+            Ok(vec![])
+        }
     }
 }
 
@@ -462,14 +513,29 @@ mod listener_tests {
 
     #[test]
     fn listener_pattern_matching() {
-        assert!(Listener::matches_pattern("deer-flow.cycle.start", "deer-flow.#"));
-        assert!(Listener::matches_pattern("deer-flow.cycle.done", "deer-flow.#"));
+        assert!(Listener::matches_pattern(
+            "deer-flow.cycle.start",
+            "deer-flow.#"
+        ));
+        assert!(Listener::matches_pattern(
+            "deer-flow.cycle.done",
+            "deer-flow.#"
+        ));
         assert!(Listener::matches_pattern("deer-flow.cycle", "deer-flow.#"));
-        assert!(Listener::matches_pattern("tengine.session.frame", "tengine.#"));
+        assert!(Listener::matches_pattern(
+            "tengine.session.frame",
+            "tengine.#"
+        ));
         assert!(Listener::matches_pattern("agent.session.started", "#"));
         assert!(Listener::matches_pattern("agent.session.started", "*"));
-        assert!(Listener::matches_pattern("deer-flow.audit.recommendation.v1", "deer-flow.audit.#"));
-        assert!(!Listener::matches_pattern("deer-flow.audit.recommendation.v1", "deer-flow.tool.*"));
+        assert!(Listener::matches_pattern(
+            "deer-flow.audit.recommendation.v1",
+            "deer-flow.audit.#"
+        ));
+        assert!(!Listener::matches_pattern(
+            "deer-flow.audit.recommendation.v1",
+            "deer-flow.tool.*"
+        ));
     }
 
     #[test]
