@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.checkpoint.warmup_chain_timing.v1.json",
+  "title": "tengine.checkpoint.warmup_chain_timing v1",
+  "description": "Per-WT first-signal timestamp from SignalTimeline, grouped by warmup chain. Emitted once per chain WT at session end by crates/tengine-dgc-hal/src/silo/shadergen_handlers/session_ctrl.rs::emit(), which reads the SignalTimeline GPU ring (RES_SIGNAL_TIMELINE) after all frames have completed. total_warmup_ms = max_first_signal_ns - min_first_signal_ns across the chain's WTs. Producer: registry handle WARMUP_CHAIN_TIMING in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs. CloudEvents subject is the chain name (e.g. 'svdag').",
+  "type": "object",
+  "required": ["chain", "wt", "first_signal_frame", "first_signal_ns", "total_warmup_ms"],
+  "properties": {
+    "chain": {
+      "type": "string",
+      "description": "Warmup chain name (e.g. 'svdag')."
+    },
+    "wt": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Work-type id within the chain."
+    },
+    "first_signal_frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Estimated GPU frame index at which the WT's first signal was recorded."
+    },
+    "first_signal_ns": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Nanosecond timestamp of the WT's first-signal entry in SignalTimeline."
+    },
+    "total_warmup_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Chain's total warmup duration in milliseconds: (max_first_signal_ns - min_first_signal_ns) / 1e6 across all WTs in the chain."
+    },
+    "frames_rendered": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Informational: total frames rendered in the session at emission time. Not part of the registry's declared schema but present on the wire; consumers should treat it as optional."
+    }
+  }
+}

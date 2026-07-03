@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.telemetry.effect_summary.v1.json",
+  "title": "tengine.telemetry.effect_summary v1",
+  "description": "Per-frame field-effect attribution from field_summary_ring (slot 327), available after WT 545. Gated on the TENGINE_EFFECT_ATTRIBUTION env var == 1. Emitted by EffectAttributionDrainer (Phase 7). Producer: registry handle EFFECT_SUMMARY in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs. CloudEvents subject is 'frame_{frame}'.",
+  "type": "object",
+  "required": ["frame", "wt_id", "effects", "frame_phase", "reload_generation"],
+  "properties": {
+    "frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index this summary covers."
+    },
+    "wt_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Work-type id the effect attribution is for."
+    },
+    "effects": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "Per-effect attribution entries read from field_summary_ring for this frame; shape is effect-family specific."
+    },
+    "frame_phase": {
+      "type": "string",
+      "description": "Frame-phase enum value at emission time."
+    },
+    "reload_generation": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Hot-reload generation counter at emission time."
+    }
+  }
+}

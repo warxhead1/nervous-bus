@@ -96,3 +96,24 @@ jobs:
           if fails:
               sys.exit(f"\n{len(fails)} invalid schema(s)")
           EOF
+
+      - name: Verify CHANNELS.md is up to date
+        # schemas/CHANNELS.md is auto-generated from schemas/*.json by
+        # tools/gen_channels_md.py (see that file's docstring). This is the
+        # drift class from the ecosystem-audit-p2 tengine-schema-hygiene fix:
+        # 19 tengine schemas were missing entirely, so CHANNELS.md silently
+        # under-reported the real channel surface with no CI signal. Regenerate
+        # into a scratch copy and diff against the committed file — fail the
+        # build if a schema file exists (added, removed, or edited) without a
+        # matching regeneration.
+        run: |
+          set -euo pipefail
+          cp schemas/CHANNELS.md /tmp/CHANNELS.md.committed
+          python3 tools/gen_channels_md.py
+          if ! diff -u /tmp/CHANNELS.md.committed schemas/CHANNELS.md; then
+            echo ""
+            echo "STALE: schemas/CHANNELS.md does not match the generator output above."
+            echo "Run 'python3 tools/gen_channels_md.py' and commit the result."
+            exit 1
+          fi
+          echo "OK: schemas/CHANNELS.md is up to date"

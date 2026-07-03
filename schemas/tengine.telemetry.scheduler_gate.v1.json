@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.telemetry.scheduler_gate.v1.json",
+  "title": "tengine.telemetry.scheduler_gate v1",
+  "description": "Per-WT gate event from scheduler_watch_ring (slot 340, host_visible). Gated by the TENGINE_SCHEDULER_WATCH_WT env var — zero overhead when unset. Emitted by SignalTimelineDrainer (Phase 5). Producer: registry handle SCHEDULER_GATE in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs. CloudEvents subject is 'frame_{frame}'.",
+  "type": "object",
+  "required": ["frame", "wt_id", "wt_name", "gate_kind", "blocking_wt_id", "gate_ns", "reload_generation"],
+  "properties": {
+    "frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index at which the gate event was recorded."
+    },
+    "wt_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Work-type id that was gated."
+    },
+    "wt_name": {
+      "type": "string",
+      "description": "Human-readable work-type name."
+    },
+    "gate_kind": {
+      "type": "string",
+      "description": "Kind of scheduling gate encountered (e.g. dependency wait, resource contention)."
+    },
+    "blocking_wt_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Work-type id of the WT that caused the gate, when known."
+    },
+    "gate_ns": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Duration of the gate wait, in nanoseconds."
+    },
+    "reload_generation": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Hot-reload generation counter at the time of the gate event."
+    }
+  }
+}

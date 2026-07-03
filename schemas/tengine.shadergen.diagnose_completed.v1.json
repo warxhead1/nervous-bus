@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.shadergen.diagnose_completed.v1.json",
+  "title": "tengine.shadergen.diagnose_completed v1",
+  "description": "Diagnose report completed — summary metrics only (not the full diagnose report body). Producer: registry handle DIAGNOSE_COMPLETED in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs.",
+  "type": "object",
+  "required": ["fps", "health_pct", "anomaly_count", "frame"],
+  "properties": {
+    "fps": {
+      "type": "number",
+      "minimum": 0,
+      "description": "FPS at the time the diagnose report was generated."
+    },
+    "health_pct": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Overall silo health percentage computed by the diagnose pass."
+    },
+    "anomaly_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Anomaly count observed during the diagnose window."
+    },
+    "frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index at which the diagnose report completed."
+    }
+  }
+}

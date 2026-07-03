@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.session.biome_palette_loaded.v1.json",
+  "title": "tengine.session.biome_palette_loaded v1",
+  "description": "Fires at silo startup reporting the static biome palette registry size. Producer: registry handle BIOME_PALETTE_LOADED in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs.",
+  "type": "object",
+  "required": ["palette_count", "biome_ids"],
+  "properties": {
+    "palette_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of biome entries in the static biome palette registry."
+    },
+    "biome_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Identifiers of the registered biomes, in registry order."
+    }
+  }
+}

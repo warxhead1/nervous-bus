@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.contract.violation.v1.json",
+  "title": "tengine.contract.violation v1",
+  "description": "One violation emitted per new entry in the contract_violations ring (RES_CONTRACT_VIOLATIONS = 410, WT 590). Highest-volume tengine channel — burst-safe, the ring has 1024 slots so a single frame can emit many events during a violation storm, but only newly-appeared entries are emitted. Producer: crates/tengine-dgc-hal/src/silo/contract_event_emitter.rs (per-frame emitter on the frame-JSONL stream), registry handle CONTRACT_VIOLATION in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs. CloudEvents source is 'silo:<silo_name>:<session_id>'; subject is 'frame_<NNNN>'.",
+  "type": "object",
+  "required": [
+    "frame", "race_phase", "contract_id", "contract_name",
+    "category", "severity", "observed_json", "expected_json",
+    "location_hint", "waypoint_id"
+  ],
+  "properties": {
+    "frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index at which the violation was detected."
+    },
+    "race_phase": {
+      "type": "string",
+      "enum": ["IDLE", "COUNTDOWN", "RACING", "FINISHED"],
+      "description": "Race-phase enum at the time of detection."
+    },
+    "contract_id": {
+      "type": "string",
+      "pattern": "^0x[0-9A-Fa-f]+$",
+      "description": "FNV hex hash identifying the contract, e.g. '0xNNNNNNNN'."
+    },
+    "contract_name": {
+      "type": "string",
+      "description": "Human-readable contract name from the ring entry. Empty string for GPU-generated entries that carry no name."
+    },
+    "category": {
+      "type": "string",
+      "enum": ["SCHEDULING", "POD", "TERRAIN", "CONFIG", "VISUAL", "ENVIRONMENT"],
+      "description": "Contract category — matches the keys used in tengine.contract.state.v1's violations_by_category."
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["WARN", "FAIL"],
+      "description": "Violation severity."
+    },
+    "observed_json": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 4,
+      "maxItems": 4,
+      "description": "Array of 4 f32 values as observed by the contract."
+    },
+    "expected_json": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 4,
+      "maxItems": 4,
+      "description": "Array of 4 f32 values that were expected."
+    },
+    "location_hint": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Opaque hint (e.g. pod index, voxel coord, or 0 when not applicable)."
+    },
+    "waypoint_id": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Cinema (tengine-qc5wv) timeline waypoint id. Always null until Cinema's waypoint wiring lands; the field MUST remain in the schema so existing consumers don't break when Cinema ships."
+    }
+  }
+}

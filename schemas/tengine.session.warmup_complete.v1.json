@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.session.warmup_complete.v1.json",
+  "title": "tengine.session.warmup_complete v1",
+  "description": "Silo warmup finished; socket is ready and workshop warmup frames have completed. Producer: registry handle SESSION_WARMUP_COMPLETE in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs (H5 — session warmup-complete event).",
+  "type": "object",
+  "required": ["silo", "session_dir", "frame", "pid"],
+  "properties": {
+    "silo": {
+      "type": "string",
+      "description": "Silo identifier as configured."
+    },
+    "session_dir": {
+      "type": "string",
+      "description": "Absolute path to the session directory."
+    },
+    "frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index at which warmup completed."
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "OS process id of the silo."
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.telemetry.probe_record.v1.json",
+  "title": "tengine.telemetry.probe_record v1",
+  "description": "One probe record from pulse_probe_ring (slot 184). Gated on the TENGINE_PROBE_MASK env var != 0; zero overhead when disabled. Emitted by PulseProbeDrainer (Phase 7). Producer: registry handle PROBE_RECORD in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs. CloudEvents subject is 'frame_{frame}'.",
+  "type": "object",
+  "required": ["frame", "probe_id", "wt_id", "values", "probe_label", "frame_phase"],
+  "properties": {
+    "frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index at which the probe fired."
+    },
+    "probe_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Numeric probe slot id within pulse_probe_ring."
+    },
+    "wt_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Work-type id the probe is attached to."
+    },
+    "values": {
+      "type": "array",
+      "items": { "type": "number" },
+      "description": "Probe sample values read from the ring for this record."
+    },
+    "probe_label": {
+      "type": "string",
+      "description": "Human-readable label for this probe, as configured via TENGINE_PROBE_MASK."
+    },
+    "frame_phase": {
+      "type": "string",
+      "description": "Frame-phase enum value at the time the probe fired."
+    }
+  }
+}

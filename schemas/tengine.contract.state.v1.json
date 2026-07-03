@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.contract.state.v1.json",
+  "title": "tengine.contract.state v1",
+  "description": "ContractState aggregate, read from the contract_state buffer (RES_CONTRACT_STATE = 447). Emitted at race-phase transitions, every state_cadence frames (default 60, ~1Hz at 60 FPS), and on silo shutdown (emit_final). Producer: crates/tengine-dgc-hal/src/silo/contract_event_emitter.rs, registry handle CONTRACT_STATE in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs. CloudEvents source is 'silo:<silo_name>:<session_id>'; subject is 'frame_<NNNN>'.",
+  "type": "object",
+  "required": ["frame", "race_phase", "violations_total", "violations_by_category"],
+  "properties": {
+    "frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index at emission time."
+    },
+    "race_phase": {
+      "type": "string",
+      "enum": ["IDLE", "COUNTDOWN", "RACING", "FINISHED"],
+      "description": "Race-phase enum at emission time; same enum as tengine.contract.violation.v1."
+    },
+    "violations_total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Lifetime violation count from ContractState (monotonic, does not reset within a session)."
+    },
+    "violations_by_category": {
+      "type": "object",
+      "description": "Per-category lifetime violation counts.",
+      "required": ["SCHEDULING", "POD", "TERRAIN", "CONFIG", "VISUAL", "ENVIRONMENT"],
+      "properties": {
+        "SCHEDULING": { "type": "integer", "minimum": 0 },
+        "POD": { "type": "integer", "minimum": 0 },
+        "TERRAIN": { "type": "integer", "minimum": 0 },
+        "CONFIG": { "type": "integer", "minimum": 0 },
+        "VISUAL": { "type": "integer", "minimum": 0 },
+        "ENVIRONMENT": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

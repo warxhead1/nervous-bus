@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/tengine.session.frame_milestone.v1.json",
+  "title": "tengine.session.frame_milestone v1",
+  "description": "Emitted every 100 frames as a lightweight liveness heartbeat, cheaper than subscribing to the full tengine.session.frame stream. Producer: registry handle FRAME_MILESTONE in crates/tengine-dgc-hal/src/silo/shadergen_handlers/track_group.rs. CloudEvents subject is 'frame_{frame}'.",
+  "type": "object",
+  "required": [
+    "session_id", "session_type", "silo", "wt_count",
+    "reload_generation", "frame_phase", "frame_index_basis",
+    "frame", "fps_avg"
+  ],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Provenance header: session-dir basename, stable correlation id for this silo run."
+    },
+    "session_type": {
+      "type": "string",
+      "description": "Provenance header: kind of session (e.g. 'interactive', 'headless', 'racing')."
+    },
+    "silo": {
+      "type": "string",
+      "description": "Provenance header: silo identifier as configured."
+    },
+    "wt_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Provenance header: number of work-types active in this session."
+    },
+    "reload_generation": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Provenance header: hot-reload generation counter; increments on each TSDL/constants reload."
+    },
+    "frame_phase": {
+      "type": "string",
+      "description": "Provenance header: current frame-phase enum value at emission time."
+    },
+    "frame_index_basis": {
+      "type": "string",
+      "description": "Provenance header: which frame counter this event's frame numbers are relative to (e.g. 'session' vs 'process')."
+    },
+    "frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "GPU frame index at this milestone (multiple of 100)."
+    },
+    "fps_avg": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Rolling-average FPS at the milestone."
+    }
+  }
+}

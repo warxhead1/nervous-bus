@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/tengine.silo.started.v1.json",
   "title": "tengine.silo.started v1",
-  "description": "Fires when a new silo session directory appears under ~/.tengine/sessions/silo_*/. Always pairs with a later tengine.silo.verify event for clean completions; absence of pair within window N indicates the silo crashed mid-run.",
+  "description": "Fires when a new silo session directory appears under ~/.tengine/sessions/silo_*/. Always pairs with a later tengine.silo.verify event for clean completions; absence of pair within window N indicates the silo crashed mid-run. Producer: the silo-watcher nervous-bus adapter (~/.config/nervous-bus/adapters/silo-watcher/watcher.py, systemd --user unit nervous-silo-watcher.service — confirmed running as of 2026-07-02), NOT tengine's own EventChannel registry; this is an out-of-repo directory-poll adapter that lives in the private overlay config tree, which is why an in-repo-only producer scan misses it. Re-verified 2026-07-02 (ecosystem-audit-p2): schema was previously assumed dead by an automated scan that only covers hearth-loom/deer-flow/kb/tengine source trees, none of which include this adapter.",
   "type": "object",
   "required": ["silo", "session_id", "started_at"],
   "properties": {
