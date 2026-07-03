@@ -2,7 +2,8 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "kb.plan.updated.v1",
   "title": "KB Plan Updated",
-  "description": "Emitted by `kb plan update <id>` when a plan YAML file is modified. Lets deer-flow and hearth-loom react to plan changes without polling the vault.",
+  "status": "unconsumed",
+  "description": "Emitted by `kb plan update <id>` when a plan YAML file is modified. Lets deer-flow and hearth-loom react to plan changes without polling the vault. UNCONSUMED (2026-07 zombie-event audit): no consumer was found anywhere in hearth, tengine, or tachyonac-engine — currently write-only telemetry. The 'lets deer-flow and hearth-loom react' language above describes aspirational/intended use, not a verified handler. Not removed (cheap, harmless bus write that may become useful later); flagged so the registry stops implying something reads it today. See nervous-bus schemas/CHANNELS.md for current status.",
   "type": "object",
   "required": ["plan_id", "title"],
   "properties": {

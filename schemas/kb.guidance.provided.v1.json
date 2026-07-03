@@ -2,7 +2,8 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "kb.guidance.provided.v1",
   "title": "KB Guidance Provided",
-  "description": "Emitted by `kb check <query>` when the vault is queried for coverage confidence. The escalate field is the dynamic cadence signal: false = coast on vault knowledge; true = spawn deer-flow research. Enables tracking of how often Claude defers to vault vs escalates to deep research.",
+  "status": "unconsumed",
+  "description": "Emitted by `kb check <query>` when the vault is queried for coverage confidence. The escalate field is the dynamic cadence signal: false = coast on vault knowledge; true = spawn deer-flow research. Enables tracking of how often Claude defers to vault vs escalates to deep research. UNCONSUMED (2026-07 zombie-event audit): kb publishes this event but no consumer was found anywhere in hearth, tengine, or tachyonac-engine — currently write-only telemetry. Not removed (cheap, harmless bus write that may become useful later); flagged so the registry stops implying something reads it today. See nervous-bus schemas/CHANNELS.md for current status.",
   "type": "object",
   "required": ["query", "confidence", "escalate"],
   "properties": {

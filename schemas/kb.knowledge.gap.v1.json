@@ -2,7 +2,8 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "kb.knowledge.gap.v1",
   "title": "KB Knowledge Gap",
-  "description": "Emitted by kb audit and kb decay when an empirically_testable entry has no evidence chain, or when a project has an identified research blind spot. Primary consumer: deer-flow gap-dispatch loop which queues a research question and feeds the result back as deer-flow.guidance.fact.v1.",
+  "status": "unconsumed",
+  "description": "Emitted by kb audit and kb decay when an empirically_testable entry has no evidence chain, or when a project has an identified research blind spot. Primary consumer: deer-flow gap-dispatch loop which queues a research question and feeds the result back as deer-flow.guidance.fact.v1. UNCONSUMED-IN-SCOPE (2026-07 zombie-event audit): no consumer was found anywhere in hearth, tengine, or tachyonac-engine — currently write-only telemetry from that vantage point. The deer-flow 'primary consumer' claim above was NOT independently re-verified in this pass and deer-flow is outside this audit's scope — this note confirms the hearth/tengine/tachyonac-engine side is silent, not that deer-flow doesn't listen. Not removed (cheap, harmless bus write). See nervous-bus schemas/CHANNELS.md for current status.",
   "type": "object",
   "required": ["project", "question", "priority"],
   "properties": {

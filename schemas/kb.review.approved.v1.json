@@ -2,7 +2,8 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "kb.review.approved.v1",
   "title": "KB Review Approved",
-  "description": "Emitted by `kb review approve <id>` when a human reviewer accepts a proposed vault entry. Triggers confidence boost in the scoring model.",
+  "status": "unconsumed",
+  "description": "Emitted by `kb review approve <id>` when a human reviewer accepts a proposed vault entry. Triggers confidence boost in the scoring model. UNCONSUMED (2026-07 zombie-event audit): kb publishes this event but no consumer was found anywhere in hearth, tengine, or tachyonac-engine — currently write-only telemetry. Not removed (cheap, harmless bus write that may become useful later); flagged so the registry stops implying something reads it today. See nervous-bus schemas/CHANNELS.md for current status.",
   "type": "object",
   "required": ["entry_id", "reviewed_by", "reviewed_at"],
   "properties": {

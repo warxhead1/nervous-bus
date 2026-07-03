@@ -2,7 +2,8 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "kb.plan.researched.v1",
   "title": "KB Plan Researched",
-  "description": "Emitted by `kb plan-research <id>` when deer-flow research tracks are dispatched for a plan. Enables hearth-loom to correlate bead dispatch with the originating plan.",
+  "status": "unconsumed",
+  "description": "Emitted by `kb plan-research <id>` when deer-flow research tracks are dispatched for a plan. Enables hearth-loom to correlate bead dispatch with the originating plan. UNCONSUMED (2026-07 zombie-event audit): no consumer was found anywhere in hearth, tengine, or tachyonac-engine — currently write-only telemetry. The 'enables hearth-loom' language above describes aspirational/intended use, not a verified handler. Not removed (cheap, harmless bus write that may become useful later); flagged so the registry stops implying something reads it today. See nervous-bus schemas/CHANNELS.md for current status.",
   "type": "object",
   "required": ["plan_id", "track_ids"],
   "properties": {

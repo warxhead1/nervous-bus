@@ -2,7 +2,8 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "kb.artifact.linked.v1",
   "title": "KB Artifact Linked",
-  "description": "Emitted by `kb link <plan> --session <id>` when a session artifact is associated with a plan entry. Enables downstream consumers (deer-flow, hearth-loom) to track which sessions contributed evidence to which plans.",
+  "status": "unconsumed",
+  "description": "Emitted by `kb link <plan> --session <id>` when a session artifact is associated with a plan entry. Enables downstream consumers (deer-flow, hearth-loom) to track which sessions contributed evidence to which plans. UNCONSUMED (2026-07 zombie-event audit): no consumer was found anywhere in hearth, tengine, or tachyonac-engine — currently write-only telemetry. The 'downstream consumers' language above describes aspirational/intended use, not a verified handler; a deer-flow-side consumer was not independently re-verified in this pass and is outside this audit's scope. Not removed (cheap, harmless bus write that may become useful later); flagged so the registry stops implying something reads it today. See nervous-bus schemas/CHANNELS.md for current status.",
   "type": "object",
   "required": ["entry_id", "artifact_uri", "artifact_type"],
   "properties": {

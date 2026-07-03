@@ -21,6 +21,15 @@ or renaming schemas:  python3 tools/gen_channels_md.py
 Naming convention codified: `<project>.<subsystem>.<event>.v<n>` (lowercase,
 dot-separated, trailing major version). Violations are listed in their own
 section so they can be fixed or consciously grandfathered.
+
+Status annotations: a schema may carry a free-text top-level `"status"` key
+(e.g. `"unconsumed"`, `"orphaned-consumer-mismatch"`, `"retired"`) to flag
+that it's known write-only telemetry, a producer/consumer field mismatch, or
+similar. When present, it's surfaced inline in the channel's Description
+cell (🔇 marker) so this doc doesn't silently imply a live listener where
+none is evidenced. Channels whose schema file was removed entirely (producer
+gone, nothing left to regenerate a row from) are listed by hand in the
+"Retired channels (no schema file)" section — see RETIRED_NO_SCHEMA below.
 """
 
 from __future__ import annotations
@@ -98,6 +107,49 @@ def title_of(path: Path) -> str:
     return ""
 
 
+def status_of(path: Path) -> str | None:
+    """Pull the schema-level `status` annotation (e.g. 'unconsumed',
+    'orphaned-consumer-mismatch', 'retired'), if present. This is a free-text
+    vendor keyword, not part of the JSON Schema vocabulary — see e.g.
+    tengine.frame.metrics.v1.json and the kb.* zombie-event schemas."""
+    try:
+        doc = json.loads(path.read_text())
+    except Exception:
+        return None
+    val = doc.get("status")
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+    return None
+
+
+# Channels formally retired whose producer AND schema file were both removed
+# from this repo (not just deprecated-in-place). Listed by hand because the
+# generator only has *.json files to walk — there's nothing on disk to
+# classify() for these. Keep in sync with any future retirement: add the
+# channel + a short reason, do not fabricate a schema file just to get a row.
+RETIRED_NO_SCHEMA: list[tuple[str, str]] = [
+    (
+        "hearth.device.state.v1",
+        "Formally retired (2026-07 zombie-event audit). Producer was "
+        "adapters/hearth-bridge (home IoT bridge); both the adapter and its "
+        "schema file were deleted from this repo in commit 8dbb391 "
+        "(oss-prep private-schema migration) and never restored publicly. "
+        "No consumer evidenced anywhere. Not resurrecting speculative "
+        "cross-project infra without an evidenced product need.",
+    ),
+    (
+        "hearth.presence.v1",
+        "Formally retired (2026-07 zombie-event audit). Same producer "
+        "(adapters/hearth-bridge) and same removal commit (8dbb391) as "
+        "hearth.device.state.v1. No consumer evidenced anywhere. "
+        "hearth.health.snapshot.v1 was removed in the same commit and never "
+        "had an evidenced producer even before removal (no publish call "
+        "site found) — worth knowing if this channel is ever revisited, "
+        "though it isn't itself being re-registered here.",
+    ),
+]
+
+
 def main() -> int:
     schemas = sorted(SCHEMA_DIR.glob("*.json"))
     if not schemas:
@@ -152,8 +204,27 @@ def main() -> int:
             ch = channel_of(p)
             flag = " ⚠️" if ch in violations else ""
             desc_cell = title_of(p).replace("|", "\\|") or "—"
+            status = status_of(p)
+            if status:
+                desc_cell = f"🔇 **{status}** — {desc_cell}"
             lines.append(f"| `{ch}`{flag} | {desc_cell} |")
         lines.append("")
+
+    # Retired channels with no schema file on disk. These can't come from the
+    # SCHEMA_DIR.glob() walk above (there's no *.json to walk), so they're
+    # listed explicitly. See RETIRED_NO_SCHEMA docstring for why.
+    lines.append("## Retired channels (no schema file)")
+    lines.append("")
+    lines.append(
+        "Producer and schema file both removed from this repo — nothing to "
+        "regenerate a row from, so these are listed by hand. Present here so "
+        "contributors don't mistake silent absence for 'never existed' or "
+        "'still planned'."
+    )
+    lines.append("")
+    for ch, note in RETIRED_NO_SCHEMA:
+        lines.append(f"- `{ch}` 🔇 **retired** — {note}")
+    lines.append("")
 
     # Naming-convention violations
     lines.append("## Naming-convention violations")

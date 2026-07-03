@@ -2,7 +2,8 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "kb.entry.vetted.v1",
   "title": "KB Entry Vetted",
-  "description": "Emitted by kb vet when an EvidenceEntry is appended to a vault entry's evidence_chain. The highest-confidence write event kb produces — source_type test-result maps to confidence 1.0 in the scoring model.",
+  "status": "unconsumed",
+  "description": "Emitted by kb vet when an EvidenceEntry is appended to a vault entry's evidence_chain. The highest-confidence write event kb produces — source_type test-result maps to confidence 1.0 in the scoring model. UNCONSUMED (2026-07 zombie-event audit): kb publishes this event but no consumer was found anywhere in hearth, tengine, or tachyonac-engine — currently write-only telemetry. Not removed (cheap, harmless bus write that may become useful later); flagged so the registry stops implying something reads it today. See nervous-bus schemas/CHANNELS.md for current status.",
   "type": "object",
   "required": ["entry_id", "title", "project", "result", "session_uri", "old_confidence", "new_confidence"],
   "properties": {
