@@ -4,7 +4,7 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**291 channels** across 5 clusters.
+**297 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
@@ -12,7 +12,7 @@ Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster
 | [Autobench](#autobench) | 53 | autobench.* evolution loop (case/judge/improver/budget/...) |
 | [Hearth](#hearth) | 49 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 128 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 134 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -311,6 +311,8 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `funsearch.engine_render.completed.v1` | funsearch.engine_render.completed.v1 |
 | `funsearch.engine_render.requested.v1` | funsearch.engine_render.requested.v1 |
 | `funsearch.review.v1` | funsearch.review.v1 |
+| `greenhouse.candidate.ready.v1` | greenhouse.candidate.ready.v1 v1 |
+| `greenhouse.cycle.completed.v1` | greenhouse.cycle.completed.v1 v1 |
 | `jobops.application.updated.v1` | jobops.application.updated v1 |
 | `jobops.contact.added.v1` | jobops.contact.added v1 |
 | `jobops.content.queued.v1` | jobops.content.queued v1 |
@@ -331,13 +333,17 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `kernel.best_fitness_improved.v1` | kernel.best_fitness_improved v1 |
 | `kernel.candidate.evaluated.v1` | kernel.candidate.evaluated.v1 v1 |
 | `kernel.completed.v1` | kernel.completed.v1 v1 |
+| `kernel.composition.ready.v1` | kernel.composition.ready.v1 v1 |
 | `kernel.generation.completed.v1` | kernel.generation.completed.v1 v1 |
 | `kernel.island_reset.v1` | kernel.island_reset v1 |
 | `kernel.plateau_hint.v1` | kernel.plateau_hint v1 |
 | `kernel.prior.loaded.v1` | kernel.prior.loaded v1 |
 | `kernel.prior.updated.v1` | kernel.prior.updated v1 |
+| `kernel.render.evaluated.v1` | kernel.render.evaluated.v1 v1 |
 | `kernel.started.v1` | kernel.started.v1 v1 |
 | `pulse.kernel.snapshot.v1` | pulse.kernel.snapshot v1 |
+| `pulse.render.quality.v1` | pulse.render.quality v1 |
+| `shader.preadmit.evaluated.v1` | shader.preadmit.evaluated.v1 v1 |
 | `sys.log.entry.v1` | sys.log.entry v1 |
 
 ## Naming-convention violations

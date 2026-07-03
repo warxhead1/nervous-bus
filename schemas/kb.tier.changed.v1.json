@@ -2,7 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/kb.tier.changed.v1.json",
   "title": "kb.tier.changed v1",
-  "description": "Emitted once per entry transition by `kb tier-promote` (live runs only — never on --dry-run). Real tier transitions (inbox->graded, graded->promoted, promoted->graded) and dedup-collision skips both ride this channel, discriminated by `transition`. A frequent dedup_skipped stream signals duplicate content repeatedly re-promoted; a dedup_skipped event with no matching on-disk duplicate flags the ephemeral dedup index diverging from indexed/. Source: kb/src/commands/tier.rs (run_promote).",
+  "status": "unconsumed",
+  "description": "Emitted once per entry transition by `kb tier-promote` (live runs only — never on --dry-run). Real tier transitions (inbox->graded, graded->promoted, promoted->graded) and dedup-collision skips both ride this channel, discriminated by `transition`. A frequent dedup_skipped stream signals duplicate content repeatedly re-promoted; a dedup_skipped event with no matching on-disk duplicate flags the ephemeral dedup index diverging from indexed/. Source: kb/src/commands/tier.rs (run_promote). UNCONSUMED (2026-07 zombie-event audit): kb publishes this event but no consumer was found anywhere in hearth, tengine, or tachyonac-engine — currently write-only telemetry. Not removed (cheap, harmless bus write that may become useful later); flagged so the registry stops implying something reads it today. See nervous-bus schemas/CHANNELS.md for current status.",
   "type": "object",
   "required": ["entry_id", "title", "project", "from", "to", "confidence", "transition"],
   "properties": {

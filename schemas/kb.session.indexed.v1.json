@@ -2,7 +2,8 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "kb.session.indexed.v1",
   "title": "KB Session Indexed",
-  "description": "Emitted by kb ingest-sessions and kb watch (research.cycle.completed handler) when a new session or research artifact is written to index.yaml. Consumed by hearth-api for Android counter updates.",
+  "status": "unconsumed",
+  "description": "Emitted by kb ingest-sessions and kb watch (research.cycle.completed handler) when a new session or research artifact is written to index.yaml. Consumed by hearth-api for Android counter updates. UNCONSUMED (2026-07 zombie-event audit): the 'consumed by hearth-api' claim above is STALE/INCORRECT as of this audit — verified via full-text grep of hearth-api's nbus_consumer.rs dispatch table (handle_redis_event / classify_dispatch), which has no arm for kb.session.indexed.v1 (it does handle kb.entry.created.v1, kb.session.harvest.v1, kb.session.context.v1, kb.review.requested.v1, kb.brainstorm.checkpoint.v1, hearth.kb.approved.v1 — none of them this channel). Currently write-only telemetry; not removed (cheap, harmless bus write that may become useful later). See nervous-bus schemas/CHANNELS.md for current status.",
   "type": "object",
   "required": ["source", "added"],
   "properties": {

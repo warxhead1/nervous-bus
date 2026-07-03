@@ -19,6 +19,7 @@ One JSON Schema file per channel event type, named `<type>.v<n>.json`.
 | ⚠ wired-not-deployed | Producer code + schema exist, but no service is currently running (deploy gap) |
 | ◯ planned | Schema declared; producer is TBD or in-flight (tracking bead noted) |
 | ✗ no-schema | Channel fires on bus but no schema in this repo (gap A — file the schema or kill the producer) |
+| ☠ retired | Producer AND schema file both deleted from this repo; channel is formally dead, not resurrected without an evidenced product need. See schemas/CHANNELS.md's "Retired channels (no schema file)" section. |
 
 Refresh the table by running `python3 sdk/python/classify_channels.py` (TODO; for now: `jq -R 'fromjson? | .type' ~/.cache/nervous-bus/debug.jsonl | sort | uniq -c`).
 
@@ -48,8 +49,8 @@ Refresh the table by running `python3 sdk/python/classify_channels.py` (TODO; fo
 | `loom.lifecycle.retry.v1.json` | `loom.lifecycle.retry` | hearth-loom | ◯ planned — retry / gate / AC evidence signals (tracker: nervous-bus-5o8) |
 | `loom.plan.v1.json` | `loom.plan` | hearth-loom | ◯ planned — filed when human approves a plan |
 | `loom.plan.step.v1.json` | `loom.plan.step` | hearth-loom | ◯ planned — per-bead execution progress |
-| `hearth.device.state.v1.json` | `hearth.device.state` | adapters/hearth-bridge | ✓ live — nervous-hearth-bridge.service active since 2026-05-10; publishes device state + presence from Redis (tracker: nervous-bus-p82) |
-| `hearth.presence.v1.json` | `hearth.presence` | adapters/hearth-bridge | ✓ live — same service, publishes aggregate occupancy/presence (tracker: nervous-bus-p82) |
+| _(no schema file)_ | `hearth.device.state` | adapters/hearth-bridge (deleted) | ☠ retired — nervous-hearth-bridge.service and this schema file were both removed in commit 8dbb391 (oss-prep private-schema migration, 2026-05-31); the systemd unit's dangling symlink was cleaned up 2026-06-30. No consumer evidenced anywhere. Formerly tracked as nervous-bus-p82 — that claim of "✓ live" is stale as of this audit. Do not resurrect without an evidenced product need. |
+| _(no schema file)_ | `hearth.presence` | adapters/hearth-bridge (deleted) | ☠ retired — same removal (commit 8dbb391) as `hearth.device.state`. No consumer evidenced anywhere. `hearth.health.snapshot.v1.json` was also deleted in the same commit but never had an evidenced publish call site even before removal — not itself re-registered here. |
 | `hearth.router.decision.v1.json` | `hearth.router.decision` | hearth-nbus crate (in hearth repo) | ◯ planned — AI router model selection + fallback tracking |
 | `hearth.ember.insight.v1.json` | `hearth.ember.insight` | hearth-cognitive (in hearth repo) | ◯ planned — cognitive insight events (tracker: hearth-4yzn) |
 | `home-automation.news.article.v1.json` | `home-automation.news.article` | home-automation/hearth-brain | ✓ live — keyword-boost scoring (no external LLM); fires on articles with boost >= 1.2 |
