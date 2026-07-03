@@ -177,6 +177,8 @@ publish("tengine.silo.verify.v1", &json!({
 
 The default (`subprocess`) feature shells out to `nervous publish`. The `native` feature appends the envelope straight to `debug.jsonl` (and pipes to the Zellij plugin when running inside Zellij), skipping the `nervous` CLI; Redis delivery still happens via the redis-mirror adapter that tails `debug.jsonl`. See `sdk/rust/src/lib.rs` for the v1 status.
 
+For real consumer-group Redis Streams support (`XREADGROUP`/`XACK`/`XAUTOCLAIM`, not just publish), enable the `streams` feature — see `sdk/rust/README.md`.
+
 ### Python
 
 The Python shim (`sdk/python/nbus.py`) wraps the shell SDK and is kept for backwards compatibility. For new consumers, shell out to `nervous publish` directly or use the `deer obs bus` subcommand if deer-flow is in your stack.
