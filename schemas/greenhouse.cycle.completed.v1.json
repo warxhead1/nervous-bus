@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/greenhouse.cycle.completed.v1.json",
+  "title": "greenhouse.cycle.completed.v1 v1",
+  "description": "One budgeted greenhouse evolution cycle finished (whatever the outcome). The observability heartbeat for autonomous background evolution. Source: /autobench/greenhouse.",
+  "type": "object",
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/greenhouse"
+    },
+    "type": {
+      "type": "string",
+      "const": "greenhouse.cycle.completed.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "goal_id",
+        "domain",
+        "run_id",
+        "stop_reason",
+        "llm_requests",
+        "candidates_dropped",
+        "window_requests_used",
+        "window_requests_budget"
+      ],
+      "properties": {
+        "goal_id": {
+          "type": "string"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "stop_reason": {
+          "type": "string",
+          "description": "Horizon reason from the kernel run (target_fitness | max_requests | max_wall_seconds | plateau | error)."
+        },
+        "generations": {
+          "type": "integer"
+        },
+        "best_fitness": {
+          "type": "number"
+        },
+        "llm_requests": {
+          "type": "integer",
+          "description": "Requests consumed by this cycle."
+        },
+        "candidates_dropped": {
+          "type": "integer",
+          "description": "How many validated candidates were exported to the drop dir."
+        },
+        "window_requests_used": {
+          "type": "integer",
+          "description": "Greenhouse requests used in the current sliding window AFTER this cycle."
+        },
+        "window_requests_budget": {
+          "type": "integer",
+          "description": "The greenhouse's own window cap (a deliberate slice of the shared plan budget, never the whole plan cap)."
+        },
+        "skipped": {
+          "type": "boolean",
+          "description": "True when the cycle exited without evolving (budget exhausted, empty manifest, lock held)."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

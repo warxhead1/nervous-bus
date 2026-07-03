@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/greenhouse.candidate.ready.v1.json",
+  "title": "greenhouse.candidate.ready.v1 v1",
+  "description": "A goal-directed evolution cycle produced a validated GLSL candidate and dropped it for garden intake. Emitted once per exported candidate. Source: /autobench/greenhouse.",
+  "type": "object",
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/greenhouse"
+    },
+    "type": {
+      "type": "string",
+      "const": "greenhouse.candidate.ready.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "goal_id",
+        "domain",
+        "run_id",
+        "candidate_id",
+        "fitness",
+        "drop_path",
+        "glsl_validated"
+      ],
+      "properties": {
+        "goal_id": {
+          "type": "string",
+          "description": "Goal manifest entry this cycle evolved toward."
+        },
+        "domain": {
+          "type": "string",
+          "enum": [
+            "sdf",
+            "noise",
+            "terrain",
+            "phase",
+            "latent",
+            "sph",
+            "thermal",
+            "oasis"
+          ]
+        },
+        "run_id": {
+          "type": "string",
+          "description": "ULID of the underlying kernel run."
+        },
+        "candidate_id": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "instance": {
+          "type": "string"
+        },
+        "fitness": {
+          "type": "number"
+        },
+        "drop_path": {
+          "type": "string",
+          "description": "Absolute path of the dropped candidate JSON (kernel-entry-shaped: id, domain, fitness, generation, run_id, glsl, tags)."
+        },
+        "glsl_validated": {
+          "type": "boolean",
+          "description": "True when glslangValidator accepted the transpiled source offline."
+        },
+        "glsl_bytes": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
