@@ -4,7 +4,7 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**297 channels** across 5 clusters.
+**299 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
@@ -12,7 +12,7 @@ Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster
 | [Autobench](#autobench) | 53 | autobench.* evolution loop (case/judge/improver/budget/...) |
 | [Hearth](#hearth) | 49 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 134 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 136 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -38,7 +38,7 @@ _agent session lifecycle, heartbeats, thread/run start-stop_
 | `hearth.session.completed.v1` | hearth.session.completed v1 |
 | `kb.session.context.v1` | KB Session Context |
 | `kb.session.harvest.v1` | kb.session.harvest v1 |
-| `kb.session.indexed.v1` | KB Session Indexed |
+| `kb.session.indexed.v1` | 🔇 **unconsumed** — KB Session Indexed |
 
 ## Autobench
 
@@ -169,7 +169,7 @@ _tengine shadergen + silo session telemetry_
 | `tengine.code.changed.v1` | tengine.code.changed v1 |
 | `tengine.contract.state.v1` | tengine.contract.state v1 |
 | `tengine.contract.violation.v1` | tengine.contract.violation v1 |
-| `tengine.frame.metrics.v1` | tengine.frame.metrics v1 |
+| `tengine.frame.metrics.v1` | 🔇 **orphaned-consumer-mismatch** — tengine.frame.metrics v1 |
 | `tengine.gpu.lease.granted.v1` | tengine.gpu.lease.granted v1 |
 | `tengine.gpu.lease.heartbeat.v1` | tengine.gpu.lease.heartbeat v1 |
 | `tengine.gpu.lease.released.v1` | tengine.gpu.lease.released v1 |
@@ -264,6 +264,8 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `career-ops.scanner.cycle_completed.v1` | career-ops.scanner.cycle_completed v1 |
 | `career-ops.steering.answered.v1` | career-ops.steering.answered v1 |
 | `codeforces_problem.v1` ⚠️ | CodeforcesProblem |
+| `codemap.graph.rebuilt.v1` | codemap.graph.rebuilt v1 |
+| `codemap.public_api.changed.v1` | codemap.public_api.changed v1 |
 | `deer-flow.agent.message.v1` | deer-flow.agent.message v1 |
 | `deer-flow.agent.thread.v1` | deer-flow.agent.thread v1 |
 | `deer-flow.audit.recommendation.snapshot.v1` | deer-flow.audit.recommendation.snapshot v1 |
@@ -277,7 +279,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `deer-flow.council.started.v1` | deer-flow.council.started v1 |
 | `deer-flow.cumulative.exit.v1` | deer-flow.cumulative.exit v1 |
 | `deer-flow.cumulative.hard.v1` | deer-flow.cumulative.hard v1 |
-| `deer-flow.cycle.snapshot.v1` | deer-flow.cycle.snapshot v1 |
+| `deer-flow.cycle.snapshot.v1` | 🔇 **superseded** — deer-flow.cycle.snapshot v1 |
 | `deer-flow.cycle.wait.exit.v1` | deer-flow.cycle.wait.exit v1 |
 | `deer-flow.feedback.acted.v1` | deer-flow.feedback.acted v1 |
 | `deer-flow.feedback.received.v1` | deer-flow.feedback.received v1 |
@@ -317,19 +319,19 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `jobops.contact.added.v1` | jobops.contact.added v1 |
 | `jobops.content.queued.v1` | jobops.content.queued v1 |
 | `jobops.outreach.logged.v1` | jobops.outreach.logged v1 |
-| `kb.artifact.linked.v1` | KB Artifact Linked |
-| `kb.decay.applied.v1` | KB Decay Applied |
+| `kb.artifact.linked.v1` | 🔇 **unconsumed** — KB Artifact Linked |
+| `kb.decay.applied.v1` | 🔇 **unconsumed** — KB Decay Applied |
 | `kb.entry.created.v1` | KB Entry Created |
-| `kb.entry.vetted.v1` | KB Entry Vetted |
-| `kb.guidance.provided.v1` | KB Guidance Provided |
+| `kb.entry.vetted.v1` | 🔇 **unconsumed** — KB Entry Vetted |
+| `kb.guidance.provided.v1` | 🔇 **unconsumed** — KB Guidance Provided |
 | `kb.ingest.tengine.completed.v1` | kb.ingest.tengine.completed v1 |
-| `kb.knowledge.gap.v1` | KB Knowledge Gap |
-| `kb.plan.researched.v1` | KB Plan Researched |
-| `kb.plan.updated.v1` | KB Plan Updated |
-| `kb.review.approved.v1` | KB Review Approved |
-| `kb.review.rejected.v1` | KB Review Rejected |
+| `kb.knowledge.gap.v1` | 🔇 **unconsumed** — KB Knowledge Gap |
+| `kb.plan.researched.v1` | 🔇 **unconsumed** — KB Plan Researched |
+| `kb.plan.updated.v1` | 🔇 **unconsumed** — KB Plan Updated |
+| `kb.review.approved.v1` | 🔇 **unconsumed** — KB Review Approved |
+| `kb.review.rejected.v1` | 🔇 **unconsumed** — KB Review Rejected |
 | `kb.review.requested.v1` | KB Review Requested |
-| `kb.tier.changed.v1` | kb.tier.changed v1 |
+| `kb.tier.changed.v1` | 🔇 **unconsumed** — kb.tier.changed v1 |
 | `kernel.best_fitness_improved.v1` | kernel.best_fitness_improved v1 |
 | `kernel.candidate.evaluated.v1` | kernel.candidate.evaluated.v1 v1 |
 | `kernel.completed.v1` | kernel.completed.v1 v1 |
@@ -345,6 +347,13 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `pulse.render.quality.v1` | pulse.render.quality v1 |
 | `shader.preadmit.evaluated.v1` | shader.preadmit.evaluated.v1 v1 |
 | `sys.log.entry.v1` | sys.log.entry v1 |
+
+## Retired channels (no schema file)
+
+Producer and schema file both removed from this repo — nothing to regenerate a row from, so these are listed by hand. Present here so contributors don't mistake silent absence for 'never existed' or 'still planned'.
+
+- `hearth.device.state.v1` 🔇 **retired** — Formally retired (2026-07 zombie-event audit). Producer was adapters/hearth-bridge (home IoT bridge); both the adapter and its schema file were deleted from this repo in commit 8dbb391 (oss-prep private-schema migration) and never restored publicly. No consumer evidenced anywhere. Not resurrecting speculative cross-project infra without an evidenced product need.
+- `hearth.presence.v1` 🔇 **retired** — Formally retired (2026-07 zombie-event audit). Same producer (adapters/hearth-bridge) and same removal commit (8dbb391) as hearth.device.state.v1. No consumer evidenced anywhere. hearth.health.snapshot.v1 was removed in the same commit and never had an evidenced producer even before removal (no publish call site found) — worth knowing if this channel is ever revisited, though it isn't itself being re-registered here.
 
 ## Naming-convention violations
 
