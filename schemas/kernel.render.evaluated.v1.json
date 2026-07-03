@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kernel.render.evaluated.v1.json",
+  "title": "kernel.render.evaluated.v1 v1",
+  "description": "Links an evolved kernel candidate to a render-quality vector. Engine-agnostic; domain-discriminated via data.domain. Source: /autobench/kernel.",
+  "type": "object",
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/kernel"
+    },
+    "type": {
+      "type": "string",
+      "const": "kernel.render.evaluated.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "domain",
+        "run_id",
+        "generation",
+        "candidate_id",
+        "fitness"
+      ],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "enum": [
+            "sph",
+            "sdf",
+            "noise",
+            "phase",
+            "terrain",
+            "thermal",
+            "latent",
+            "tsp"
+          ],
+          "description": "Kernel domain discriminator."
+        },
+        "run_id": {
+          "type": "string",
+          "description": "ULID identifying this kernel run."
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "candidate_id": {
+          "type": "string"
+        },
+        "instance": {
+          "type": "string"
+        },
+        "fitness": {
+          "type": "number",
+          "description": "Oracle fitness."
+        },
+        "render_metrics": {
+          "type": "object",
+          "required": [
+            "render_time_ms"
+          ],
+          "properties": {
+            "ssim": {
+              "type": "number"
+            },
+            "lpips": {
+              "type": "number"
+            },
+            "raps_slope_err": {
+              "type": "number"
+            },
+            "eikonal_grad_err": {
+              "type": "number"
+            },
+            "topology_score": {
+              "type": "number"
+            },
+            "march_steps_mean": {
+              "type": "number"
+            },
+            "render_time_ms": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "artifact_path": {
+          "type": "string"
+        },
+        "verdict": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

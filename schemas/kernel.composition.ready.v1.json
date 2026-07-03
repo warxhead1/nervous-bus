@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kernel.composition.ready.v1.json",
+  "title": "kernel.composition.ready.v1 v1",
+  "description": "Autobench composition oracle — kernel.composition.ready.v1 event. Reports whether a (terrain, reaction) kernel pair composes well enough to gate downstream consumption. Engine-agnostic; domains are free-form strings. Source: /autobench/composition_oracle.",
+  "type": "object",
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/composition_oracle"
+    },
+    "type": {
+      "type": "string",
+      "const": "kernel.composition.ready.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "terrain_fitness",
+        "reaction_fitness",
+        "composition_fitness",
+        "gate_threshold",
+        "ready"
+      ],
+      "properties": {
+        "terrain_domain": {
+          "type": "string",
+          "description": "Free-form domain label of the terrain-side kernel."
+        },
+        "reaction_domain": {
+          "type": "string",
+          "description": "Free-form domain label of the reaction-side kernel."
+        },
+        "terrain_fitness": {
+          "type": "number"
+        },
+        "reaction_fitness": {
+          "type": "number"
+        },
+        "composition_fitness": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Composed-pair fitness; null if the oracle failed to score the pair."
+        },
+        "gate_threshold": {
+          "type": "number",
+          "description": "Minimum composition_fitness required for ready=true."
+        },
+        "ready": {
+          "type": "boolean",
+          "description": "True when composition_fitness exceeds gate_threshold."
+        },
+        "terrain_run_id": {
+          "type": "string",
+          "description": "Identifier for the terrain kernel run/result source."
+        },
+        "reaction_run_id": {
+          "type": "string",
+          "description": "Identifier for the reaction kernel run/result source."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

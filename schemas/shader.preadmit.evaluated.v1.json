@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/shader.preadmit.evaluated.v1.json",
+  "title": "shader.preadmit.evaluated.v1 v1",
+  "description": "Pre-admission evaluation result for a shader candidate: static-analysis verdict, crash-risk classification, and an optional render-quality vector emitted when the pre-admit gate runs as a service. Engine-agnostic; render_metrics field names are generic visual-feedback descriptors. Source: /autobench/pre_admit.",
+  "type": "object",
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/pre_admit"
+    },
+    "type": {
+      "type": "string",
+      "const": "shader.preadmit.evaluated.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "shader_id",
+        "language",
+        "kind",
+        "safe",
+        "verdict",
+        "crash_risk",
+        "static_findings"
+      ],
+      "properties": {
+        "shader_id": {
+          "type": "string",
+          "description": "Identifier for the shader candidate evaluated."
+        },
+        "language": {
+          "type": "string",
+          "enum": [
+            "glsl",
+            "slang"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "fragment",
+            "sdf",
+            "compute"
+          ]
+        },
+        "safe": {
+          "type": "boolean",
+          "description": "Whether the candidate passed the pre-admission safety gate."
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "OK",
+            "VF",
+            "WA",
+            "CE",
+            "RE",
+            "TLE",
+            "MLE"
+          ]
+        },
+        "crash_risk": {
+          "type": "string",
+          "enum": [
+            "none",
+            "compile",
+            "runtime",
+            "timeout",
+            "memory"
+          ]
+        },
+        "static_findings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Static-analysis findings; may be empty."
+        },
+        "render_metrics": {
+          "type": "object",
+          "properties": {
+            "ssim": {
+              "type": "number"
+            },
+            "lpips": {
+              "type": "number"
+            },
+            "raps_slope_err": {
+              "type": "number"
+            },
+            "eikonal_grad_err": {
+              "type": "number"
+            },
+            "topology_score": {
+              "type": "number"
+            },
+            "march_steps_mean": {
+              "type": "number"
+            },
+            "render_time_ms": {
+              "type": "number"
+            },
+            "brightness_mean": {
+              "type": "number"
+            },
+            "contrast_ratio": {
+              "type": "number"
+            },
+            "color_diversity": {
+              "type": "number"
+            },
+            "noise_level": {
+              "type": "number"
+            },
+            "sharpness_score": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "source_run_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

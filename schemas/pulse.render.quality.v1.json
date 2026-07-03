@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/pulse.render.quality.v1.json",
+  "title": "pulse.render.quality v1",
+  "description": "Low-frequency per-generation render-quality TREND rollup so phones/TUIs can track render health without drinking the per-render firehose. Engine-agnostic (the rendering engine names itself in best_render_metrics.engine); coalesced at most ~once/generation. Sibling to pulse.kernel.snapshot.v1. Source: /autobench/pulse.",
+  "type": "object",
+  "required": [
+    "specversion",
+    "id",
+    "source",
+    "type",
+    "datacontenttype",
+    "time",
+    "data"
+  ],
+  "properties": {
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "/autobench/pulse"
+    },
+    "type": {
+      "type": "string",
+      "const": "pulse.render.quality.v1"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/json"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "domain",
+        "run_id",
+        "generation",
+        "best_fitness"
+      ],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "enum": ["sph", "sdf", "noise", "phase", "terrain", "thermal", "latent", "tsp"],
+          "description": "Kernel domain discriminator."
+        },
+        "run_id": {
+          "type": "string",
+          "description": "ULID identifying this kernel run."
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "best_fitness": {
+          "type": "number",
+          "description": "Best fitness this rollup covers (domain-specific; higher = better)."
+        },
+        "best_render_metrics": {
+          "type": "object",
+          "description": "Render metrics for the best candidate this window. Engine-agnostic; the engine names itself via `engine`. All fields optional.",
+          "properties": {
+            "engine": {
+              "type": "string",
+              "description": "Which engine rendered it (e.g. 'tengine'); engine self-names, no engine-specific keys."
+            },
+            "frame": {
+              "type": "integer"
+            },
+            "bytes": {
+              "type": "integer"
+            },
+            "build_ms": {
+              "type": "number"
+            },
+            "render_ms": {
+              "type": "number"
+            },
+            "screenshot_path": {
+              "type": "string",
+              "description": "Local path to the rendered PNG (producer host)."
+            }
+          },
+          "additionalProperties": false
+        },
+        "mean_render_time_ms": {
+          "type": "number",
+          "description": "Mean render time (ms) across renders in this window."
+        },
+        "samples_in_window": {
+          "type": "integer",
+          "description": "How many renders were coalesced into this rollup."
+        },
+        "window_ms": {
+          "type": "integer",
+          "description": "Coalescing window (ms) this rollup covers."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
