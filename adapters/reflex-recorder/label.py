@@ -875,6 +875,8 @@ def backfill(
     run_id_filter: Optional[str] = None,
     dry_run: bool = False,
     verbose: bool = False,
+    since_days: Optional[int] = None,
+    unlabeled_only: bool = False,
 ) -> list[dict]:
     """Run the labeling pass over all (or one) run(s) in runs.db.
 
@@ -883,6 +885,17 @@ def backfill(
 
     B5 fix: compute_label returning None means 'insufficient signal'; we do NOT
     coerce None → 'clean'.  Such runs are left with outcome=None (unlabeled).
+
+    since_days: bound the pass to runs started in the last N days.  Without
+    this, a growing run history means an unbounded, ever-slower pass (this
+    function always recomputes explicit sources, which shell out to gh/bd).
+    unlabeled_only: skip runs that already carry a non-null outcome.  A
+    landed/reverted/abandoned/clean/thrashed label is, in practice, terminal
+    (a merged PR doesn't un-merge; a behavior-inferred label is a deterministic
+    function of frozen run_events) — so nightly incremental passes should only
+    keep spending gh/bd calls on runs that are STILL unresolved (outcome IS
+    NULL), not re-verify settled history every run. --run-id bypasses both
+    filters (an explicit single-run lookup always executes in full).
     """
     conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -890,7 +903,15 @@ def backfill(
     if run_id_filter:
         cur = conn.execute("SELECT * FROM runs WHERE run_id=?", (run_id_filter,))
     else:
-        cur = conn.execute("SELECT * FROM runs ORDER BY started ASC")
+        clauses = []
+        params: list = []
+        if since_days is not None:
+            clauses.append("started >= datetime('now', ?)")
+            params.append(f"-{int(since_days)} days")
+        if unlabeled_only:
+            clauses.append("outcome IS NULL")
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        cur = conn.execute(f"SELECT * FROM runs {where} ORDER BY started ASC", params)
 
     cols = [d[0] for d in cur.description]
     runs = [dict(zip(cols, row)) for row in cur.fetchall()]
@@ -1035,6 +1056,12 @@ def main() -> int:
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("--report", action="store_true",
                         help="Run backfill then print report table")
+    parser.add_argument("--since-days", type=int, default=None,
+                        help="Only consider runs started in the last N days "
+                             "(bounds cost against a growing run history)")
+    parser.add_argument("--unlabeled-only", action="store_true",
+                        help="Skip runs that already carry a non-null outcome "
+                             "(true incremental pass for nightly automation)")
     args = parser.parse_args()
 
     results = backfill(
@@ -1042,6 +1069,8 @@ def main() -> int:
         run_id_filter=args.run_id,
         dry_run=args.dry_run,
         verbose=args.verbose,
+        since_days=args.since_days,
+        unlabeled_only=args.unlabeled_only,
     )
 
     print_report(results)

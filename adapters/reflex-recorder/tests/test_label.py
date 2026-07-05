@@ -577,6 +577,48 @@ class TestBackfillIntegration(unittest.TestCase):
         finally:
             db_path.unlink(missing_ok=True)
 
+    def test_since_days_excludes_old_runs(self):
+        """--since-days bounds the pass to recently-started runs only."""
+        db_path = self._make_db_file()
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(db_path), isolation_level=None)
+            # Both fixture runs are dated 2026-06-13; push one far into the past
+            # so it falls outside a 1-day-from-now window.
+            conn.execute(
+                "UPDATE runs SET started='2020-01-01T00:00:00Z' WHERE run_id='run-clean-01'"
+            )
+            conn.close()
+
+            with patch("label.label_from_bead", MagicMock(return_value=None)):
+                with patch("label.label_from_pr", MagicMock(return_value=None)):
+                    results = backfill(db_path, dry_run=True, verbose=False, since_days=1)
+
+            ids = {r["run_id"] for r in results}
+            self.assertNotIn("run-clean-01", ids)
+        finally:
+            db_path.unlink(missing_ok=True)
+
+    def test_unlabeled_only_skips_already_labeled(self):
+        """--unlabeled-only leaves settled outcomes alone on subsequent passes."""
+        db_path = self._make_db_file()
+        try:
+            with patch("label.label_from_bead", MagicMock(return_value=None)):
+                with patch("label.label_from_pr", MagicMock(return_value=None)):
+                    first_pass = backfill(db_path, dry_run=False, verbose=False)
+                    self.assertEqual(
+                        {r["run_id"] for r in first_pass}, {"run-clean-01", "run-abandon-01"}
+                    )
+
+                    second_pass = backfill(
+                        db_path, dry_run=False, verbose=False, unlabeled_only=True
+                    )
+            # Both runs got a terminal label on the first pass, so the
+            # unlabeled-only incremental pass should find nothing left to do.
+            self.assertEqual(second_pass, [])
+        finally:
+            db_path.unlink(missing_ok=True)
+
 
 if __name__ == "__main__":
     unittest.main()

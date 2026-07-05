@@ -1,0 +1,21 @@
+# Install:
+#   systemctl --user enable --now reflex-analysis.timer
+#   systemctl --user list-timers reflex-analysis.timer
+#   journalctl --user -u reflex-analysis.service -n 100
+
+[Unit]
+Description=nervous-bus Reflexarc nightly analysis timer — daily ~05:30 local
+# Requires=network-online.target is intentionally omitted: label.py's gh/bd
+# calls degrade safely to None on any network failure (never fatal), and the
+# rest of the batch (detectors, struggle ledger, digest) is local-only.
+
+[Timer]
+# Run once daily at 05:30 local time — off-hours, well clear of live capture
+# traffic, before the day's first working session typically starts.
+OnCalendar=*-*-* 05:30:00
+# Catch up on a missed run (machine asleep/off at 05:30) once it wakes.
+Persistent=true
+Unit=reflex-analysis.service
+
+[Install]
+WantedBy=timers.target

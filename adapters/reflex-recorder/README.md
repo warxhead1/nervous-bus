@@ -251,3 +251,61 @@ python3 struggle_ledger.py --json                # machine-readable
 The fix-correlation is an honest heuristic (keyword-matched remediations, ±7-day
 before/after windows, edge-truncation flagged) — a starting signal for "is this wall
 still standing", not a proof.
+
+## Nightly Analysis Loop
+
+Capture (`recorder.py`) has run as a systemd service since the engine's first bead.
+Outcome labeling (`label.py`), the 12 detectors (`synthesis.py`), and the struggle
+ledger (`struggle_ledger.py`) were code-complete but only ever invoked BY HAND —
+a three-quarter loop: capture shipped without a schedule to consume it. The
+ecosystem charter's rule is that nothing ships as "done" until it closes the full
+capture → analyze → surface → consume loop; `nightly_analysis.py` + its timer is
+what closes the analyze/surface half for reflex-recorder.
+
+`nightly_analysis.py` runs three steps in order, each subprocess-wrapped with a
+hard per-step timeout (default 300s) and a logged-but-non-fatal failure — a slow
+or broken step never blocks the ones after it, and a bad night never wedges the
+timer:
+
+1. `label.py --since-days 30 --unlabeled-only` — incremental outcome labeling.
+   `--unlabeled-only` means a settled outcome (landed/reverted/abandoned/clean/
+   thrashed) is never re-verified; only runs still sitting at `outcome=NULL` get
+   another attempt (their PR may have merged, their bead may have closed since).
+   `--since-days` bounds cost against an ever-growing run history. A first pass
+   against a mostly-unlabeled DB may not finish inside the timeout — that's fine,
+   `apply_label` autocommits per-row, so the next night resumes where this one
+   left off.
+2. `synthesis.py` (default dry-run) — runs every built-in + private-overlay
+   detector and persists hits/issues to `detector_hits`/`issues`. Dry-run only
+   gates the `nervous publish` calls; the local persistence that `reflex
+   prevalence`/`reflex issues` read happens either way.
+3. `struggle_ledger.py --days 14 --json` — captured (not persisted, it has no
+   store of its own) to feed the digest below.
+
+Then it writes/updates a rolling digest at
+`~/knowledge/indexed/shared/reflex-digest.md` (kb vault; a fixed id in the
+frontmatter means each run rewrites the same entry rather than forking a new
+file) with: run counts + labeled-outcome distribution (7d), top detector
+prevalence (7d), and top OPEN struggle-ledger items (14d). The digest is a
+rolling log, not a decision record — this script does **not** git-commit it;
+commit a snapshot by hand if you want history of one.
+
+```bash
+# Manual run (same as the timer):
+python3 nightly_analysis.py
+
+# Custom DB / windows / timeout:
+python3 nightly_analysis.py --db /path/to/runs.db --step-timeout 300 \
+    --label-since-days 30 --window-days 7 --struggle-window-days 14
+```
+
+Enable the systemd user timer (daily, ~05:30 local, catches up after sleep):
+
+```bash
+cp adapters/reflex-recorder/systemd/reflex-analysis.{service,timer} \
+    ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now reflex-analysis.timer
+systemctl --user list-timers reflex-analysis.timer
+journalctl --user -u reflex-analysis.service -n 100
+```

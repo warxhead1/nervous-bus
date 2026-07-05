@@ -1,0 +1,24 @@
+[Unit]
+Description=nervous-bus Reflexarc nightly analysis — outcome labeling, detectors, struggle ledger, digest
+After=default.target
+
+[Service]
+Type=oneshot
+# %h expands to the user's home directory at unit-load time.
+# Pyenv 3.11.13 used to match reflex-recorder.service; label.py/synthesis.py
+# lazily import redis (caught + degrades safely) so system python3 would also
+# work, but staying on the same interpreter as the capture half avoids drift.
+ExecStart=%h/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/reflex-recorder/nightly_analysis.py
+WorkingDirectory=%h/projects/nervous-bus/adapters/reflex-recorder
+# Generous overall unit timeout: nightly_analysis.py enforces its own
+# per-step timeouts (default 300s) and never blocks past them, but give the
+# whole batch (3 steps + digest queries) headroom before systemd itself
+# would kill it.
+TimeoutStartSec=30min
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=reflex-analysis
+ReadWritePaths=%h/.cache/nervous-bus %h/knowledge
+
+[Install]
+WantedBy=default.target
