@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/career-ops.pipeline.added.v1.json",
+  "title": "career-ops.pipeline.added v1",
+  "description": "Emitted when a new job-posting URL is added to data/pipeline.md, the career-ops scan inbox. Producers today: job-search-se's POST /api/pipeline (manual dashboard add). career-ops's own scan.mjs is the primary bulk producer but does not yet call this — SYSTEM-layer script, out of job-search-se's direct-edit scope per DATA_CONTRACT.",
+  "type": "object",
+  "required": ["url"],
+  "additionalProperties": false,
+  "properties": {
+    "url": {
+      "type": "string",
+      "maxLength": 2000,
+      "description": "Job posting URL added to the pipeline inbox."
+    },
+    "source": {
+      "type": "string",
+      "enum": ["dashboard_manual", "scan"],
+      "description": "How the URL entered the pipeline."
+    }
+  }
+}
