@@ -2,47 +2,49 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/deer-flow.cycle.wait.exit.v1.json",
   "title": "deer-flow.cycle.wait.exit v1",
-  "description": "Emitted by `deer cycle wait` when blocking on a stack-tuner cycle finishes — either because the cycle reached a TERMINAL_VERDICTS state (reason=terminal) or because the wait timed out (reason=timeout). PRODUCER NOTE: this channel is currently emitted by scripts/deer's `_emit_bus_event` helper which writes a FLAT dict (no CloudEvents envelope, no `data` block) — top-level keys are `type`, `ts`, `cycle_id`, `reason`, `elapsed_s`, and on terminal: `event`, `verdict`, `cost_usd`. This schema describes that flat shape as currently emitted; the canonical CloudEvents-wrapped shape is tracked for migration. Producer source: scripts/deer::_cycle_wait.",
+  "description": "Emitted by `deer cycle wait` when blocking on a stack-tuner cycle finishes — either because the cycle reached a TERMINAL_VERDICTS state (reason=terminal) or because the wait timed out (reason=timeout). Canonical CloudEvents-lite envelope: specversion/id/source/type/datacontenttype/time + payload nested under `data`. Producer: scripts/deer::_emit_bus_event / _cycle_wait (migrated off the legacy flat shape per nervous-bus-v737).",
   "type": "object",
-  "required": ["type", "ts", "cycle_id", "reason", "elapsed_s"],
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
   "properties": {
-    "type": {
-      "type": "string",
-      "const": "deer-flow.cycle.wait.exit",
-      "description": "literal channel name (flat-envelope only — drop when migrated to CloudEvents wrapper)"
-    },
-    "ts": {
-      "type": "string",
-      "format": "date-time",
-      "description": "RFC3339 UTC timestamp emitted by the producer"
-    },
-    "cycle_id": {
-      "type": "string",
-      "description": "stack-tuner cycle id this wait was blocking on"
-    },
-    "reason": {
-      "type": "string",
-      "enum": ["terminal", "timeout"],
-      "description": "why the wait exited"
-    },
-    "elapsed_s": {
-      "type": "number",
-      "minimum": 0,
-      "description": "wall-clock seconds spent blocking (rounded to 1 decimal)"
-    },
-    "event": {
-      "type": "string",
-      "const": "done",
-      "description": "terminal-only marker — present when reason=terminal"
-    },
-    "verdict": {
-      "type": "string",
-      "description": "terminal-only — the TERMINAL_VERDICTS value the cycle reached (e.g. ship, abort, needs_pro_tuning)"
-    },
-    "cost_usd": {
-      "type": "number",
-      "minimum": 0,
-      "description": "terminal-only — cumulative cycle cost in USD"
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "deer-flow.cycle.wait.exit.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["cycle_id", "reason", "elapsed_s"],
+      "properties": {
+        "cycle_id": {
+          "type": "string",
+          "description": "stack-tuner cycle id this wait was blocking on"
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["terminal", "timeout"],
+          "description": "why the wait exited"
+        },
+        "elapsed_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "wall-clock seconds spent blocking (rounded to 1 decimal)"
+        },
+        "event": {
+          "type": "string",
+          "const": "done",
+          "description": "terminal-only marker — present when reason=terminal"
+        },
+        "verdict": {
+          "type": "string",
+          "description": "terminal-only — the TERMINAL_VERDICTS value the cycle reached (e.g. ship, abort, needs_pro_tuning)"
+        },
+        "cost_usd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "terminal-only — cumulative cycle cost in USD"
+        }
+      }
     }
   }
 }
