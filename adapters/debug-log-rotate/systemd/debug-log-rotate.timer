@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic size check for nervous-bus debug.jsonl rotation
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Unit=debug-log-rotate.service
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

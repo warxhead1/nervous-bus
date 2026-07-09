@@ -1,0 +1,6 @@
+[Unit]
+Description=Rotate nervous-bus debug.jsonl when it exceeds 100MiB
+
+[Service]
+Type=oneshot
+ExecStart=%h/projects/nervous-bus/adapters/debug-log-rotate/rotate.sh
