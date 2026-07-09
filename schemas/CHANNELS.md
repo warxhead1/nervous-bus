@@ -4,7 +4,7 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**299 channels** across 5 clusters.
+**302 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
@@ -12,7 +12,7 @@ Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster
 | [Autobench](#autobench) | 53 | autobench.* evolution loop (case/judge/improver/budget/...) |
 | [Hearth](#hearth) | 49 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 136 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 139 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -260,8 +260,11 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `bus.triage.findings.v1` | bus.triage.findings v1 |
 | `bus.workflow.agent.dispatch.v1` | Workflow agent dispatch |
 | `career-ops.application.submitted.v1` | career-ops.application.submitted v1 |
+| `career-ops.pipeline.added.v1` | career-ops.pipeline.added v1 |
 | `career-ops.posting.evaluated.v1` | career-ops.posting.evaluated v1 |
 | `career-ops.scanner.cycle_completed.v1` | career-ops.scanner.cycle_completed v1 |
+| `career-ops.steering-queue.answered.v1` | career-ops.steering-queue.answered v1 |
+| `career-ops.steering-queue.requested.v1` | career-ops.steering-queue.requested v1 |
 | `career-ops.steering.answered.v1` | career-ops.steering.answered v1 |
 | `codeforces_problem.v1` ⚠️ | CodeforcesProblem |
 | `codemap.graph.rebuilt.v1` | codemap.graph.rebuilt v1 |
