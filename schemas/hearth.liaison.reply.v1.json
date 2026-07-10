@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/hearth.liaison.reply.v1.json",
   "title": "hearth.liaison.reply v1",
-  "description": "Emitted by hearth-api's routes/liaison.rs (POST /api/liaison/reply/{insight_id}) when Eric sends a 'rubber-duck' free-text reply to a career-ops proposition card in the Liaison phone feed — an idea, objection, question, connection, or todo that should feed back into the machinery rather than a structured answer/dismiss action. The reply is first persisted to hearth-api's liaison_replies table, then mirrored here. Consumers: career-ops sessions (to fold the reply into the next relevant working session), kb (durable capture). SENSITIVE-DATA NOTE: this event lands in the shared nervous-bus debug log (~/.cache/nervous-bus/debug.jsonl — world-tailed into Redis for any consumer). Publishers MUST NOT put verbatim personal/financial detail in `reply`; prefer a short category-level label plus enough context for a consumer to go find the durable record (liaison_replies row via `reply_id`) rather than inlining sensitive specifics here.",
+  "description": "Emitted by hearth-api's routes/liaison.rs (POST /api/liaison/reply/{insight_id}) when Eric sends a 'rubber-duck' free-text reply to a career-ops proposition card in the Liaison phone feed — an idea, objection, question, connection, or todo that should feed back into the machinery rather than a structured answer/dismiss action. The reply is first persisted to hearth-api's liaison_replies table, then mirrored here. Consumers: career-ops sessions (to fold the reply into the next relevant working session), kb (durable capture). SENSITIVE-DATA NOTE: `reply` IS the raw rubber-duck text Eric typed, verbatim — by design; the whole point of this channel is to capture the unfiltered thought, and it is not sanitized before publish. The burden is consumer-side: this event lands in the shared nervous-bus debug log (~/.cache/nervous-bus/debug.jsonl — tailed into Redis for any consumer), so every consumer MUST treat `reply` as sensitive personal data, must never mirror it verbatim to a public or shared surface, and any ember/summary/digest that surfaces it must truncate to 200 chars.",
   "type": "object",
   "required": ["reply_id", "insight_id", "reply", "category", "created_at"],
   "additionalProperties": false,
@@ -26,7 +26,7 @@
     "reply": {
       "type": "string",
       "maxLength": 2000,
-      "description": "Eric's rubber-duck reply text (NOT verbatim sensitive detail — see schema-level SENSITIVE-DATA NOTE; prefer category + short text)."
+      "description": "Eric's rubber-duck reply text, verbatim and unsanitized — see schema-level SENSITIVE-DATA NOTE: treat as sensitive personal data consumer-side, never mirror raw to a public/shared surface."
     },
     "category": {
       "type": "string",
