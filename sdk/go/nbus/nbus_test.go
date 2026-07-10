@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -323,5 +324,89 @@ func TestSubscriber_ConsumerDefaultsToHostname(t *testing.T) {
 	sub := NewSubscriber(nil, Config{Group: "g"}, discardLogger())
 	if sub.cfg.Consumer == "" {
 		t.Fatal("expected Consumer to default to hostname, got empty string")
+	}
+}
+
+// TestEnsureGroup_CreatesWhenMissing covers the common cold-start case: no
+// stream, no group yet. ensureGroup must create both and return no error.
+func TestEnsureGroup_CreatesWhenMissing(t *testing.T) {
+	rdb, _ := newMiniredis(t)
+	ctx := context.Background()
+	cfg := Config{Stream: "nbus:all", Group: "my-service"}
+	sub := NewSubscriber(rdb, cfg, discardLogger())
+
+	if err := sub.ensureGroup(ctx, cfg.Stream); err != nil {
+		t.Fatalf("ensureGroup on cold start: %v", err)
+	}
+
+	groups, err := rdb.XInfoGroups(ctx, cfg.Stream).Result()
+	if err != nil {
+		t.Fatalf("XInfoGroups after ensureGroup: %v", err)
+	}
+	if len(groups) != 1 || groups[0].Name != cfg.Group {
+		t.Fatalf("expected group %q to exist, got %+v", cfg.Group, groups)
+	}
+}
+
+// TestEnsureGroup_IdempotentAcrossRestarts is the regression test for the
+// BUSYGROUP-on-every-restart bug: calling ensureGroup repeatedly against a
+// group that already exists (simulating a process restart re-running Run())
+// must never return an error, and must not disturb an already-pending entry
+// (proving it isn't blowing away and recreating the group each time).
+func TestEnsureGroup_IdempotentAcrossRestarts(t *testing.T) {
+	rdb, _ := newMiniredis(t)
+	ctx := context.Background()
+	cfg := Config{Stream: "nbus:all", Group: "my-service", Consumer: "host-a"}
+	sub := NewSubscriber(rdb, cfg, discardLogger())
+
+	for i := 0; i < 3; i++ {
+		if err := sub.ensureGroup(ctx, cfg.Stream); err != nil {
+			t.Fatalf("ensureGroup call #%d (simulated restart): %v", i+1, err)
+		}
+	}
+
+	// Read an entry into the PEL, then run ensureGroup again ("restart") and
+	// confirm the pending entry survived — a naive recreate would reset
+	// last-delivered-id and could orphan or duplicate delivery.
+	env, _ := NewEnvelope("/op", "bus.notify.v1", nil)
+	raw, _ := json.Marshal(env)
+	if err := rdb.XAdd(ctx, &redis.XAddArgs{Stream: cfg.Stream, Values: map[string]any{"_raw": string(raw)}}).Err(); err != nil {
+		t.Fatalf("XAdd: %v", err)
+	}
+	if _, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
+		Group: cfg.Group, Consumer: cfg.Consumer, Streams: []string{cfg.Stream, ">"}, Count: 10,
+	}).Result(); err != nil {
+		t.Fatalf("XReadGroup: %v", err)
+	}
+
+	if err := sub.ensureGroup(ctx, cfg.Stream); err != nil {
+		t.Fatalf("ensureGroup after a restart with a pending entry: %v", err)
+	}
+	pending, err := rdb.XPending(ctx, cfg.Stream, cfg.Group).Result()
+	if err != nil || pending.Count != 1 {
+		t.Fatalf("expected the pending entry to survive ensureGroup, got %+v err=%v", pending, err)
+	}
+}
+
+// TestEnsureGroup_SurfacesNonBUSYGROUPError proves ensureGroup no longer
+// discards every error unconditionally: a genuine failure (here, the stream
+// key already exists as a non-stream type, so both XINFO GROUPS and XGROUP
+// CREATE fail with WRONGTYPE, not BUSYGROUP) must be returned to the caller.
+func TestEnsureGroup_SurfacesNonBUSYGROUPError(t *testing.T) {
+	rdb, _ := newMiniredis(t)
+	ctx := context.Background()
+	cfg := Config{Stream: "not-a-stream", Group: "my-service"}
+	sub := NewSubscriber(rdb, cfg, discardLogger())
+
+	if err := rdb.Set(ctx, cfg.Stream, "plain-string-value", 0).Err(); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	err := sub.ensureGroup(ctx, cfg.Stream)
+	if err == nil {
+		t.Fatal("expected ensureGroup to surface the WRONGTYPE error, got nil")
+	}
+	if strings.Contains(err.Error(), "BUSYGROUP") {
+		t.Fatalf("expected a non-BUSYGROUP error, got %v", err)
 	}
 }

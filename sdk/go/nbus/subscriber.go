@@ -85,8 +85,10 @@ func (s *Subscriber) On(pattern string, h Handler) {
 func (s *Subscriber) Run(ctx context.Context) {
 	stream := s.cfg.streamOrDefault()
 
-	// Create the consumer group, ignoring the error if it already exists.
-	_ = s.rdb.XGroupCreateMkStream(ctx, stream, s.cfg.Group, "$").Err()
+	if err := s.ensureGroup(ctx, stream); err != nil {
+		s.logger.Error("nbus: failed to ensure consumer group",
+			"stream", stream, "group", s.cfg.Group, "err", err)
+	}
 
 	s.logger.Info("nbus: subscriber running",
 		"stream", stream,
@@ -139,6 +141,37 @@ func (s *Subscriber) Run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// ensureGroup makes sure the configured consumer group exists on stream,
+// creating both the stream and group (via XGROUP CREATE MKSTREAM) only when
+// needed. It first checks for the group with XINFO GROUPS so the common
+// steady-state case (group already exists, e.g. every process restart) never
+// issues a create call at all. If the group turns out to be missing, it
+// creates it; a BUSYGROUP error from that create (another replica won the
+// race between our existence check and our create) is expected under
+// concurrent startup and is swallowed. Any other error — including a
+// genuinely missing permission or a broken connection — is returned so the
+// caller can log or act on it instead of it being silently discarded.
+func (s *Subscriber) ensureGroup(ctx context.Context, stream string) error {
+	groups, err := s.rdb.XInfoGroups(ctx, stream).Result()
+	if err == nil {
+		for _, g := range groups {
+			if g.Name == s.cfg.Group {
+				return nil
+			}
+		}
+	}
+	// err != nil here typically means the stream itself doesn't exist yet
+	// ("ERR no such key"); either way (stream missing, or stream present but
+	// our group isn't in it) we fall through and attempt to create it.
+	if err := s.rdb.XGroupCreateMkStream(ctx, stream, s.cfg.Group, "$").Err(); err != nil {
+		if strings.Contains(err.Error(), "BUSYGROUP") {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // processMessage dispatches one entry and acknowledges it. This is the
