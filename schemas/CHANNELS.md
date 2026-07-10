@@ -4,15 +4,15 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**302 channels** across 5 clusters.
+**304 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
 | [Session Lifecycle](#session-lifecycle) | 19 | agent session lifecycle, heartbeats, thread/run start-stop |
 | [Autobench](#autobench) | 53 | autobench.* evolution loop (case/judge/improver/budget/...) |
-| [Hearth](#hearth) | 49 | hearth-loom PR pipeline, bead lifecycle, loom executions |
+| [Hearth](#hearth) | 50 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 139 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 140 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -140,6 +140,7 @@ _hearth-loom PR pipeline, bead lifecycle, loom executions_
 | `hearth.inference.error.v1` | hearth.inference.error v1 |
 | `hearth.integration.error.v1` | hearth.integration.error v1 |
 | `hearth.kb.article.saved.v1` | hearth.kb.article.saved v1 |
+| `hearth.liaison.reply.v1` | hearth.liaison.reply v1 |
 | `hearth.perf.ai_call.v1` | hearth.perf.ai_call v1 |
 | `hearth.perf.slow_query.v1` | hearth.perf.slow_query v1 |
 | `hearth.router.decision.v1` | hearth.router.decision v1 |
@@ -264,6 +265,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `career-ops.posting.evaluated.v1` | career-ops.posting.evaluated v1 |
 | `career-ops.scanner.cycle_completed.v1` | career-ops.scanner.cycle_completed v1 |
 | `career-ops.steering-queue.answered.v1` | career-ops.steering-queue.answered v1 |
+| `career-ops.steering-queue.dismissed.v1` | career-ops.steering-queue.dismissed v1 |
 | `career-ops.steering-queue.requested.v1` | career-ops.steering-queue.requested v1 |
 | `career-ops.steering.answered.v1` | career-ops.steering.answered v1 |
 | `codeforces_problem.v1` ⚠️ | CodeforcesProblem |

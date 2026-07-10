@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/career-ops.steering-queue.dismissed.v1.json",
+  "title": "career-ops.steering-queue.dismissed v1",
+  "description": "Emitted by job-search-se's server/steeringRoutes.js DELETE handler when a career-ops-queue entry (career-ops/data/steering-queue.json) is dismissed without an answer, closing the silent-dismiss gap left by career-ops.steering-queue.answered.v1. Pairs with career-ops.steering-queue.requested.v1's id as the correlation key so hearth-api can clear the phone notification card and remove the matching Liaison feed insight. Distinct from career-ops.steering.answered.v1, which is an unrelated behavioural-memory-steering concept.",
+  "type": "object",
+  "required": ["id", "question", "dismissed_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "steering-queue.json entry id (8-char hex), matching the id from the paired requested.v1 event."
+    },
+    "question": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "The question that was dismissed, for a readable log/notification without re-reading steering-queue.json."
+    },
+    "dismissed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp the entry was dismissed."
+    }
+  }
+}

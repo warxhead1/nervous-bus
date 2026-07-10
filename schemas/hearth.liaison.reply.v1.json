@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.liaison.reply.v1.json",
+  "title": "hearth.liaison.reply v1",
+  "description": "Emitted by hearth-api's routes/liaison.rs (POST /api/liaison/reply/{insight_id}) when Eric sends a 'rubber-duck' free-text reply to a career-ops proposition card in the Liaison phone feed — an idea, objection, question, connection, or todo that should feed back into the machinery rather than a structured answer/dismiss action. The reply is first persisted to hearth-api's liaison_replies table, then mirrored here. Consumers: career-ops sessions (to fold the reply into the next relevant working session), kb (durable capture). SENSITIVE-DATA NOTE: this event lands in the shared nervous-bus debug log (~/.cache/nervous-bus/debug.jsonl — world-tailed into Redis for any consumer). Publishers MUST NOT put verbatim personal/financial detail in `reply`; prefer a short category-level label plus enough context for a consumer to go find the durable record (liaison_replies row via `reply_id`) rather than inlining sensitive specifics here.",
+  "type": "object",
+  "required": ["reply_id", "insight_id", "reply", "category", "created_at"],
+  "additionalProperties": false,
+  "properties": {
+    "reply_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "UUID primary key of the liaison_replies row this event mirrors."
+    },
+    "insight_id": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "CognitiveBus Insight id the reply was attached to (the proposition card being rubber-ducked)."
+    },
+    "source_refs": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 500 },
+      "maxItems": 20,
+      "description": "The proposition's source_ids (e.g. demand-signal ids, bet slugs, steering-queue ids) the reply refers back to, for traceability."
+    },
+    "reply": {
+      "type": "string",
+      "maxLength": 2000,
+      "description": "Eric's rubber-duck reply text (NOT verbatim sensitive detail — see schema-level SENSITIVE-DATA NOTE; prefer category + short text)."
+    },
+    "category": {
+      "type": "string",
+      "enum": ["idea", "objection", "question", "connection", "todo"],
+      "description": "What kind of reply this is, for routing/triage by consumers."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp the reply was submitted."
+    }
+  }
+}
