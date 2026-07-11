@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/career-ops.pipeline.drained.v1.json",
+  "title": "career-ops.pipeline.drained v1",
+  "description": "Per-run summary emitted at the end of a pipeline-drain cycle — the scheduled agentic run that drains data/pipeline.md's Pending inbox (liveness sweep, A-F evaluation, tracker merge). One event per run, not per row. Producer: the career-pipeline-drain systemd service's headless agent, via the same validate-then-append JSONL pattern as job-search-se's nervousBus.js. Consumers: hearth surfaces (funnel health card), kb ingest.",
+  "type": "object",
+  "required": ["swept", "expired", "evaluated", "escalated", "pending_remaining"],
+  "additionalProperties": false,
+  "properties": {
+    "swept": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Pending rows liveness-checked this run (the sweep covers the whole inbox, zero-token)."
+    },
+    "expired": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Rows auto-moved to Processed/Discarded because the posting is dead."
+    },
+    "evaluated": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Rows that received a full A-F evaluation + report this run (bounded per-run batch)."
+    },
+    "escalated": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Evaluated rows that cleared the steering threshold and were included in the run's single consolidated steering digest."
+    },
+    "pending_remaining": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Inbox backlog left after this run."
+    },
+    "trigger": {
+      "type": "string",
+      "enum": ["timer", "manual"],
+      "description": "Whether the run was fired by career-pipeline-drain.timer or invoked by hand."
+    },
+    "run_log": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "Path to the run's log file under career-ops/data/drain-run-logs/."
+    }
+  }
+}
