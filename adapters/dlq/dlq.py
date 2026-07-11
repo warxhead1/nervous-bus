@@ -5,13 +5,22 @@ Subscribes to ``nbus:bus.dead_letter`` Redis stream and persists each event
 into a SQLite database at ``~/.cache/nervous-bus/dlq.db``.
 
 Retry policy:
-  - ``failure_reason == "schema_violation"`` → no retry (fix the emitter)
+  - ``failure_reason == "schema_violation"`` → quarantine, no retry. A
+    schema violation means the emitter is wrong, not the bus — redelivering
+    the same payload just re-fails the same validation deterministically.
+    Quarantined entries are archived verbatim (one JSON line per entry) to
+    ``~/.cache/nervous-bus/dlq-quarantine.jsonl`` for forensics/replay-after-fix,
+    then marked terminal in the DB (``quarantined_at`` + ``resolved_at`` both
+    set — they no longer show up in the "needs attention" unresolved view,
+    but the archive + DB row are never deleted).
   - All other reasons → exponential backoff: 30 s, 5 min, 30 min (max 3 retries)
   - On retry: re-emits original payload via ``nervous publish``
 
-HTTP endpoint:
-  GET /dlq?limit=50  — returns JSON array of unresolved dead-letter entries.
-  Intended for consumption by the Sysmap Stream tab.
+HTTP endpoints:
+  GET /dlq?limit=50   — returns JSON array of unresolved dead-letter entries.
+                        Intended for consumption by the Sysmap Stream tab.
+  GET /dlq/stats       — terminal-state counters: quarantined_total,
+                        retried_ok_total, pending_total.
 
 Run::
 
@@ -36,12 +45,18 @@ from typing import Optional
 import redis
 
 DEFAULT_DB_PATH = Path.home() / ".cache" / "nervous-bus" / "dlq.db"
+DEFAULT_QUARANTINE_PATH = Path.home() / ".cache" / "nervous-bus" / "dlq-quarantine.jsonl"
 DEFAULT_PORT = 9419
 VALKEY_URL = "redis://localhost:6379"
 DLQ_STREAM = "nbus:bus.dead_letter"
 
 # Retry backoff schedule (seconds) — index = retry_count (0-based)
 RETRY_BACKOFF = [30, 300, 1800]  # 30s, 5min, 30min
+
+# failure_reason values that are never retryable — the emitter produced a
+# payload the schema/envelope validator rejects, so redelivering the exact
+# same bytes fails the exact same way. These get quarantined, not retried.
+NON_RETRYABLE_REASONS = {"schema_violation"}
 
 NBUS_ROOT = Path(__file__).parent.parent.parent
 
@@ -60,7 +75,8 @@ CREATE TABLE IF NOT EXISTS dead_letters (
     last_error TEXT,
     created_at REAL NOT NULL,
     next_retry_at REAL,
-    resolved_at REAL
+    resolved_at REAL,
+    quarantined_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_unresolved ON dead_letters(resolved_at, next_retry_at);
 CREATE INDEX IF NOT EXISTS idx_created_at ON dead_letters(created_at);
@@ -72,12 +88,45 @@ def open_db(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
+    # Migration for pre-existing DBs created before quarantined_at existed.
+    try:
+        conn.execute("ALTER TABLE dead_letters ADD COLUMN quarantined_at REAL")
+    except sqlite3.OperationalError:
+        pass  # column already present
     conn.commit()
     return conn
 
 
-def insert_dead_letter(conn: sqlite3.Connection, entry: dict) -> None:
-    """Insert a new dead-letter entry. Idempotent on id collision."""
+def archive_quarantined(archive_path: Path, entry: dict, event_id: str,
+                         failure_reason: str, created_at: float) -> None:
+    """Append one quarantined dead-letter to the durable JSONL archive.
+
+    Called BEFORE the DB row is marked terminal, so a crash between the two
+    writes leaves the archive complete (at worst a duplicate re-append on
+    restart, never a silent drop) — archive-then-mark, not mark-then-archive.
+    """
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps({
+        "id": event_id,
+        "failure_reason": failure_reason,
+        "created_at": created_at,
+        "quarantined_at": time.time(),
+        **entry,
+    }, default=str)
+    try:
+        with open(archive_path, "a") as fh:
+            fh.write(line + "\n")
+    except Exception as e:
+        sys.stderr.write(f"[dlq] quarantine archive write failed: {e}\n")
+
+
+def insert_dead_letter(conn: sqlite3.Connection, entry: dict,
+                        archive_path: Path = DEFAULT_QUARANTINE_PATH) -> None:
+    """Insert a new dead-letter entry. Idempotent on id collision.
+
+    schema_violation entries are archived + marked terminal (quarantined)
+    rather than left to sit unresolved forever — see module docstring.
+    """
     now = time.time()
     event_id = entry.get("id") or entry.get("event_id") or ""
     event_type = entry.get("original_type") or entry.get("event_type") or "unknown"
@@ -86,8 +135,19 @@ def insert_dead_letter(conn: sqlite3.Connection, entry: dict) -> None:
     schema_detail = entry.get("schema_violation_detail") or ""
     original_payload = entry.get("original_payload_excerpt") or json.dumps(entry)
 
-    # Schema violations don't retry; everything else gets first retry scheduled
-    if failure_reason == "schema_violation" or event_id == "":
+    non_retryable = failure_reason in NON_RETRYABLE_REASONS
+    quarantined_at: Optional[float] = None
+    resolved_at: Optional[float] = None
+
+    if non_retryable and event_id:
+        archive_quarantined(archive_path, entry, event_id, failure_reason, now)
+        quarantined_at = time.time()
+        resolved_at = quarantined_at  # terminal: excluded from "needs attention"
+        next_retry_at = None
+    elif non_retryable or event_id == "":
+        # No event_id means we can't safely retry (nothing to re-publish) —
+        # leave it unresolved/inert rather than quarantine, since it isn't
+        # actually a confirmed schema violation.
         next_retry_at = None
     else:
         next_retry_at = now + RETRY_BACKOFF[0]
@@ -96,10 +156,11 @@ def insert_dead_letter(conn: sqlite3.Connection, entry: dict) -> None:
         conn.execute(
             """INSERT OR IGNORE INTO dead_letters
                (id, event_type, source, failure_reason, schema_violation_detail,
-                original_payload, retry_count, created_at, next_retry_at)
-               VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)""",
+                original_payload, retry_count, created_at, next_retry_at,
+                resolved_at, quarantined_at)
+               VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)""",
             (event_id, event_type, source, failure_reason, schema_detail,
-             original_payload, now, next_retry_at),
+             original_payload, now, next_retry_at, resolved_at, quarantined_at),
         )
         conn.commit()
     except Exception as e:
@@ -110,7 +171,7 @@ def get_unresolved(conn: sqlite3.Connection, limit: int = 50) -> list:
     rows = conn.execute(
         """SELECT id, event_type, source, failure_reason, schema_violation_detail,
                   original_payload, retry_count, last_error, created_at,
-                  next_retry_at, resolved_at
+                  next_retry_at, resolved_at, quarantined_at
            FROM dead_letters
            WHERE resolved_at IS NULL
            ORDER BY created_at DESC
@@ -118,6 +179,25 @@ def get_unresolved(conn: sqlite3.Connection, limit: int = 50) -> list:
         (limit,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_counts(conn: sqlite3.Connection) -> dict:
+    """Terminal-state counters for the /dlq/stats endpoint and reporting."""
+    row = conn.execute(
+        """SELECT
+             COUNT(*) AS total,
+             SUM(CASE WHEN quarantined_at IS NOT NULL THEN 1 ELSE 0 END) AS quarantined_total,
+             SUM(CASE WHEN resolved_at IS NOT NULL AND quarantined_at IS NULL
+                      THEN 1 ELSE 0 END) AS retried_ok_total,
+             SUM(CASE WHEN resolved_at IS NULL THEN 1 ELSE 0 END) AS pending_total
+           FROM dead_letters"""
+    ).fetchone()
+    return {
+        "total": row["total"] or 0,
+        "quarantined_total": row["quarantined_total"] or 0,
+        "retried_ok_total": row["retried_ok_total"] or 0,
+        "pending_total": row["pending_total"] or 0,
+    }
 
 
 def get_pending_retries(conn: sqlite3.Connection) -> list:
@@ -214,6 +294,7 @@ def subscribe_worker(
     conn: sqlite3.Connection,
     valkey_url: str,
     stop_event: threading.Event,
+    archive_path: Path = DEFAULT_QUARANTINE_PATH,
 ) -> None:
     """Tail nbus:bus.dead_letter with XREAD (no consumer group — just observe)."""
     last_id = "$"
@@ -265,7 +346,7 @@ def subscribe_worker(
                         merged["failure_reason"] = merged["reason"]
                     if "original_type" not in merged and "channel" in merged:
                         merged["original_type"] = merged["channel"]
-                    insert_dead_letter(conn, merged)
+                    insert_dead_letter(conn, merged, archive_path=archive_path)
                     sys.stderr.write(
                         f"[dlq] persisted dead_letter: {merged.get('id',entry_id)} "
                         f"reason={merged.get('failure_reason','?')}\n"
@@ -287,6 +368,18 @@ def _make_handler(conn: sqlite3.Connection):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             parsed = urllib.parse.urlparse(self.path)
+
+            if parsed.path in ("/dlq/stats", "/dlq/stats/"):
+                with _conn_lock:
+                    stats = get_counts(conn)
+                body = json.dumps(stats, default=str).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
             if parsed.path not in ("/dlq", "/dlq/"):
                 self.send_response(404)
                 self.end_headers()
@@ -325,11 +418,20 @@ def main(argv=None) -> int:
                         help=f"SQLite DB path (default: {DEFAULT_DB_PATH})")
     parser.add_argument("--valkey-url", default=VALKEY_URL,
                         help=f"Valkey/Redis URL (default: {VALKEY_URL})")
+    parser.add_argument("--quarantine-file", type=Path, default=DEFAULT_QUARANTINE_PATH,
+                        help=f"JSONL archive for quarantined (non-retryable) "
+                             f"dead letters (default: {DEFAULT_QUARANTINE_PATH})")
     parser.add_argument("--list", action="store_true",
                         help="Print unresolved entries as JSON and exit")
+    parser.add_argument("--stats", action="store_true",
+                        help="Print terminal-state counters as JSON and exit")
     args = parser.parse_args(argv)
 
     conn = open_db(args.db)
+
+    if args.stats:
+        print(json.dumps(get_counts(conn), indent=2, default=str))
+        return 0
 
     if args.list:
         rows = get_unresolved(conn, limit=100)
@@ -340,7 +442,7 @@ def main(argv=None) -> int:
 
     sub_thread = threading.Thread(
         target=subscribe_worker,
-        args=(conn, args.valkey_url, stop_event),
+        args=(conn, args.valkey_url, stop_event, args.quarantine_file),
         daemon=True,
         name="dlq_subscriber",
     )
@@ -364,8 +466,9 @@ def main(argv=None) -> int:
     http_thread.start()
 
     print(
-        f"nbus DLQ daemon: db={args.db}  HTTP=:{args.port}/dlq  "
-        f"stream={DLQ_STREAM}  valkey={args.valkey_url}"
+        f"nbus DLQ daemon: db={args.db}  HTTP=:{args.port}/dlq (+/dlq/stats)  "
+        f"stream={DLQ_STREAM}  valkey={args.valkey_url}  "
+        f"quarantine={args.quarantine_file}"
     )
 
     try:
