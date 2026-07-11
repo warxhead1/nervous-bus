@@ -147,6 +147,56 @@ RETIRED_NO_SCHEMA: list[tuple[str, str]] = [
         "site found) — worth knowing if this channel is ever revisited, "
         "though it isn't itself being re-registered here.",
     ),
+    (
+        "jobops.contact.added.v1",
+        "Formally retired (2026-07 audit task #24 C3, via "
+        "docs/channel-retirement-runbook.md). Schema file removed from this "
+        "repo (was schemas/jobops.contact.added.v1.json). Producer was "
+        "job-ops's internal/bus.Publisher (Go CLI); the const/struct and "
+        "its one call site in internal/commands/contacts.go were deleted in "
+        "the same pass. Lifetime history on the nbus:jobops.contact.added.v1 "
+        "mirror stream: 2 events, both 2026-06-27, payloads visibly "
+        "synthetic ('Test Person'/'TestCo'/relationship:\"test\"). No "
+        "consumer group ever registered (XINFO GROUPS empty). Nothing since.",
+    ),
+    (
+        "jobops.outreach.logged.v1",
+        "Formally retired (2026-07 audit task #24 C3), same pass as "
+        "jobops.contact.added.v1 — see that entry for the general "
+        "circumstances. Lifetime history: 2 events, both 2026-06-27. No "
+        "consumer group ever registered.",
+    ),
+    (
+        "jobops.content.queued.v1",
+        "Formally retired (2026-07 audit task #24 C3), same pass as "
+        "jobops.contact.added.v1. Lifetime history: 1 event, 2026-06-27. No "
+        "consumer group ever registered.",
+    ),
+    (
+        "jobops.application.updated.v1",
+        "Formally retired (2026-07 audit task #24 C3), same pass as "
+        "jobops.contact.added.v1. Unlike its siblings this one has a "
+        "genuine zero: no nbus:jobops.application.updated.v1 stream key ever "
+        "existed, and no Publish() call site referencing it was found "
+        "anywhere in job-ops despite the const/struct being defined — dead "
+        "on arrival, never wired to a caller.",
+    ),
+    (
+        "jobops.candidate.updated.v1",
+        "Formally retired (2026-07 audit task #24 C3). Schema-less orphan — "
+        "never had a schema file in this repo at all (a standing "
+        "schema-first violation flagged by the 2026-07-10 documentation "
+        "ingestion gap audit), so there is nothing to `git rm` here, only "
+        "this entry. Producer was an ad hoc /tachyonac-engine script, not "
+        "job-ops. Lifetime history on the nbus:jobops.candidate.updated.v1 "
+        "mirror stream: 2 events, both 2026-07-06, payloads explicitly "
+        "labeled reason:\"smoke\"/\"post-reject check\" — a one-off used to "
+        "validate hearth's t0gate routing fixture "
+        "(hearth/crates/hearth-hermes/t0gate/fixtures.json still references "
+        "this channel name in its test data; that fixture is untouched "
+        "here since it never executes against the live bus). No consumer "
+        "group ever registered. Nothing since.",
+    ),
 ]
 
 

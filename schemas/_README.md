@@ -38,7 +38,7 @@ Refresh the table by running `python3 sdk/python/classify_channels.py` (TODO; fo
 | `bus.bead.updated.v1.json` | `bus.bead.updated` | nbd wrapper | ⚠ wired-not-deployed — fires on `nbd update --claim` / `--status=` / generic updates; same `nbd` invocation gating as the rest of the bus.bead.* family |
 | `bus.bead.scored.v1.json` | `bus.bead.scored` | deer-flow | ◯ planned — feedback signal for executor selection loop |
 | `bus.saga.v1.json` | `bus.saga` | nervous-bus / Jarvis planner | ◯ planned — multi-bead plan correlation root |
-| `bus.dead_letter.v1.json` | `bus.dead_letter` | nervous-bus plugin | ◐ live-quiet — only fires on malformed events (1 ever) |
+| `bus.dead_letter.v1.json` | `bus.dead_letter` | nervous-bus plugin, adapters/redis-mirror | ✓ live — fires on schema/envelope validation failure. Volume here is hand-maintained and goes stale fast (this row previously read "1 ever"; the real count as of the 2026-07-10 audit was 117k+ lifetime, ~10k in the current MAXLEN~10000 window). Don't trust a fixed number in this table — check live: `curl localhost:9419/dlq/stats` (adapters/dlq/dlq.py) or `redis-cli XINFO STREAM nbus:bus.dead_letter`. |
 | `bus.intrinsic.marker.v1.json` | `bus.intrinsic.marker` | any project (hearth, hearth-loom, deer-flow, etc.) | ◯ planned — standardized lifecycle + health markers for sysmap aggregation; replaces ad-hoc per-project event wiring for cycle/build/deploy/quality signals |
 | `bus.dashboard.v1.json` | `bus.dashboard` | cc-bus-dashboard | ◯ planned — dashboard heartbeat / state-of-bus channel |
 | `bus.redis-mirror.config.v1.json` | n/a (config schema, not an event) | adapters/redis-mirror | n/a — describes adapter config shape |
