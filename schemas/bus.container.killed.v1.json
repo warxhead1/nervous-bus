@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.container.killed.v1.json",
+  "title": "bus.container.killed v1",
+  "description": "hearth-loom's kill observer (internal/observe/nbus_recorder.go) publishes one event per CorrelatedKill the moment the docker daemon reports a loomie sleeve container died/was killed — live signal for peer/dugout/dashboards ahead of any DB polling or journalctl tail. Backfilled schema — audit B1 / task #22: the channel had live Redis traffic (bare, un-enveloped JSON XADDed directly to nbus:all) with no registered schema, which caused hearth-api's nbus_consumer and hermesd to dead-letter every event.",
+  "type": "object",
+  "required": ["container_id", "action", "cause"],
+  "properties": {
+    "bead_id": {
+      "type": "string",
+      "description": "hearth-loom task/bead id correlating this kill to a dispatch (CorrelatedKill.TaskID)."
+    },
+    "execution_id": {
+      "type": "string",
+      "description": "Execution id of the run whose sleeve container died."
+    },
+    "container_id": {
+      "type": "string",
+      "description": "Full or short docker container id."
+    },
+    "container_name": {
+      "type": "string",
+      "description": "Docker container name, e.g. hearth-loom-sleeve-42."
+    },
+    "action": {
+      "type": "string",
+      "description": "Docker event action that triggered this record, e.g. 'kill', 'die', 'oom'."
+    },
+    "signal": {
+      "type": "string",
+      "description": "Signal number/name that killed the container, when known (e.g. '15' for SIGTERM)."
+    },
+    "exit_code": {
+      "type": "string",
+      "description": "Container exit code, when known."
+    },
+    "signal_sender": {
+      "type": "string",
+      "description": "PID or uid that sent the kill signal, when attributable (e.g. SIGTERM-cliff correlation)."
+    },
+    "cause": {
+      "type": "string",
+      "description": "Correlator's classification of why the container died, e.g. 'external_sigterm', 'voluntary_exit', 'oom_kill'."
+    },
+    "image_ref": {
+      "type": "string",
+      "description": "Docker image reference the container ran, e.g. hearth-loom-agent:sleeve."
+    },
+    "labels": {
+      "type": "object",
+      "description": "Docker labels on the container, typically including hearth-loom.execution_id / hearth-loom.task_id / hearth-loom.role.",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "additionalProperties": false
+}
