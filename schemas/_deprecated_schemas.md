@@ -15,6 +15,26 @@ its `description` is prefixed with a `DEPRECATED (<date>, <bead-id>)` marker.
 | `bus.bead.closed.v1.json`                  | 2026-05-16    | nervous-bus-immg  | `bus.bead.lifecycle.v1` with `event_type="bead_closed"`                       |
 | `bus.bead.scored.v1.json`                  | 2026-05-16    | nervous-bus-immg  | derived from `bus.bead.lifecycle.v1` (pr_merged/falsified) + `bus.bead.bench_completed.v1` |
 | `bus.tengine.bridge_path_verified.v1.json` | 2026-06-02    | kernel-unify wave | `bus.tengine.bridge.path_verified.v1` (dot-separated canonical)              |
+| `career-ops.steering.answered.v1.json`     | 2026-07-12    | job-search-se-schema-audit | `career-ops.steering-queue.answered.v1` — see caveat below     |
+
+## `career-ops.steering.answered.v1` retirement caveat (2026-07-12)
+
+Retired as publisher-less: zero occurrences in `~/.cache/nervous-bus/debug.jsonl`
+history, and no caller anywhere on disk (`~/projects/job-search-se`,
+`~/projects/career-ops`, `~/projects/nervous-bus`) publishes this exact
+channel string — only a stray comment in job-search-se's `server/nervousBus.js`
+references its *schema shape* for a sensitive-data note, it never calls
+`publish('career-ops.steering.answered.v1', ...)`.
+
+**Caveat:** `career-ops.steering-queue.answered.v1`'s own schema description
+explicitly says the two are "unrelated" concepts — this one is behavioural
+auto-memory steering (target geography/salary/role-fit answers feeding
+`~/.claude/.../memory/`), the other is dashboard steering-**queue** Q&A
+(career-ops/data/steering-queue.json entries, phone-notification correlation).
+The "Superseded by" column above is about coverage of job-search-se's actual
+steering-answer write path, not a same-shape replacement — if career-ops ever
+grows a real behavioural-steering-answer publisher, this schema (or a
+non-deprecated equivalent) will need to come back.
 
 ## Kernel channel collapse (kernel-unify wave, 2026-06-02)
 

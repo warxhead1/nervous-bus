@@ -5,14 +5,22 @@ Subscribes to ``nbus:bus.dead_letter`` Redis stream and persists each event
 into a SQLite database at ``~/.cache/nervous-bus/dlq.db``.
 
 Retry policy:
-  - ``failure_reason == "schema_violation"`` → quarantine, no retry. A
-    schema violation means the emitter is wrong, not the bus — redelivering
-    the same payload just re-fails the same validation deterministically.
-    Quarantined entries are archived verbatim (one JSON line per entry) to
+  - ``failure_reason`` in NON_RETRYABLE_REASONS (``schema_violation``,
+    ``malformed_json``, ``missing_type``, ``missing_required_field``) →
+    quarantine, no retry. These all mean the emitter/payload is wrong, not
+    the bus — redelivering the same bytes just re-fails the same way. (The
+    latter three were added after a 2026-07 incident where retrying
+    ``event_type=UNKNOWN`` / non-JSON excerpts caused a self-amplifying
+    republish loop — see NON_RETRYABLE_REASONS docstring.) Quarantined
+    entries are archived verbatim (one JSON line per entry) to
     ``~/.cache/nervous-bus/dlq-quarantine.jsonl`` for forensics/replay-after-fix,
     then marked terminal in the DB (``quarantined_at`` + ``resolved_at`` both
     set — they no longer show up in the "needs attention" unresolved view,
     but the archive + DB row are never deleted).
+  - retry_worker() also refuses to retry (and abandons via the same terminal
+    mechanism) any row whose event_type is "UNKNOWN" (case-insensitive) or
+    whose original_payload fails json.loads, regardless of failure_reason —
+    defense in depth for rows scheduled before the checks above existed.
   - All other reasons → exponential backoff: 30 s, 5 min, 30 min (max 3 retries)
   - On retry: re-emits original payload via ``nervous publish``
 
@@ -56,7 +64,22 @@ RETRY_BACKOFF = [30, 300, 1800]  # 30s, 5min, 30min
 # failure_reason values that are never retryable — the emitter produced a
 # payload the schema/envelope validator rejects, so redelivering the exact
 # same bytes fails the exact same way. These get quarantined, not retried.
-NON_RETRYABLE_REASONS = {"schema_violation"}
+#
+# malformed_json / missing_type / missing_required_field were added after a
+# 2026-07 incident: rows classified with these reasons by hearth-api's tail
+# consumer carry event_type "UNKNOWN" and a truncated, non-JSON
+# original_payload excerpt. Retrying via `nervous publish` republished that
+# garbage, which hearth-api dead-lettered again under a *new* uuid (so
+# retry_count never exhausted) — a self-amplifying republish loop. See also
+# the belt-and-suspenders checks in retry_worker() below, which catch rows
+# that reach the retry path despite this set (e.g. legacy rows inserted
+# before this set grew).
+NON_RETRYABLE_REASONS = {
+    "schema_violation",
+    "malformed_json",
+    "missing_type",
+    "missing_required_field",
+}
 
 NBUS_ROOT = Path(__file__).parent.parent.parent
 
@@ -202,15 +225,19 @@ def get_counts(conn: sqlite3.Connection) -> dict:
 
 def get_pending_retries(conn: sqlite3.Connection) -> list:
     now = time.time()
+    # Exclude all NON_RETRYABLE_REASONS, not just schema_violation — belt and
+    # suspenders alongside insert_dead_letter's next_retry_at=None for these
+    # reasons, in case a row was scheduled before this set grew.
+    placeholders = ",".join("?" for _ in NON_RETRYABLE_REASONS)
     rows = conn.execute(
-        """SELECT id, event_type, original_payload, retry_count, failure_reason
+        f"""SELECT id, event_type, original_payload, retry_count, failure_reason
            FROM dead_letters
            WHERE resolved_at IS NULL
-             AND failure_reason != 'schema_violation'
+             AND failure_reason NOT IN ({placeholders})
              AND next_retry_at IS NOT NULL
              AND next_retry_at <= ?
              AND retry_count < 3""",
-        (now,),
+        (*NON_RETRYABLE_REASONS, now),
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -219,6 +246,25 @@ def mark_retry_success(conn: sqlite3.Connection, entry_id: str) -> None:
     conn.execute(
         "UPDATE dead_letters SET resolved_at=?, last_error=NULL WHERE id=?",
         (time.time(), entry_id),
+    )
+    conn.commit()
+
+
+def mark_abandoned(conn: sqlite3.Connection, entry_id: str, archive_path: Path,
+                    entry: dict, reason: str) -> None:
+    """Terminal, non-retryable — same semantics as insert-time quarantine
+    (archive_quarantined + quarantined_at + resolved_at both set), reused
+    here for rows that reach the retry path despite NON_RETRYABLE_REASONS
+    (e.g. rows scheduled before this set grew, or a payload that only turns
+    out to be un-parseable at retry time). Never calls `nervous publish`.
+    """
+    now = time.time()
+    archive_quarantined(archive_path, entry, entry_id, reason, now)
+    conn.execute(
+        """UPDATE dead_letters
+           SET quarantined_at=?, resolved_at=?, last_error=?, next_retry_at=NULL
+           WHERE id=?""",
+        (now, now, reason[:500], entry_id),
     )
     conn.commit()
 
@@ -264,14 +310,43 @@ def _retry_event(entry: dict) -> tuple[bool, str]:
         return False, str(e)[:500]
 
 
-def retry_worker(conn: sqlite3.Connection, stop_event: threading.Event) -> None:
-    """Background thread: check for due retries every 10 s."""
+def retry_worker(conn: sqlite3.Connection, stop_event: threading.Event,
+                  archive_path: Path = DEFAULT_QUARANTINE_PATH) -> None:
+    """Background thread: check for due retries every 10 s.
+
+    Two belt-and-suspenders guards run before any `nervous publish` shell-out
+    (see NON_RETRYABLE_REASONS docstring for the incident that motivated
+    them): a row with event_type "UNKNOWN" (case-insensitive) or an
+    original_payload that doesn't parse as JSON is abandoned instead of
+    retried, even if it reached this point with a scheduled next_retry_at.
+    """
     while not stop_event.is_set():
         try:
             pending = get_pending_retries(conn)
             for entry in pending:
                 entry_id = entry["id"]
                 retry_count = entry["retry_count"]
+                event_type = (entry.get("event_type") or "").strip()
+
+                if event_type.upper() == "UNKNOWN":
+                    sys.stderr.write(
+                        f"[dlq] abandoning {entry_id}: event_type is UNKNOWN, "
+                        f"refusing to retry (would republish garbage)\n"
+                    )
+                    mark_abandoned(conn, entry_id, archive_path, entry, "unknown_event_type")
+                    continue
+
+                payload = entry.get("original_payload") or ""
+                try:
+                    json.loads(payload)
+                except (json.JSONDecodeError, TypeError):
+                    sys.stderr.write(
+                        f"[dlq] abandoning {entry_id}: original_payload is not "
+                        f"valid JSON, refusing to retry\n"
+                    )
+                    mark_abandoned(conn, entry_id, archive_path, entry, "invalid_payload_json")
+                    continue
+
                 sys.stderr.write(
                     f"[dlq] retrying {entry_id} (attempt {retry_count + 1}/3) "
                     f"type={entry['event_type']}\n"
@@ -450,7 +525,7 @@ def main(argv=None) -> int:
 
     retry_thread = threading.Thread(
         target=retry_worker,
-        args=(conn, stop_event),
+        args=(conn, stop_event, args.quarantine_file),
         daemon=True,
         name="dlq_retry",
     )
