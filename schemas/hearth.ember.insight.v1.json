@@ -4,13 +4,8 @@
   "title": "hearth.ember.insight v1",
   "description": "Cognitive insight derived from Ember tick — semantic/temporal/causal/entity observations about user behavior and environment. Published by hearth-cognitive after internal insight commit.",
   "type": "object",
-  "required": ["event_type", "source", "insight_id", "graph", "subject", "summary", "confidence", "evidence_count", "created_at"],
+  "required": ["source", "insight_id", "graph", "subject", "summary", "confidence", "evidence_count", "created_at"],
   "properties": {
-    "event_type": {
-      "type": "string",
-      "const": "hearth.ember.insight.v1",
-      "description": "CloudEvents type identifier for this event; always 'hearth.ember.insight.v1'."
-    },
     "source": {
       "type": "string",
       "description": "URI path identifying the emitting subsystem; always '/hearth/cognitive'."

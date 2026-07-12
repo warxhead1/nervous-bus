@@ -16,8 +16,8 @@
     },
     "reason": {
       "type": "string",
-      "enum": ["shutdown", "crash_reaped", "yielded", "error"],
-      "description": "Why the lease ended: 'shutdown' clean exit, 'crash_reaped' reclaimed by the reaper after holder death, 'yielded' cooperatively given up, 'error' aborted due to a fault."
+      "enum": ["shutdown", "crash_reaped", "yielded", "error", "normal_exit"],
+      "description": "Why the lease ended: 'shutdown' clean exit, 'crash_reaped' reclaimed by the reaper after holder death, 'yielded' cooperatively given up, 'error' aborted due to a fault, 'normal_exit' clean exit reported by the gpu_verify_lock.sh wrapper (distinct producer path from the interactive_pipeline_lab binary's 'shutdown')."
     },
     "released_at": {
       "type": "string",
