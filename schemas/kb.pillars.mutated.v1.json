@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.pillars.mutated.v1.json",
+  "title": "kb.pillars.mutated v1",
+  "description": "Emitted by hearth-api / hearth-mcp when the architectural pillars tree changes (kb_collections tree nodes or kb_collection_links edges). One event per mutation, aggregates + titles only — node `body` markdown is never carried on the bus. Added per the 2026-07-13 pillars adversarial review: pillar mutations were bus-silent, invisible to hermes digests, phone notifications, and kb-watch guidance.",
+  "type": "object",
+  "required": ["op", "node_id", "project"],
+  "additionalProperties": false,
+  "properties": {
+    "op": {
+      "type": "string",
+      "enum": ["created", "updated", "reparented", "deleted", "linked", "unlinked"],
+      "description": "Which mutation occurred."
+    },
+    "node_id": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "The kb_collections id the mutation targets (for linked/unlinked: the from_id)."
+    },
+    "project": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Project the node belongs to (hearth, tengine, ...)."
+    },
+    "name": {
+      "type": "string",
+      "maxLength": 256,
+      "description": "Node name at mutation time (title only, never body)."
+    },
+    "kind": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "Node kind (pillar, screen, api, idea, story, ...). Freeform by design."
+    },
+    "parent_id": {
+      "type": ["string", "null"],
+      "maxLength": 64,
+      "description": "Parent after the mutation (null = root). Present on created/reparented."
+    },
+    "to_id": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "Cross-link target node id. Present on linked/unlinked."
+    },
+    "relationship": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "Cross-link relationship label. Present on linked/unlinked."
+    },
+    "descendants_deleted": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "For op=deleted: how many descendant nodes the cascade destroyed (the honest count, not rows_affected)."
+    },
+    "surface": {
+      "type": "string",
+      "enum": ["api", "mcp"],
+      "description": "Which write path produced the mutation."
+    }
+  }
+}
