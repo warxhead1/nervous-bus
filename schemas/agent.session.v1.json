@@ -22,7 +22,7 @@
     },
     "agent_kind": {
       "type": "string",
-      "enum": ["host_claude_code", "host_codex", "codex-cli", "claude-code", "claude-code-minimax"],
+      "enum": ["host_claude_code", "host_codex", "codex-cli", "claude-code", "claude-code-minimax", "antigravity-cli"],
       "description": "Host-side agent runtime kind. Present on OSC-133 events only. codex-cli / claude-code / claude-code-minimax are legacy values emitted by the codex-hook binary's detectAgentKind() (claude-hook-fast/cmd/codex-hook) — same widening already applied to the sibling bus.agent.activity.v1 schema, kept additive here rather than touching the producer to avoid diverging the two channels that share detectAgentKind()."
     },
     "conversation_id": {
