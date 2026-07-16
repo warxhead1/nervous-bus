@@ -40,6 +40,14 @@ types = [
     # wins the race delivers exactly once — same idempotent pattern already
     # relied on for career-ops./tengine./funsearch./kernel. above.
     "hearth.",
+    # bus.agent.activity. / agent.session. (agent lifecycle telemetry): the
+    # sandboxed-MiniMax adapter (cmmx-hook inside claude-minimax-sandboxed)
+    # publishes from a rootlesskit netns where localhost Redis is unreachable —
+    # its `nervous publish` lands in the host debug.jsonl only (the launcher
+    # binds ~/.cache/nervous-bus into the sandbox). Host Claude/Codex/agy
+    # publishers deliver live and are deduped here via nbus:dedup:<id>.
+    "bus.agent.activity.",
+    "agent.session.",
 ]
 
 [redis]
