@@ -51,9 +51,9 @@
         "correlation_id": {
           "type": "string",
           "minLength": 26,
-          "maxLength": 26,
-          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
-          "description": "Optional ULID of the upstream event/cycle/PR/bead. A phone tap on the notification deep-links back to whatever this id resolves to in the consumer's persistence layer."
+          "maxLength": 36,
+          "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$",
+          "description": "Optional id of the upstream event/cycle/PR/bead — a 26-char ULID or a 36-char UUID (hearth's internal correlation ids are UUIDs; the ULID-only cap was dead-lettering every hearth-emitted notify). A phone tap on the notification deep-links back to whatever this id resolves to in the consumer's persistence layer."
         },
         "body": {
           "type": "string",
