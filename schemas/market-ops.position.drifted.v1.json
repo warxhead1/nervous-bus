@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/market-ops.position.drifted.v1.json",
+  "title": "market-ops position drifted",
+  "description": "Emitted by market-ops `market-intel sources check` (via `kb event emit`), at most once per run, when primary-source drift is detected: an evidence URL's content changed or the URL went dark. `position_ids` (capped at 50) lists the positions whose evidence needs re-verification — this event IS the re-verification signal hearth/kb should surface.",
+  "type": "object",
+  "required": ["checked", "changed", "gone"],
+  "additionalProperties": false,
+  "properties": {
+    "checked": { "type": "integer", "minimum": 0 },
+    "changed": { "type": "integer", "minimum": 0 },
+    "gone": { "type": "integer", "minimum": 0 },
+    "position_ids": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "type": "string", "maxLength": 64 }
+    },
+    "sample_urls": {
+      "type": "array",
+      "maxItems": 10,
+      "items": { "type": "string", "maxLength": 300 }
+    }
+  }
+}

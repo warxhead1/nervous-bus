@@ -4,7 +4,7 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**302 channels** across 5 clusters.
+**305 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
@@ -12,7 +12,7 @@ Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster
 | [Autobench](#autobench) | 53 | autobench.* evolution loop (case/judge/improver/budget/...) |
 | [Hearth](#hearth) | 50 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 138 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 141 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -329,6 +329,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `kb.guidance.provided.v1` | 🔇 **unconsumed** — KB Guidance Provided |
 | `kb.ingest.tengine.completed.v1` | kb.ingest.tengine.completed v1 |
 | `kb.knowledge.gap.v1` | 🔇 **unconsumed** — KB Knowledge Gap |
+| `kb.pillars.mutated.v1` | kb.pillars.mutated v1 |
 | `kb.plan.researched.v1` | 🔇 **unconsumed** — KB Plan Researched |
 | `kb.plan.updated.v1` | 🔇 **unconsumed** — KB Plan Updated |
 | `kb.review.approved.v1` | 🔇 **unconsumed** — KB Review Approved |
@@ -346,6 +347,8 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `kernel.prior.updated.v1` | kernel.prior.updated v1 |
 | `kernel.render.evaluated.v1` | kernel.render.evaluated.v1 v1 |
 | `kernel.started.v1` | kernel.started.v1 v1 |
+| `market-ops.knowledge.imported.v1` | market-ops knowledge imported |
+| `market-ops.position.drifted.v1` | market-ops position drifted |
 | `pulse.kernel.snapshot.v1` | pulse.kernel.snapshot v1 |
 | `pulse.render.quality.v1` | pulse.render.quality v1 |
 | `shader.preadmit.evaluated.v1` | shader.preadmit.evaluated.v1 v1 |

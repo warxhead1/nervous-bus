@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/market-ops.knowledge.imported.v1.json",
+  "title": "market-ops knowledge imported",
+  "description": "Emitted by market-ops `market-intel import` (via `kb event emit`) after a research-import run lands in the position registry. Counts describe what the run wrote/skipped; `verdicts` counts hostile-review verdicts across the imported file. Correlation key for consumers (hearth cards, kb) is `source_file`.",
+  "type": "object",
+  "required": ["source_file", "positions_written", "probes_written"],
+  "additionalProperties": false,
+  "properties": {
+    "source_file": { "type": "string", "maxLength": 256 },
+    "domains": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "type": "string", "maxLength": 64 }
+    },
+    "positions_written": { "type": "integer", "minimum": 0 },
+    "positions_skipped": { "type": "integer", "minimum": 0 },
+    "probes_written": { "type": "integer", "minimum": 0 },
+    "probes_skipped": { "type": "integer", "minimum": 0 },
+    "verdicts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "confirmed": { "type": "integer", "minimum": 0 },
+        "weakened": { "type": "integer", "minimum": 0 },
+        "refuted": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
