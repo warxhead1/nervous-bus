@@ -27,6 +27,12 @@ types = [
     # sole path into Redis Streams for consumers that need one (dashboards etc).
     # kb's own `kb watch` reads debug.jsonl directly and does not need this.
     "career-ops.",
+    # market-ops.* (market-ops internal/bus via `kb event emit`): same class as
+    # career-ops. above — kb's emit appends to debug.jsonl only, no live XADD,
+    # so this mirror is market-ops's sole path into Redis Streams (hermesd
+    # consumes nbus:all for market_ops.knowledge_imported cards). Discovered
+    # 2026-07-17: without this entry, market-ops events never reached hermes.
+    "market-ops.",
     # hearth.* (hearth-api routes via hearth-nbus's `nervous publish` shell-out,
     # e.g. hearth.liaison.reply.v1): durability backstop, not a duplicate
     # source. hearth-nbus shells out to the `nervous` CLI, which XADDs to Redis
