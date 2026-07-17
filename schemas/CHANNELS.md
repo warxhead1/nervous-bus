@@ -4,7 +4,7 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**305 channels** across 5 clusters.
+**306 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
@@ -12,7 +12,7 @@ Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster
 | [Autobench](#autobench) | 53 | autobench.* evolution loop (case/judge/improver/budget/...) |
 | [Hearth](#hearth) | 50 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 141 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 142 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -349,6 +349,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `kernel.started.v1` | kernel.started.v1 v1 |
 | `market-ops.knowledge.imported.v1` | market-ops knowledge imported |
 | `market-ops.position.drifted.v1` | market-ops position drifted |
+| `market-ops.radar.scored.v1` | market-ops radar scored |
 | `pulse.kernel.snapshot.v1` | pulse.kernel.snapshot v1 |
 | `pulse.render.quality.v1` | pulse.render.quality v1 |
 | `shader.preadmit.evaluated.v1` | shader.preadmit.evaluated.v1 v1 |

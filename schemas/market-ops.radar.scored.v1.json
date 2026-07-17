@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/market-ops.radar.scored.v1.json",
+  "title": "market-ops radar scored",
+  "description": "Emitted by market-ops `market-intel radar score` (via `kb event emit`) after a demand-radar scoring run. `top` is the ranked head of the run (max 10); `predictions_registered` counts newly registered Brier-tracked forecasts. Correlation key is `run_date`.",
+  "type": "object",
+  "required": ["run_date", "series_scored"],
+  "additionalProperties": false,
+  "properties": {
+    "run_date": { "type": "string", "maxLength": 10 },
+    "connectors": {
+      "type": "array",
+      "maxItems": 8,
+      "items": { "type": "string", "maxLength": 32 }
+    },
+    "series_scored": { "type": "integer", "minimum": 0 },
+    "top": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "required": ["slug", "score"],
+        "additionalProperties": false,
+        "properties": {
+          "slug": { "type": "string", "maxLength": 80 },
+          "connector": { "type": "string", "maxLength": 32 },
+          "score": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+    "predictions_registered": { "type": "integer", "minimum": 0 }
+  }
+}
