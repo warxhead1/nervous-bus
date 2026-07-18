@@ -61,6 +61,16 @@ types = [
     # publishers deliver live and are deduped here via nbus:dedup:<id>.
     "bus.agent.activity.",
     "agent.session.",
+    # bus.notify. (generic phone-push channel, bus.notify.v1): jsonl-only
+    # publishers exist — job-search-se's scripts/notify.mjs (server/nervousBus.js
+    # appends to debug.jsonl per the no-direct-XAdd rule) — same class as
+    # career-ops./market-ops. above, so this mirror is their sole path into
+    # Redis Streams. hearth-api consumes bus.notify.v1 from nbus:all ONLY (its
+    # file-tail whitelist excludes it), so without this entry a jsonl-published
+    # notify silently never reaches the phone. Discovered 2026-07-18 the same
+    # way market-ops. was on 2026-07-17. Direct publishers (hearth_nbus /
+    # `nervous publish`) are deduped via nbus:dedup:<id>, same as hearth. above.
+    "bus.notify.",
 ]
 
 [redis]
