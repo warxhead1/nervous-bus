@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.note.published.v1.json",
+  "title": "kb note published",
+  "description": "Emitted deliberately (via `kb event emit` or a jsonl append) when an agent session pushes a knowledge-vault note to the phone surface. NOT fired on every vault write — the semantic is 'this doc is for you, go read it'. `kb_ref` is the vault-relative slug without the .md extension (e.g. market-ops/2026-07-17-some-note), matching hearth-api `GET /api/kb/indexed/{*slug}`; hermes turns it into a `hearth://kb/{kb_ref}` notification deep link after re-validating it. Everything else in the payload stays on the card, never on the notify rail.",
+  "type": "object",
+  "required": ["kb_ref", "project", "title"],
+  "additionalProperties": false,
+  "properties": {
+    "kb_ref": {
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+    },
+    "project": { "type": "string", "maxLength": 64 },
+    "title": { "type": "string", "maxLength": 200 },
+    "summary": { "type": "string", "maxLength": 500 }
+  }
+}

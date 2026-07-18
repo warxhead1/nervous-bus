@@ -33,6 +33,13 @@ types = [
     # consumes nbus:all for market_ops.knowledge_imported cards). Discovered
     # 2026-07-17: without this entry, market-ops events never reached hermes.
     "market-ops.",
+    # kb.note.* (kb CLI `kb event emit`, i.e. kb.note.published.v1 doc pushes):
+    # same jsonl-only publisher class as career-ops./market-ops. above — this
+    # mirror is the sole path into Redis Streams for hermesd consumption.
+    # Deliberately NOT the bare "kb." prefix: kb's internal telemetry
+    # (kb.tier.changed.v1 ~12k events, kb.ask.v1, ...) is jsonl-only by design
+    # and must not flood the streams.
+    "kb.note.",
     # hearth.* (hearth-api routes via hearth-nbus's `nervous publish` shell-out,
     # e.g. hearth.liaison.reply.v1): durability backstop, not a duplicate
     # source. hearth-nbus shells out to the `nervous` CLI, which XADDs to Redis
