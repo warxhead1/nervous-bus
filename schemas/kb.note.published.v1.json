@@ -2,15 +2,21 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/kb.note.published.v1.json",
   "title": "kb note published",
-  "description": "Emitted deliberately (via `kb event emit` or a jsonl append) when an agent session pushes a knowledge-vault note to the phone surface. NOT fired on every vault write — the semantic is 'this doc is for you, go read it'. `kb_ref` is the vault-relative slug without the .md extension (e.g. market-ops/2026-07-17-some-note), matching hearth-api `GET /api/kb/indexed/{*slug}`; hermes turns it into a `hearth://kb/{kb_ref}` notification deep link after re-validating it. Everything else in the payload stays on the card, never on the notify rail.",
+  "description": "Emitted deliberately (via `kb event emit` or a jsonl append) when an agent session pushes a knowledge-vault note or design asset to the phone surface. NOT fired on every vault write — the semantic is 'this doc is for you, go read it'. `kb_ref` is the vault-relative slug without the .md extension (e.g. market-ops/2026-07-17-some-note), matching hearth-api `GET /api/kb/indexed/{*slug}`; hermes turns it into a `hearth://kb/{kb_ref}` notification deep link after re-validating it. `design_ref` is a `{project}/{file}` pointer (extension kept, .html or .md) into hearth-api `GET /kb/design/{project}/{slug}` — a self-contained live example/mockup; hermes maps it to `hearth://design/{design_ref}`. Exactly one of the two should be set; hermes prefers kb_ref if both are. Everything else in the payload stays on the card, never on the notify rail.",
   "type": "object",
-  "required": ["kb_ref", "project", "title"],
+  "required": ["project", "title"],
+  "anyOf": [{ "required": ["kb_ref"] }, { "required": ["design_ref"] }],
   "additionalProperties": false,
   "properties": {
     "kb_ref": {
       "type": "string",
       "maxLength": 256,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+    },
+    "design_ref": {
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*\\.(html|md)$"
     },
     "project": { "type": "string", "maxLength": 64 },
     "title": { "type": "string", "maxLength": 200 },
