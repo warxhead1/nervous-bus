@@ -4,18 +4,29 @@
   "title": "career-ops.steering-queue.answered v1",
   "description": "Emitted by job-search-se's server/steeringRoutes.js when a career-ops-queue entry (career-ops/data/steering-queue.json) is answered via the SteeringView UI. Pairs with career-ops.steering-queue.requested.v1's id as the correlation key so hearth-api can clear the phone notification card raised on request. Distinct from career-ops.steering.answered.v1, which is an unrelated behavioural-memory-steering concept.",
   "type": "object",
-  "required": ["id", "answer"],
+  "required": [
+    "id",
+    "answer"
+  ],
   "additionalProperties": false,
   "properties": {
     "id": {
       "type": "string",
       "maxLength": 64,
-      "description": "steering-queue.json entry id — matches the id from the paired requested.v1 event."
+      "description": "steering-queue.json entry id \u2014 matches the id from the paired requested.v1 event."
     },
     "answer": {
       "type": "string",
       "maxLength": 2000,
       "description": "Eric's answer, as recorded in steering-queue.json."
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "question",
+        "secret_request"
+      ],
+      "description": "Echo of the requested.v1 kind so consumers can disambiguate answer shape (a secret_request answer is a vault pointer like 'stored: api/foo-key -> hearth-vault', never the value)."
     }
   }
 }
