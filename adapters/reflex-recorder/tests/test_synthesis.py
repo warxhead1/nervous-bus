@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -422,6 +423,23 @@ def _make_cargo_event(run_id: str, seq: int, ts: str, next_ts: str,
     })
 
 
+def _relative_pair(days_ago: int, minutes: int = 2) -> tuple[str, str]:
+    """Return (start_ts, end_ts) RFC3339 UTC strings `minutes` apart, ending
+    `days_ago` days before the real wall-clock "now".
+
+    synthesis._rebuild_cache_miss_replay bounds its candidate runs to a
+    rolling window measured against datetime.now() (see
+    synthesis._days_ago_utc / WINDOW_DAYS). Hardcoded calendar-date fixtures
+    silently fall outside that window as wall-clock time passes, so anchor
+    relative to real "now" instead (matches the `_now_utc()`-relative idiom
+    used elsewhere in this suite, e.g. detectors/tests/test_base.py).
+    """
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    end = datetime.now(timezone.utc) - timedelta(days=days_ago)
+    start = end - timedelta(minutes=minutes)
+    return start.strftime(fmt), end.strftime(fmt)
+
+
 class TestRebuildCacheMissReplay:
     def test_first_build_is_not_preventable(self):
         """First ever builds of different crates → not_preventable (no prior cache to share).
@@ -435,9 +453,11 @@ class TestRebuildCacheMissReplay:
         """
         conn = _make_conn()
         # Two runs, each with a different crate (crate-A and crate-B), both first-ever
+        r1_ts1, r1_ts2 = _relative_pair(days_ago=2)
+        r2_ts1, r2_ts2 = _relative_pair(days_ago=1)
         for i, (rid, crate, ts1, ts2, started) in enumerate([
-            ("R1", "crate-a", "2026-06-01T00:00:00Z", "2026-06-01T00:02:00Z", "2026-06-01T00:00:00Z"),
-            ("R2", "crate-b", "2026-06-02T00:00:00Z", "2026-06-02T00:02:00Z", "2026-06-02T00:00:00Z"),
+            ("R1", "crate-a", r1_ts1, r1_ts2, r1_ts1),
+            ("R2", "crate-b", r2_ts1, r2_ts2, r2_ts1),
         ]):
             _insert_run(conn, rid, project="proj", started=started,
                         ended=ts2, close_reason="idle_timeout")
@@ -471,9 +491,11 @@ class TestRebuildCacheMissReplay:
         """
         conn = _make_conn()
 
+        r1_ts1, r1_ts2 = _relative_pair(days_ago=2)
+        r2_ts1, r2_ts2 = _relative_pair(days_ago=1)
         for i, (rid, ts1, ts2, started) in enumerate([
-            ("R1", "2026-06-01T00:00:00Z", "2026-06-01T00:02:00Z", "2026-06-01T00:00:00Z"),
-            ("R2", "2026-06-02T00:00:00Z", "2026-06-02T00:02:00Z", "2026-06-02T00:00:00Z"),
+            ("R1", r1_ts1, r1_ts2, r1_ts1),
+            ("R2", r2_ts1, r2_ts2, r2_ts1),
         ]):
             _insert_run(conn, rid, project="proj", started=started,
                         ended=ts2, close_reason="idle_timeout")
@@ -1175,9 +1197,11 @@ class TestHardeningAcceptance:
         Gate passes because false_suppression=0."""
         conn = _make_conn()
 
+        r1_ts1, r1_ts2 = _relative_pair(days_ago=2)
+        r2_ts1, r2_ts2 = _relative_pair(days_ago=1)
         for i, (rid, ts1, ts2, started) in enumerate([
-            ("R1", "2026-06-01T00:00:00Z", "2026-06-01T00:02:00Z", "2026-06-01T00:00:00Z"),
-            ("R2", "2026-06-02T00:00:00Z", "2026-06-02T00:02:00Z", "2026-06-02T00:00:00Z"),
+            ("R1", r1_ts1, r1_ts2, r1_ts1),
+            ("R2", r2_ts1, r2_ts2, r2_ts1),
         ]):
             _insert_run(conn, rid, project="proj", started=started,
                         ended=ts2, close_reason="idle_timeout")
