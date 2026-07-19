@@ -47,7 +47,7 @@ import json
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -66,6 +66,13 @@ DEFAULT_DIGEST_WINDOW_DAYS = 7      # per-project stats + detector prevalence wi
 DEFAULT_STRUGGLE_WINDOW_DAYS = 14   # struggle-ledger scan window
 TOP_DETECTORS = 10
 TOP_STRUGGLES = 8
+TOP_HARNESS_CHANGES = 30
+
+
+def _days_ago_iso(days: int) -> str:
+    """RFC3339 UTC cutoff string, `days` ago from now (same format ts columns use)."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    return cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class StepResult:
@@ -150,6 +157,37 @@ def build_digest(
     struggles = _run_json(
         "struggle_ledger.py (digest source)",
         [sys.executable, "struggle_ledger.py", "--days", str(struggle_window_days), "--json"],
+        step_timeout,
+    ) or []
+
+    # A1 (harness-change watch): pull individual hits (not just the aggregate
+    # prevalence row) so the digest can name the actual run/session that
+    # touched a harness artifact. detector_hits + issues carry everything
+    # needed already — no new capture, just a join.
+    window_cutoff = _days_ago_iso(window_days)
+    harness_hits = _run_json(
+        "query.py sql (harness_change_watch digest source)",
+        [sys.executable, "query.py", "--db", str(db_path), "sql",
+         "SELECT dh.project AS project, dh.signature AS signature, "
+         "dh.run_id AS run_id, dh.ts AS ts, r.session_id AS session_id "
+         "FROM detector_hits dh JOIN runs r ON r.run_id = dh.run_id "
+         "WHERE dh.detector = 'harness_change_watch' "
+         f"AND dh.ts >= '{window_cutoff}' ORDER BY dh.ts DESC",
+         "--json"],
+        step_timeout,
+    ) or []
+
+    # A2 (failure taxonomy): aggregate distinct-run counts per (project, bucket).
+    # The bucket name is the last ':'-separated segment of the signature
+    # (project:failure_taxonomy:<bucket>) — see detectors/failure_taxonomy.py.
+    taxonomy_hits = _run_json(
+        "query.py sql (failure_taxonomy digest source)",
+        [sys.executable, "query.py", "--db", str(db_path), "sql",
+         "SELECT project AS project, signature AS signature, "
+         "COUNT(DISTINCT run_id) AS n FROM detector_hits "
+         "WHERE detector = 'failure_taxonomy' "
+         f"AND ts >= '{window_cutoff}' GROUP BY project, signature",
+         "--json"],
         step_timeout,
     ) or []
 
@@ -248,18 +286,68 @@ def build_digest(
         lines.append("- no struggle-ledger data (or query unavailable)")
     lines.append("")
 
+    # A1 — harness-change watch (sensor only, no gate/enforcement).
+    lines.append(f"## Harness changes ({window_days}d) — observational, no gate")
+    lines.append("")
+    if harness_hits:
+        top = harness_hits[:TOP_HARNESS_CHANGES]
+        lines.append("| project | harness artifact | run | session | ts |")
+        lines.append("|---|---|---|---|---|")
+        for row in top:
+            # signature = "<project>:harness_change_watch:<artifact>"
+            sig = row.get("signature", "")
+            artifact = sig.rsplit(":", 1)[-1] if sig else "?"
+            lines.append(
+                f"| {row.get('project', '?')} | {artifact} | {row.get('run_id', '?')} | "
+                f"{row.get('session_id') or '?'} | {(row.get('ts') or '')[:19]} |"
+            )
+        if len(harness_hits) > TOP_HARNESS_CHANGES:
+            lines.append("")
+            lines.append(f"_(+{len(harness_hits) - TOP_HARNESS_CHANGES} more in window)_")
+    else:
+        lines.append("- no harness-artifact changes in window (or query unavailable)")
+    lines.append("")
+
+    # A2 — failure taxonomy aggregate counts.
+    lines.append(f"## Failure taxonomy ({window_days}d)")
+    lines.append("")
+    if taxonomy_hits:
+        bucket_totals: dict[str, int] = {}
+        per_project_rows: list[dict] = []
+        for row in taxonomy_hits:
+            sig = row.get("signature", "")
+            bucket = sig.rsplit(":", 1)[-1] if sig else "unclassified"
+            n = row.get("n", 0)
+            bucket_totals[bucket] = bucket_totals.get(bucket, 0) + n
+            per_project_rows.append({"project": row.get("project", "?"), "bucket": bucket, "n": n})
+
+        lines.append("### Totals by bucket")
+        lines.append("")
+        for bucket, n in sorted(bucket_totals.items(), key=lambda kv: -kv[1]):
+            lines.append(f"- {bucket}: {n} run(s)")
+        lines.append("")
+        lines.append("### By project")
+        lines.append("")
+        lines.append("| project | bucket | runs |")
+        lines.append("|---|---|---|")
+        for row in sorted(per_project_rows, key=lambda r: (-r["n"], r["project"])):
+            lines.append(f"| {row['project']} | {row['bucket']} | {row['n']} |")
+    else:
+        lines.append("- no failure-taxonomy hits in window (or query unavailable)")
+    lines.append("")
+
     text = "\n".join(lines) + "\n"
     return text
 
 
-def write_digest(text: str) -> None:
-    DIGEST_PATH.parent.mkdir(parents=True, exist_ok=True)
+def write_digest(text: str, digest_path: Path = DIGEST_PATH) -> None:
+    digest_path.parent.mkdir(parents=True, exist_ok=True)
     # Preserve the original `created:` timestamp across runs if the file
     # already exists, so "created" reflects first-write, not last-write.
-    if DIGEST_PATH.exists():
+    if digest_path.exists():
         try:
             old_created = next(
-                (l for l in DIGEST_PATH.read_text().splitlines() if l.startswith("created:")),
+                (l for l in digest_path.read_text().splitlines() if l.startswith("created:")),
                 None,
             )
             if old_created:
@@ -269,7 +357,7 @@ def write_digest(text: str) -> None:
                 ) + "\n"
         except Exception:
             pass
-    DIGEST_PATH.write_text(text)
+    digest_path.write_text(text)
 
 
 def main() -> int:
@@ -279,6 +367,15 @@ def main() -> int:
     ap.add_argument("--label-since-days", type=int, default=DEFAULT_LABEL_SINCE_DAYS)
     ap.add_argument("--window-days", type=int, default=DEFAULT_DIGEST_WINDOW_DAYS)
     ap.add_argument("--struggle-window-days", type=int, default=DEFAULT_STRUGGLE_WINDOW_DAYS)
+    ap.add_argument(
+        "--digest-path", type=Path, default=DIGEST_PATH,
+        help=(
+            "Where to write the rolling digest. Defaults to the live kb-vault "
+            "entry (DIGEST_PATH) — override this when running against a "
+            "fixture/test DB so a manual or fixture-based verification run "
+            "never clobbers the real digest that the nightly timer maintains."
+        ),
+    )
     args = ap.parse_args()
 
     if not args.db.exists():
@@ -305,8 +402,8 @@ def main() -> int:
         args.db, label_result, detector_result,
         args.window_days, args.struggle_window_days, args.step_timeout,
     )
-    write_digest(digest)
-    print(f"[nightly] digest written to {DIGEST_PATH}", file=sys.stderr)
+    write_digest(digest, args.digest_path)
+    print(f"[nightly] digest written to {args.digest_path}", file=sys.stderr)
 
     print(f"[nightly] === reflex nightly analysis done ===", file=sys.stderr)
     return 0
