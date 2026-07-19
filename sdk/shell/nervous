@@ -19,9 +19,15 @@
 #   nervous dlq                             # show recent dead-letter events
 #   nervous dlq --since 1h --reason malformed_json
 #   nervous dlq --json                      # raw JSONL for piping into jq
+#   nervous trace <trace-id>                # causal chain: events sharing a traceparent
+#   nervous trace <trace-id> --json         # raw envelopes for piping into jq
 #
 # Env:
 #   NERVOUS_SOURCE   override source field (default: /<basename-cwd>)
+#   NERVOUS_TRACEPARENT  W3C trace-context string added to the envelope as the
+#                    CloudEvents `traceparent` extension (docs/TRACE-CONTEXT.md).
+#                    Format: 00-<32 hex>-<16 hex>-<2 hex>. Invalid values are
+#                    dropped with a stderr warning, never published.
 #   NERVOUS_PLUGIN   plugin name (default: nervous-bus)
 #   NERVOUS_HOME     user-level config + private schema overlay
 #                    (default: ~/.config/nervous-bus)
@@ -308,12 +314,23 @@ PYEOF
     if [[ -n "$subject" ]]; then
         subj_field="\"subject\":$(printf '%s' "$subject" | jq -R .),"
     fi
+    # CloudEvents distributed-tracing extension (docs/TRACE-CONTEXT.md).
+    # Envelope-level, optional; malformed values are dropped, not published.
+    local trace_field=""
+    if [[ -n "${NERVOUS_TRACEPARENT:-}" ]]; then
+        if [[ "${NERVOUS_TRACEPARENT}" =~ ^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$ ]]; then
+            trace_field="\"traceparent\":\"${NERVOUS_TRACEPARENT}\","
+        else
+            echo "nervous: WARNING: NERVOUS_TRACEPARENT is not a valid W3C traceparent, dropping it" >&2
+        fi
+    fi
     local envelope
-    envelope=$(printf '{"specversion":"1.0","id":"%s","source":%s,"type":"%s",%s"time":"%s","datacontenttype":"application/json","data":%s}' \
+    envelope=$(printf '{"specversion":"1.0","id":"%s","source":%s,"type":"%s",%s%s"time":"%s","datacontenttype":"application/json","data":%s}' \
         "$id" \
         "$(printf '%s' "$source" | jq -R .)" \
         "$channel" \
         "$subj_field" \
+        "$trace_field" \
         "$time" \
         "$payload")
     local log="${NERVOUS_DEBUG_LOG:-$HOME/.cache/nervous-bus/debug.jsonl}"
@@ -484,6 +501,53 @@ cmd_tail() {
     # In zellij: send subscribe request to plugin
     printf '{"plugin_id":%d}' "$$" | zellij pipe -p "$PLUGIN" -n "subscribe:$channel"
     echo "subscribed pid=$$ to $channel (plugin will fan out via pipe_message_to_plugin)"
+}
+
+# Causal-chain reader for the traceparent extension (docs/TRACE-CONTEXT.md):
+# every envelope whose traceparent contains the given trace-id, oldest first.
+# This is the consumption surface that makes the field worth writing (the
+# no-three-quarter-loops rule) — a trace with no reader would be plumbing.
+cmd_trace() {
+    local as_json=false trace=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            *)      trace="$1"; shift ;;
+        esac
+    done
+    [[ -n "$trace" ]] || { echo "usage: nervous trace <trace-id> [--json]" >&2; return 2; }
+    local log="${NERVOUS_DEBUG_LOG:-$HOME/.cache/nervous-bus/debug.jsonl}"
+    # Include the rotated window (debug.jsonl.1) so a chain that straddles a
+    # rotation still reads as one trace. Rotated file first = oldest first.
+    "${NERVOUS_PYTHON:-python3}" - "$trace" "$as_json" "$log" <<'PYEOF'
+import json, sys
+trace, as_json, log = sys.argv[1], sys.argv[2] == "true", sys.argv[3]
+events = []
+for path in (log + ".1", log):
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if trace not in line:
+                    continue
+                try:
+                    env = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if trace in env.get("traceparent", ""):
+                    events.append(env)
+    except OSError:
+        continue
+events.sort(key=lambda e: e.get("time", ""))
+if not events:
+    print(f"no events with traceparent containing {trace!r}", file=sys.stderr)
+    sys.exit(1)
+if as_json:
+    for env in events:
+        print(json.dumps(env))
+else:
+    for env in events:
+        print(f'{env.get("time","-"):20}  {env.get("type","-"):45}  {env.get("source","-"):20}  {env.get("id","-")}')
+PYEOF
 }
 
 cmd_schemas() {
@@ -905,6 +969,7 @@ case "$CMD" in
     adapter) cmd_adapter "$@" ;;
     setup)   cmd_setup "$@" ;;
     dlq)     cmd_dlq "$@" ;;
+    trace)   cmd_trace "$@" ;;
     pattern) cmd_pattern "$@" ;;
     help|-h|--help) cmd_help ;;
     *) echo "unknown command: $CMD" >&2; cmd_help ;;

@@ -129,6 +129,7 @@ Every event is a single JSON line — a CloudEvents-lite envelope:
 | `type` | `<project>.<channel>.<event>.v<n>` — dot-separated, versioned |
 | `time` | RFC3339 UTC |
 | `data` | channel-specific payload; schema in `schemas/<type>.json` |
+| `traceparent` | optional — W3C trace-context (CloudEvents distributed-tracing extension) linking every event in one causal chain; read back with `nervous trace <trace-id>`. See `docs/TRACE-CONTEXT.md` |
 
 ---
 
