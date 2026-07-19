@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/codemap.graph.rebuilt.v1.json",
+  "title": "codemap.graph.rebuilt v1",
+  "description": "Emitted by codemapd after a repo's code-knowledge-graph is reindexed (webhook, bus-triggered, or manual rebuild). Lifecycle/observability signal: lets agents know a repo's graph is fresh and worth re-querying. Per-user local bus only; payload carries no private-repo internals.",
+  "type": "object",
+  "required": ["repo", "head"],
+  "properties": {
+    "repo": { "type": "string", "description": "tracked repo name (codemap registry key, e.g. 'tengine')" },
+    "head": { "type": "string", "description": "git HEAD sha the graph was built from" },
+    "nodes": { "type": "integer", "minimum": 0, "description": "graph node count" },
+    "edges": { "type": "integer", "minimum": 0, "description": "graph edge count" },
+    "communities": { "type": "integer", "minimum": 0, "description": "detected community count" },
+    "trigger": { "type": "string", "enum": ["webhook", "bus", "manual"], "description": "what kicked the rebuild" },
+    "graph_mtime": { "type": "string", "format": "date-time", "description": "RFC3339 UTC build time" }
+  }
+}

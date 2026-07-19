@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/codemap.public_api.changed.v1.json",
+  "title": "codemap.public_api.changed v1",
+  "description": "Emitted by codemapd when a reindex detects that a CROSS-REPO-VISIBLE contract changed in a repo: a bus channel's producer/consumer set, a schema, or an exported FFI/HTTP symbol. Carries the blast radius (affected_repos) so consumers like hearth-loom can file a bead to update dependents. Private-prefixed channels (tachyonos.*, tengine.diag.*, hearth.market.state.*) MUST be redacted from this payload before emit.",
+  "type": "object",
+  "required": ["repo", "head", "changes"],
+  "properties": {
+    "repo": { "type": "string", "description": "repo whose reindex produced the change" },
+    "head": { "type": "string", "description": "git HEAD sha after the change" },
+    "changes": {
+      "type": "array",
+      "minItems": 1,
+      "description": "the cross-repo-visible contract changes detected",
+      "items": {
+        "type": "object",
+        "required": ["kind", "name", "change"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["channel", "schema", "symbol"], "description": "what kind of contract changed" },
+          "name": { "type": "string", "description": "channel name, schema name, or exported symbol" },
+          "change": { "type": "string", "enum": ["added", "removed", "modified"], "description": "nature of the change" },
+          "affected_repos": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "other repos that produce/consume this contract (the blast radius); empty = no cross-repo dependents"
+          }
+        }
+      }
+    }
+  }
+}
