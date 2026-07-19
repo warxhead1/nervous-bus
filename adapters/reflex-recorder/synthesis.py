@@ -62,6 +62,8 @@ from detectors.red_baseline_dispatch import RedBaselineDispatchDetector
 from detectors.unverified_completion import UnverifiedCompletionDetector
 from detectors.directive_ground_truth_mismatch import DirectiveGroundTruthMismatchDetector
 from detectors.inherited_rationalization import InheritedRationalizationDetector
+from detectors.harness_change_watch import HarnessChangeWatchDetector
+from detectors.failure_taxonomy import FailureTaxonomyDetector
 from adapter_api import load_adapters
 
 # ---------------------------------------------------------------------------
@@ -143,6 +145,12 @@ _BUILTIN_DETECTOR_CLASSES: list[type[BaseDetector]] = [
     UnverifiedCompletionDetector,
     DirectiveGroundTruthMismatchDetector,
     InheritedRationalizationDetector,
+    HarnessChangeWatchDetector,
+    # FailureTaxonomyDetector MUST stay last: it reads detector_hits recorded by
+    # every detector above it in THIS SAME synthesis pass (see its module
+    # docstring). Appending a new built-in detector after this line would make
+    # it invisible to the taxonomy classifier until the following pass.
+    FailureTaxonomyDetector,
 ]
 
 
@@ -1424,6 +1432,8 @@ def run_synthesis(
             "reread_same_file": "automate",
             "edit_build_fail_revert": "inform",
             "file_reads_to_finding": "inform",
+            "harness_change_watch": "inform",
+            "failure_taxonomy": "inform",
         }
 
         # Determine rung from candidate's extra (explicit) or from known-rung registry.
