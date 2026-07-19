@@ -64,13 +64,15 @@ sudo apt install redis-server && sudo systemctl enable --now redis
 ### 2. Install the shell SDK
 
 ```bash
-git clone https://github.com/warxhead1/nervous-bus
+git clone --recurse-submodules https://github.com/warxhead1/nervous-bus
 cd nervous-bus
 chmod +x sdk/shell/nervous
 cp sdk/shell/nervous ~/.local/bin/nervous   # or symlink
 
 nervous setup    # bootstraps ~/.config/nervous-bus/
 ```
+
+The `--recurse-submodules` flag populates the `autobench/` submodule for kernel evolution and the autobench-pulse dashboard. Omit it if you only need the core bus.
 
 ### 3. Start redis-mirror
 
