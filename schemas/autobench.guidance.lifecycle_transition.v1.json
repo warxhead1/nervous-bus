@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/autobench.guidance.lifecycle_transition.v1.json",
+  "title": "autobench.guidance.lifecycle_transition v1",
+  "description": "Emitted by deer-flow's GuidanceEvidenceBridge (packages/harness/deerflow/evidence/guidance_bridge.py, _emit_transition_event) when a deer-flow.guidance.fact.v1 event's lifecycle_status transitions to 'stale' or 'superseded'. Consumed by autobench's evidence-graph to invalidate downstream claims that cited the fact.",
+  "type": "object",
+  "required": ["guidance_id", "channel", "lifecycle_status"],
+  "properties": {
+    "guidance_id": {
+      "type": "string",
+      "description": "Fact identifier (guidance_id from the source event, or its CloudEvents id as a fallback)."
+    },
+    "channel": {
+      "type": "string",
+      "description": "CloudEvents type of the source guidance-fact event that triggered this transition."
+    },
+    "lifecycle_status": {
+      "type": "string",
+      "enum": ["stale", "superseded"],
+      "description": "New lifecycle state. This event is only emitted for these two transitions."
+    },
+    "related_claim": {
+      "type": ["string", "null"],
+      "description": "Claim ID this guidance fact maps to via category (edd-claim-002/003/004), or null if the category is unmapped."
+    },
+    "value_score": {
+      "type": ["number", "null"],
+      "description": "Value score carried on the source event's payload, if present."
+    },
+    "confidence": {
+      "type": ["string", "null"],
+      "description": "Stringified confidence annotation from the source event, if present."
+    }
+  },
+  "additionalProperties": true
+}

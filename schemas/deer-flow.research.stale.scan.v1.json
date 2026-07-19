@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.research.stale.scan.v1.json",
+  "title": "deer-flow.research.stale.scan v1",
+  "description": "Emitted by deer-flow's ResearchDispatchConsumer (packages/harness/deerflow/research_dispatch/consumer.py) each time the periodic stale-cycle recovery scan runs (every _STALE_SCAN_INTERVAL_S), independent of whether any stale cycles were found. Consumers use this as a liveness heartbeat for the recovery loop itself.",
+  "type": "object",
+  "required": ["consumer"],
+  "properties": {
+    "consumer": {
+      "type": "string",
+      "description": "Name of the bus consumer instance that ran the scan (BaseBusConsumer._name)."
+    }
+  },
+  "additionalProperties": true
+}

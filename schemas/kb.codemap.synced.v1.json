@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.codemap.synced.v1.json",
+  "title": "kb.codemap.synced v1",
+  "description": "Emitted by kb at the end of a full `kb codemap` sync pass (scan → link → materialize → prune), src/commands/codemap.rs:1735. Source: /kb.",
+  "type": "object",
+  "required": ["seam_count", "written", "unchanged", "pruned", "repos"],
+  "properties": {
+    "seam_count": { "type": "integer", "minimum": 0, "description": "Total seams discovered across scanned repos." },
+    "written": { "type": "integer", "minimum": 0, "description": "Codemap entries newly written." },
+    "unchanged": { "type": "integer", "minimum": 0, "description": "Codemap entries left unchanged." },
+    "pruned": { "type": "integer", "minimum": 0, "description": "Codemap entries pruned this pass." },
+    "repos": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Repo names scanned this pass (post --repo filter)."
+    }
+  },
+  "additionalProperties": true
+}

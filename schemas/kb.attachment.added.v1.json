@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.attachment.added.v1.json",
+  "title": "kb.attachment.added v1",
+  "description": "Emitted by kb (src/kb_ops/attach.rs:142) when a file attachment is successfully copied into an entry's .attachments directory. Source: /kb.",
+  "type": "object",
+  "required": ["entry_id", "attachment_id", "filename", "mime", "size"],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "description": "Vault entry the attachment was added to."
+    },
+    "attachment_id": {
+      "type": "string",
+      "description": "UUID (v7) identifying the attachment."
+    },
+    "filename": {
+      "type": "string",
+      "description": "Original filename of the attached file."
+    },
+    "mime": {
+      "type": "string",
+      "description": "MIME type, caller-supplied free-form string."
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Attachment size in bytes."
+    }
+  },
+  "additionalProperties": true
+}

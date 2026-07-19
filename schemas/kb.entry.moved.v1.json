@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.entry.moved.v1.json",
+  "title": "kb.entry.moved v1",
+  "description": "Emitted by kb (src/kb_ops/entry.rs:341) when `kb entry move` relocates an entry's file to a new project/category directory. Source: /kb.",
+  "type": "object",
+  "required": ["entry_id", "from", "to", "to_project"],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "description": "Moved entry's id."
+    },
+    "from": {
+      "type": "string",
+      "description": "Original file path."
+    },
+    "to": {
+      "type": "string",
+      "description": "New file path."
+    },
+    "to_project": {
+      "type": "string",
+      "description": "Destination project."
+    },
+    "to_category": {
+      "type": ["string", "null"],
+      "description": "Destination category, only present when --to-category was supplied."
+    }
+  },
+  "additionalProperties": true
+}

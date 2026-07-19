@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.ingest.tachyonac.completed.v1.json",
+  "title": "kb.ingest.tachyonac.completed v1",
+  "description": "Emitted by kb at the end of `kb ingest tachyonac` (src/ingest/tachyonac.rs:891), after writing 0+ new research-rec vault entries from tachyonac-engine market data. Source: /kb.",
+  "type": "object",
+  "required": ["entries_created", "regime", "dry_run"],
+  "properties": {
+    "entries_created": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of new vault entries written this run."
+    },
+    "regime": {
+      "type": "string",
+      "description": "Market-regime label from the upstream tachyonac-engine ingest (e.g. 'elevated_vol'). Free-form string — its defining vocabulary lives upstream, not in kb."
+    },
+    "dry_run": {
+      "type": "boolean",
+      "description": "Whether this was a dry run (no entries actually written)."
+    }
+  },
+  "additionalProperties": true
+}

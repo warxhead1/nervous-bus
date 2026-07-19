@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.freshness.report.v1.json",
+  "title": "kb.freshness.report v1",
+  "description": "Emitted by kb at the end of a `kb freshness` staleness-report run (src/commands/freshness.rs:176). Summary only — does not include the per-item breakdown that the CLI's own stdout JSON carries. Source: /kb.",
+  "type": "object",
+  "required": ["total_at_risk", "stale_days"],
+  "properties": {
+    "project": {
+      "type": ["string", "null"],
+      "description": "Project scope filter applied to the report, if any."
+    },
+    "total_at_risk": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Count of entries at risk of going stale."
+    },
+    "stale_days": {
+      "type": "integer",
+      "description": "Staleness threshold (days) used for this report."
+    }
+  },
+  "additionalProperties": true
+}

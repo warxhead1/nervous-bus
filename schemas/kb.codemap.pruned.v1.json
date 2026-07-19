@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.codemap.pruned.v1.json",
+  "title": "kb.codemap.pruned v1",
+  "description": "Emitted by kb (src/commands/codemap.rs:1452) when a stale materialized codemap markdown entry, no longer backed by a live seam, is deleted during `kb codemap --prune`. Source: /kb.",
+  "type": "object",
+  "required": ["path"],
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Path to the pruned codemap entry."
+    }
+  },
+  "additionalProperties": true
+}

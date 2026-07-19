@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.edge.invalid.v1.json",
+  "title": "kb.edge.invalid v1",
+  "description": "Emitted by kb from two distinct call sites with two distinct payload shapes, unified under one channel: (a) src/commands/codemap.rs:1600 — codemap seam-groundedness check, uses seam_id/literal/endpoints/reason/asserted_by; (b) src/commands/edges.rs:481 — related-edge validation (dangling/archived/contradiction findings), uses source_id/target_id/rel instead. Only `project` and `kind` are common to both; schema is intentionally permissive (additionalProperties: true) rather than a strict oneOf. Source: /kb.",
+  "type": "object",
+  "required": ["project", "kind"],
+  "properties": {
+    "project": {
+      "type": "string",
+      "description": "Project the invalid edge was found in."
+    },
+    "kind": {
+      "type": "string",
+      "description": "codemap.rs call site: SeamKind::as_str() value (e.g. 'http-route', 'bus-channel', 'socket-port', 'process-spawn', 'env-var', 'cli-invocation'). edges.rs call site: FindingKind::as_str() value ('DANGLING', 'ARCHIVED_TARGET', 'NON_RECIPROCAL_CONTRADICTION', 'MISLABELED_ALIGNMENT', 'UNGROUNDED_CONTRADICTION'). Left as free-form string since the two call sites draw from different vocabularies under the same key."
+    },
+    "seam_id": {
+      "type": "string",
+      "description": "codemap.rs call site only: the seam whose source is gone."
+    },
+    "literal": {
+      "type": "string",
+      "description": "codemap.rs call site only: the literal string the seam was parsed from."
+    },
+    "endpoints": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "codemap.rs call site only: number of endpoints the seam had."
+    },
+    "reason": {
+      "type": "string",
+      "description": "codemap.rs call site only: currently always the literal 'seam-source-gone'."
+    },
+    "asserted_by": {
+      "type": "string",
+      "description": "codemap.rs call site only: currently always the literal 'codemap'."
+    },
+    "source_id": {
+      "type": "string",
+      "description": "edges.rs call site only: source entry id of the invalid relation edge."
+    },
+    "target_id": {
+      "type": "string",
+      "description": "edges.rs call site only: target entry id of the invalid relation edge."
+    },
+    "rel": {
+      "type": "string",
+      "enum": ["implements", "cites", "refines", "contradicts", "depends_on"],
+      "description": "edges.rs call site only: relation type (RelationType::as_str(), src/kb_ops/types.rs)."
+    }
+  },
+  "additionalProperties": true
+}

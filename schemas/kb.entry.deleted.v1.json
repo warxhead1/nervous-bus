@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.entry.deleted.v1.json",
+  "title": "kb.entry.deleted v1",
+  "description": "Emitted by kb (src/kb_ops/entry.rs:431) when a hard delete (`kb entry delete --force`) irreversibly removes an entry's markdown file (and its .attachments dir, if present). Distinct from archive/unarchive, which are reversible. Source: /kb.",
+  "type": "object",
+  "required": ["entry_id", "title", "file"],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "description": "Deleted entry's id."
+    },
+    "title": {
+      "type": ["string", "null"],
+      "description": "Entry title from frontmatter, if present at delete time."
+    },
+    "file": {
+      "type": "string",
+      "description": "Path of the deleted markdown file."
+    }
+  },
+  "additionalProperties": true
+}

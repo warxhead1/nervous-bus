@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.research.session.v1.json",
+  "title": "deer-flow.research.session v1",
+  "description": "Emitted by deer-flow's start_run() (backend/app/gateway/services.py) when a new agent run is created, on the internal deer-flow bus (documented in backend/.deer-flow/threads/.../deer-flow-chat-message-flow.md as 'deer-flow.research.session (thread_id, run_id, caller_id)'). Distinct from the sibling deer-flow.agent.thread.v1 lifecycle event emitted immediately after on nervous-bus proper; this channel is emitted unversioned in code (schema filename adds the .v1 suffix per repo convention). Fire-and-forget — emit failures are logged and swallowed.",
+  "type": "object",
+  "required": ["thread_id", "run_id", "caller_id", "agent"],
+  "properties": {
+    "thread_id": {
+      "type": "string",
+      "description": "Target thread the run belongs to."
+    },
+    "run_id": {
+      "type": "string",
+      "description": "Run identifier (stringified UUID)."
+    },
+    "caller_id": {
+      "type": "string",
+      "description": "Caller identity from the X-Deer-Caller header or run metadata; 'unknown' if absent."
+    },
+    "agent": {
+      "type": "string",
+      "description": "Agent name from body.config.configurable.agent_name; 'unknown' if absent."
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.autoingest.v1.json",
+  "title": "kb.autoingest v1",
+  "description": "Emitted by kb at the end of a `kb autoingest` run (src/commands/autoingest.rs:147) — session ingest, planning-doc ingest, promotion pass, graph enqueue, and repo-plugin projection. Source: /kb.",
+  "type": "object",
+  "required": [
+    "since",
+    "project",
+    "branch",
+    "worktree",
+    "sessions_indexed",
+    "planning_ingested",
+    "provenance_stamped",
+    "promoted",
+    "graph_enqueued",
+    "plugins_ran",
+    "plugins_ingested"
+  ],
+  "properties": {
+    "since": {
+      "type": "string",
+      "description": "Lower bound of the ingest window (as passed to the run)."
+    },
+    "project": {
+      "type": "string",
+      "description": "Project the autoingest run scoped to."
+    },
+    "branch": {
+      "type": "string",
+      "description": "Git branch active at ingest time."
+    },
+    "worktree": {
+      "type": "string",
+      "description": "Worktree label active at ingest time."
+    },
+    "sessions_indexed": { "type": "integer", "minimum": 0 },
+    "planning_ingested": { "type": "integer", "minimum": 0 },
+    "provenance_stamped": { "type": "integer", "minimum": 0 },
+    "promoted": { "type": "integer", "minimum": 0 },
+    "graph_enqueued": { "type": "integer", "minimum": 0 },
+    "plugins_ran": { "type": "integer", "minimum": 0 },
+    "plugins_ingested": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.ask.v1.json",
+  "title": "kb.ask v1",
+  "description": "Emitted by kb's `kb ask` command (src/commands/ask/mod.rs:397) after producing an answer, before any optional synthesis. Source: /kb.",
+  "type": "object",
+  "required": ["question", "hits", "proven", "thin_coverage", "project", "contradictions", "hardlines", "intent"],
+  "properties": {
+    "question": {
+      "type": "string",
+      "description": "Natural-language question passed to `kb ask`."
+    },
+    "hits": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of vault entries matched."
+    },
+    "proven": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of matched entries with proven/verified evidence."
+    },
+    "thin_coverage": {
+      "type": "boolean",
+      "description": "Whether the answer was flagged as thinly covered by evidence."
+    },
+    "project": {
+      "type": ["string", "null"],
+      "description": "Project scope filter applied to the query, if any."
+    },
+    "contradictions": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of contradictions surfaced against the answer."
+    },
+    "hardlines": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of registered hardlines relevant to the answer."
+    },
+    "intent": {
+      "type": "string",
+      "enum": ["define", "directional", "contradiction", "provenance", "relational"],
+      "description": "Classified question intent (src/commands/ask/intent.rs)."
+    }
+  },
+  "additionalProperties": true
+}

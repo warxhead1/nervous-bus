@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.bus.subscription.error.v1.json",
+  "title": "deer-flow.bus.subscription.error v1",
+  "description": "Default failure channel for BaseBusConsumer subclasses (packages/harness/deerflow/bus_consumer_base.py, emit_error()) that don't declare their own error_channel. Emitted when a bus consumer's dispatch handler raises. Never raises itself — swallowed at the call site.",
+  "type": "object",
+  "required": ["consumer", "error_type", "message"],
+  "properties": {
+    "consumer": {
+      "type": "string",
+      "description": "Name of the bus consumer instance that failed (BaseBusConsumer._name)."
+    },
+    "event_channel": {
+      "type": ["string", "null"],
+      "description": "Channel of the event being handled when the failure occurred, or the consumer's subscription_glob if unavailable."
+    },
+    "subject": {
+      "type": ["string", "null"],
+      "description": "CloudEvents subject of the event being handled, if any."
+    },
+    "error_type": {
+      "type": "string",
+      "description": "Caller-supplied short category for the failure."
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable failure detail."
+    }
+  },
+  "additionalProperties": true
+}

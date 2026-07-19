@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.conflict.v1.json",
+  "title": "kb.conflict v1",
+  "description": "Emitted by kb from three distinct call sites with three distinct payload shapes, unified under one channel: (a) src/commands/conflicts.rs:287 — main `kb conflicts` detection loop, adds min_confidence and a 2-element `entries` array of {id,title,confidence,stance}; (b) src/commands/hardline.rs:203 — birth-time check when a newly-registered hardline opposes a standing one, `entries` array elements have only {id}, signal/severity hardcoded to 'hardline-polarity'/'hard'; (c) src/commands/stray.rs:114 — a proposal/action matches a registered hardline, uses hardline_id/polarity/authority/overlap/contested instead of entries. Only the fields common to all three call sites are required here; schema is intentionally permissive (additionalProperties: true) rather than a strict oneOf, since the call sites diverge structurally. Source: /kb.",
+  "type": "object",
+  "required": ["project", "subject", "signal", "severity"],
+  "properties": {
+    "project": {
+      "type": "string",
+      "description": "Project the conflict was detected in."
+    },
+    "subject": {
+      "type": "string",
+      "description": "Subject the conflicting entries/hardline/action share."
+    },
+    "signal": {
+      "type": "string",
+      "enum": ["hardline-polarity", "evidence-verdict", "hardline-stray"],
+      "description": "Which detector produced this conflict."
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["hard", "weak"],
+      "description": "Conflict severity."
+    },
+    "min_confidence": {
+      "type": "number",
+      "description": "conflicts.rs call site only: minimum confidence among the opposing entries."
+    },
+    "entries": {
+      "type": "array",
+      "description": "conflicts.rs/hardline.rs call sites only: the opposing pair. Shape varies — conflicts.rs includes {id,title,confidence,stance} per entry; hardline.rs includes only {id}.",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "confidence": { "type": "number" },
+          "stance": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "hardline_id": {
+      "type": "string",
+      "description": "stray.rs call site only: the registered hardline this action/proposal matched."
+    },
+    "polarity": {
+      "type": "string",
+      "description": "stray.rs call site only: the hardline's polarity."
+    },
+    "authority": {
+      "type": ["string", "null"],
+      "description": "stray.rs call site only: authority backing the hardline, if set."
+    },
+    "overlap": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "stray.rs call site only: overlapping terms/spans between the action and the hardline."
+    },
+    "contested": {
+      "type": "boolean",
+      "description": "stray.rs call site only: whether the match is contested."
+    }
+  },
+  "additionalProperties": true
+}

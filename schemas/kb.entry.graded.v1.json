@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.entry.graded.v1.json",
+  "title": "kb.entry.graded v1",
+  "description": "Emitted by kb (src/commands/grade.rs:205,248,310) for any of: `kb grade <entry>` (structural), `kb grade review <entry> <score>` (human/subagent verdict), or `kb grade all` (batch structural re-grade). Source: /kb.",
+  "type": "object",
+  "required": ["entry_id", "title", "project", "old_grade", "new_grade", "source"],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "description": "Graded entry's id."
+    },
+    "title": {
+      "type": "string",
+      "description": "Entry title."
+    },
+    "project": {
+      "type": "string",
+      "description": "Entry's project."
+    },
+    "old_grade": {
+      "type": ["number", "null"],
+      "description": "Grade before this update, from frontmatter; null if the entry had no prior grade."
+    },
+    "new_grade": {
+      "type": "number",
+      "description": "Grade after this update."
+    },
+    "source": {
+      "type": "string",
+      "enum": ["structural", "review"],
+      "description": "Whether the grade came from automated structural scoring or a human/subagent review verdict."
+    }
+  },
+  "additionalProperties": true
+}

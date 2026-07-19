@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.plan.archived.v1.json",
+  "title": "kb.plan.archived v1",
+  "description": "Emitted by kb watch (src/commands/watch.rs:914) when it auto-archives a category:plan vault entry whose linked hearth-loom bead/trace has completed (merge). Source: /kb.",
+  "type": "object",
+  "required": ["entry_id", "title", "trace_uri", "reason"],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "description": "Archived plan entry's id. Defaults to empty string if unavailable, rather than being omitted."
+    },
+    "title": {
+      "type": "string",
+      "description": "Plan entry title. Defaults to empty string if unavailable."
+    },
+    "trace_uri": {
+      "type": "string",
+      "description": "Trace URI (e.g. bd://<bead>) that linked this plan to the completed work."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Reason for the auto-archive. Currently always the literal 'anchor bead merged' at this call site, kept as a free-form string rather than a schema enum since it isn't a real Rust enum."
+    }
+  },
+  "additionalProperties": true
+}

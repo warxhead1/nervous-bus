@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.attachment.removed.v1.json",
+  "title": "kb.attachment.removed v1",
+  "description": "Emitted by kb (src/kb_ops/attach.rs:190) when an attachment (and its .meta sidecar, if present) is deleted from an entry. Source: /kb.",
+  "type": "object",
+  "required": ["entry_id", "attachment_id"],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "description": "Vault entry the attachment was removed from."
+    },
+    "attachment_id": {
+      "type": "string",
+      "description": "Identifier of the removed attachment."
+    }
+  },
+  "additionalProperties": true
+}
