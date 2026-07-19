@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.hardline.registered.v1.json",
+  "title": "kb.hardline.registered v1",
+  "description": "Emitted by kb (src/commands/hardline.rs:167) when `kb hardline add` successfully writes a new hardline constraint entry. Source: /kb.",
+  "type": "object",
+  "required": ["entry_id", "title", "project", "polarity", "subject", "authority", "file"],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "description": "Newly created hardline entry's id."
+    },
+    "title": {
+      "type": "string",
+      "description": "Hardline entry title."
+    },
+    "project": {
+      "type": "string",
+      "description": "Project the hardline applies to."
+    },
+    "polarity": {
+      "type": "string",
+      "description": "Hardline polarity. Not a closed Rust enum at the type level; commonly 'forbid', 'require', or 'prefer' per current call sites, but left free-form."
+    },
+    "subject": {
+      "type": "string",
+      "description": "Subject the hardline constrains."
+    },
+    "authority": {
+      "type": "string",
+      "description": "Authority who registered the hardline."
+    },
+    "file": {
+      "type": "string",
+      "description": "Path of the written hardline entry file."
+    }
+  },
+  "additionalProperties": true
+}

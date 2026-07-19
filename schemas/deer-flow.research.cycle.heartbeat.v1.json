@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.research.cycle.heartbeat.v1.json",
+  "title": "deer-flow.research.cycle.heartbeat v1",
+  "description": "Emitted by deer-flow's ResearchDispatchConsumer (packages/harness/deerflow/research_dispatch/consumer.py) every ~30s while a meta_probe.py research cycle subprocess is still polling, so consumers can distinguish a slow-but-alive cycle from a stalled one. Sibling of deer-flow.research.cycle.started.v1 / .completed.v1.",
+  "type": "object",
+  "required": ["research_id", "cycle_id", "elapsed_s"],
+  "properties": {
+    "research_id": {
+      "type": "string",
+      "description": "Identifier for the research request (CloudEvents subject)."
+    },
+    "cycle_id": {
+      "type": "string",
+      "description": "Cycle identifier, format YYYYMMDDTHHMMSSz-<hex>."
+    },
+    "elapsed_s": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Whole seconds elapsed since the cycle's deadline window opened, at heartbeat time."
+    }
+  },
+  "additionalProperties": true
+}

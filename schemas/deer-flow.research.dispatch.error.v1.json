@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.research.dispatch.error.v1.json",
+  "title": "deer-flow.research.dispatch.error v1",
+  "description": "Emitted by deer-flow's ResearchDispatchConsumer (packages/harness/deerflow/research_dispatch/consumer.py, _emit_error) when a dispatched research cycle fails: the meta_probe.py subprocess crashes, times out, or a previously-dispatched cycle is found stale (pending or running) on a recovery scan. Caller should retry the dispatch on receipt.",
+  "type": "object",
+  "required": ["error_type", "message"],
+  "properties": {
+    "research_id": {
+      "type": ["string", "null"],
+      "description": "Identifier for the research request this error pertains to, if known."
+    },
+    "error_type": {
+      "type": "string",
+      "enum": ["timeout", "stale_pending", "stale_running", "crash"],
+      "description": "Category of dispatch failure. Values as observed at call sites; a new category constitutes a schema-compatible additive change."
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable detail, e.g. exit code, cycle_id, or staleness age."
+    }
+  },
+  "additionalProperties": true
+}

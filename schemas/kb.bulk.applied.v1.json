@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.bulk.applied.v1.json",
+  "title": "kb.bulk.applied v1",
+  "description": "Emitted by kb (src/kb_ops/bulk.rs:103) once per successfully-committed op in a `kb bulk` batch. Source: /kb.",
+  "type": "object",
+  "required": ["entry_id", "op"],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "description": "Vault entry the bulk op was applied to."
+    },
+    "op": {
+      "type": "string",
+      "description": "The BulkOp variant rendered via Rust's derived Debug (format!(\"{op:?}\")), NOT the serde tag form used elsewhere for BulkOp. Can embed nested struct/vec contents (e.g. 'Move(MoveOptions { to_project: Some(\"x\"), to_category: None })', 'TagAdd([\"a\", \"b\"])'). Intentionally left as a free-form string rather than a closed enum — the Debug format is not a stable contract and its exact shape can change if the struct's fields or derive change."
+    }
+  },
+  "additionalProperties": true
+}

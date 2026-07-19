@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth-loom.pr.merged.v1.json",
+  "title": "hearth-loom.pr.merged v1",
+  "description": "Emitted by hearth-loom's Publisher.PublishPRMerged (internal/bus/publisher.go) when autoloom successfully merges a bead's PR. Consumed for accurate cycle-time metrics (claim→merge wall time) and to distinguish merge from other close reasons. Source: /hearth-loom.",
+  "type": "object",
+  "required": ["bead_id", "execution_id", "pr_url", "pr_number", "branch", "base_branch", "repo", "commit_sha", "merge_method", "ts"],
+  "properties": {
+    "bead_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Bead id this PR was merged for."
+    },
+    "execution_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Loomie execution identifier — correlates to loom.lifecycle.v1 execution_id."
+    },
+    "pr_url": {
+      "type": "string",
+      "description": "Full GitHub PR URL."
+    },
+    "pr_number": {
+      "type": "integer",
+      "description": "GitHub PR number."
+    },
+    "branch": {
+      "type": "string",
+      "description": "Head branch that was merged."
+    },
+    "base_branch": {
+      "type": "string",
+      "description": "Base branch the PR was merged into."
+    },
+    "repo": {
+      "type": "string",
+      "description": "Repository the PR was merged against."
+    },
+    "commit_sha": {
+      "type": "string",
+      "description": "Merge commit SHA (or head SHA, depending on merge_method)."
+    },
+    "merge_method": {
+      "type": "string",
+      "enum": ["merge", "squash", "rebase"],
+      "description": "How the PR was merged. Matches hearth-loom's MergeMethod const set."
+    },
+    "merged_by": {
+      "type": "string",
+      "description": "GitHub login of whoever/whatever performed the merge. Optional — omitted when unknown."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the event was published."
+    }
+  },
+  "additionalProperties": true
+}

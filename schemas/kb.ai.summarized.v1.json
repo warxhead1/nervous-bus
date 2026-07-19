@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.ai.summarized.v1.json",
+  "title": "kb.ai.summarized v1",
+  "description": "Emitted by kb's ai_summarize (src/kb_ops/ai.rs:97) after a local-LLM (Ollama) summarization of a vault entry completes. Validated against event['data']. Source: /kb.",
+  "type": "object",
+  "required": ["entry_id", "model", "latency_ms"],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "description": "Vault entry the summarization was performed on."
+    },
+    "model": {
+      "type": "string",
+      "description": "Ollama model used (currently always the OLLAMA_MODEL const, e.g. 'qwen2.5vl:3b'; a plain string, not a fixed schema enum, since the const can change)."
+    },
+    "latency_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Wall-clock time the summarization call took, in milliseconds."
+    }
+  },
+  "additionalProperties": true
+}

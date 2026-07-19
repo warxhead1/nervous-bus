@@ -19,14 +19,21 @@ my.channel
 # prefixed form actually crosses the bus.
 bead.lifecycle.v1
 
-# Same streamBase concat pattern: bare suffix const (now schema-backed via
-# bus.exec.lifecycle.v1.json — removed from allowlist).
-# exec.lifecycle.v1
-# bus.exec.lifecycle.v1
+# Same streamBase concat pattern: `d.busPublisher.Publish(ctx, "exec.lifecycle.v1", ev)`
+# (hearth-loom/internal/executor/dispatcher_queue.go:370) passes the bare
+# suffix directly to Publish(), which prepends "bus." at runtime
+# (publisher.go:64-68), producing the canonical `bus.exec.lifecycle.v1` —
+# already schema-backed via bus.exec.lifecycle.v1.json. Allowlist the bare
+# literal because only the prefixed form actually crosses the bus.
+exec.lifecycle.v1
 
-# Triage runner stream key (now schema-backed via bus.triage.findings.v1.json).
-# triage.findings
-# bus.triage.findings
+# Triage runner stream key: `r.busPublisher.Publish(ctx, "triage.findings", ...)`
+# (hearth-loom/internal/autoloom/triage/runner.go:191) uses the same
+# *bus.Publisher whose Publish() prepends "bus." at runtime, producing the
+# canonical `bus.triage.findings` — already schema-backed via
+# bus.triage.findings.v1.json. Allowlist the bare literal for the same
+# streamBase-prefix reason as exec.lifecycle.v1 above.
+triage.findings
 
 # Shared-session observability publisher channel (now schema-backed via
 # loom.shared-session.v1.json).

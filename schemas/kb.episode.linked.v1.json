@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.episode.linked.v1.json",
+  "title": "kb.episode.linked v1",
+  "description": "Emitted by kb (src/commands/ingest_episode.rs:142) when `kb ingest-episode` creates a vault entry from a chat/thread episode and completes its synchronous connections pass. Only id/title/project are carried — no raw thread content. Source: /kb.",
+  "type": "object",
+  "required": ["entry_id", "thread_id", "project", "title"],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "description": "Newly created vault entry's id."
+    },
+    "thread_id": {
+      "type": "string",
+      "description": "Caller-supplied source thread/episode identifier."
+    },
+    "project": {
+      "type": "string",
+      "description": "Project the entry was filed under."
+    },
+    "title": {
+      "type": "string",
+      "description": "Entry title."
+    }
+  },
+  "additionalProperties": true
+}

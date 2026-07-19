@@ -3,9 +3,10 @@ name: schema-coverage
 # Schema-first drift detector — fails when a producer emits a channel that
 # nervous-bus has no schema for. See nervous-bus-baid for the rationale.
 #
-# The first-run rollout is REPORT-ONLY: the workflow logs the report but
-# exits 0 even when missing channels are found. A follow-up bead flips the
-# `--report-only` flag to make this a hard gate.
+# Merge-blocking as of the harness-adoption-map B4 bead: the first-run
+# report-only rollout cleared its in-flight drift (all emitted channels now
+# have a schema or a documented allowlist entry), so this gate now fails the
+# job on any new schema-coverage gap instead of only warning about it.
 
 on:
   push:
@@ -61,16 +62,12 @@ jobs:
           head -40 scan_emitted_channels.json
           echo "... total $(wc -l < scan_emitted_channels.json) lines"
 
-      - name: Check schema coverage (report-only on first rollout)
-        # continue-on-error so the gate is informational on first rollout.
-        # When the in-flight drift is cleared, a follow-up PR (tracked as a
-        # nervous-bus follow-up bead) flips this to false AND drops the
-        # --report-only flag below.
-        #
-        # Report-only does NOT mean quiet: --summary-file appends a LOUD,
-        # PR-visible Markdown block (with a missing-channel table) to the run
-        # summary, and the driver emits ::warning:: annotations for every miss.
-        continue-on-error: true
+      - name: Check schema coverage (merge-blocking)
+        # No continue-on-error and no --report-only: a missing schema now
+        # fails this job. --summary-file still appends a Markdown block
+        # (with a missing-channel table) to the run summary, and the driver
+        # still emits ::warning:: annotations for every miss, on top of the
+        # non-zero exit.
         run: |
           set -euo pipefail
           python3 tools/check_schema_coverage.py \
@@ -78,7 +75,6 @@ jobs:
             --schemas schemas \
             --allowlist tools/schema_coverage_allowlist.txt \
             --deprecated tools/schema_coverage_deprecated.txt \
-            --report-only \
             --summary-file "$GITHUB_STEP_SUMMARY" \
             | tee schema-coverage-report.txt
 

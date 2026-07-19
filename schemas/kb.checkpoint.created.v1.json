@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.checkpoint.created.v1.json",
+  "title": "kb.checkpoint.created v1",
+  "description": "Emitted by kb (src/commands/checkpoint.rs:407) when a `kb checkpoint` run finishes writing checkpoint.md and supporting artifacts (spv copies, diff, screenshots) for a TEngine verification session. Source: /kb.",
+  "type": "object",
+  "required": ["entry_id", "slug", "project", "session_id", "passed", "fps_avg", "shaders_changed", "plan", "dir"],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "description": "UUID of the created checkpoint vault entry."
+    },
+    "slug": {
+      "type": "string",
+      "description": "Checkpoint slug used for the entry/dir name."
+    },
+    "project": {
+      "type": "string",
+      "description": "Project the checkpoint belongs to."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "TEngine session identifier being checkpointed."
+    },
+    "passed": {
+      "type": "boolean",
+      "description": "Whether the checkpointed session passed verification."
+    },
+    "fps_avg": {
+      "type": "number",
+      "description": "Average FPS recorded for the session."
+    },
+    "shaders_changed": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of shader files changed since the prior checkpoint."
+    },
+    "plan": {
+      "type": ["string", "null"],
+      "description": "Optional plan reference supplied via CheckpointOptions.plan."
+    },
+    "dir": {
+      "type": "string",
+      "description": "Directory the checkpoint artifacts were written to."
+    }
+  },
+  "additionalProperties": true
+}

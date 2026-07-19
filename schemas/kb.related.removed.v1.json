@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.related.removed.v1.json",
+  "title": "kb.related.removed v1",
+  "description": "Emitted by kb (src/kb_ops/related.rs:148) when `kb entry relate remove` deletes all relation edges between a pair of entries. Unlike kb.related.added.v1, no single `rel` is reported since every relation type between the pair is removed. Source: /kb.",
+  "type": "object",
+  "required": ["source_id", "target_id"],
+  "properties": {
+    "source_id": {
+      "type": "string",
+      "description": "Source entry id of the removed relation(s)."
+    },
+    "target_id": {
+      "type": "string",
+      "description": "Target entry id of the removed relation(s)."
+    }
+  },
+  "additionalProperties": true
+}

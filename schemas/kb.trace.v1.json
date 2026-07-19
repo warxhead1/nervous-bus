@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.trace.v1.json",
+  "title": "kb.trace v1",
+  "description": "Emitted by kb (src/commands/trace.rs:616) when `kb trace` resolves a provenance trail for an entry. Source: /kb.",
+  "type": "object",
+  "required": ["id", "project", "evidence_count", "origin_scheme", "resolved_count"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Traced entry's id."
+    },
+    "project": {
+      "type": "string",
+      "description": "Traced entry's project."
+    },
+    "evidence_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total evidence items in the trail."
+    },
+    "origin_scheme": {
+      "type": "string",
+      "description": "URI scheme of the trail's origin reference (e.g. 'bd', 'deer-flow'), or '' if the trail has no origin."
+    },
+    "resolved_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of evidence items in the trail that resolved successfully."
+    }
+  },
+  "additionalProperties": true
+}

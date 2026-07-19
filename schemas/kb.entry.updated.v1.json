@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.entry.updated.v1.json",
+  "title": "kb.entry.updated v1",
+  "description": "Emitted by kb (src/kb_ops/entry.rs:269) after any `kb entry update` (body/frontmatter edit), including title-change-driven file renames. Source: /kb.",
+  "type": "object",
+  "required": ["entry_id", "file"],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "description": "Updated entry's id."
+    },
+    "title": {
+      "type": ["string", "null"],
+      "description": "Entry title after update, from frontmatter."
+    },
+    "project": {
+      "type": ["string", "null"],
+      "description": "Entry project after update, from frontmatter."
+    },
+    "file": {
+      "type": "string",
+      "description": "Path of the (possibly renamed) markdown file after update."
+    },
+    "archived": {
+      "type": ["boolean", "null"],
+      "description": "Archived flag after update, from frontmatter."
+    }
+  },
+  "additionalProperties": true
+}

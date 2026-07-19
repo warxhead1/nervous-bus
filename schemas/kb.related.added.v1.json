@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.related.added.v1.json",
+  "title": "kb.related.added v1",
+  "description": "Emitted by kb (src/kb_ops/related.rs:111) when `kb entry relate add` links two entries with a typed edge. Source: /kb.",
+  "type": "object",
+  "required": ["source_id", "target_id", "rel"],
+  "properties": {
+    "source_id": {
+      "type": "string",
+      "description": "Source entry id of the relation."
+    },
+    "target_id": {
+      "type": "string",
+      "description": "Target entry id of the relation."
+    },
+    "rel": {
+      "type": "string",
+      "enum": ["implements", "cites", "refines", "contradicts", "depends_on"],
+      "description": "Relation type (RelationType::as_str(), src/kb_ops/types.rs)."
+    }
+  },
+  "additionalProperties": true
+}

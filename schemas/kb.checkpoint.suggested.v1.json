@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.checkpoint.suggested.v1.json",
+  "title": "kb.checkpoint.suggested v1",
+  "description": "Emitted by kb watch (src/commands/watch.rs:176) when it observes a passing kb.session.indexed.v1 session but auto-checkpoint is not enabled (KB_WATCH_AUTOCHECKPOINT unset or --live off) — nudges the user with a suggested command instead of acting. Fields are extracted defensively from the inbound session-indexed event with fallback defaults, so their presence here does not guarantee the upstream event actually carried real values. Source: /kb.",
+  "type": "object",
+  "required": ["session_id", "silo", "fps_avg", "project", "hint"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "TEngine session identifier from the observed kb.session.indexed.v1 event."
+    },
+    "silo": {
+      "type": "string",
+      "description": "Silo name, defaults to '' if absent upstream."
+    },
+    "fps_avg": {
+      "type": "number",
+      "description": "Average FPS, defaults to 0.0 if absent upstream."
+    },
+    "project": {
+      "type": "string",
+      "description": "Project, defaults to 'tengine' if absent upstream."
+    },
+    "hint": {
+      "type": "string",
+      "description": "Suggested `kb checkpoint` command text shown to the user."
+    }
+  },
+  "additionalProperties": true
+}

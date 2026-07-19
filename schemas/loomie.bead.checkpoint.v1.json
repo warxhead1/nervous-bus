@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/loomie.bead.checkpoint.v1.json",
+  "title": "loomie.bead.checkpoint v1",
+  "description": "Emitted by hearth-loom's Publisher.PublishBeadCheckpoint (internal/bus/publisher.go) after a bead completes, capturing the file change set (modified/new/deleted) and execution metadata for lineage tracking. Source: /hearth-loom.",
+  "type": "object",
+  "required": ["bead_id", "loomie_id", "session_id", "bead_type", "files", "exit_code", "duration_ms", "ts"],
+  "properties": {
+    "bead_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Bead id that completed."
+    },
+    "loomie_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifier of the loomie container/instance that ran the bead."
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Session identifier for the loomie run."
+    },
+    "bead_type": {
+      "type": "string",
+      "description": "Bead type/category as tracked by hearth-loom."
+    },
+    "files": {
+      "type": "object",
+      "required": ["modified", "new", "deleted"],
+      "description": "File change set produced during the bead's execution.",
+      "properties": {
+        "modified": { "type": "array", "items": { "type": "string" } },
+        "new": { "type": "array", "items": { "type": "string" } },
+        "deleted": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "exit_code": {
+      "type": "integer",
+      "description": "Process exit code of the bead's execution."
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Wall-clock duration of the bead's execution in milliseconds."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp when the event was published."
+    }
+  },
+  "additionalProperties": true
+}

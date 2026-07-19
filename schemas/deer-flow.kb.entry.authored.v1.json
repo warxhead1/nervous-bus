@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.kb.entry.authored.v1.json",
+  "title": "deer-flow.kb.entry.authored v1",
+  "description": "Emitted by deer-flow's ResearchDispatchConsumer (packages/harness/deerflow/research_dispatch/consumer.py) after the kb-structurer agent writes a structured markdown summary of a completed research cycle to the knowledge vault (~/knowledge/indexed/<project_source>/<research_id>_structured.md).",
+  "type": "object",
+  "required": ["research_id", "cycle_id", "kb_path", "project_source"],
+  "properties": {
+    "research_id": {
+      "type": "string",
+      "description": "Identifier for the research request (CloudEvents subject)."
+    },
+    "cycle_id": {
+      "type": "string",
+      "description": "Cycle identifier, format YYYYMMDDTHHMMSSz-<hex>."
+    },
+    "kb_path": {
+      "type": "string",
+      "description": "Absolute filesystem path to the written vault markdown file."
+    },
+    "project_source": {
+      "type": "string",
+      "description": "Originating project/source the research cycle was requested for."
+    }
+  },
+  "additionalProperties": true
+}
