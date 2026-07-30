@@ -72,8 +72,9 @@ cmd_help() {
 # The envelope has already been schema-validated by cmd_publish at this point;
 # this function is pure transport (not a producer bypassing the SDK). Delivery
 # is idempotent: an event id is XADD'd at most once across the live publish path
-# and the redis-mirror backstop, gated by a short-lived claim key
-# (nbus:dedup:<id>, claim-before-publish, fail-open).
+# and the redis-mirror backstop. The dedup check, both stream XADDs, and the
+# short-lived dedup marker are one Redis Lua transaction, so a marker can never
+# become visible without both stream rows.
 #
 # Tries python-redis first (fast, pipelined); falls back to redis-cli when no
 # python interpreter on PATH carries the redis module — the systemd-service case
@@ -119,18 +120,42 @@ try:
     }
     url = os.environ.get('NERVOUS_REDIS_URL', 'redis://localhost:6379')
     r = _r.Redis.from_url(url, socket_connect_timeout=1, socket_timeout=1)
-    # Idempotent claim — if the mirror (or a prior call) already delivered this
-    # id, skip the XADD. Fail-open: a dedup-infra error must not block delivery.
-    if eid:
-        try:
-            if r.set('nbus:dedup:' + eid, '1', nx=True, ex=600) is None:
-                sys.exit(0)
-        except Exception:
-            pass
-    p = r.pipeline(transaction=False)
-    p.xadd(f'nbus:{ch}', fields, maxlen=10000, approximate=True)
-    p.xadd('nbus:all',   fields, maxlen=50000, approximate=True)
-    p.execute()
+    script = r'''
+local dedup_key = KEYS[1]
+if dedup_key ~= '' and redis.call('EXISTS', dedup_key) == 1 then
+  return 0
+end
+local channel_type = redis.call('TYPE', KEYS[2])['ok']
+local universal_type = redis.call('TYPE', KEYS[3])['ok']
+if (channel_type ~= 'none' and channel_type ~= 'stream') or
+   (universal_type ~= 'none' and universal_type ~= 'stream') then
+  return redis.error_reply('nervous-bus stream key has incompatible type')
+end
+local fields = {}
+for i = 4, #ARGV do
+  fields[#fields + 1] = ARGV[i]
+end
+redis.call('XADD', KEYS[2], 'MAXLEN', '~', ARGV[2], '*', unpack(fields))
+redis.call('XADD', KEYS[3], 'MAXLEN', '~', ARGV[3], '*', unpack(fields))
+if dedup_key ~= '' then
+  redis.call('SET', dedup_key, '1', 'EX', ARGV[1])
+end
+return 1
+'''
+    flat_fields = []
+    for key, value in fields.items():
+        flat_fields.extend((key, value))
+    r.eval(
+        script,
+        3,
+        ('nbus:dedup:' + eid) if eid else '',
+        f'nbus:{ch}',
+        'nbus:all',
+        600,
+        10000,
+        50000,
+        *flat_fields,
+    )
     sys.exit(0)
 except SystemExit:
     raise
@@ -144,7 +169,7 @@ PYEOF
 # interpreter itself, and stdlib json, are still present). Field extraction uses
 # python stdlib json rather than jq, which service hosts frequently lack and
 # whose absence previously made this fallback a silent no-op. Mirrors the python
-# path's idempotent claim semantics.
+# path's atomic idempotent-publication semantics.
 _nbus_xadd_rediscli() {
     command -v redis-cli >/dev/null 2>&1 || return 1
     local raw="$1" url ch src ts id parsed
@@ -163,19 +188,35 @@ PYEOF
 )" || return 1
     { IFS= read -r ch; IFS= read -r src; IFS= read -r ts; IFS= read -r id; } <<<"$parsed"
     [[ -z "$ch" ]] && return 0
-    # Idempotent claim. SET..NX returns "OK" when claimed, nil (empty) when the
-    # key already exists. A non-zero exit means Redis is unreachable — report
-    # failure so the event stays in debug.jsonl for the mirror to deliver.
-    if [[ -n "$id" ]]; then
-        local _claim _rc
-        if _claim="$(redis-cli -u "$url" SET "nbus:dedup:$id" 1 NX EX 600 2>/dev/null)"; then _rc=0; else _rc=$?; fi
-        [[ $_rc -ne 0 ]] && return 1
-        [[ "$_claim" != "OK" ]] && return 0
-    fi
-    redis-cli -u "$url" XADD "nbus:$ch" MAXLEN '~' 10000 '*' \
-        _raw "$raw" type "$ch" source "$src" timestamp "$ts" event_id "$id" >/dev/null 2>&1 || return 1
-    redis-cli -u "$url" XADD nbus:all MAXLEN '~' 50000 '*' \
-        _raw "$raw" type "$ch" source "$src" timestamp "$ts" event_id "$id" >/dev/null 2>&1 || true
+    local dedup_key="" script
+    [[ -n "$id" ]] && dedup_key="nbus:dedup:$id"
+    script="
+local dedup_key = KEYS[1]
+if dedup_key ~= '' and redis.call('EXISTS', dedup_key) == 1 then
+  return 0
+end
+local channel_type = redis.call('TYPE', KEYS[2])['ok']
+local universal_type = redis.call('TYPE', KEYS[3])['ok']
+if (channel_type ~= 'none' and channel_type ~= 'stream') or
+   (universal_type ~= 'none' and universal_type ~= 'stream') then
+  return redis.error_reply('nervous-bus stream key has incompatible type')
+end
+local fields = {}
+for i = 4, #ARGV do
+  fields[#fields + 1] = ARGV[i]
+end
+redis.call('XADD', KEYS[2], 'MAXLEN', '~', ARGV[2], '*', unpack(fields))
+redis.call('XADD', KEYS[3], 'MAXLEN', '~', ARGV[3], '*', unpack(fields))
+if dedup_key ~= '' then
+  redis.call('SET', dedup_key, '1', 'EX', ARGV[1])
+end
+return 1
+"
+    redis-cli -u "$url" --raw EVAL "$script" 3 \
+        "$dedup_key" "nbus:$ch" "nbus:all" \
+        600 10000 50000 \
+        _raw "$raw" type "$ch" source "$src" timestamp "$ts" event_id "$id" \
+        >/dev/null 2>&1 || return 1
     return 0
 }
 

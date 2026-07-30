@@ -39,11 +39,40 @@ import redis
 
 SCHEMA_RELOAD_INTERVAL_S = 300
 
-# Idempotent-delivery claim key TTL. Both the live publish path (sdk/shell/nervous)
-# and this mirror SET nbus:dedup:<id> NX before XADD so an event reaches a stream
-# exactly once no matter which path wins. The TTL only needs to outlive the lag
+# Idempotent-delivery marker TTL. The live publisher and mirror both execute the
+# same atomic contract: check marker, XADD the per-type + universal streams, then
+# set the marker in one Lua transaction. The TTL only needs to outlive the lag
 # between a live publish and the mirror reading the same line from debug.jsonl.
 DEDUP_TTL_S = 600
+
+ATOMIC_PUBLISH_LUA = """
+local dedup_key = KEYS[1]
+if dedup_key ~= '' and redis.call('EXISTS', dedup_key) == 1 then
+  return 0
+end
+local channel_type = redis.call('TYPE', KEYS[2])['ok']
+local universal_type = KEYS[3] == '' and 'none' or redis.call('TYPE', KEYS[3])['ok']
+if (channel_type ~= 'none' and channel_type ~= 'stream') or
+   (universal_type ~= 'none' and universal_type ~= 'stream') then
+  return redis.error_reply('nervous-bus stream key has incompatible type')
+end
+local fields = {}
+for i = 5, #ARGV do
+  fields[#fields + 1] = ARGV[i]
+end
+if ARGV[2] == 'MINID' then
+  redis.call('XADD', KEYS[2], 'MINID', '~', ARGV[3], '*', unpack(fields))
+else
+  redis.call('XADD', KEYS[2], 'MAXLEN', '~', ARGV[3], '*', unpack(fields))
+end
+if KEYS[3] ~= '' then
+  redis.call('XADD', KEYS[3], 'MAXLEN', '~', ARGV[4], '*', unpack(fields))
+end
+if dedup_key ~= '' then
+  redis.call('SET', dedup_key, '1', 'EX', ARGV[1])
+end
+return 1
+"""
 
 # The hearth-api nbus consumer rebuilds the entire CloudEvent from the stream
 # `_raw` field (serde_json::from_str), so a truncated `_raw` silently drops the
@@ -436,6 +465,42 @@ def xadd_args(maxlen: int, trim_strategy: str, min_idle_ms: int) -> List[str]:
     return ["MAXLEN", str(maxlen)]
 
 
+def atomic_publish(
+    client: redis.Redis,
+    *,
+    event_id: str,
+    stream_name: str,
+    universal_stream: str,
+    fields: Dict[str, str],
+    trim_strategy: str,
+    maxlen: int,
+    min_idle_ms: int,
+    universal_stream_maxlen: int,
+) -> bool:
+    """Atomically deduplicate and publish both Redis stream rows.
+
+    Returns ``True`` when this call inserted the event and ``False`` when a
+    prior publisher already completed the same atomic operation.
+    """
+    flat_fields: List[str] = []
+    for key, value in fields.items():
+        flat_fields.extend((key, value))
+    threshold = min_idle_ms if trim_strategy == "MINID" else maxlen
+    inserted = client.eval(
+        ATOMIC_PUBLISH_LUA,
+        3,
+        f"nbus:dedup:{event_id}" if event_id else "",
+        stream_name,
+        universal_stream,
+        DEDUP_TTL_S,
+        trim_strategy,
+        threshold,
+        universal_stream_maxlen,
+        *flat_fields,
+    )
+    return int(inserted) == 1
+
+
 def _emit_dead_letter(state: State, event_type: str, raw: str, violation_detail: str) -> None:
     """Emit a bus.dead_letter.v1 event to Redis for a schema-violating event.
 
@@ -504,24 +569,7 @@ def mirror_event(state: State, raw: str) -> bool:
         return False
     # ────────────────────────────────────────────────────────────────────────
 
-    # ── Idempotent delivery ───────────────────────────────────────────────────
-    # Claim the event id before XADD. If the live publish path (nervous publish)
-    # already delivered this event, the key exists and we skip — preventing a
-    # duplicate stream entry for channels that publish live AND are mirrored.
-    # Fail-open: a dedup-infra error must never drop an event.
     event_id = event.get("id") or ""
-    if event_id:
-        try:
-            claimed = state.redis_client.set(
-                f"nbus:dedup:{event_id}", "1", nx=True, ex=DEDUP_TTL_S
-            )
-            if claimed is None:
-                state.events_deduped += 1
-                return False
-        except redis.RedisError:
-            pass
-    # ────────────────────────────────────────────────────────────────────────
-
     stream_name = f"nbus:{event_type}"
 
     try:
@@ -548,22 +596,22 @@ def mirror_event(state: State, raw: str) -> bool:
             sys.stderr.flush()
         fields["_raw"] = raw
 
-        if state.trim_strategy == "MINID":
-            state.redis_client.xadd(stream_name, fields, minid=str(state.min_idle_ms), approximate=True)
-        else:
-            state.redis_client.xadd(stream_name, fields, maxlen=state.maxlen, approximate=True)
-        state.events_mirrored += 1
-
-        if state.universal_stream:
-            try:
-                state.redis_client.xadd(
-                    state.universal_stream, fields,
-                    maxlen=state.universal_stream_maxlen, approximate=True,
-                )
-            except redis.RedisError:
-                pass  # universal stream failure is non-fatal
-
-        return True
+        inserted = atomic_publish(
+            state.redis_client,
+            event_id=event_id,
+            stream_name=stream_name,
+            universal_stream=state.universal_stream,
+            fields=fields,
+            trim_strategy=state.trim_strategy,
+            maxlen=state.maxlen,
+            min_idle_ms=state.min_idle_ms,
+            universal_stream_maxlen=state.universal_stream_maxlen,
+        )
+        if inserted:
+            state.events_mirrored += 1
+            return True
+        state.events_deduped += 1
+        return False
 
     except redis.RedisError as e:
         state.redis_connected = False
