@@ -374,6 +374,7 @@ def subscribe_worker(
     """Tail nbus:bus.dead_letter with XREAD (no consumer group — just observe)."""
     last_id = "$"
     r: Optional[redis.Redis] = None
+    first_connect = True
 
     while not stop_event.is_set():
         # Connect / reconnect
@@ -386,8 +387,12 @@ def subscribe_worker(
                     socket_connect_timeout=3,
                 )
                 r.ping()
-                # On first connect, read all existing entries not yet seen
-                last_id = "0"
+                if first_connect:
+                    # Only on true first connect: backfill all existing entries.
+                    # A mid-run reconnect must resume from last_id — resetting
+                    # to "0" here replayed the full DLQ stream on every blip.
+                    last_id = "0"
+                    first_connect = False
                 sys.stderr.write(f"[dlq] connected to Valkey, tailing {DLQ_STREAM}\n")
             except Exception as e:
                 sys.stderr.write(f"[dlq] Valkey connect failed: {e}\n")
