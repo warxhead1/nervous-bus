@@ -85,9 +85,16 @@ pub enum NativePublishError {
 
 fn default_source() -> String {
     std::env::var("NERVOUS_SOURCE").unwrap_or_else(|_| {
-        let basename = std::path::Path::new(".")
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
+        // This used `Path::new(".").file_name()`, which is ALWAYS `None` —
+        // the sole component of "." is `Component::CurDir`, not a name — so
+        // every publish that didn't set NERVOUS_SOURCE was stamped `/unknown`
+        // instead of the documented `/<cwd-basename>`. Consumers route on the
+        // source URI (hearth's `derive_event_project` reads it *before* falling
+        // back to `data.project`), so mis-sourced events land in the wrong
+        // project bucket. Resolve the real cwd.
+        let basename = std::env::current_dir()
+            .ok()
+            .and_then(|cwd| cwd.file_name().map(|s| s.to_string_lossy().to_string()))
             .unwrap_or_else(|| "unknown".into());
         format!("/{}", basename)
     })
@@ -125,11 +132,14 @@ pub(crate) fn make_envelope(
     let id = ulid();
     let time = iso_now();
     let data = serde_json::to_string(payload)?;
+    // `channel` is interpolated into a JSON string position and reaches here
+    // from callers verbatim — a quote or backslash in it produced a malformed
+    // envelope that the mirror silently dead-lettered. Escape it like `source`.
     Ok(format!(
-        r#"{{"specversion":"1.0","id":"{}","source":{},"type":"{}","time":"{}","datacontenttype":"application/json","data":{} }}"#,
+        r#"{{"specversion":"1.0","id":"{}","source":{},"type":{},"time":"{}","datacontenttype":"application/json","data":{} }}"#,
         id,
         serde_json::to_string(source)?,
-        channel,
+        serde_json::to_string(channel)?,
         time,
         data,
     ))
@@ -177,29 +187,61 @@ pub fn publish<T: Serialize + ?Sized>(_channel: &str, _payload: &T) -> Result<()
     Err(PublishError::CliMissing)
 }
 
+/// Publish without spawning the `nervous` CLI: append the CloudEvent envelope
+/// straight to the debug log the redis-mirror adapter tails.
+///
+/// This is the path to use from a long-lived multi-threaded service. The
+/// subprocess path costs a `bash` + a `python3` interpreter *per event*, which
+/// is fine for a hook firing a handful of times and catastrophic for a server
+/// fanning out thousands (hearth-api, 2026-08-16: a restart re-emitted ~4000
+/// session events, 4000 interpreters exhausted RAM, and the children wedged
+/// in D-state inside zram compression — load average 4041).
+///
+/// Schema validation is unaffected: the mirror validates every line it reads
+/// off the log, so a malformed payload still dead-letters exactly as it would
+/// have via the CLI.
 #[cfg(feature = "native")]
 pub fn native_publish<T: Serialize + ?Sized>(
     channel: &str,
     payload: &T,
 ) -> Result<(), NativePublishError> {
-    let source = default_source();
-    let envelope = make_envelope(channel, payload, &source).map_err(NativePublishError::Serde)?;
+    native_publish_with_source(channel, payload, &default_source())
+}
+
+/// [`native_publish`] with an explicit CloudEvents `source` URI.
+///
+/// Consumers route on `source` (hearth's `derive_event_project` reads it
+/// before falling back to `data.project`), and a service publishing on behalf
+/// of several projects can't express that through the process-wide
+/// `NERVOUS_SOURCE` env var. Pass it per-call instead.
+#[cfg(feature = "native")]
+pub fn native_publish_with_source<T: Serialize + ?Sized>(
+    channel: &str,
+    payload: &T,
+    source: &str,
+) -> Result<(), NativePublishError> {
+    let envelope = make_envelope(channel, payload, source).map_err(NativePublishError::Serde)?;
     let log_path = debug_log_path();
 
-    if let Some(_zellij_sock) = std::env::var_os("ZELLIJ") {
-        if std::env::var("NERVOUS_NO_ZELLIJ").ok() != Some("1".into()) {
-            let plugin = std::env::var("NERVOUS_PLUGIN").unwrap_or_else(|_| "nervous-bus".into());
-            let prog = std::process::Command::new("zellij")
-                .args(["pipe", "-p", &plugin, "-n", channel])
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn();
-            if let Ok(mut child) = prog {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(envelope.as_bytes());
-                }
+    if std::env::var_os("ZELLIJ").is_some()
+        && std::env::var("NERVOUS_NO_ZELLIJ").ok() != Some("1".into())
+    {
+        let plugin = std::env::var("NERVOUS_PLUGIN").unwrap_or_else(|_| "nervous-bus".into());
+        let prog = std::process::Command::new("zellij")
+            .args(["pipe", "-p", &plugin, "-n", channel])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        if let Ok(mut child) = prog {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(envelope.as_bytes());
             }
+            // Drop stdin (above, by scope) THEN reap. Without this wait the
+            // child stays a zombie for the lifetime of the process — one PID
+            // leaked per publish, which for a long-lived publisher eventually
+            // exhausts the pid_max table.
+            let _ = child.wait();
         }
     }
 
@@ -211,13 +253,32 @@ pub fn native_publish<T: Serialize + ?Sized>(
         .append(true)
         .open(&log_path)
         .map_err(NativePublishError::Io)?;
-    writeln!(file, "{}", envelope).map_err(NativePublishError::Io)
+    // One `write_all` of envelope-plus-newline, NOT `writeln!`. `writeln!` goes
+    // through `write_fmt`, which may issue the body and the newline as separate
+    // `write(2)` calls; with several threads (or processes) appending to the
+    // same log that interleaves and yields corrupt JSONL lines the mirror drops
+    // on the floor. A single write to an O_APPEND fd is atomic at this size.
+    let mut line = envelope.into_bytes();
+    line.push(b'\n');
+    file.write_all(&line).map_err(NativePublishError::Io)
 }
 
 #[cfg(not(feature = "native"))]
 pub fn native_publish<T: Serialize + ?Sized>(
     _channel: &str,
     _payload: &T,
+) -> Result<(), NativePublishError> {
+    Err(NativePublishError::Io(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "native feature not enabled — rebuild with --features native",
+    )))
+}
+
+#[cfg(not(feature = "native"))]
+pub fn native_publish_with_source<T: Serialize + ?Sized>(
+    _channel: &str,
+    _payload: &T,
+    _source: &str,
 ) -> Result<(), NativePublishError> {
     Err(NativePublishError::Io(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
@@ -487,23 +548,80 @@ pub mod listener {
 mod tests {
     use super::*;
 
+    /// The envelope must be parseable JSON, not just plausible-looking text —
+    /// it is built by string interpolation, so every interpolated field needs a
+    /// test that a hostile value can't break out of its JSON position.
     #[test]
-    fn publish_returns_cli_missing_when_no_binary() {
-        let _ = serde_json::to_string(&serde_json::json!({"k": "v"})).unwrap();
+    fn envelope_is_valid_json() {
+        let raw = make_envelope("tengine.silo.verify.v1", &serde_json::json!({"ok": true}), "/x")
+            .expect("serialize");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("envelope must be JSON");
+        assert_eq!(parsed["type"], "tengine.silo.verify.v1");
+        assert_eq!(parsed["source"], "/x");
+        assert_eq!(parsed["specversion"], "1.0");
+        assert_eq!(parsed["data"]["ok"], true);
     }
 
     #[test]
-    fn native_publish_drops_subprocess_hop() {
-        #[cfg(feature = "native")]
-        {
-            let result = native_publish("test.channel", &serde_json::json!({"k": "v"}));
-            assert!(result.is_ok());
+    fn envelope_escapes_channel_and_source() {
+        let nasty = r#"a"b\c"#;
+        let raw = make_envelope(nasty, &serde_json::json!({}), nasty).expect("serialize");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&raw).expect("quotes in channel must not break the envelope");
+        assert_eq!(parsed["type"], nasty);
+        assert_eq!(parsed["source"], nasty);
+    }
+
+    /// Regression: `Path::new(".").file_name()` is `None`, so this used to
+    /// return `/unknown` for every caller that hadn't set NERVOUS_SOURCE.
+    #[test]
+    fn default_source_is_the_cwd_basename_not_unknown() {
+        if std::env::var_os("NERVOUS_SOURCE").is_some() {
+            return; // caller pinned it; nothing to assert
         }
-        #[cfg(not(feature = "native"))]
-        {
-            let result = native_publish("test.channel", &serde_json::json!({"k": "v"}));
-            assert!(matches!(result, Err(NativePublishError::Io(_))));
+        let expected = std::env::current_dir()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(default_source(), format!("/{expected}"));
+        assert_ne!(default_source(), "/unknown");
+    }
+
+    #[cfg(feature = "native")]
+    #[test]
+    fn native_publish_appends_one_parseable_line_per_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("nested/debug.jsonl");
+        // Scoped to this test only — the default target is the LIVE bus log.
+        std::env::set_var("NERVOUS_DEBUG_LOG", &log);
+        std::env::set_var("NERVOUS_NO_ZELLIJ", "1");
+
+        native_publish_with_source("test.channel.v1", &serde_json::json!({"n": 1}), "/probe")
+            .expect("first publish");
+        native_publish_with_source("test.channel.v1", &serde_json::json!({"n": 2}), "/probe")
+            .expect("second publish");
+
+        let body = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = body.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(lines.len(), 2, "one line per publish, log={body:?}");
+        for (i, line) in lines.iter().enumerate() {
+            let ev: serde_json::Value =
+                serde_json::from_str(line).expect("each line must parse standalone");
+            assert_eq!(ev["type"], "test.channel.v1");
+            assert_eq!(ev["source"], "/probe");
+            assert_eq!(ev["data"]["n"], (i + 1) as i64);
         }
+        std::env::remove_var("NERVOUS_DEBUG_LOG");
+        std::env::remove_var("NERVOUS_NO_ZELLIJ");
+    }
+
+    #[cfg(not(feature = "native"))]
+    #[test]
+    fn native_publish_is_unsupported_without_the_feature() {
+        let result = native_publish("test.channel", &serde_json::json!({"k": "v"}));
+        assert!(matches!(result, Err(NativePublishError::Io(_))));
     }
 }
 
