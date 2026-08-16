@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.gamedev.progress.v1.json",
+  "type": "object",
+  "title": "bus.gamedev.progress.v1",
+  "description": "One progress beat from a game-development project (first producer: unreal-battlebots-gamedev, via tools/hearth_progress.py). Deliberately ONE schema with a `kind` discriminator rather than a family of per-event schemas: hearth persists any event carrying `project` through the generic nbus_events tap, so a single well-known channel gives the phone a live timeline with zero consumer code. `screenshot_path` is what makes a visually-oriented gate reachable from the phone — hearth serves the bytes from the repo, the event only names the path.",
+  "properties": {
+    "v": {
+      "type": "integer",
+      "const": 1,
+      "description": "Event schema version"
+    },
+    "source": {
+      "type": "string",
+      "const": "gamedev",
+      "description": "Emitting subsystem family"
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Project slug — MUST match the repo directory name (e.g. unreal-battlebots-gamedev). Hearth's derive_event_project keys the whole nbus_events rollup on this."
+    },
+    "host": {
+      "type": "string",
+      "description": "Hostname of the emitting machine"
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["gate", "bench", "shot", "phase", "review", "wave"],
+      "description": "gate = automated pass/fail check (check.sh); bench = a perf measurement; shot = a visual artifact worth a human eyeball; phase = roadmap phase transition; review = a five-lens/adversarial review verdict; wave = a work wave landed"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Short human line, e.g. 'check.sh 28/28' or 'Wave 3G landed'"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "pending", "info"],
+      "description": "pass/fail for gates and benches; pending when a human verdict is required (a visual gate awaiting eyes); info for narration"
+    },
+    "phase": {
+      "type": "string",
+      "description": "Roadmap phase id this beat belongs to, e.g. '1' or '2A'"
+    },
+    "summary": {
+      "type": "string",
+      "description": "One or two sentences of detail. Failing test names belong here."
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Free-form numeric facts (frame_p95_ms, tests_passed, ...). Numbers only — string facts go in summary.",
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "artifact_path": {
+      "type": "string",
+      "description": "Absolute path to the run's artifact directory or JSON, for tap-through"
+    },
+    "screenshot_path": {
+      "type": "string",
+      "description": "Absolute path to a PNG/JPG/WebP the phone should render. Must live inside the project checkout — hearth re-validates containment before serving bytes."
+    },
+    "git_sha": {
+      "type": "string",
+      "description": "Commit the beat was measured at"
+    },
+    "needs_eyes": {
+      "type": "boolean",
+      "description": "True when a human must LOOK at this before the phase can proceed (a visual gate). Producers pair this with a bus.notify.v1 phone push; consumers may surface it more loudly."
+    }
+  },
+  "required": ["v", "source", "project", "host", "kind", "title", "status"],
+  "additionalProperties": false
+}
