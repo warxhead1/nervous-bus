@@ -200,7 +200,11 @@ fn iso_now() -> String {
         .unwrap_or_else(|| "1970-01-01T00:00:00Z".into())
 }
 
-pub(crate) fn make_envelope(
+/// Create a serialized CloudEvents-lite envelope for an immediate publish.
+///
+/// Use [`Envelope`] directly when a producer needs to persist one completed
+/// envelope and replay it unchanged after a durable retry.
+pub fn make_envelope(
     channel: &str,
     payload: &(impl Serialize + ?Sized),
     source: &str,

@@ -1,4 +1,4 @@
-use nbus::Envelope;
+use nbus::{make_envelope, Envelope};
 
 const CROCKFORD_BASE32: &str = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -38,6 +38,20 @@ fn serde_envelope_preserves_shape_and_escapes_fields() {
     assert_eq!(value["type"], channel);
     assert_eq!(value["datacontenttype"], "application/json");
     assert_eq!(value["data"]["quote"], "a\"b\\c");
+}
+
+#[test]
+fn serialized_convenience_api_is_available_to_external_callers() {
+    let raw = make_envelope(
+        "kb.entry.created.v2",
+        &serde_json::json!({"entry_id": "e-1"}),
+        "/kb",
+    )
+    .expect("create serialized envelope");
+    let value: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+    assert_eq!(value["source"], "/kb");
+    assert_eq!(value["type"], "kb.entry.created.v2");
+    assert_eq!(value["data"]["entry_id"], "e-1");
 }
 
 #[test]
