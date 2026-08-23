@@ -2,8 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "kb.entry.created.v2",
   "title": "KB Entry Created v2",
-  "description": "PLANNED migration contract for normalized KB entry-created events. No producer emits and no consumer accepts v2 yet; the companion KB migration must dual-publish or cut consumers over only after it supplies every required identity, category, provenance, confidence basis, and timestamp field. v1 remains live and unchanged during that migration window.",
-  "status": "planned-unconsumed-unproduced",
+  "description": "Hearth accepts this normalized v2 KB entry-created contract, while KB producers remain v1-only. v1 remains live during the migration. Dual v1/v2 publishing is unsafe until semantic deduplication exists.",
+  "status": "consumer-ready-producer-pending",
   "type": "object",
   "additionalProperties": false,
   "required": [
