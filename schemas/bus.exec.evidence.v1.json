@@ -191,14 +191,14 @@
           },
           "additionalProperties": true
         },
-        "exit_code": {"type": "integer", "description": "Exact process exit code for command.argv."},
+        "exit_code": {"type": ["integer", "null"], "description": "Exact process exit code for command.argv; null while a nonterminal receipt has no completed process."},
         "completion_state": {
           "type": "string",
           "enum": ["runtime_complete", "command_failed", "cancelled", "timed_out", "incomplete", "started", "source_accepted", "static_contract", "background", "partial"],
           "description": "Receipt state. started, background, static_contract, source_accepted, and partial faithfully record non-decisive progress but can never satisfy runtime_complete rules."
         },
-        "completed_at": {"type": "string", "format": "date-time"},
-        "artifacts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/artifact"}},
+        "completed_at": {"type": ["string", "null"], "format": "date-time", "description": "Terminal completion time; null for a nonterminal or partial receipt."},
+        "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}, "description": "Observed artifacts, empty when the attempt has not produced one or its command has no artifact output."},
         "denominators": {
           "type": "object",
           "required": ["tests_matched"],
@@ -228,6 +228,7 @@
           "then": {
             "properties": {
               "exit_code": {"const": 0},
+              "completed_at": {"type": "string", "format": "date-time"},
               "gates": {
                 "properties": {
                   "test": {"properties": {"status": {"enum": ["passed", "not_applicable"]}}},

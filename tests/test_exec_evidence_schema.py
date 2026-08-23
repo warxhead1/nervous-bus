@@ -148,6 +148,21 @@ def test_non_decisive_progress_states_are_representable(
     validator.validate(event)
 
 
+def test_partial_receipt_needs_no_fabricated_terminal_or_artifact_evidence(
+    validator: Draft202012Validator,
+) -> None:
+    event = receipt_fixture()
+    event["data"]["completion_state"] = "partial"
+    event["data"]["exit_code"] = None
+    event["data"]["completed_at"] = None
+    event["data"]["artifacts"] = []
+    event["data"]["gates"]["runtime"] = {
+        "status": "unknown",
+        "unavailable_reason": "The background process has not reached a probeable state.",
+    }
+    validator.validate(event)
+
+
 @pytest.mark.parametrize("gate_name", ["test", "runtime", "database", "device"])
 def test_runtime_complete_rejects_failed_applicable_gate(
     validator: Draft202012Validator, gate_name: str
@@ -188,6 +203,16 @@ def test_runtime_complete_requires_a_decisive_runtime_gate(validator: Draft20201
 def test_runtime_complete_rejects_known_zero_tests_matched(validator: Draft202012Validator) -> None:
     event = receipt_fixture()
     event["data"]["denominators"]["tests_matched"] = {"status": "known", "value": 0}
+    with pytest.raises(ValidationError):
+        validator.validate(event)
+
+
+@pytest.mark.parametrize("field", ["exit_code", "completed_at"])
+def test_runtime_complete_requires_terminal_exit_and_completion_time(
+    validator: Draft202012Validator, field: str
+) -> None:
+    event = receipt_fixture()
+    event["data"][field] = None
     with pytest.raises(ValidationError):
         validator.validate(event)
 
