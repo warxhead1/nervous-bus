@@ -63,6 +63,7 @@ from detectors.unverified_completion import UnverifiedCompletionDetector
 from detectors.directive_ground_truth_mismatch import DirectiveGroundTruthMismatchDetector
 from detectors.inherited_rationalization import InheritedRationalizationDetector
 from detectors.harness_change_watch import HarnessChangeWatchDetector
+from detectors.kb_recall_gap import KbRecallGapDetector
 from detectors.failure_taxonomy import FailureTaxonomyDetector
 from adapter_api import load_adapters
 
@@ -146,6 +147,10 @@ _BUILTIN_DETECTOR_CLASSES: list[type[BaseDetector]] = [
     DirectiveGroundTruthMismatchDetector,
     InheritedRationalizationDetector,
     HarnessChangeWatchDetector,
+    # KbRecallGapDetector MUST come after RepeatedQuestionDetector (it reads
+    # repeated_question's detector_hits rows from THIS SAME synthesis pass —
+    # see its module docstring) and before FailureTaxonomyDetector (below).
+    KbRecallGapDetector,
     # FailureTaxonomyDetector MUST stay last: it reads detector_hits recorded by
     # every detector above it in THIS SAME synthesis pass (see its module
     # docstring). Appending a new built-in detector after this line would make

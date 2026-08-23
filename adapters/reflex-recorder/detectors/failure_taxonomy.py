@@ -34,6 +34,10 @@ context_failure:
     contradicts — a directly-observed WRONG context propagated to children)
   - repeated_question hit         (same question re-asked = context not
     retained across turns/runs)
+  - kb_recall_gap hit             (repeated_question fired for this run AND
+    the run recorded zero kb.guidance.provided.v1 / kb.session.context.v1 /
+    kb.entry.created.v1 activity — the vault that could have answered the
+    repeated question was never consulted or grown)
 
 constraint_failure:
   - >=1 permission_requested event in this run (a permission gate was hit;
@@ -100,6 +104,7 @@ BUCKETS = (CONTEXT_FAILURE, CONSTRAINT_FAILURE, VERIFICATION_FAILURE, PLANNING_F
 # Detector-hit signal sets per bucket (see module docstring for rationale).
 _CONTEXT_DETECTORS = frozenset({
     "reread_same_file", "directive_ground_truth_mismatch", "repeated_question",
+    "kb_recall_gap",
 })
 _VERIFICATION_DETECTORS = frozenset({"unverified_completion", "edit_build_fail_revert"})
 _PLANNING_DETECTORS = frozenset({"red_baseline_dispatch", "inherited_rationalization"})
