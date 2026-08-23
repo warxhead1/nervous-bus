@@ -4,7 +4,7 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**346 channels** across 5 clusters.
+**347 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
@@ -12,7 +12,7 @@ Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster
 | [Autobench](#autobench) | 54 | autobench.* evolution loop (case/judge/improver/budget/...) |
 | [Hearth](#hearth) | 52 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 178 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 179 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -363,6 +363,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `kb.ingest.tachyonac.completed.v1` | kb.ingest.tachyonac.completed v1 |
 | `kb.ingest.tengine.completed.v1` | kb.ingest.tengine.completed v1 |
 | `kb.knowledge.gap.v1` | 🔇 **unconsumed** — KB Knowledge Gap |
+| `kb.knowledge.gap.v2` | 🔇 **planned / unproduced / unconsumed** — KB Knowledge Gap v2 |
 | `kb.note.published.v1` | kb note published |
 | `kb.pillars.mutated.v1` | kb.pillars.mutated v1 |
 | `kb.plan.archived.v1` | kb.plan.archived v1 |
