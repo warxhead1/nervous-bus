@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "kb.entry.created.v1",
   "title": "KB Entry Created",
-  "description": "Emitted by kb ingest when a new vault entry is written. Currently silent — this schema defines what the event SHOULD contain once kb ingest is updated to emit it. Primary consumers: hearth-api (counter), deer-flow (awareness of new knowledge).",
+  "description": "SUPERSEDES the prior 'Currently silent — defines what the event SHOULD contain once kb ingest is updated to emit it' claim (2026-08-23 emission re-audit, kb-recall-loop): this channel is LIVE, not silent — source-verified via grep of publish_to_bus(\"kb.entry.created.v1\", ...) call sites (src/commands/ingest.rs:390, src/commands/landmark.rs:136, src/commands/watch.rs:658 and :1321) and confirmed against the live nbus:kb.entry.created.v1 Redis stream (XLEN > 10000 at time of audit) and recent debug.jsonl history. Emitted by kb ingest, kb landmark, and two kb watch handlers, each carrying the required project field as a plain string. Primary consumers: hearth-api (counter), deer-flow (awareness of new knowledge) — NOT independently re-verified in this pass; only the emission side was audited here. See nervous-bus schemas/CHANNELS.md for current status.",
   "type": "object",
   "required": ["entry_id", "title", "project", "source_type", "confidence"],
   "properties": {
