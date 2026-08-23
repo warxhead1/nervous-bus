@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.knowledge.gap.v2.json",
+  "title": "KB Knowledge Gap v2",
+  "status": "planned / unproduced / unconsumed",
+  "description": "Planned migration contract; no current producer or consumer has been migrated to this channel. Source audit of KB's kb.knowledge.gap.v1 call sites found five producer paths: enrich --pass gaps, check --emit-gap, overlap, and watch's scope_divergence and loom.coord claim-overlap handlers. v2 makes that bounded origin taxonomy explicit: enrichment, agent-escalation, overlap, and scope-divergence. entry_id is optional only when the emitting gap is tied to a local vault entry; audited operational and query-rooted producers omit it, including scope-divergence, rather than publishing entry_id: null. Current v1 remains during the producer migration window.",
+  "type": "object",
+  "required": ["project", "question", "priority", "reasoning", "gap_type"],
+  "additionalProperties": false,
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Optional UUID of the local vault entry that directly triggered the gap. Omit when there is no entry identity; null is not a valid absence representation."
+    },
+    "project": {
+      "type": "string",
+      "description": "Project label supplied by the emitting KB command or event."
+    },
+    "question": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "Research or coordination question that would resolve the gap."
+    },
+    "priority": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Priority from 0 (low) through 1 (urgent)."
+    },
+    "reasoning": {
+      "type": "string",
+      "maxLength": 1000,
+      "description": "Measured coverage, overlap, scope, or enrichment rationale for the gap."
+    },
+    "gap_type": {
+      "type": "string",
+      "enum": ["enrichment", "agent-escalation", "overlap", "scope-divergence"],
+      "description": "Bounded origin classification: enrichment = enrich --pass gaps; agent-escalation = check --emit-gap; overlap = overlap or loom.coord claim overlap; scope-divergence = watch scope_divergence."
+    },
+    "suggested_deer_query": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "Optional pre-formatted research or coordination query."
+    }
+  }
+}
