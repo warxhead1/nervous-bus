@@ -47,9 +47,10 @@
 //! l.run();
 //! ```
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::io::Write as IoWrite;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "native")]
@@ -100,15 +101,90 @@ fn default_source() -> String {
     })
 }
 
-fn ulid() -> String {
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
-    let mut bytes = [0u8; 10];
-    getrandom::getrandom(&mut bytes).ok();
-    let hex: String = bytes.iter().map(|b| format!("{:02X}", b)).collect();
-    format!("{:010}{}", ts, &hex[..16])
+/// CloudEvents-lite wire envelope shared by every nervous-bus transport.
+///
+/// Construct it with [`Envelope::new`] rather than manually formatting JSON.
+/// It derives serde traits so a durable producer can persist a completed
+/// envelope and publish the exact same bytes again after a retry.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Envelope {
+    specversion: String,
+    id: String,
+    source: String,
+    #[serde(rename = "type")]
+    channel: String,
+    time: String,
+    datacontenttype: String,
+    data: serde_json::Value,
+}
+
+impl Envelope {
+    /// Create a new, canonical nervous-bus envelope.
+    ///
+    /// IDs are 26-character Crockford Base32 ULIDs. The process-wide
+    /// generator is monotonic, including when several events are stamped in
+    /// the same millisecond, matching the Go SDK's `oklog/ulid` contract.
+    pub fn new<T: Serialize + ?Sized>(
+        source: impl Into<String>,
+        channel: impl Into<String>,
+        data: &T,
+    ) -> Result<Self, serde_json::Error> {
+        Ok(Self {
+            specversion: "1.0".into(),
+            id: next_ulid(),
+            source: source.into(),
+            channel: channel.into(),
+            time: iso_now(),
+            datacontenttype: "application/json".into(),
+            data: serde_json::to_value(data)?,
+        })
+    }
+
+    /// The canonical ULID assigned to this envelope.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// The CloudEvents source URI for this envelope.
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    /// The nervous-bus channel stored in the CloudEvents `type` field.
+    pub fn channel(&self) -> &str {
+        &self.channel
+    }
+
+    /// The publish timestamp in UTC RFC3339 form.
+    pub fn time(&self) -> &str {
+        &self.time
+    }
+
+    /// The JSON payload retained for durable persistence and replay.
+    pub fn data(&self) -> &serde_json::Value {
+        &self.data
+    }
+
+    /// Serialize the complete envelope for any existing publish transport.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+}
+
+fn next_ulid() -> String {
+    static GENERATOR: OnceLock<Mutex<ulid::Generator>> = OnceLock::new();
+    let generator = GENERATOR.get_or_init(|| Mutex::new(ulid::Generator::new()));
+    let mut generator = generator
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    // The only error is an 80-bit entropy overflow inside one millisecond,
+    // which is not realistically recoverable. `Ulid::new` still emits a
+    // standards-compliant Crockford ULID if that pathological edge occurs.
+    generator
+        .generate()
+        .unwrap_or_else(|_| ulid::Ulid::new())
+        .to_string()
 }
 
 fn iso_now() -> String {
@@ -129,20 +205,7 @@ pub(crate) fn make_envelope(
     payload: &(impl Serialize + ?Sized),
     source: &str,
 ) -> Result<String, serde_json::Error> {
-    let id = ulid();
-    let time = iso_now();
-    let data = serde_json::to_string(payload)?;
-    // `channel` is interpolated into a JSON string position and reaches here
-    // from callers verbatim — a quote or backslash in it produced a malformed
-    // envelope that the mirror silently dead-lettered. Escape it like `source`.
-    Ok(format!(
-        r#"{{"specversion":"1.0","id":"{}","source":{},"type":{},"time":"{}","datacontenttype":"application/json","data":{} }}"#,
-        id,
-        serde_json::to_string(source)?,
-        serde_json::to_string(channel)?,
-        time,
-        data,
-    ))
+    Envelope::new(source, channel, payload)?.to_json()
 }
 
 fn debug_log_path() -> PathBuf {
@@ -548,13 +611,17 @@ pub mod listener {
 mod tests {
     use super::*;
 
-    /// The envelope must be parseable JSON, not just plausible-looking text —
-    /// it is built by string interpolation, so every interpolated field needs a
-    /// test that a hostile value can't break out of its JSON position.
+    /// The envelope must be parseable JSON, not just plausible-looking text.
+    /// Fields are serialized through serde so hostile values cannot break out
+    /// of their JSON positions.
     #[test]
     fn envelope_is_valid_json() {
-        let raw = make_envelope("tengine.silo.verify.v1", &serde_json::json!({"ok": true}), "/x")
-            .expect("serialize");
+        let raw = make_envelope(
+            "tengine.silo.verify.v1",
+            &serde_json::json!({"ok": true}),
+            "/x",
+        )
+        .expect("serialize");
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("envelope must be JSON");
         assert_eq!(parsed["type"], "tengine.silo.verify.v1");
         assert_eq!(parsed["source"], "/x");
