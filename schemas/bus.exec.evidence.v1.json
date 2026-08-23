@@ -1,0 +1,273 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.exec.evidence.v1.json",
+  "title": "bus.exec.evidence v1",
+  "description": "Append-only execution-evidence receipt. One receipt records one execution attempt and exposes stable receipt/event identities for consumer-side deduplication. A runtime_complete receipt is evidence of completed gates, not merely a started process, accepted source change, static contract, or background launch. Public contract only; producers and consumers are intentionally out of scope.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "CloudEvents event identifier. It is repeated as data.event_id so consumers that retain only data can still deduplicate."
+    },
+    "source": {"type": "string", "minLength": 1, "description": "Path-style producer source URI, for example /hearth-loom."},
+    "type": {"type": "string", "const": "bus.exec.evidence.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {"$ref": "#/$defs/receipt"}
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "nonemptyString": {"type": "string", "minLength": 1},
+    "sha": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{40,64}$",
+      "description": "Immutable Git object id. SHA-1 and SHA-256 repositories are both representable."
+    },
+    "denominator": {
+      "type": "object",
+      "required": ["status", "value"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["known", "unknown", "not_applicable"],
+          "description": "known preserves a measured integer, including zero. unknown and not_applicable must not masquerade as zero."
+        },
+        "value": {"type": ["integer", "null"], "minimum": 0},
+        "basis": {"type": "string", "minLength": 1, "description": "What population was counted when status is known."}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "known"}}, "required": ["status"]},
+          "then": {"properties": {"value": {"type": "integer", "minimum": 0}}, "required": ["value"]}
+        },
+        {
+          "if": {"properties": {"status": {"enum": ["unknown", "not_applicable"]}}, "required": ["status"]},
+          "then": {"properties": {"value": {"type": "null"}}, "required": ["value"]}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["path", "sha256", "size_bytes", "mtime"],
+      "properties": {
+        "path": {"$ref": "#/$defs/nonemptyString", "description": "Producer-visible path of the evidence artifact."},
+        "sha256": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$", "description": "SHA-256 over the artifact bytes."},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "mtime": {"type": "string", "format": "date-time", "description": "Artifact modification timestamp in RFC3339 UTC."},
+        "media_type": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": true
+    },
+    "applicableGate": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {"type": "string", "enum": ["passed", "failed", "not_applicable", "unknown", "unavailable"]},
+        "evidence_id": {"$ref": "#/$defs/nonemptyString"},
+        "evidence_kind": {
+          "type": "string",
+          "enum": ["test_result", "runtime_probe", "database_query", "device_observation"],
+          "description": "Only decisive evidence kinds. Lifecycle-only states such as started, background, static_contract, and source_accepted are deliberately excluded."
+        },
+        "completed_at": {"type": "string", "format": "date-time"},
+        "not_applicable_reason": {"type": "string", "minLength": 1},
+        "unavailable_reason": {"type": "string", "minLength": 1, "description": "Why an otherwise applicable gate could not run; unavailable never proves completion."}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "not_applicable"}}, "required": ["status"]},
+          "then": {"required": ["not_applicable_reason"], "not": {"anyOf": [{"required": ["evidence_id"]}, {"required": ["evidence_kind"]}, {"required": ["completed_at"]}]}}
+        },
+        {
+          "if": {"properties": {"status": {"enum": ["unknown", "unavailable"]}}, "required": ["status"]},
+          "then": {"required": ["unavailable_reason"], "not": {"anyOf": [{"required": ["evidence_id"]}, {"required": ["evidence_kind"]}, {"required": ["completed_at"]}]}}
+        },
+        {
+          "if": {"properties": {"status": {"enum": ["passed", "failed"]}}, "required": ["status"]},
+          "then": {"required": ["evidence_id", "evidence_kind", "completed_at"]}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "testGate": {
+      "allOf": [
+        {"$ref": "#/$defs/applicableGate"},
+        {"if": {"properties": {"status": {"enum": ["passed", "failed"]}}, "required": ["status"]}, "then": {"properties": {"evidence_kind": {"const": "test_result"}}}}
+      ]
+    },
+    "runtimeGate": {
+      "allOf": [
+        {"$ref": "#/$defs/applicableGate"},
+        {"if": {"properties": {"status": {"enum": ["passed", "failed"]}}, "required": ["status"]}, "then": {"properties": {"evidence_kind": {"const": "runtime_probe"}}}}
+      ]
+    },
+    "databaseGate": {
+      "allOf": [
+        {"$ref": "#/$defs/applicableGate"},
+        {"if": {"properties": {"status": {"enum": ["passed", "failed"]}}, "required": ["status"]}, "then": {"properties": {"evidence_kind": {"const": "database_query"}}}}
+      ]
+    },
+    "deviceGate": {
+      "allOf": [
+        {"$ref": "#/$defs/applicableGate"},
+        {"if": {"properties": {"status": {"enum": ["passed", "failed"]}}, "required": ["status"]}, "then": {"properties": {"evidence_kind": {"const": "device_observation"}}}}
+      ]
+    },
+    "receipt": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "receipt_id",
+        "event_id",
+        "bead_id",
+        "execution_id",
+        "attempt_id",
+        "attempt_number",
+        "dispatch_owner",
+        "requested_execution",
+        "actual_execution",
+        "git_revisions",
+        "command",
+        "exit_code",
+        "completion_state",
+        "completed_at",
+        "artifacts",
+        "denominators",
+        "gates"
+      ],
+      "properties": {
+        "schema_version": {"type": "string", "const": "1", "description": "Contract major. Consumers reject unknown major fixtures rather than guessing compatibility."},
+        "receipt_id": {"$ref": "#/$defs/nonemptyString", "description": "Stable append-only execution-receipt identity and primary consumer deduplication key."},
+        "event_id": {"$ref": "#/$defs/nonemptyString", "description": "CloudEvents event id copied from the envelope for data-only consumers."},
+        "bead_id": {"$ref": "#/$defs/nonemptyString"},
+        "execution_id": {"$ref": "#/$defs/nonemptyString", "description": "Stable execution identity across retries."},
+        "attempt_id": {"$ref": "#/$defs/nonemptyString", "description": "Unique identity for this attempt; never overwrite a prior attempt receipt."},
+        "attempt_number": {"type": "integer", "minimum": 1, "description": "One-based attempt ordinal within execution_id."},
+        "dispatch_owner": {"$ref": "#/$defs/nonemptyString", "description": "Actor or service that owns this dispatch decision."},
+        "requested_execution": {
+          "type": "object",
+          "required": ["provider", "model", "backend"],
+          "properties": {
+            "provider": {"$ref": "#/$defs/nonemptyString"},
+            "model": {"$ref": "#/$defs/nonemptyString"},
+            "backend": {"$ref": "#/$defs/nonemptyString"},
+            "sleeve_image": {"type": ["string", "null"], "minLength": 1, "description": "Requested execution sleeve/container image when the dispatcher selected one; null when no sleeve applies."}
+          },
+          "additionalProperties": true
+        },
+        "actual_execution": {
+          "type": "object",
+          "required": ["provider", "model", "backend"],
+          "properties": {
+            "provider": {"$ref": "#/$defs/nonemptyString"},
+            "model": {"$ref": "#/$defs/nonemptyString"},
+            "backend": {"$ref": "#/$defs/nonemptyString"},
+            "sleeve_image": {"type": ["string", "null"], "minLength": 1, "description": "Observed execution sleeve/container image when available; null when the backend does not expose one."}
+          },
+          "additionalProperties": true
+        },
+        "git_revisions": {
+          "type": "object",
+          "required": ["source_sha", "main_sha", "integration_sha", "worktree_sha"],
+          "properties": {
+            "source_sha": {"$ref": "#/$defs/sha"},
+            "main_sha": {"$ref": "#/$defs/sha"},
+            "integration_sha": {"$ref": "#/$defs/sha"},
+            "worktree_sha": {"$ref": "#/$defs/sha"}
+          },
+          "additionalProperties": true
+        },
+        "command": {
+          "type": "object",
+          "required": ["argv", "rendered", "working_directory"],
+          "properties": {
+            "argv": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/nonemptyString"}, "description": "Exact argument vector; do not substitute an abbreviated command summary."},
+            "rendered": {"$ref": "#/$defs/nonemptyString", "description": "Human-readable rendering of argv."},
+            "working_directory": {"$ref": "#/$defs/nonemptyString"}
+          },
+          "additionalProperties": true
+        },
+        "exit_code": {"type": "integer", "description": "Exact process exit code for command.argv."},
+        "completion_state": {
+          "type": "string",
+          "enum": ["runtime_complete", "command_failed", "cancelled", "timed_out", "incomplete", "started", "source_accepted", "static_contract", "background", "partial"],
+          "description": "Receipt state. started, background, static_contract, source_accepted, and partial faithfully record non-decisive progress but can never satisfy runtime_complete rules."
+        },
+        "completed_at": {"type": "string", "format": "date-time"},
+        "artifacts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/artifact"}},
+        "denominators": {
+          "type": "object",
+          "required": ["tests_matched"],
+          "minProperties": 1,
+          "properties": {
+            "tests_matched": {"$ref": "#/$defs/denominator", "description": "Number of tests matched for a passed test gate. A known zero is evidence that no test ran, not a passing test result."}
+          },
+          "additionalProperties": {"$ref": "#/$defs/denominator"},
+          "description": "Named counted populations. Each uses an explicit status/value pair so known zero remains distinct from unknown and not_applicable."
+        },
+        "gates": {
+          "type": "object",
+          "required": ["test", "runtime", "database", "device"],
+          "properties": {
+            "test": {"$ref": "#/$defs/testGate"},
+            "runtime": {"$ref": "#/$defs/runtimeGate"},
+            "database": {"$ref": "#/$defs/databaseGate"},
+            "device": {"$ref": "#/$defs/deviceGate"}
+          },
+          "additionalProperties": true
+        },
+        "prior_attempt_receipt_ids": {"type": "array", "items": {"$ref": "#/$defs/nonemptyString"}, "uniqueItems": true, "description": "Optional lineage only; prior receipts remain separately addressable rather than replaced."}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"completion_state": {"const": "runtime_complete"}}, "required": ["completion_state"]},
+          "then": {
+            "properties": {
+              "exit_code": {"const": 0},
+              "gates": {
+                "properties": {
+                  "test": {"properties": {"status": {"enum": ["passed", "not_applicable"]}}},
+                  "runtime": {"properties": {"status": {"const": "passed"}}},
+                  "database": {"properties": {"status": {"enum": ["passed", "not_applicable"]}}},
+                  "device": {"properties": {"status": {"enum": ["passed", "not_applicable"]}}}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "completion_state": {"const": "runtime_complete"},
+              "gates": {
+                "properties": {
+                  "test": {"properties": {"status": {"const": "passed"}}, "required": ["status"]}
+                },
+                "required": ["test"]
+              }
+            },
+            "required": ["completion_state", "gates"]
+          },
+          "then": {
+            "properties": {
+              "denominators": {
+                "properties": {
+                  "tests_matched": {
+                    "properties": {"status": {"const": "known"}, "value": {"type": "integer", "minimum": 1}},
+                    "required": ["status", "value"]
+                  }
+                },
+                "required": ["tests_matched"]
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
+    }
+  }
+}
