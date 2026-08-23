@@ -4,7 +4,7 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**345 channels** across 5 clusters.
+**346 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
@@ -12,7 +12,7 @@ Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster
 | [Autobench](#autobench) | 54 | autobench.* evolution loop (case/judge/improver/budget/...) |
 | [Hearth](#hearth) | 52 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 177 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 178 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -349,6 +349,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `kb.decay.applied.v1` | 🔇 **unconsumed** — KB Decay Applied |
 | `kb.edge.invalid.v1` | kb.edge.invalid v1 |
 | `kb.entry.created.v1` | KB Entry Created |
+| `kb.entry.created.v2` | 🔇 **planned-unconsumed-unproduced** — KB Entry Created v2 |
 | `kb.entry.deleted.v1` | kb.entry.deleted v1 |
 | `kb.entry.graded.v1` | kb.entry.graded v1 |
 | `kb.entry.moved.v1` | kb.entry.moved v1 |
