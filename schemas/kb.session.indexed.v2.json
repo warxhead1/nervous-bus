@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/kb.session.indexed.v2.json",
+  "title": "kb.session.indexed v2",
+  "status": "planned",
+  "description": "PLANNED migration contract; no kb.session.indexed.v2 publisher or consumer is evidenced as of the 2026-08-23 source audit. It replaces the overloaded v1 data payload with a strict event_kind discriminator: kb sync and watch bead-complete indexing are batch_indexed, kb ingest-sessions passing TEngine reports are verified_session_indexed, and watch session-started linkage is session_linked. The sole evidenced v1 reader is kb watch (kb/src/commands/watch.rs), whose batch/log, verification/checkpoint, and session-link handling currently infer those meanings from undeclared optional fields. v1 remains the live migration-window channel until the KB producer and reader change together. This schema validates the CloudEvents data object only.",
+  "oneOf": [
+    { "$ref": "#/$defs/scoped_sync_batch" },
+    { "$ref": "#/$defs/unscoped_sync_batch" },
+    { "$ref": "#/$defs/bead_complete_batch" },
+    { "$ref": "#/$defs/verified_session" },
+    { "$ref": "#/$defs/session_link" }
+  ],
+  "$defs": {
+    "nonempty_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "scoped_sync_batch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_kind", "source", "scope", "project", "added", "already_known"],
+      "properties": {
+        "event_kind": { "const": "batch_indexed" },
+        "source": { "const": "kb.sync" },
+        "scope": { "const": "scoped" },
+        "project": { "$ref": "#/$defs/nonempty_string" },
+        "added": { "$ref": "#/$defs/count" },
+        "already_known": { "$ref": "#/$defs/count" },
+        "trigger_session_id": {
+          "$ref": "#/$defs/nonempty_string",
+          "description": "Optional active Hearth session that initiated sync, distinct from an indexed TEngine session."
+        }
+      }
+    },
+    "unscoped_sync_batch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_kind", "source", "scope", "added", "already_known"],
+      "properties": {
+        "event_kind": { "const": "batch_indexed" },
+        "source": { "const": "kb.sync" },
+        "scope": { "const": "unscoped" },
+        "added": { "$ref": "#/$defs/count" },
+        "already_known": { "$ref": "#/$defs/count" },
+        "trigger_session_id": {
+          "$ref": "#/$defs/nonempty_string",
+          "description": "Optional active Hearth session that initiated sync, distinct from an indexed TEngine session."
+        }
+      }
+    },
+    "bead_complete_batch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_kind", "source", "scope", "project", "added", "entry_ids"],
+      "properties": {
+        "event_kind": { "const": "batch_indexed" },
+        "source": { "const": "watch.bead_complete" },
+        "scope": { "const": "scoped" },
+        "project": { "$ref": "#/$defs/nonempty_string" },
+        "added": { "$ref": "#/$defs/count" },
+        "entry_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "format": "uuid" }
+        }
+      }
+    },
+    "verified_session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_kind", "source", "project", "entry_id", "session_id", "silo", "passed", "fps_avg", "anomaly_count", "session_dir"],
+      "properties": {
+        "event_kind": { "const": "verified_session_indexed" },
+        "source": { "const": "kb.ingest-sessions" },
+        "project": { "const": "tengine" },
+        "entry_id": {
+          "$ref": "#/$defs/nonempty_string",
+          "description": "Index entry identifier for the newly indexed TEngine session."
+        },
+        "session_id": {
+          "$ref": "#/$defs/nonempty_string",
+          "description": "TEngine session directory identifier whose verification report passed."
+        },
+        "silo": { "$ref": "#/$defs/nonempty_string" },
+        "passed": { "const": true },
+        "fps_avg": { "type": "number", "minimum": 0 },
+        "anomaly_count": { "$ref": "#/$defs/count" },
+        "session_dir": { "$ref": "#/$defs/nonempty_string" }
+      }
+    },
+    "session_link": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_kind", "source", "project", "linked_session_id"],
+      "properties": {
+        "event_kind": { "const": "session_linked" },
+        "source": { "const": "watch.session.started" },
+        "project": { "$ref": "#/$defs/nonempty_string" },
+        "linked_session_id": {
+          "$ref": "#/$defs/nonempty_string",
+          "description": "Hearth session id observed on bus.hearth.session.started.v1; it is a link notification, not TEngine verification evidence."
+        }
+      }
+    }
+  }
+}
