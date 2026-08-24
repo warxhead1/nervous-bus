@@ -137,6 +137,8 @@ Every event is a single JSON line — a CloudEvents-lite envelope:
 
 Every channel requires a JSON Schema **before** any producer emits. Breaking changes bump the major version (`v1` → `v2`) as a new file; old schemas remain.
 
+`kb.entry.created.v2` is the active KB entry-created contract: KB produces it and Hearth consumes it. Runtime migration evidence recorded 2026-08-24: activation probe event `01M0RZ2V7GWWHGHCE03Y8YY4RJ` appeared exactly once in both `nbus:kb.entry.created.v2` and `nbus:all`, without advancing the v1 or DLQ stream heads. `kb.entry.created.v1` remains deprecated legacy compatibility only; producers must not dual-publish equivalent records without semantic deduplication.
+
 **Where schemas live:** the `schemas/` directory at the repo root is the authoritative store — one file per channel, flat, named `<type>.json` (the version is part of the type, e.g. `tengine.session.frame.v1.json`). This directory is the complete source of truth for the *public* bus, so listing `schemas/` is a valid way to see every public channel. At runtime the validator also overlays private channels from `$NERVOUS_HOME/schemas/` (see [NERVOUS_HOME](#nervous_home--private-schema-and-adapter-overlay)); user schemas win on a name conflict. Use `nervous schemas` to enumerate the full merged set rather than assuming `schemas/` is everything a given machine has loaded.
 
 ```bash
@@ -270,7 +272,7 @@ Set `NERVOUS_HOME` to override the default location. This pattern also applies t
 
 ```bash
 kb check "redis streams backpressure"    # emits kb.knowledge.gap.v1 if coverage is low
-kb landmark "latent heat oracle fix"     # emits kb.entry.created.v1
+kb landmark "latent heat oracle fix"     # emits kb.entry.created.v2
 kb vet <entry-id>                        # emits kb.entry.vetted.v1
 ```
 

@@ -2,7 +2,8 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "kb.entry.created.v1",
   "title": "KB Entry Created",
-  "description": "SUPERSEDES the prior 'Currently silent — defines what the event SHOULD contain once kb ingest is updated to emit it' claim (2026-08-23 emission re-audit, kb-recall-loop): this channel is LIVE, not silent — source-verified via grep of publish_to_bus(\"kb.entry.created.v1\", ...) call sites (src/commands/ingest.rs:390, src/commands/landmark.rs:136, src/commands/watch.rs:658 and :1321) and confirmed against the live nbus:kb.entry.created.v1 Redis stream (XLEN > 10000 at time of audit) and recent debug.jsonl history. Emitted by kb ingest, kb landmark, and two kb watch handlers, each carrying the required project field as a plain string. Primary consumers: hearth-api (counter), deer-flow (awareness of new knowledge) — NOT independently re-verified in this pass; only the emission side was audited here. See nervous-bus schemas/CHANNELS.md for current status.",
+  "description": "DEPRECATED legacy compatibility contract for KB entry-created events. The historical v1 producer paths remain documented here for existing records and consumers, but new KB entry-created producer and consumer work uses kb.entry.created.v2. Runtime migration evidence recorded 2026-08-24: v2 activation probe event 01M0RZ2V7GWWHGHCE03Y8YY4RJ did not append to nbus:kb.entry.created.v1, so this migration does not claim a semantic dual-write. Keep this schema until legacy consumers and retained v1 history no longer require it.",
+  "deprecated": true,
   "type": "object",
   "required": ["entry_id", "title", "project", "source_type", "confidence"],
   "properties": {

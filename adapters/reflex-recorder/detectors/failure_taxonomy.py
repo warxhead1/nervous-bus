@@ -36,7 +36,7 @@ context_failure:
     retained across turns/runs)
   - kb_recall_gap hit             (repeated_question fired for this run AND
     the run recorded zero kb.guidance.provided.v1 / kb.session.context.v1 /
-    kb.entry.created.v1 activity — the vault that could have answered the
+    kb.entry.created.v1 / kb.entry.created.v2 activity — the vault that could have answered the
     repeated question was never consulted or grown)
 
 constraint_failure:

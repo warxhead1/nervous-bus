@@ -2,8 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "kb.entry.created.v2",
   "title": "KB Entry Created v2",
-  "description": "Hearth accepts this normalized v2 KB entry-created contract, while KB producers remain v1-only. v1 remains live during the migration. Dual v1/v2 publishing is unsafe until semantic deduplication exists.",
-  "status": "consumer-ready-producer-pending",
+  "description": "Active normalized KB entry-created contract. KB now produces and Hearth now consumes v2. Runtime migration evidence recorded 2026-08-24: event 01M0RZ2V7GWWHGHCE03Y8YY4RJ appeared exactly once in nbus:kb.entry.created.v2 and exactly once in nbus:all; the v1 and DLQ stream heads were unchanged by that probe. kb.entry.created.v1 remains available only for legacy compatibility. This is a cutover, not semantic dual publishing: producers must not emit equivalent v1 and v2 records for the same entry without deduplication.",
+  "status": "active-producer-and-consumer",
   "type": "object",
   "additionalProperties": false,
   "required": [
