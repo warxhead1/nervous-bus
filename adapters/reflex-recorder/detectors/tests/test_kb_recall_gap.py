@@ -5,7 +5,8 @@ Covers:
   - Positive: a run with a repeated_question detector_hits row and zero
     kb-recall run_events rows fires kb_recall_gap.
   - Negative: a run with a repeated_question hit but a kb.guidance.provided.v1
-    / kb.session.context.v1 / kb.entry.created.v1 event present does NOT fire.
+    / kb.session.context.v1 / kb.entry.created.v1 or v2 event present does
+    NOT fire.
   - Negative: a run with kb-recall activity but no repeated_question hit is
     never considered (kb_recall_gap only scores runs already flagged by
     repeated_question).
@@ -122,6 +123,7 @@ class TestKbRecallChannels(unittest.TestCase):
                 "kb.guidance.provided.v1",
                 "kb.session.context.v1",
                 "kb.entry.created.v1",
+                "kb.entry.created.v2",
             }),
         )
 
@@ -170,7 +172,7 @@ class TestKbRecallGapDetector(unittest.TestCase):
         candidates = detector.detect(self.conn)
         self.assertEqual(candidates, [])
 
-    def test_does_not_fire_when_entry_created_present(self):
+    def test_does_not_fire_when_entry_created_v1_only_present(self):
         _insert_run(self.conn, "run-1", "myproject")
         _insert_repeated_question_hit(self.conn, "run-1", "myproject")
         _insert_kb_event(self.conn, "run-1", 1, "kb.entry.created.v1")
@@ -178,6 +180,24 @@ class TestKbRecallGapDetector(unittest.TestCase):
         detector = KbRecallGapDetector(self.conn)
         candidates = detector.detect(self.conn)
         self.assertEqual(candidates, [])
+
+    def test_does_not_fire_when_entry_created_v2_only_present(self):
+        _insert_run(self.conn, "run-1", "myproject")
+        _insert_repeated_question_hit(self.conn, "run-1", "myproject")
+        _insert_kb_event(self.conn, "run-1", 1, "kb.entry.created.v2")
+
+        detector = KbRecallGapDetector(self.conn)
+        candidates = detector.detect(self.conn)
+        self.assertEqual(candidates, [])
+
+    def test_fires_when_only_unrelated_event_present(self):
+        _insert_run(self.conn, "run-1", "myproject")
+        _insert_repeated_question_hit(self.conn, "run-1", "myproject")
+        _insert_kb_event(self.conn, "run-1", 1, "custom.unrelated.v1")
+
+        detector = KbRecallGapDetector(self.conn)
+        candidates = detector.detect(self.conn)
+        self.assertEqual(len(candidates), 1)
 
     def test_knowledge_gap_event_does_not_count_as_recall(self):
         """kb.knowledge.gap.v1 is itself evidence recall FAILED — must not suppress the detector."""

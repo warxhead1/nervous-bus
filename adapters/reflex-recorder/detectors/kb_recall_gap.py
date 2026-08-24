@@ -4,8 +4,8 @@ Detects a run that hit repeated_question (the same question class re-asked
 across runs — see repeated_question.py's own docstring for that algorithm)
 with NO kb-recall activity recorded in that SAME run: no
 kb.guidance.provided.v1 (kb check), kb.session.context.v1 (kb prime), or
-kb.entry.created.v1 (kb landmark / kb ingest / kb watch) event in the run's
-run_events.
+kb.entry.created.v1 or kb.entry.created.v2 (kb landmark / kb ingest / kb
+watch) event in the run's run_events.
 
 MAPPING PRINCIPLE — no new capture
 ====================================
@@ -29,9 +29,9 @@ kb` were run read-only against the real nervous-bus debug.jsonl and each
 appended exactly the envelope named below within the same second):
   kb.guidance.provided.v1  — kb check <query>            (src/commands/check.rs:220)
   kb.session.context.v1    — kb prime                     (src/commands/prime.rs:177,344)
-  kb.entry.created.v1      — kb landmark / kb ingest / kb watch
-                              (src/commands/landmark.rs:136, ingest.rs:390,
-                               watch.rs:658,1321)
+  kb.entry.created.v1/v2   — kb landmark / kb ingest / kb watch
+                              (v1 retained for historical run_events; v2 is
+                               the staged current producer contract)
 These three are kb's live read-and-answer surface (check/prime) plus its
 durable-write surface (entry creation) — the events a session emits when it
 actually consulted or grew the vault. kb.knowledge.gap.v1 and
@@ -50,7 +50,8 @@ A run with a repeated_question detector_hits row (repeated_question fired
 for this run_id — the run asked the user something already asked in a prior
 run of the same project) AND zero run_events rows matching
 event_type IN (kb.guidance.provided.v1, kb.session.context.v1,
-kb.entry.created.v1) is flagged context_failure:kb_recall_missing.
+kb.entry.created.v1, kb.entry.created.v2) is flagged
+context_failure:kb_recall_missing.
 
 Output
 ======
@@ -81,6 +82,7 @@ KB_RECALL_CHANNELS = frozenset({
     "kb.guidance.provided.v1",
     "kb.session.context.v1",
     "kb.entry.created.v1",
+    "kb.entry.created.v2",
 })
 
 
@@ -152,7 +154,7 @@ class KbRecallGapDetector(BaseDetector):
                         "Inform-rung: these runs re-asked a question already asked in a "
                         "prior run of this project (see repeated_question) with no "
                         "kb.guidance.provided.v1 / kb.session.context.v1 / "
-                        "kb.entry.created.v1 activity in between — the vault was never "
+                        "kb.entry.created.v1/v2 activity in between — the vault was never "
                         "consulted or grown in the run that repeated the question. "
                         "Consider adding a `kb check <question>` step to this project's "
                         "session-start workflow (CLAUDE.md or a skill) so recurring "
