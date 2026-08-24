@@ -122,6 +122,18 @@ def status_of(path: Path) -> str | None:
     return None
 
 
+def status_annotation(status: str) -> str:
+    """Render a semantic marker for a schema lifecycle annotation.
+
+    Most status annotations call out inactive or unhealthy channels, so they
+    retain the existing silent marker. Active producer-and-consumer statuses
+    instead render a positive marker: calling a live channel silent is false
+    operational documentation.
+    """
+    marker = "🟢" if status.lower().startswith("active") else "🔇"
+    return f"{marker} **{status}**"
+
+
 # Channels formally retired whose producer AND schema file were both removed
 # from this repo (not just deprecated-in-place). Listed by hand because the
 # generator only has *.json files to walk — there's nothing on disk to
@@ -256,7 +268,7 @@ def main() -> int:
             desc_cell = title_of(p).replace("|", "\\|") or "—"
             status = status_of(p)
             if status:
-                desc_cell = f"🔇 **{status}** — {desc_cell}"
+                desc_cell = f"{status_annotation(status)} — {desc_cell}"
             lines.append(f"| `{ch}`{flag} | {desc_cell} |")
         lines.append("")
 

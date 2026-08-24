@@ -350,7 +350,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `kb.decay.applied.v1` | 🔇 **unconsumed** — KB Decay Applied |
 | `kb.edge.invalid.v1` | kb.edge.invalid v1 |
 | `kb.entry.created.v1` | KB Entry Created |
-| `kb.entry.created.v2` | 🔇 **active-producer-and-consumer** — KB Entry Created v2 |
+| `kb.entry.created.v2` | 🟢 **active-producer-and-consumer** — KB Entry Created v2 |
 | `kb.entry.deleted.v1` | kb.entry.deleted v1 |
 | `kb.entry.graded.v1` | kb.entry.graded v1 |
 | `kb.entry.moved.v1` | kb.entry.moved v1 |
