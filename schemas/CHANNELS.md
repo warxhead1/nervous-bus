@@ -230,6 +230,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `bus.exec.evidence.v1` | bus.exec.evidence v1 |
 | `bus.exec.lifecycle.v1` | bus.exec.lifecycle v1 |
 | `bus.gamedev.progress.v1` | bus.gamedev.progress.v1 |
+| `bus.gamedev.progress.v2` | bus.gamedev.progress v2 — digest-bound logical screenshot identity; v1 retained during migration |
 | `bus.hearth-loom.ac.verified.v1` | bus.hearth-loom.ac.verified v1 |
 | `bus.intrinsic.marker.v1` | bus.intrinsic.marker v1 |
 | `bus.notify.v1` | bus.notify v1 |
@@ -419,4 +420,3 @@ Convention: `<project>.<subsystem>.<event>.v<n>` (lowercase, dot-separated, trai
 - `_per-project.rule.push.v1` — leading underscore (template/placeholder, not a real `<project>` segment)
 - `_per-project.skill.push.v1` — leading underscore (template/placeholder, not a real `<project>` segment)
 - `codeforces_problem.v1` — too few segments — needs `<project>.<subsystem>.<event>` before `.v<n>`
-

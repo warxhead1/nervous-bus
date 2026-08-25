@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.gamedev.progress.v2.json",
+  "type": "object",
+  "title": "bus.gamedev.progress.v2",
+  "description": "One game-development progress beat. Version 2 retains the v1 timeline fields and adds digest-bound logical screenshot identity so Hearth can serve an approved Saved symlink target without trusting an arbitrary absolute path.",
+  "properties": {
+    "v": {
+      "type": "integer",
+      "const": 2,
+      "description": "Event schema version"
+    },
+    "source": {
+      "type": "string",
+      "const": "gamedev",
+      "description": "Emitting subsystem family"
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Project slug matching the repository directory name"
+    },
+    "host": {
+      "type": "string",
+      "description": "Hostname of the emitting machine"
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["gate", "bench", "shot", "phase", "review", "wave"]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "pending", "info"]
+    },
+    "phase": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "artifact_path": {
+      "type": "string",
+      "description": "Absolute path to the run artifact directory or JSON"
+    },
+    "screenshot_path": {
+      "type": "string",
+      "description": "Producer-resolved absolute screenshot path retained for host diagnostics"
+    },
+    "screenshot_relpath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+\\.(?i:png|jpe?g|webp)$",
+      "description": "Repository-logical screenshot path used by Hearth; must be relative and traversal-free"
+    },
+    "screenshot_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Lowercase SHA-256 of the exact screenshot bytes"
+    },
+    "screenshot_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Exact non-zero screenshot byte count"
+    },
+    "git_sha": {
+      "type": "string"
+    },
+    "needs_eyes": {
+      "type": "boolean"
+    }
+  },
+  "required": ["v", "source", "project", "host", "kind", "title", "status"],
+  "dependentRequired": {
+    "screenshot_path": ["screenshot_relpath", "screenshot_sha256", "screenshot_bytes"],
+    "screenshot_relpath": ["screenshot_path", "screenshot_sha256", "screenshot_bytes"],
+    "screenshot_sha256": ["screenshot_path", "screenshot_relpath", "screenshot_bytes"],
+    "screenshot_bytes": ["screenshot_path", "screenshot_relpath", "screenshot_sha256"]
+  },
+  "additionalProperties": false
+}
