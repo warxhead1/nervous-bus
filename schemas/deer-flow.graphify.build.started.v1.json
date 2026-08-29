@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.graphify.build.started.v1.json",
+  "title": "deer-flow.graphify.build.started v1",
+  "description": "A Deer Flow Graphify rebuild started for a project. Source: /deer-flow/graphify.",
+  "type": "object",
+  "required": ["project", "reason", "graph"],
+  "properties": {
+    "project": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Basename of the project whose graph is being rebuilt"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Why the rebuild started, including force for an explicit rebuild"
+    },
+    "graph": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Filesystem path to the project's graph.json artifact"
+    }
+  },
+  "additionalProperties": false
+}

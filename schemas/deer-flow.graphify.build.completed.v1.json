@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.graphify.build.completed.v1.json",
+  "title": "deer-flow.graphify.build.completed v1",
+  "description": "A Deer Flow Graphify rebuild completed and reports the resulting graph size. Source: /deer-flow/graphify.",
+  "type": "object",
+  "required": ["project", "graph", "node_count", "edge_count"],
+  "properties": {
+    "project": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Basename of the project whose graph was rebuilt"
+    },
+    "graph": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Filesystem path to the project's graph.json artifact"
+    },
+    "node_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of nodes in the completed graph"
+    },
+    "edge_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of edges in the completed graph"
+    }
+  },
+  "additionalProperties": false
+}

@@ -4,7 +4,7 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**348 channels** across 5 clusters.
+**352 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
@@ -12,7 +12,7 @@ Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster
 | [Autobench](#autobench) | 54 | autobench.* evolution loop (case/judge/improver/budget/...) |
 | [Hearth](#hearth) | 52 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 179 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 183 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -230,7 +230,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `bus.exec.evidence.v1` | bus.exec.evidence v1 |
 | `bus.exec.lifecycle.v1` | bus.exec.lifecycle v1 |
 | `bus.gamedev.progress.v1` | bus.gamedev.progress.v1 |
-| `bus.gamedev.progress.v2` | bus.gamedev.progress v2 — digest-bound logical screenshot identity; v1 retained during migration |
+| `bus.gamedev.progress.v2` | bus.gamedev.progress.v2 |
 | `bus.hearth-loom.ac.verified.v1` | bus.hearth-loom.ac.verified v1 |
 | `bus.intrinsic.marker.v1` | bus.intrinsic.marker v1 |
 | `bus.notify.v1` | bus.notify v1 |
@@ -302,6 +302,9 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `deer-flow.feedback.received.v1` | deer-flow.feedback.received v1 |
 | `deer-flow.forge.seal.stamped.v1` | deer-flow.forge.seal.stamped v1 |
 | `deer-flow.forge.subscription.error.v1` | ForgeSubscriptionError |
+| `deer-flow.graphify.build.completed.v1` | deer-flow.graphify.build.completed v1 |
+| `deer-flow.graphify.build.started.v1` | deer-flow.graphify.build.started v1 |
+| `deer-flow.graphify.graph.stale.v1` | deer-flow.graphify.graph.stale v1 |
 | `deer-flow.guidance.fact.v1` | deer-flow.guidance.fact v1 |
 | `deer-flow.kb.entry.authored.v1` | deer-flow.kb.entry.authored v1 |
 | `deer-flow.metaprobe.cycle.v1` | deer-flow.metaprobe.cycle v1 |
@@ -420,3 +423,4 @@ Convention: `<project>.<subsystem>.<event>.v<n>` (lowercase, dot-separated, trai
 - `_per-project.rule.push.v1` — leading underscore (template/placeholder, not a real `<project>` segment)
 - `_per-project.skill.push.v1` — leading underscore (template/placeholder, not a real `<project>` segment)
 - `codeforces_problem.v1` — too few segments — needs `<project>.<subsystem>.<event>` before `.v<n>`
+
