@@ -138,11 +138,55 @@ def _extract_remediation(command: str, day: str, project: str) -> list[Remediati
     return out
 
 
-def scan(src: str, adapters=None) -> tuple[list[StruggleEvent], list[Remediation], str]:
+def _candidate_files(files: list[str], days_limit: Optional[int]) -> list[str]:
+    """Bound the file set by mtime BEFORE anything opens/parses them.
+
+    A transcript file's mtime is >= the timestamp of every record it contains
+    (records are appended, and an append updates mtime), so a file whose mtime
+    falls before the window's cutoff cannot hold any in-window record and is
+    safe to drop without ever being opened. Only a cheap stat() per file, no
+    line-by-line parsing.
+
+    days_limit=None (the "give me everything" call) returns files unchanged —
+    the unbounded read stays available, this only shrinks the bounded one.
+
+    The cutoff is anchored on the highest mtime seen (a stat-only proxy for
+    the true horizon, which normally requires parsing every line to find) with
+    a +1 day buffer to absorb mtime/record-timestamp skew (TZ, a record
+    written just before midnight in a file whose mtime lands just after). The
+    buffer only ever makes the kept set larger, never smaller, so it cannot
+    drop a file the unbounded scan would have used for the final windowed
+    output — it only skips files that are provably too old to matter.
+    """
+    if not days_limit:
+        return files
+    mtimes = []
+    for f in files:
+        try:
+            mtimes.append((f, os.path.getmtime(f)))
+        except OSError:
+            continue
+    if not mtimes:
+        return files
+    newest = max(m for _, m in mtimes)
+    cutoff_ts = newest - (days_limit + 1) * 86400
+    return [f for f, m in mtimes if m >= cutoff_ts]
+
+
+def scan(src: str, adapters=None,
+         days_limit: Optional[int] = None) -> tuple[list[StruggleEvent], list[Remediation], str]:
     """Walk every *.jsonl under src; return (struggle_events, remediation_events, horizon).
 
     horizon = most recent record date across ALL records (the data-window end), used
     to decide open-vs-resolved relative to *now*, not relative to the last struggle.
+
+    days_limit, when given, is used ONLY to shrink the candidate file set via
+    _candidate_files() (a stat-only mtime prefilter) before any file is opened —
+    it does not change which records within the kept files are returned; the
+    caller (run()) still applies the exact day-level cutoff against the real
+    parsed horizon, so the final output for a given days_limit is identical to
+    scanning everything and filtering afterward. See _candidate_files() for why
+    the prefilter cannot drop an in-window record.
     """
     import glob
     adapters = adapters if adapters is not None else load_adapters()
@@ -151,7 +195,8 @@ def scan(src: str, adapters=None) -> tuple[list[StruggleEvent], list[Remediation
     remed: list[Remediation] = []
     horizon = ""
 
-    for f in glob.glob(os.path.join(src, "*", "*.jsonl")) + glob.glob(os.path.join(src, "*.jsonl")):
+    all_files = glob.glob(os.path.join(src, "*", "*.jsonl")) + glob.glob(os.path.join(src, "*.jsonl"))
+    for f in _candidate_files(all_files, days_limit):
         with open(f, errors="replace") as fh:
             for line in fh:
                 m = _TS_RE.search(line)
@@ -300,7 +345,7 @@ def render(recs: dict, remed: list[Remediation], maxday: str, days: list[str],
 
 def run(src: str, project: Optional[str] = None, days_limit: Optional[int] = None):
     adapters = load_adapters()
-    events, remed, horizon = scan(src, adapters)
+    events, remed, horizon = scan(src, adapters, days_limit)
     if not events:
         return {}, [], "", []
     maxday = horizon or max(e.day for e in events)

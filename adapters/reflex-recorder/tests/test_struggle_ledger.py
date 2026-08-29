@@ -151,5 +151,99 @@ class TestFixCorrelation(unittest.TestCase):
             self.assertEqual(recs[("myproj", "resource_busy")].fix_verdict, "unfixed_no_attempt")
 
 
+def _touch(path, day):
+    """Set a file's mtime to noon UTC on `day` (YYYY-MM-DD), like a real transcript
+    file whose last write was that day."""
+    import calendar
+    import time
+    y, m, dd = map(int, day.split("-"))
+    ts = calendar.timegm((y, m, dd, 12, 0, 0, 0, 0, 0))
+    os.utime(path, (ts, ts))
+
+
+class TestMtimePrefilter(unittest.TestCase):
+    """struggle_ledger's --days must bound IO (via mtime) before opening any
+    transcript file, not just filter the parsed result afterward — a stale
+    file cannot hold an in-window record because mtime only grows on append."""
+
+    def test_candidate_files_drops_stale_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            old = os.path.join(d, "old.jsonl")
+            new = os.path.join(d, "new.jsonl")
+            open(old, "w").close()
+            open(new, "w").close()
+            _touch(old, "2026-06-01")
+            _touch(new, "2026-06-20")
+            kept = SL._candidate_files([old, new], days_limit=5)
+            self.assertEqual(kept, [new])
+
+    def test_candidate_files_keeps_everything_within_buffer(self):
+        with tempfile.TemporaryDirectory() as d:
+            edge = os.path.join(d, "edge.jsonl")
+            new = os.path.join(d, "new.jsonl")
+            open(edge, "w").close()
+            open(new, "w").close()
+            # 6 days back from the newest file, days_limit=5 -> inside the +1 day buffer
+            _touch(edge, "2026-06-14")
+            _touch(new, "2026-06-20")
+            kept = SL._candidate_files([edge, new], days_limit=5)
+            self.assertEqual(sorted(kept), sorted([edge, new]))
+
+    def test_candidate_files_no_days_limit_returns_everything(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = os.path.join(d, "a.jsonl")
+            b = os.path.join(d, "b.jsonl")
+            open(a, "w").close()
+            open(b, "w").close()
+            _touch(a, "2020-01-01")
+            _touch(b, "2026-06-20")
+            self.assertEqual(sorted(SL._candidate_files([a, b], None)), sorted([a, b]))
+
+    def test_scan_with_days_limit_opens_fewer_files_same_events(self):
+        # Old file (well outside the window) + new file (inside it). Bounded scan
+        # must skip the old file's open() entirely, yet the windowed events()
+        # returned by run() must be byte-identical to the unbounded scan filtered
+        # by hand afterward -- proving the IO bound changes nothing observable.
+        old_lines = [_rec("2026-05-01", "s0", CWD, result="device or resource busy")]
+        new_lines = [_rec(f"2026-06-{dd:02d}", "s1", CWD, result="device or resource busy")
+                     for dd in range(16, 21)]
+        with tempfile.TemporaryDirectory() as d:
+            proj = os.path.join(d, "myproj")
+            _write(proj, "old.jsonl", old_lines)
+            _write(proj, "new.jsonl", new_lines)
+            _touch(os.path.join(proj, "old.jsonl"), "2026-05-01")
+            _touch(os.path.join(proj, "new.jsonl"), "2026-06-20")
+
+            opened = []
+            real_open = open
+
+            def spy_open(path, *a, **kw):
+                opened.append(path)
+                return real_open(path, *a, **kw)
+
+            import builtins
+            orig = builtins.open
+            builtins.open = spy_open
+            try:
+                events_bounded, _remed, horizon_bounded = SL.scan(d, adapters=[], days_limit=5)
+            finally:
+                builtins.open = orig
+            self.assertTrue(all("old.jsonl" not in p for p in opened),
+                             f"old.jsonl must not be opened, got {opened}")
+            self.assertTrue(any("new.jsonl" in p for p in opened))
+
+            # Unbounded scan + the same manual day-cutoff run() applies -> identical
+            # windowed result.
+            events_full, _remed2, horizon_full = SL.scan(d, adapters=[])
+            self.assertEqual(horizon_bounded, horizon_full)
+            cutoff = (SL._parse(horizon_full) - SL.timedelta(days=5)).isoformat()
+            full_windowed = sorted(
+                (e.name, e.day, e.session, e.project) for e in events_full if e.day >= cutoff)
+            bounded_sorted = sorted(
+                (e.name, e.day, e.session, e.project) for e in events_bounded if e.day >= cutoff)
+            self.assertEqual(full_windowed, bounded_sorted)
+            self.assertTrue(full_windowed, "fixture must actually produce events")
+
+
 if __name__ == "__main__":
     unittest.main()
