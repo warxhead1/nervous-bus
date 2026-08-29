@@ -54,22 +54,64 @@ verification_failure:
   - outcome == 'reverted' (labeled_at IS NOT NULL) (claimed-done work was
     later undone — the strongest possible verification-failure signal)
 
-planning_failure:
+planning_failure (CONFIRMED tier):
   - outcome in ('thrashed', 'abandoned') (labeled_at IS NOT NULL)
   - red_baseline_dispatch hit     (fan-out launched on a red/unestablished
     baseline — a planning precondition was skipped)
   - inherited_rationalization hit (sibling cohort converged on one seeded
     bad outcome — scope/plan drift propagated from the dispatch)
+
+planning_failure_unconfirmed_cadence (UNCONFIRMED tier — 2026-08-28 split,
+see "Confidence tiers" below):
   - event_count >= THRASH_EVENT_COUNT_FLOOR AND outcome is not confirmed
-    clean (labeled_at IS NOT NULL AND outcome in clean/landed/corrected) —
-    the weakest signal here, an honest cadence heuristic: a very long run
-    that did NOT end in a confirmed-clean outcome is treated as a loop/thrash
-    candidate, not a diagnosis.
+    clean (labeled_at IS NOT NULL AND outcome in clean/landed/corrected)
+    AND none of the confirmed planning_failure reasons above also fired for
+    this run — the weakest signal in the taxonomy, an honest cadence
+    heuristic: a very long run that did NOT end in a confirmed-clean outcome
+    is treated as a loop/thrash CANDIDATE, not a diagnosis. By design (see
+    "Confidence tiers") this fires on both labeled-non-clean runs whose
+    outcome isn't itself a planning outcome and on NOT-YET-LABELED runs —
+    it is never gated on labeled_at, because label.py is flaky (exited 1 in
+    the 2026-08-28 nightly) and gating on it would silently hide real thrash
+    sitting in the unlabeled backlog.
+
+Confidence tiers (2026-08-28, adversarially-reviewed narrowing)
+=================================================================
+synthesis.py originally scored planning_failure as one undifferentiated
+bucket, so a run whose ONLY planning evidence was the cadence heuristic
+scored identically to a run confirmed thrashed/abandoned by label.py.
+Measured 2026-08-28 against the live store: 692 runs tripped the cadence
+floor, and 543/692 (78.5%) of them were simply NOT-YET-LABELED backlog, not
+diagnosed thrash — yet the combined bucket still ranked #3 overall with
+prevalence=100% and decision=propose_fix.
+
+The fix is NOT to gate the cadence heuristic on labeled_at (that would hide
+real thrash the moment label.py has a bad night — see the module-docstring
+mapping principle above and README.md's null-vs-clean discipline). Instead,
+classify_run() splits planning-failure evidence into two buckets:
+
+  - A run with >=1 CONFIRMED planning reason (outcome=thrashed/abandoned,
+    red_baseline_dispatch hit, inherited_rationalization hit) is tagged
+    `planning_failure`, even if the cadence heuristic also fired for it (the
+    cadence reason is appended as corroborating evidence, not the sole
+    basis).
+  - A run whose planning evidence is the cadence heuristic ALONE (no
+    confirmed reason fired) is tagged `planning_failure_unconfirmed_cadence`
+    — a distinct signature, scored and ranked independently by
+    synthesis.py's per-signature prevalence/recurrence machinery, so its
+    mass is visible but can never dilute (or inflate) the confirmed bucket's
+    score. synthesis.py additionally caps this bucket's decision at
+    `monitor` — an unconfirmed-cadence-only signature can never reach
+    `propose_fix` on its own; only confirmed evidence drives a top-rank
+    decision. The unconfirmed mass is never dropped: it is downweighted and
+    reported under its own bucket name so a reader sees exactly how much of
+    "planning failure" is real vs unlabeled backlog waiting on label.py.
 
 Output
 ======
 One PatternCandidate per (project, bucket) — including an explicit
-`unclassified` bucket — grouping every run that matched, so the Kyoko
+`unclassified` bucket and the `planning_failure_unconfirmed_cadence` tier
+bucket above — grouping every run that matched, so the Kyoko
 prevalence/recurrence layer tracks "how much of this project's work falls
 into which failure bucket" over time. Per-run tags are reconstructable from
 detector_hits (run_id, signature) without any extra state, exactly like every
@@ -99,7 +141,24 @@ VERIFICATION_FAILURE = "verification_failure"
 PLANNING_FAILURE = "planning_failure"
 UNCLASSIFIED = "unclassified"
 
+# Confidence-tier sub-bucket for planning_failure's weakest signal (the cadence
+# heuristic below). Kept as its OWN bucket/signature — never merged back into
+# PLANNING_FAILURE — so synthesis.py's per-signature prevalence/recurrence/score
+# never lets unconfirmed backlog mass stand in for a confirmed diagnosis. See
+# "Confidence tiers" in the module docstring.
+PLANNING_FAILURE_UNCONFIRMED_CADENCE = "planning_failure_unconfirmed_cadence"
+
+# Canonical four-bucket taxonomy (deepset). PLANNING_FAILURE_UNCONFIRMED_CADENCE
+# is intentionally NOT a fifth taxonomy bucket — it is a confidence-tier split
+# of PLANNING_FAILURE's weakest signal, reported separately (see above).
 BUCKETS = (CONTEXT_FAILURE, CONSTRAINT_FAILURE, VERIFICATION_FAILURE, PLANNING_FAILURE)
+
+# Confidence-tier labels stamped onto each PatternCandidate's extra dict so
+# synthesis.py (and any report/digest reading detector output) can tell a
+# confirmed bucket from the unconfirmed-cadence-candidate split without
+# string-matching the bucket name.
+CONFIRMED_TIER = "confirmed"
+UNCONFIRMED_CADENCE_TIER = "unconfirmed_cadence_candidate"
 
 # Detector-hit signal sets per bucket (see module docstring for rationale).
 _CONTEXT_DETECTORS = frozenset({
@@ -180,18 +239,39 @@ def classify_run(
     if verification_reasons:
         buckets[VERIFICATION_FAILURE] = verification_reasons
 
-    planning_reasons = []
+    # planning_failure — CONFIRMED reasons only (a labeled thrash/abandoned
+    # outcome, or a hit from a detector that itself is a confirmed planning
+    # signal). The cadence heuristic is deliberately NOT folded in here — see
+    # "Confidence tiers" in the module docstring.
+    planning_confirmed_reasons = []
     if labeled_at is not None and outcome in _FAILURE_OUTCOMES_PLANNING:
-        planning_reasons.append(f"outcome={outcome}")
+        planning_confirmed_reasons.append(f"outcome={outcome}")
     for name in sorted(hit_detectors & _PLANNING_DETECTORS):
-        planning_reasons.append(f"{name} hit")
+        planning_confirmed_reasons.append(f"{name} hit")
+
     is_confirmed_clean = labeled_at is not None and outcome in _CLEAN_OUTCOMES
+    cadence_reason = None
     if not is_confirmed_clean and event_count >= THRASH_EVENT_COUNT_FLOOR:
-        planning_reasons.append(
-            f"event_count={event_count}>={THRASH_EVENT_COUNT_FLOOR} (cadence heuristic, outcome not confirmed clean)"
+        cadence_reason = (
+            f"event_count={event_count}>={THRASH_EVENT_COUNT_FLOOR} "
+            f"(cadence heuristic, outcome not confirmed clean)"
         )
-    if planning_reasons:
-        buckets[PLANNING_FAILURE] = planning_reasons
+
+    if planning_confirmed_reasons:
+        # Confirmed tier: real evidence carries the bucket. The cadence
+        # heuristic, if it also fired, is appended as corroborating evidence
+        # — it is never the SOLE basis for this bucket.
+        reasons = list(planning_confirmed_reasons)
+        if cadence_reason:
+            reasons.append(cadence_reason)
+        buckets[PLANNING_FAILURE] = reasons
+    elif cadence_reason:
+        # Unconfirmed tier: cadence heuristic fired ALONE — no confirmed
+        # planning reason backs it. Own bucket/signature so synthesis.py
+        # scores and ranks it independently and can cap its decision (see
+        # "Confidence tiers" in the module docstring); the mass is reported,
+        # never dropped, and never allowed to inflate the confirmed bucket.
+        buckets[PLANNING_FAILURE_UNCONFIRMED_CADENCE] = [cadence_reason]
 
     return buckets
 
@@ -199,7 +279,12 @@ def classify_run(
 # ── Detector ──────────────────────────────────────────────────────────────────
 
 class FailureTaxonomyDetector(BaseDetector):
-    """Classify each closed run's failure signals into the four-bucket taxonomy."""
+    """Classify each closed run's failure signals into the four-bucket taxonomy.
+
+    planning_failure additionally splits into a confirmed bucket and a
+    separately-scored planning_failure_unconfirmed_cadence bucket — see the
+    module docstring's "Confidence tiers" section.
+    """
 
     DETECTOR_NAME = "failure_taxonomy"
 
@@ -254,6 +339,30 @@ class FailureTaxonomyDetector(BaseDetector):
 
             signature = f"{project}:{self.DETECTOR_NAME}:{bucket}"
 
+            is_unconfirmed_cadence = bucket == PLANNING_FAILURE_UNCONFIRMED_CADENCE
+            confidence_tier = (
+                UNCONFIRMED_CADENCE_TIER if is_unconfirmed_cadence else CONFIRMED_TIER
+            )
+            if is_unconfirmed_cadence:
+                rung_justification = (
+                    "Classifier/surfacing detector — no single deterministic fix "
+                    "exists for a failure CATEGORY. This is the UNCONFIRMED-CADENCE "
+                    "split of planning_failure's weakest signal: every run here "
+                    "matched ONLY the long-run cadence heuristic, with no confirmed "
+                    "thrashed/abandoned outcome or confirmed planning-detector hit. "
+                    "Reported for visibility (never dropped), but never sufficient "
+                    "on its own to drive a top-rank decision — see "
+                    "synthesis.py's confidence-tier decision cap and the module "
+                    "docstring's 'Confidence tiers' section."
+                )
+            else:
+                rung_justification = (
+                    "Classifier/surfacing detector — no single deterministic "
+                    "fix exists for a failure CATEGORY. Value is in the "
+                    "aggregate counts (which bucket dominates) and per-run "
+                    "tags for downstream, more specific detectors/humans."
+                )
+
             candidates.append(
                 PatternCandidate(
                     project=project,
@@ -268,12 +377,8 @@ class FailureTaxonomyDetector(BaseDetector):
                         "bucket": bucket,
                         "runs_tagged": len(hits),
                         "remediation_rung": "inform",
-                        "remediation_rung_justification": (
-                            "Classifier/surfacing detector — no single deterministic "
-                            "fix exists for a failure CATEGORY. Value is in the "
-                            "aggregate counts (which bucket dominates) and per-run "
-                            "tags for downstream, more specific detectors/humans."
-                        ),
+                        "remediation_rung_justification": rung_justification,
+                        "confidence_tier": confidence_tier,
                     },
                 )
             )

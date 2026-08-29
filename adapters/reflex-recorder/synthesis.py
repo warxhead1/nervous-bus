@@ -64,7 +64,10 @@ from detectors.directive_ground_truth_mismatch import DirectiveGroundTruthMismat
 from detectors.inherited_rationalization import InheritedRationalizationDetector
 from detectors.harness_change_watch import HarnessChangeWatchDetector
 from detectors.kb_recall_gap import KbRecallGapDetector
-from detectors.failure_taxonomy import FailureTaxonomyDetector
+from detectors.failure_taxonomy import (
+    FailureTaxonomyDetector,
+    UNCONFIRMED_CADENCE_TIER,
+)
 from adapter_api import load_adapters
 
 # ---------------------------------------------------------------------------
@@ -1222,6 +1225,13 @@ def build_eval_payload(
         # Internal field used by persist_eval
         "issue": issue,
     }
+    # Confidence tier (e.g. failure_taxonomy's "confirmed" vs
+    # "unconfirmed_cadence_candidate" split, see detectors/failure_taxonomy.py)
+    # — surfaced whenever a detector stamps it, so a reader of the eval (or
+    # the digest built from run_evals) can see how much of a bucket's mass is
+    # unconfirmed without re-deriving it from the signature string.
+    if candidate is not None and candidate.extra.get("confidence_tier"):
+        payload["confidence_tier"] = candidate.extra["confidence_tier"]
     if candidate and candidate.proposed_remediation:
         rung_type = candidate.extra.get("remediation_rung", rung)
         payload["remediation"] = {
@@ -1501,6 +1511,37 @@ def run_synthesis(
             labeled_support=labeled_support,
             logical_run_count=logical_run_count,
         )
+
+        # Confidence-tier decision cap (2026-08-28, adversarially-reviewed
+        # narrowing of the failure_taxonomy planning_failure cadence finding):
+        # a candidate whose evidence is ONLY the weak, unconfirmed cadence
+        # heuristic (candidate.extra["confidence_tier"] ==
+        # UNCONFIRMED_CADENCE_TIER — stamped by
+        # detectors/failure_taxonomy.py's split of planning_failure) can never
+        # independently reach propose_fix, no matter how high its own
+        # prevalence/recurrence score climbs. Its score and prevalence are
+        # still computed and surfaced in full (never dropped) — only the
+        # DECISION is capped, so a reader sees the real mass of unconfirmed
+        # backlog without the engine acting on it as if it were diagnosed.
+        # Only a candidate with >=1 confirmed reason (outcome=thrashed/
+        # abandoned, red_baseline_dispatch, inherited_rationalization) can
+        # drive a top-rank propose_fix decision for planning failure.
+        if (
+            candidate is not None
+            and candidate.extra.get("confidence_tier") == UNCONFIRMED_CADENCE_TIER
+            and decision == "propose_fix"
+        ):
+            decision = "monitor"
+            decision_rationale = (
+                f"Unconfirmed-cadence-candidate tier: score={score:.3f} would "
+                f"otherwise propose_fix, but this signature's only evidence is "
+                f"the long-run cadence heuristic (no confirmed thrashed/"
+                f"abandoned outcome, no confirmed planning-detector hit) — "
+                f"capped at monitor. Confirmed evidence alone drives a "
+                f"top-rank decision for planning failure; escalate this "
+                f"backlog by labeling the underlying runs (label.py), not by "
+                f"scoring cadence alone higher."
+            )
 
         # ── Step 6: Persist eval ──────────────────────────────────────────
         prior_eval = get_prior_eval(conn, signature)

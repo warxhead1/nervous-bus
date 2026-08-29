@@ -1420,3 +1420,129 @@ class TestHardeningAcceptance:
             all_members.update(members)
         assert "A" in all_members, "A must be in the logical run"
         assert "B" in all_members, "B must be in the logical run"
+
+
+# ---------------------------------------------------------------------------
+# 12. failure_taxonomy confidence-tier split (2026-08-28, verifier-narrowed
+#     remediation of the planning_failure cadence-heuristic finding)
+# ---------------------------------------------------------------------------
+
+class TestFailureTaxonomyConfidenceTierDecisionCap:
+    """End-to-end (real run_synthesis, real detectors) proof that:
+
+      1. planning_failure's cadence-only evidence and its confirmed evidence
+         are scored/reported as two SEPARATE signatures.
+      2. An unconfirmed-cadence-only signature can NEVER reach propose_fix,
+         no matter how high its own prevalence/score climbs — confirmed
+         evidence alone drives a top-rank decision.
+      3. The unconfirmed mass is reported (never dropped): it still produces
+         a candidate/eval with its real score and run count.
+    """
+
+    def _seed_unconfirmed_long_runs(self, conn, project, n, days_ago=1):
+        """N runs, no label, event_count over the cadence floor — the ONLY
+        planning-failure evidence for these runs is the weak cadence
+        heuristic. Same project, no other runs, so this signature's own
+        prevalence is 100% within the window (this is the exact shape of
+        the real defect: an all-unlabeled backlog reads as 100% prevalent)."""
+        from detectors.failure_taxonomy import THRASH_EVENT_COUNT_FLOOR
+        for i in range(n):
+            started, ended = _relative_pair(days_ago=days_ago, minutes=5)
+            _insert_run(
+                conn, f"{project}-unconfirmed-{i}", project=project,
+                started=started, ended=ended, close_reason="idle_timeout",
+                outcome=None, labeled_at=None,
+            )
+            # event_count isn't a column _insert_run sets; patch it directly.
+            conn.execute(
+                "UPDATE runs SET event_count = ? WHERE run_id = ?",
+                (THRASH_EVENT_COUNT_FLOOR + i, f"{project}-unconfirmed-{i}"),
+            )
+
+    def _seed_confirmed_thrashed_runs(self, conn, project, m, days_ago=1):
+        """M short runs, labeled thrashed — confirmed planning-failure
+        evidence, independent of event_count/cadence."""
+        for i in range(m):
+            started, ended = _relative_pair(days_ago=days_ago, minutes=5)
+            _insert_run(
+                conn, f"{project}-confirmed-{i}", project=project,
+                started=started, ended=ended, close_reason="idle_timeout",
+                outcome="thrashed", labeled_at=ended,
+            )
+
+    def test_unconfirmed_cadence_only_bucket_never_reaches_propose_fix(self):
+        """A project with ONLY unconfirmed-cadence long runs (no other
+        activity) has 100% prevalence for that signature — the exact shape
+        of the measured real-world defect (692 cadence hits, 543/692 =
+        78.5% unlabeled backlog, yet the combined bucket scored 0.760 and
+        ranked #3 with decision=propose_fix). Confirm the split-and-cap
+        fix: the isolated unconfirmed signature must be capped at monitor."""
+        conn = _make_conn()
+        project = "cadence-only-proj"
+        self._seed_unconfirmed_long_runs(conn, project, n=8)
+
+        result = syn.run_synthesis(conn, dry_run=True, project_filter=project)
+        taxonomy_evals = [
+            e for e in result.evals if e["detector"] == "failure_taxonomy"
+        ]
+        cadence_evals = [
+            e for e in taxonomy_evals
+            if e["issue_signature"].endswith(":planning_failure_unconfirmed_cadence")
+        ]
+        assert len(cadence_evals) == 1, (
+            f"expected exactly one unconfirmed-cadence eval, got {taxonomy_evals}"
+        )
+        ev = cadence_evals[0]
+        assert ev.get("confidence_tier") == "unconfirmed_cadence_candidate"
+        assert ev["decision"] != "propose_fix", (
+            f"unconfirmed-cadence-only signature reached propose_fix "
+            f"(score={ev['score']}) — the confidence-tier cap did not apply"
+        )
+        assert "capped at monitor" in ev["decision_rationale"] or (
+            ev["decision"] in ("monitor", "needs_more_data", "suppressed")
+        )
+
+    def test_confirmed_and_unconfirmed_report_as_separate_signatures(self):
+        """N unlabeled long runs + M labeled-thrashed runs in the SAME
+        project must produce two distinct failure_taxonomy planning
+        signatures with their own occurrence counts, and no eval tagged
+        unconfirmed_cadence_candidate may carry decision=propose_fix — the
+        confirmed tier alone may drive a top-rank decision."""
+        conn = _make_conn()
+        project = "mixed-proj"
+        n, m = 12, 4
+        self._seed_unconfirmed_long_runs(conn, project, n=n)
+        self._seed_confirmed_thrashed_runs(conn, project, m=m)
+
+        result = syn.run_synthesis(conn, dry_run=True, project_filter=project)
+        taxonomy_evals = [
+            e for e in result.evals if e["detector"] == "failure_taxonomy"
+        ]
+        by_suffix = {
+            e["issue_signature"].rsplit(":", 1)[-1]: e for e in taxonomy_evals
+        }
+        assert "planning_failure" in by_suffix, taxonomy_evals
+        assert "planning_failure_unconfirmed_cadence" in by_suffix, taxonomy_evals
+
+        confirmed_ev = by_suffix["planning_failure"]
+        unconfirmed_ev = by_suffix["planning_failure_unconfirmed_cadence"]
+
+        assert confirmed_ev["issue_signature"] != unconfirmed_ev["issue_signature"]
+        assert confirmed_ev.get("confidence_tier") == "confirmed"
+        assert unconfirmed_ev.get("confidence_tier") == "unconfirmed_cadence_candidate"
+
+        # Occurrence/run counts are visible per-tier (mass is reported, not
+        # dropped) via run_sample / score_components — sanity-check both
+        # signatures actually carry evidence.
+        assert len(confirmed_ev["run_sample"]) >= 1
+        assert len(unconfirmed_ev["run_sample"]) >= 1
+
+        # The universal invariant: across every eval this pass produced, an
+        # unconfirmed-cadence-tier signature is never the one licensing a
+        # propose_fix decision.
+        for e in result.evals:
+            if e.get("confidence_tier") == "unconfirmed_cadence_candidate":
+                assert e["decision"] != "propose_fix", (
+                    f"{e['issue_signature']} is unconfirmed-cadence-tier but "
+                    f"reached propose_fix"
+                )

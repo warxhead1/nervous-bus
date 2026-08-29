@@ -31,7 +31,10 @@ from detectors.failure_taxonomy import (
     CONSTRAINT_FAILURE,
     VERIFICATION_FAILURE,
     PLANNING_FAILURE,
+    PLANNING_FAILURE_UNCONFIRMED_CADENCE,
     UNCLASSIFIED,
+    CONFIRMED_TIER,
+    UNCONFIRMED_CADENCE_TIER,
     THRASH_EVENT_COUNT_FLOOR,
 )
 
@@ -148,17 +151,55 @@ class TestClassifyRunPure(unittest.TestCase):
         buckets = classify_run({"inherited_rationalization"}, None, None, 0, 10)
         self.assertIn(PLANNING_FAILURE, buckets)
 
-    def test_planning_failure_from_cadence_heuristic_when_not_confirmed_clean(self):
+    def test_cadence_heuristic_alone_lands_in_unconfirmed_bucket_not_confirmed(self):
+        # 2026-08-28 confidence-tier split: a run whose ONLY planning evidence
+        # is the cadence heuristic (no confirmed thrashed/abandoned outcome,
+        # no confirmed planning-detector hit) is NOT tagged PLANNING_FAILURE
+        # (the confirmed tier) — it lands in its own, separately-scored
+        # unconfirmed bucket.
         buckets = classify_run(set(), None, None, 0, THRASH_EVENT_COUNT_FLOOR)
-        self.assertIn(PLANNING_FAILURE, buckets)
+        self.assertNotIn(PLANNING_FAILURE, buckets)
+        self.assertIn(PLANNING_FAILURE_UNCONFIRMED_CADENCE, buckets)
+
+    def test_cadence_heuristic_fires_for_labeled_non_planning_outcome_too(self):
+        # A labeled-but-not-thrashed/abandoned outcome (e.g. 'reverted') is
+        # not confirmed CLEAN, so the cadence heuristic still fires — and
+        # since 'reverted' is not itself a confirmed planning-failure outcome,
+        # it still lands in the unconfirmed-cadence bucket for the PLANNING
+        # taxonomy (it separately drives verification_failure via
+        # outcome=='reverted', tested elsewhere). Never gated on labeled_at.
+        buckets = classify_run(set(), "reverted", "2026-01-01T00:00:00Z", 0, THRASH_EVENT_COUNT_FLOOR)
+        self.assertNotIn(PLANNING_FAILURE, buckets)
+        self.assertIn(PLANNING_FAILURE_UNCONFIRMED_CADENCE, buckets)
 
     def test_cadence_heuristic_suppressed_when_confirmed_clean(self):
         buckets = classify_run(set(), "clean", "2026-01-01T00:00:00Z", 0, THRASH_EVENT_COUNT_FLOOR)
         self.assertNotIn(PLANNING_FAILURE, buckets)
+        self.assertNotIn(PLANNING_FAILURE_UNCONFIRMED_CADENCE, buckets)
 
     def test_below_cadence_floor_no_planning_failure(self):
         buckets = classify_run(set(), None, None, 0, THRASH_EVENT_COUNT_FLOOR - 1)
         self.assertNotIn(PLANNING_FAILURE, buckets)
+        self.assertNotIn(PLANNING_FAILURE_UNCONFIRMED_CADENCE, buckets)
+
+    def test_cadence_heuristic_folds_into_confirmed_bucket_when_backed_by_confirmed_reason(self):
+        # A run that is BOTH confirmed-thrashed AND long-running lands only in
+        # the confirmed PLANNING_FAILURE bucket — the cadence heuristic is
+        # corroborating evidence there, never a separate/duplicate bucket.
+        buckets = classify_run(
+            set(), "thrashed", "2026-01-01T00:00:00Z", 0, THRASH_EVENT_COUNT_FLOOR
+        )
+        self.assertIn(PLANNING_FAILURE, buckets)
+        self.assertNotIn(PLANNING_FAILURE_UNCONFIRMED_CADENCE, buckets)
+        # cadence reason appended as corroborating evidence
+        self.assertTrue(
+            any("cadence heuristic" in r for r in buckets[PLANNING_FAILURE])
+        )
+
+    def test_confirmed_planning_reason_without_cadence_still_confirmed(self):
+        buckets = classify_run({"red_baseline_dispatch"}, None, None, 0, 10)
+        self.assertIn(PLANNING_FAILURE, buckets)
+        self.assertNotIn(PLANNING_FAILURE_UNCONFIRMED_CADENCE, buckets)
 
     def test_unclassified_when_nothing_matches(self):
         buckets = classify_run(set(), "clean", "2026-01-01T00:00:00Z", 0, 10)
@@ -244,6 +285,91 @@ class TestFailureTaxonomyDetectorEndToEnd(unittest.TestCase):
         detector = FailureTaxonomyDetector(self.conn)
         candidates = detector.run()
         self.assertEqual(candidates[0].extra["remediation_rung"], "inform")
+
+
+class TestConfidenceTierSplitEndToEnd(unittest.TestCase):
+    """2026-08-28 confidence-tier split — verifier-narrowed remediation.
+
+    N unlabeled long runs (cadence-only) + M labeled-thrashed runs must
+    produce TWO SEPARATE signatures/candidates for the planning bucket, each
+    independently scored/prevalent, so the confirmed tier's score is never
+    diluted by unconfirmed backlog and the unconfirmed tier's mass is
+    reported (never dropped) but stamped as such.
+    """
+
+    def setUp(self):
+        self.conn = _make_db()
+
+    def _seed_mixed_backlog(self, n_unlabeled_long=6, m_labeled_thrashed=2):
+        for i in range(n_unlabeled_long):
+            _insert_run(
+                self.conn, f"run-unlabeled-{i}", project="proj",
+                outcome=None, labeled_at=None,
+                event_count=THRASH_EVENT_COUNT_FLOOR + i,
+            )
+        for i in range(m_labeled_thrashed):
+            _insert_run(
+                self.conn, f"run-thrashed-{i}", project="proj",
+                outcome="thrashed", labeled_at="2026-08-28T00:00:00Z",
+                event_count=10,  # short run — confirmed via outcome alone
+            )
+        return n_unlabeled_long, m_labeled_thrashed
+
+    def test_two_separate_candidates_confirmed_vs_unconfirmed(self):
+        n, m = self._seed_mixed_backlog()
+        detector = FailureTaxonomyDetector(self.conn)
+        candidates = detector.run()
+
+        by_bucket = {c.extra["bucket"]: c for c in candidates}
+        self.assertIn(PLANNING_FAILURE, by_bucket)
+        self.assertIn(PLANNING_FAILURE_UNCONFIRMED_CADENCE, by_bucket)
+
+        confirmed = by_bucket[PLANNING_FAILURE]
+        unconfirmed = by_bucket[PLANNING_FAILURE_UNCONFIRMED_CADENCE]
+
+        # Distinct signatures — never merged.
+        self.assertNotEqual(confirmed.signature, unconfirmed.signature)
+
+        # Confirmed tier holds exactly the M labeled-thrashed runs.
+        self.assertEqual(sorted(confirmed.run_ids), sorted(f"run-thrashed-{i}" for i in range(m)))
+        self.assertEqual(confirmed.extra["confidence_tier"], CONFIRMED_TIER)
+
+        # Unconfirmed tier holds exactly the N unlabeled-long runs — the
+        # backlog mass is present, not dropped.
+        self.assertEqual(
+            sorted(unconfirmed.run_ids),
+            sorted(f"run-unlabeled-{i}" for i in range(n)),
+        )
+        self.assertEqual(unconfirmed.extra["confidence_tier"], UNCONFIRMED_CADENCE_TIER)
+
+    def test_confirmed_tier_prevalence_not_diluted_by_unconfirmed_backlog(self):
+        # 6 unlabeled-long + 2 labeled-thrashed = 8 runs total; without the
+        # split, planning_failure's naive prevalence over ALL 8 would be
+        # 100%. With the split, the CONFIRMED signature's prevalence is
+        # computed over its own detector_hits (2 runs), independent of the
+        # unconfirmed backlog's mass.
+        self._seed_mixed_backlog(n_unlabeled_long=6, m_labeled_thrashed=2)
+        detector = FailureTaxonomyDetector(self.conn)
+        candidates = detector.run()
+        by_bucket = {c.extra["bucket"]: c for c in candidates}
+        self.assertEqual(by_bucket[PLANNING_FAILURE].occurrences, 2)
+        self.assertEqual(
+            by_bucket[PLANNING_FAILURE_UNCONFIRMED_CADENCE].occurrences, 6
+        )
+
+    def test_run_confirmed_by_both_cadence_and_outcome_appears_only_in_confirmed(self):
+        # A long-running run that is ALSO labeled thrashed must not appear in
+        # the unconfirmed bucket — the cadence heuristic is corroborating
+        # evidence for the confirmed bucket, not a second, duplicate hit.
+        _insert_run(
+            self.conn, "run-both", project="proj", outcome="thrashed",
+            labeled_at="2026-08-28T00:00:00Z", event_count=THRASH_EVENT_COUNT_FLOOR,
+        )
+        detector = FailureTaxonomyDetector(self.conn)
+        candidates = detector.run()
+        by_bucket = {c.extra["bucket"]: c for c in candidates}
+        self.assertIn("run-both", by_bucket[PLANNING_FAILURE].run_ids)
+        self.assertNotIn(PLANNING_FAILURE_UNCONFIRMED_CADENCE, by_bucket)
 
 
 if __name__ == "__main__":
