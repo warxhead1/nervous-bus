@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.dlq.summary.v1.json",
+  "title": "bus.dlq.summary v1",
+  "description": "Periodic rollup published by the DLQ drain adapter (adapters/dlq/dlq.py) describing dead-letter volume by channel and failure reason over a window. NEVER carries payload bytes -- original_payload_excerpt is private (may contain trading/credential data) and must never appear here; this event is channel + reason + count only.",
+  "type": "object",
+  "required": ["window_start", "window_end", "total_count", "by_channel"],
+  "properties": {
+    "window_start": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC start of the accumulation window"
+    },
+    "window_end": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC end of the accumulation window (publish time)"
+    },
+    "total_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total dead letters drained in this window"
+    },
+    "by_channel": {
+      "type": "array",
+      "description": "Per (original_type, failure_reason) counts observed in this window. No payload content.",
+      "items": {
+        "type": "object",
+        "required": ["channel", "failure_reason", "count"],
+        "properties": {
+          "channel": { "type": "string", "description": "original_type of the dead-lettered event" },
+          "failure_reason": { "type": "string" },
+          "count": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "since_start_total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Cumulative total since the drain process started, for trend context"
+    }
+  }
+}
