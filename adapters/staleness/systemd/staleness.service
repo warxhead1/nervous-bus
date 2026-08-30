@@ -1,0 +1,13 @@
+[Unit]
+Description=nervous-bus channel staleness monitor (watch the watchers)
+After=network-online.target redis.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.cache/nervous-bus
+ExecStart=%h/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/staleness/monitor.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nervous-staleness
+ReadWritePaths=%h/.cache/nervous-bus
