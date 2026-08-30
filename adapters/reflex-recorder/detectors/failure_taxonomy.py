@@ -197,9 +197,19 @@ def _hit_detectors_for_run(conn: sqlite3.Connection, run_id: str) -> set[str]:
 
 
 def _permission_request_count(conn: sqlite3.Connection, run_id: str) -> int:
-    """Count permission_requested events for this run (constraint-failure signal)."""
+    """Count permission_requested events for this run (constraint-failure signal).
+
+    run_events.event_type is always the literal 'bus.agent.activity.v1' —
+    the real event kind lives at json_extract(raw_json, '$.data.event').
+    See repeated_question.py / reread_same_file.py for the same idiom.
+    """
     row = conn.execute(
-        "SELECT COUNT(*) FROM run_events WHERE run_id = ? AND event_type = 'permission_requested'",
+        """
+        SELECT COUNT(*) FROM run_events
+        WHERE run_id = ?
+          AND event_type = 'bus.agent.activity.v1'
+          AND json_extract(raw_json, '$.data.event') = 'permission_requested'
+        """,
         (run_id,),
     ).fetchone()
     return row[0] if row else 0

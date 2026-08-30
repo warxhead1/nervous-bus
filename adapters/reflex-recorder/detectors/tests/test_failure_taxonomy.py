@@ -26,6 +26,7 @@ sys.path.insert(0, str(_ADAPTER_ROOT))
 from detectors.base import ensure_detector_schema, _now_utc
 from detectors.failure_taxonomy import (
     FailureTaxonomyDetector,
+    _permission_request_count,
     classify_run,
     CONTEXT_FAILURE,
     CONSTRAINT_FAILURE,
@@ -91,11 +92,28 @@ def _seed_detector_hit(conn, run_id, detector, project="proj", signature=None):
 
 
 def _insert_permission_event(conn, run_id, seq=1):
-    envelope = {"tool_summary": "allow Bash(npm test)"}
+    """Insert a run_events row shaped like REAL live data.
+
+    run_events.event_type is ALWAYS the literal 'bus.agent.activity.v1' — the
+    real event kind (e.g. 'permission_requested') lives at
+    json_extract(raw_json, '$.data.event'). Verified against live data in
+    ~/.cache/nervous-bus/reflex/runs.db (213 rows matching permission_requested
+    in raw_json, all with event_type='bus.agent.activity.v1'). Do NOT
+    "simplify" this back to event_type='permission_requested' — that shape
+    never occurs in production and silently zeroes out constraint_failure.
+    """
+    envelope = {
+        "specversion": "1.0",
+        "type": "bus.agent.activity.v1",
+        "data": {
+            "event": "permission_requested",
+            "tool_summary": "allow Bash(npm test)",
+        },
+    }
     conn.execute(
         """INSERT INTO run_events (run_id, seq, event_ts, event_type, raw_json)
            VALUES (?, ?, ?, ?, ?)""",
-        (run_id, seq, _now_utc(), "permission_requested", json.dumps(envelope)),
+        (run_id, seq, _now_utc(), "bus.agent.activity.v1", json.dumps(envelope)),
     )
 
 
@@ -242,6 +260,21 @@ class TestFailureTaxonomyDetectorEndToEnd(unittest.TestCase):
         candidates = detector.run()
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0].extra["bucket"], CONSTRAINT_FAILURE)
+
+    def test_permission_request_count_reads_real_event_shape(self):
+        """Regression for the dead-since-shipping constraint_failure bucket.
+
+        run_events.event_type is always 'bus.agent.activity.v1'; the real
+        event kind lives at json_extract(raw_json, '$.data.event'). A query
+        matching on event_type == 'permission_requested' literally never
+        matches anything in production and silently returns 0 forever. This
+        must FAIL against that old query.
+        """
+        _insert_run(self.conn, "run-pc1", project="proj", event_count=5)
+        _insert_permission_event(self.conn, "run-pc1", seq=1)
+        _insert_permission_event(self.conn, "run-pc1", seq=2)
+        count = _permission_request_count(self.conn, "run-pc1")
+        self.assertEqual(count, 2)
 
     def test_context_failure_reads_upstream_detector_hits(self):
         _insert_run(self.conn, "run-x1", project="proj", event_count=5)
