@@ -172,6 +172,24 @@ def fetch_failing_log(repo: str, database_id: int) -> str:
     except Exception as e:
         return f"(failed to fetch log: {e})"
     text = out.stdout if out.stdout.strip() else out.stderr
+
+    if not text.strip():
+        # No failed-step log lines at all -- typically means the run never
+        # got as far as executing a step (e.g. timed out waiting for a
+        # self-hosted runner, or was cancelled pre-checkout). Fall back to
+        # `gh run view`'s own summary/annotations, which DO carry that
+        # signal, rather than filing a bead with an empty code block.
+        try:
+            summary = subprocess.run(
+                ["gh", "run", "view", str(database_id), "-R", repo],
+                capture_output=True, text=True, timeout=30,
+            )
+            text = summary.stdout or summary.stderr
+        except Exception as e:
+            text = f"(no failed-step log; summary fetch also failed: {e})"
+        if not text.strip():
+            text = "(no failed-step log and no run summary available)"
+
     lines = text.splitlines()[-LOG_TAIL_LINES:]
     return redact("\n".join(lines))
 
@@ -482,8 +500,26 @@ def repo_local_dir(repo: str) -> Path:
     return PROJECTS_ROOT / name
 
 
+def resolve_local_checkout(local: Path) -> Path:
+    """Some projects (e.g. hearth-loom) use a worktree-container layout where
+    /home/eric/projects/<name> is a directory of sibling worktrees (main/,
+    worktrees/, wt/) rather than the checkout itself. If the top-level dir
+    has no .github but a `main` subdir does, use that as the effective
+    checkout root. Never invented speculatively -- found by direct
+    inspection (find -maxdepth 2 -iname .github) when hearth-loom's lint
+    result ("no .github/workflows directory") contradicted its real, green
+    `gh run list` CI history for the same repo.
+    """
+    if (local / ".github").exists():
+        return local
+    candidate = local / "main"
+    if (candidate / ".github").exists():
+        return candidate
+    return local
+
+
 def lint_repo(repo: str, projects_root: Path = PROJECTS_ROOT) -> dict:
-    local = projects_root / repo.split("/", 1)[-1]
+    local = resolve_local_checkout(projects_root / repo.split("/", 1)[-1])
     result = {
         "repo": repo,
         "local_checkout": str(local),

@@ -244,6 +244,29 @@ class TestLint(unittest.TestCase):
         self.assertFalse(result["has_workflows_dir"])
         self.assertIn("not found", result["tests_run_notes"])
 
+    def test_resolve_local_checkout_worktree_container(self):
+        # Simulates hearth-loom's layout: /projects/<name>/ is a container of
+        # sibling worktrees (main/, worktrees/, wt/), not the checkout itself.
+        root = Path(tempfile.mkdtemp())
+        try:
+            container = root / "hearth-loom"
+            (container / "main" / ".github" / "workflows").mkdir(parents=True)
+            (container / "worktrees").mkdir()
+            resolved = watch.resolve_local_checkout(container)
+            self.assertEqual(resolved, container / "main")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_resolve_local_checkout_direct(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            direct = root / "nervous-bus"
+            (direct / ".github" / "workflows").mkdir(parents=True)
+            resolved = watch.resolve_local_checkout(direct)
+            self.assertEqual(resolved, direct)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
     def test_lint_real_hearth_disabled_job(self):
         # Exercises the real local checkout read-only (per FILE SCOPE: read
         # anywhere, write only inside this adapter/cache/beads). Skips
