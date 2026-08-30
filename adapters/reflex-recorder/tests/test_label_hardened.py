@@ -373,6 +373,19 @@ class TestB2FailureDetection(unittest.TestCase):
                  tool_summary='{"command":"ls"}', tool_response_summary="")
         self.assertFalse(_bash_is_failure(ev))
 
+    def test_bare_json_literal_response_summary_does_not_crash(self):
+        """Regression: tool_response_summary that is a bare JSON literal
+        (e.g. 'true', 'null', '3', '[1]') parses to a non-dict via json.loads.
+        The old code called resp_obj.get(...) unconditionally afterward and
+        raised AttributeError instead of returning False.
+        """
+        for literal in ("true", "false", "null", "3", '"str"', "[1,2,3]"):
+            with self.subTest(literal=literal):
+                ev = _ev(tool_name="Bash", tool_is_error=False,
+                         tool_summary='{"command":"ls"}',
+                         tool_response_summary=literal)
+                self.assertFalse(_bash_is_failure(ev))
+
     def test_bash_fail_rate_non_zero_on_real_data(self):
         """With real accrued event shapes, bash_fail_rate can be non-zero."""
         events = [
@@ -443,6 +456,25 @@ class TestB3ResolvingCommitDetection(unittest.TestCase):
         """Pure read/bash run with no commit → False."""
         events = [_read(), _bash(), _bash(), _read()]
         self.assertFalse(_has_resolving_commit(events))
+
+    def test_bare_json_literal_tool_summary_does_not_crash(self):
+        """Regression: tool_summary that is a bare JSON literal (e.g. 'true',
+        '3', 'null') parses to a non-dict via json.loads inside
+        _has_resolving_commit. The old code called summary_obj.get("command")
+        unconditionally and raised AttributeError: 'bool'/'int'/... object
+        has no attribute 'get' — this crashed the nightly reflex-analysis
+        label step in production (journalctl: AttributeError: 'bool' object
+        has no attribute 'get' at label.py:493).
+        """
+        for literal in ("true", "false", "null", "3", '"str"', "[1]"):
+            with self.subTest(literal=literal):
+                ev = _ev(
+                    tool_name="Bash",
+                    tool_summary=literal,
+                    tool_response_summary='{"stdout":"","stderr":""}',
+                )
+                # Must not raise, and a bare literal carries no git command.
+                self.assertFalse(_has_resolving_commit([ev]))
 
     def test_bash_git_log_not_a_commit(self):
         """git log command is not a resolving commit."""

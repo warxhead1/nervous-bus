@@ -402,6 +402,8 @@ def _bash_is_failure(ev: dict) -> bool:
         resp_obj = json.loads(resp)
     except (json.JSONDecodeError, TypeError):
         return False
+    if not isinstance(resp_obj, dict):
+        return False
 
     # Non-zero exit code
     if resp_obj.get("exitCode", 0) not in (0, None, ""):
@@ -490,7 +492,7 @@ def _has_resolving_commit(events: list[dict]) -> bool:
         if summary:
             try:
                 summary_obj = json.loads(summary)
-                cmd = summary_obj.get("command", "")
+                cmd = summary_obj.get("command", "") if isinstance(summary_obj, dict) else str(summary)
             except (json.JSONDecodeError, TypeError):
                 cmd = str(summary)
         else:
