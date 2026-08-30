@@ -15,6 +15,7 @@
     "task_id": { "type": ["string", "null"], "description": "orchestration task id this dispatch is executing. Null for heartbeat events, which carry only dispatch_id." },
     "state": { "type": "string", "enum": ["dispatched", "heartbeat", "completed", "failed", "stale"], "description": "dispatched: preamble sent to the worker terminal. heartbeat: a heartbeat message was accepted and recorded. completed/failed: a worker_done report was settled with that outcome. stale: warnStaleDispatches flagged a missed heartbeat past the hung threshold (10 min); advisory only, the dispatch stays active." },
     "task_title": { "type": ["string", "null"], "description": "Task title, or a truncated (200 char max, '…'-suffixed) excerpt of the task spec/prompt when no title was set. Truncated deliberately — task specs can carry secrets and this field must stay a short excerpt, never the full body." },
-    "outcome": { "type": ["string", "null"], "enum": ["succeeded", "failed", null], "description": "Present only when state is completed/failed: the worker_done outcome as reported by the worker." }
+    "outcome": { "type": ["string", "null"], "enum": ["succeeded", "failed", null], "description": "Present only when state is completed/failed: the worker_done outcome as reported by the worker." },
+    "bead_id": { "type": ["string", "null"], "description": "Bead id extracted from the task spec/title via the [bead:<id>] tag or loose \"bead <id>\" prose convention (docs/audits/orca-adoption-2026-08-30.md §6.2). Null when no bead reference was found." }
   }
 }

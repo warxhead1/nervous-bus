@@ -14,6 +14,7 @@
     "state": { "type": "string", "enum": ["started", "completed", "failed"], "description": "started: executeLoop began after decompose(). completed: the DAG converged with no failed tasks and no early stop. failed: the loop was stopped early, converged with outstanding/failed tasks, or threw." },
     "spec_excerpt": { "type": ["string", "null"], "description": "Truncated (200 char max, '…'-suffixed) excerpt of the run's top-level spec/objective. Truncated deliberately — specs can carry secrets and this field must stay a short excerpt, never the full body." },
     "completed_task_count": { "type": ["integer", "null"], "description": "Count of tasks marked completed by this run at the time of this event." },
-    "failed_task_count": { "type": ["integer", "null"], "description": "Count of tasks marked failed by this run at the time of this event." }
+    "failed_task_count": { "type": ["integer", "null"], "description": "Count of tasks marked failed by this run at the time of this event." },
+    "bead_id": { "type": ["string", "null"], "description": "Bead id extracted from the run's spec/objective via the [bead:<id>] tag or loose \"bead <id>\" prose convention. Null when no bead reference was found." }
   }
 }

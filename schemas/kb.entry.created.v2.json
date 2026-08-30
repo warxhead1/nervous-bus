@@ -27,8 +27,8 @@
     "project": { "type": "string", "minLength": 1, "maxLength": 200 },
     "category": {
       "type": "string",
-      "enum": ["research", "design", "handoff", "plan", "reference", "log", "concept", "decision"],
-      "description": "Canonical Category wire form from kb/src/frontmatter/parser.rs."
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+      "description": "Category slug, normalized by kb (lowercase, hyphenated, <=64 chars — kb/src/bus/kb_entry_created_v2.rs Category::Other). Open set by design: a closed enum here caused every novel category (audit, shader-architecture, ...) to dead-letter and stalled autoingest for weeks (2026-08-30 kb lifecycle audit). Known canonical values: research, design, handoff, plan, reference, log, concept, decision, audit."
     },
     "source_type": {
       "type": "string",
