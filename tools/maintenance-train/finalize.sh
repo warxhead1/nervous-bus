@@ -44,7 +44,12 @@ REPORT_PATH="$(jget report_path)"
 [ -d "$WORKTREE" ] || die "worktree $WORKTREE gone"
 
 release_bead() { # release_bead <one-line-note>
-  ( cd "$NBD_REPO" && bd update "$BEAD_ID" -a "" --notes "maintenance-train: $1" ) >&2 || true
+  # Both -a "" (clear assignee) AND --status open are required: --claim sets
+  # status=in_progress, and clearing only the assignee leaves the bead stuck
+  # in_progress with no owner -- unclaimable by a future run (MEASURED
+  # 2026-08-30 smoke test: bd update --claim failed with "issue not
+  # claimable: status in_progress" on the retry after a bare assignee clear).
+  ( cd "$NBD_REPO" && bd update "$BEAD_ID" -a "" --status open --notes "maintenance-train: $1" ) >&2 || true
 }
 
 # --- block until report file OR timeout OR worker process exited ---

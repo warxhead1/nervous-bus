@@ -96,19 +96,65 @@ systemctl --user daemon-reload
 systemctl --user enable --now maintenance-train.timer
 ```
 
-## KNOWN BLOCKER (2026-08-30): no MINIMAX_API_KEY on this box/session
+## LIVE SMOKE TEST (2026-08-30) — full end-to-end pass, two real bugs found+fixed
 
-`mmx`/`claude-minimax-sandboxed` require `MINIMAX_API_KEY` (env or
-`~/.config/minimax/key` or `~/.minimax_key`). Checked all three at
-2026-08-30T18:xx; none present in this session. This means the actual
-sandboxed-worker step of the smoke test below could not be executed against
-the real MiniMax endpoint from this session — the exact failure is captured
-in the smoke-test section. Everything upstream (selector against live dolt,
-dispatch.sh's worktree/claim/brief-render, the flock, and downstream
-finalize.sh's host build/test/push/PR/bus-publish contract) is real code,
-exercised against real infrastructure (live dolt at 127.0.0.1:39502, real
-`gh`, a real bd bead, a real data2 worktree) — only the MiniMax API call
-itself is blocked-on-key. See the smoke-test evidence at the bottom of the
-dispatch report for the exact error and what unblocks it (drop a key at
-`~/.config/minimax/key`, or export `MINIMAX_API_KEY`, then rerun
-`dispatch.sh`/`finalize.sh` for the same bead — nothing else needs to change).
+Filed a real bead (`nervous-bus-rp9a`, "fix gofmt drift on 15 top-level
+files" — the shared `claude-hook-fast` checkout was verified clean via
+`git status --porcelain` before dispatch), ran `selector.py --dry-run`
+against it (correctly deprioritized behind three older CI-red beads under
+the `MMTRAIN_MAX_REPOS=3` cap — that's the ranking working as designed, not
+a bug), then manually seeded a 1-entry manifest and ran `dispatch.sh` /
+`finalize.sh` for real. `MINIMAX_API_KEY` turned out to be present in the
+session environment the whole time (a prior file-only check
+`~/.config/minimax/key` came up absent and an earlier attempt to also check
+`$MINIMAX_API_KEY` got cut off by an unrelated sandbox guard before it could
+print — that gap in verification, not an actual missing key, is why this
+section originally read "blocked"). Two real defects surfaced and were
+fixed in this same commit:
+
+1. **Report path was outside the sandbox mount.** `claude-minimax-sandboxed`
+   only bind-mounts `CMMX_WORKDIR` (+ claude binary/cargo/`/bus`) — nothing
+   under `~/.cache` is visible inside the sandbox. The first dispatch had
+   the worker "successfully" write its completion report to
+   `$SESSION_DIR/report.md` (outside the worktree); the worker's own
+   transcript claimed success, the file never existed on host, and
+   `finalize.sh` correctly failed the run rather than trusting the claim.
+   Fixed: `REPORT_PATH` now lives at `$WORKTREE/.maintenance-report.md`
+   (inside the mount); dispatch.sh's background subshell copies it to the
+   stable `$SESSION_DIR/report.md` only after the worker exits.
+2. **`release_bead` cleared assignee but left status `in_progress`.**
+   `bd update --claim` sets `status=in_progress`; clearing only the
+   assignee left the bead unclaimable (`issue not claimable: status
+   in_progress`) on the very next dispatch attempt. Fixed: `release_bead`
+   now also passes `--status open`.
+3. **The per-repo flock is held for the FULL worker lifetime, including
+   orphaned `rootlesskit`/`slirp4netns` helper processes** that outlive the
+   `claude-minimax-sandboxed` parent exiting — this is correct/intentional
+   (the worktree is being mutated for that whole window) but means a
+   `flock -n` probe from `finalize.sh`/manual debugging can look "stuck"
+   for the true duration of an mmx session (~4-6 min observed), not a hang.
+   Documented here so it isn't mistaken for a deadlock on the next run.
+
+After the fixes, a clean rerun went fully end-to-end for real:
+- Worker committed `9c3c672` on `maint/nervous-bus-rp9a` (`gofmt -w` on the
+  17 actually-drifted files — the bead said 15, the worker's own report
+  flagged and corrected the discrepancy rather than silently matching the
+  bead's wrong count).
+- Host re-verification (independent of the sandbox's own claim):
+  `go build ./...` exit 0, `go vet ./...` exit 0, `go test ./...` — all
+  packages `ok` (`cmd/hearth-loom-hook` 7.0s, `tools/claude-hooks` 6.0s,
+  rest cached/instant), `gofmt -l .` (worktrees excluded) empty.
+- **PR opened**: https://github.com/warxhead1/claude-hook-fast/pull/2
+  ("[maint] nervous-bus-rp9a: chore(claude-hook-fast): fix gofmt drift on
+  15 top-level files", state OPEN, real commit `9c3c6725` authored by
+  `MiniMax Sandbox <mmx-sandbox@hearth-loom>`).
+- Bead `nervous-bus-rp9a` updated: `External: https://github.com/warxhead1/
+  claude-hook-fast/pull/2`, notes carry the PR-opened timestamp.
+- `bus.maintenance.pr.v1` publish attempt logged `[nbus warn] no schema for
+  type: bus.maintenance.pr.v1` — expected and harmless: the shared
+  `nervous-bus` checkout's schema dir doesn't have this PR's own
+  `schemas/bus.maintenance.pr.v1.json` yet (it ships in the same PR that
+  adds this pipeline); resolves once this branch merges to main.
+
+No blocker remains for the mmx dispatch path itself; the two real defects
+found by exercising it are fixed above.

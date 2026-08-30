@@ -95,13 +95,23 @@ git -C "$REPO_PATH" worktree add -b "$BRANCH" "$WORKTREE" HEAD >&2
 BEAD_BODY="$(cd "$NBD_REPO" && bd show "$BEAD_ID" 2>/dev/null || echo "(bd show failed — see bead $BEAD_ID directly)")"
 SESSION_DIR="$CACHE_ROOT/sessions/$BEAD_ID"
 mkdir -p "$SESSION_DIR"
-REPORT_PATH="$SESSION_DIR/report.md"
+# REPORT_PATH MUST live inside $WORKTREE. claude-minimax-sandboxed only bind-
+# mounts CMMX_WORKDIR (+ the claude binary, cargo, /bus) into the sandbox --
+# nothing under ~/.cache is visible to the worker. A report path outside the
+# worktree makes the worker silently "succeed" writing to a mount it doesn't
+# have while the host sees nothing (MEASURED 2026-08-30 smoke test: worker
+# transcript claimed "wrote report to $SESSION_DIR/report.md", file never
+# existed, host-side finalize.sh correctly treated it as a failed run). We
+# copy it out to SESSION_DIR only AFTER the worker exits, for a stable
+# location finalize.sh + humans can find without knowing the worktree layout.
+REPORT_PATH="$WORKTREE/.maintenance-report.md"
+REPORT_COPY_PATH="$SESSION_DIR/report.md"
 BRIEF_PATH="$WORKTREE/.maintenance-brief.md"
 
 python3 - "$HERE/brief-template.md" "$BRIEF_PATH" \
   "$BEAD_ID" "$TITLE" "$BEAD_BODY" "$REPO" "$BRANCH" "$BUILD_CMD" "$TEST_CMD" "$REPORT_PATH" <<'PYEOF'
 import sys
-tmpl_path, out_path, bead_id, title, body, repo, branch, build_cmd, test_cmd, report_path = sys.argv[1:10]
+tmpl_path, out_path, bead_id, title, body, repo, branch, build_cmd, test_cmd, report_path = sys.argv[1:11]
 tmpl = open(tmpl_path).read()
 subs = {
     "${BEAD_ID}": bead_id, "${BEAD_TITLE}": title, "${BEAD_BODY}": body,
@@ -125,7 +135,8 @@ cat > "$SESSION_DIR/session.json" <<EOF
   "build_cmd": $(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$BUILD_CMD"),
   "test_cmd": $(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$TEST_CMD"),
   "title": $(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$TITLE"),
-  "report_path": "$REPORT_PATH",
+  "report_path": "$REPORT_COPY_PATH",
+  "report_path_in_worktree": "$REPORT_PATH",
   "dispatched_at": "$(date -Is)"
 }
 EOF
@@ -138,13 +149,16 @@ EOF
 # $WORKDIR's OWN .claude/worktrees, defeating the point of cutting the data2
 # worktree ourselves and doubling the isolation layers uselessly.
 LOG="$SESSION_DIR/worker.log"
-: > "$REPORT_PATH.pending"  # marker: report not yet written, worker launching
 (
   cd "$WORKTREE"
   CMMX_WORKDIR="$WORKTREE" CMMX_RW=1 CMMX_USE_WT=0 CMMX_NET=isolated \
     claude-minimax-sandboxed -p "$(cat "$BRIEF_PATH")" --permission-mode bypassPermissions \
     >"$LOG" 2>&1
-  echo "$?" > "$SESSION_DIR/worker.exit"
+  rc=$?
+  # Copy the report out of the worktree (the only place the sandbox could
+  # have written it) to the stable session dir finalize.sh polls.
+  [ -s "$REPORT_PATH" ] && cp "$REPORT_PATH" "$REPORT_COPY_PATH"
+  echo "$rc" > "$SESSION_DIR/worker.exit"
 ) &
 WORKER_PID=$!
 echo "$WORKER_PID" > "$SESSION_DIR/worker.pid"
