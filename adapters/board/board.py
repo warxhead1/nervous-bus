@@ -60,11 +60,12 @@ import math
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 CACHE_DIR = Path(os.environ.get("NERVOUS_BOARD_CACHE", str(Path.home() / ".cache" / "nervous-bus" / "board")))
 BOARD_FILE = CACHE_DIR / "board.json"
@@ -125,6 +126,31 @@ CONTRACT_ISSUE_KEYS = {
     "assignee", "created_at", "updated_at", "age_days", "score",
     "blocked_by", "orca", "pr",
 }
+
+# --------------------------------------------------------------------------
+# Signals -- additive top-level "signals" key (LANE Y). Sourced independently
+# of the beads/dolt pipeline above: ci-watch's roster.json + its per-run
+# state.json / dependabot.json artifacts, plus kb's own systemd/journal
+# health. Deliberately kept OUT of build_board()/CONTRACT_TOP_LEVEL_KEYS --
+# build_board()'s contract (generated_at/lanes/issues/summary) stays frozen
+# and untouched; run() merges signals into the dict just before writing.
+# --------------------------------------------------------------------------
+
+CI_WATCH_DIR = Path(os.environ.get("NERVOUS_BOARD_CIWATCH_CACHE", str(Path.home() / ".cache" / "nervous-bus" / "ci-watch")))
+CI_WATCH_STATE_FILE = CI_WATCH_DIR / "state.json"
+CI_WATCH_DEPENDABOT_FILE = CI_WATCH_DIR / "dependabot.json"
+CI_WATCH_ROSTER_FILE = Path(os.environ.get(
+    "NERVOUS_BOARD_ROSTER",
+    str(Path(__file__).resolve().parent.parent / "ci-watch" / "roster.json"),
+))
+
+CONTRACT_SIGNAL_ENTRY_KEYS = {"ci", "dependabot", "kb"}
+CONTRACT_CI_SIGNAL_KEYS = {"status", "failing_workflows", "updated_at"}
+CONTRACT_DEPENDABOT_SIGNAL_KEYS = {"critical", "high", "moderate", "low", "updated_at"}
+CONTRACT_KB_SIGNAL_KEYS = {"autoingest_fresh", "last_run_errors", "vet_backlog", "updated_at"}
+
+KB_AUTOINGEST_UNIT = "kb-autoingest.service"
+KB_AUTOINGEST_CADENCE_S = 30 * 60.0
 
 
 def now_utc() -> datetime:
@@ -408,6 +434,253 @@ def compute_score(priority: int, age_days: float, blocked: bool) -> float:
 
 
 # --------------------------------------------------------------------------
+# Signals: roster / CI join
+# --------------------------------------------------------------------------
+
+def load_roster_project_names(path: Path = CI_WATCH_ROSTER_FILE) -> List[str]:
+    """Basenames (e.g. 'hearth-loom' from 'warxhead1/hearth-loom') of every
+    repo in ci-watch's roster.json. Returns [] if the roster can't be read --
+    signals degrades to whatever the dolt-derived project set already has,
+    never raises and takes the whole board down with it.
+    """
+    try:
+        with path.open() as f:
+            roster = json.load(f)
+    except Exception:
+        return []
+    return [entry["repo"].split("/", 1)[-1] for entry in roster.get("repos", []) if entry.get("repo")]
+
+
+def load_ci_watch_state(path: Path = CI_WATCH_STATE_FILE) -> Dict[str, dict]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open() as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def group_ci_state_by_repo(ci_state: Dict[str, dict]) -> Dict[str, List[dict]]:
+    """ci-watch's state.json is keyed 'owner/repo|workflow|branch' -> per
+    (workflow,branch) verdict. Regroup by repo BASENAME (board's project
+    naming) so each project's CI signal can be derived from all its
+    workflow/branch entries at once.
+    """
+    out: Dict[str, List[dict]] = {}
+    for key, entry in ci_state.items():
+        parts = key.split("|")
+        if len(parts) != 3 or not isinstance(entry, dict):
+            continue
+        repo, workflow, _branch = parts
+        basename = repo.split("/", 1)[-1]
+        out.setdefault(basename, []).append({**entry, "workflow": workflow})
+    return out
+
+
+def derive_ci_signal(repo_entries: Optional[List[dict]]) -> dict:
+    """One project's ci-watch state entries -> {"status","failing_workflows",
+    "updated_at"}. 'unknown' when there's no data, or when every sampled
+    entry is pending/skipped/no-runs (never seen a real green or red).
+    """
+    if not repo_entries:
+        return {"status": "unknown", "failing_workflows": [], "updated_at": None}
+
+    inconclusive = {"pending", "skipped", "no-runs", None}
+    states = {e.get("state") for e in repo_entries}
+    failing = sorted({e["workflow"] for e in repo_entries if e.get("state") == "red"})
+    updated_ats = [e.get("updated_at") for e in repo_entries if e.get("updated_at")]
+    updated_at = max(updated_ats) if updated_ats else None
+
+    if failing:
+        status = "red"
+    elif states - inconclusive:
+        status = "green"
+    else:
+        status = "unknown"
+
+    return {"status": status, "failing_workflows": failing, "updated_at": updated_at}
+
+
+def load_dependabot_signal_file(path: Path = CI_WATCH_DEPENDABOT_FILE) -> Dict[str, dict]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open() as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def derive_dependabot_signal(raw: Optional[dict]) -> Optional[dict]:
+    """ci-watch's dependabot.json entry for one repo -> the board contract's
+    signal shape, or None (never fabricated zeros) when ci-watch itself
+    recorded an error (403/scope-missing/transient) for that repo this poll,
+    or when there's no entry at all (repo not in the roster / never polled).
+    """
+    if not raw or "error" in raw:
+        return None
+    try:
+        return {
+            "critical": int(raw.get("critical", 0)),
+            "high": int(raw.get("high", 0)),
+            "moderate": int(raw.get("moderate", 0)),
+            "low": int(raw.get("low", 0)),
+            "updated_at": raw.get("updated_at"),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
+# --------------------------------------------------------------------------
+# Signals: kb health
+# --------------------------------------------------------------------------
+
+def _journalctl_json(unit: str, extra_args: Optional[List[str]] = None, timeout: int = 15) -> List[dict]:
+    args = ["journalctl", "--user", "-u", unit, "-o", "json", "--no-pager"] + (extra_args or [])
+    try:
+        out = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        return []
+    if out.returncode != 0:
+        return []
+    entries = []
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return entries
+
+
+def fetch_kb_autoingest_run_boundary(unit: str = KB_AUTOINGEST_UNIT) -> Tuple[Optional[float], Optional[float]]:
+    """(prev_finish_epoch, last_finish_epoch) from the unit's journal, found
+    by locating 'Finished kb autoingest' log lines -- the run boundary itself
+    isn't otherwise exposed (no distinct start/end unit events land under
+    this -u filter; verified 2026-08-30 against the live kb-autoingest.service
+    journal, only Started/Finished/Consumed-CPU lines from the service's own
+    stdout/systemd-generated summary are present). `prev_finish_epoch` bounds
+    the error-counting window for the LAST run; None if there's only one run
+    on record (errors then counted from the beginning of the retained log).
+    """
+    entries = _journalctl_json(unit)
+    finishes: List[float] = []
+    for e in entries:
+        msg = e.get("MESSAGE")
+        if isinstance(msg, str) and msg.startswith("Finished kb autoingest"):
+            ts = e.get("__REALTIME_TIMESTAMP")
+            if ts is not None:
+                try:
+                    finishes.append(int(ts) / 1_000_000.0)
+                except (TypeError, ValueError):
+                    continue
+    if not finishes:
+        return None, None
+    finishes.sort()
+    last = finishes[-1]
+    prev = finishes[-2] if len(finishes) >= 2 else None
+    return prev, last
+
+
+def fetch_kb_autoingest_error_count(unit: str = KB_AUTOINGEST_UNIT, since_epoch: Optional[float] = None) -> Optional[int]:
+    """Count of 'ERROR' lines in the unit's journal for its most recent run
+    (since the previous run's finish, or from the start of the retained log
+    if there's no earlier boundary). None if the journal can't be read at all
+    (unit not present / journalctl unavailable) -- distinct from a real 0.
+    """
+    args = []
+    if since_epoch is not None:
+        since_str = datetime.fromtimestamp(since_epoch, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        args = ["--since", since_str]
+    entries = _journalctl_json(unit, args)
+    if not entries and since_epoch is None:
+        # Genuinely no journal for this unit at all (vs. "since" just
+        # returning nothing because the run was quiet) -- distinguish by
+        # re-querying without a --since bound.
+        probe = _journalctl_json(unit)
+        if not probe:
+            return None
+    count = 0
+    for e in entries:
+        msg = e.get("MESSAGE")
+        if isinstance(msg, str) and "ERROR" in msg:
+            count += 1
+    return count
+
+
+def fetch_kb_vet_backlog(timeout: int = 30) -> Optional[int]:
+    """Total line count of `kb vet-pending` (entries with
+    empirically_testable=true and no evidence chain) -- the cheapest real
+    listing kb exposes for this (checked `kb --help`: `vet` itself requires
+    --result/--session for a single entry, not a list; `vet-pending` is
+    exactly the bounded list this signal needs). None if the `kb` binary
+    isn't available or the call fails -- never a fabricated 0.
+    """
+    try:
+        out = subprocess.run(["kb", "vet-pending"], capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    return len([line for line in out.stdout.splitlines() if line.strip()])
+
+
+def derive_kb_signal(*, prev_finish_epoch: Optional[float], last_finish_epoch: Optional[float],
+                      error_count: Optional[int], vet_backlog: Optional[int],
+                      cadence_s: float = KB_AUTOINGEST_CADENCE_S, now: Optional[float] = None) -> Optional[dict]:
+    """None (whole signal absent) only when kb-autoingest has never run at
+    all in the retained journal -- kb genuinely not installed/configured on
+    this box. Otherwise always the full shape with error_count/vet_backlog
+    individually nullable per their own fetch failures.
+    """
+    now = now if now is not None else time.time()
+    if last_finish_epoch is None:
+        return None
+    return {
+        "autoingest_fresh": (now - last_finish_epoch) <= (cadence_s * 2),
+        "last_run_errors": error_count,
+        "vet_backlog": vet_backlog,
+        "updated_at": iso(last_finish_epoch),
+    }
+
+
+def fetch_kb_signal(*, unit: str = KB_AUTOINGEST_UNIT, now: Optional[float] = None) -> Optional[dict]:
+    prev, last = fetch_kb_autoingest_run_boundary(unit)
+    error_count = fetch_kb_autoingest_error_count(unit, since_epoch=prev) if last is not None else None
+    vet_backlog = fetch_kb_vet_backlog() if last is not None else None
+    return derive_kb_signal(
+        prev_finish_epoch=prev, last_finish_epoch=last,
+        error_count=error_count, vet_backlog=vet_backlog, now=now,
+    )
+
+
+# --------------------------------------------------------------------------
+# Signals: assembly
+# --------------------------------------------------------------------------
+
+def build_signals(project_names: Iterable[str], *, ci_by_repo: Dict[str, List[dict]],
+                   dependabot_raw: Dict[str, dict], kb_signal: Optional[dict]) -> Dict[str, dict]:
+    """Union of every board project name and every ci-watch roster repo
+    basename (so e.g. 'orca' gets a real dependabot/ci row even though it
+    has no beads DB / isn't one of the 10 federated project DBs) -> the
+    per-project signals entry. Every entry always carries all three keys
+    (ci/dependabot/kb); a project with no data for one gets that field's
+    'no data' value (unknown / null / null), never an omitted key.
+    """
+    out: Dict[str, dict] = {}
+    for project in sorted(set(project_names)):
+        out[project] = {
+            "ci": derive_ci_signal(ci_by_repo.get(project)),
+            "dependabot": derive_dependabot_signal(dependabot_raw.get(project)),
+            "kb": kb_signal,
+        }
+    return out
+
+
+# --------------------------------------------------------------------------
 # Build
 # --------------------------------------------------------------------------
 
@@ -514,6 +787,36 @@ def render_report(board: dict, *, generated_at: Optional[str] = None) -> str:
         "",
         f"Generated: {generated_at}",
         "",
+    ]
+
+    signals = board.get("signals")
+    if signals:
+        lines.append("## Signals")
+        lines.append("")
+        lines.append("| project | CI | dependabot C/H/M/L | kb |")
+        lines.append("|---|---|---|---|")
+        for project in sorted(signals):
+            sig = signals[project]
+            ci = sig.get("ci") or {}
+            ci_cell = ci.get("status", "unknown")
+            if ci.get("failing_workflows"):
+                ci_cell += f" ({', '.join(ci['failing_workflows'])})"
+            dep = sig.get("dependabot")
+            dep_cell = (
+                f"{dep['critical']}/{dep['high']}/{dep['moderate']}/{dep['low']}" if dep else "null"
+            )
+            kb = sig.get("kb")
+            if kb:
+                kb_cell = (
+                    f"fresh={kb['autoingest_fresh']} errors={kb['last_run_errors']} "
+                    f"vet_backlog={kb['vet_backlog']}"
+                )
+            else:
+                kb_cell = "null"
+            lines.append(f"| {project} | {ci_cell} | {dep_cell} | {kb_cell} |")
+        lines.append("")
+
+    lines += [
         "## Per-project totals",
         "",
         "| project | " + " | ".join(LANES) + " | total |",
@@ -586,6 +889,14 @@ def run(
     pr_map = fetch_pr_events(r)
 
     board = build_board(issues, blocked_by_map, orca_state, lifecycle_events, pr_map)
+
+    project_names = set(board["summary"]["per_project"].keys()) | set(load_roster_project_names())
+    ci_by_repo = group_ci_state_by_repo(load_ci_watch_state())
+    dependabot_raw = load_dependabot_signal_file()
+    kb_signal = fetch_kb_signal()
+    board["signals"] = build_signals(
+        project_names, ci_by_repo=ci_by_repo, dependabot_raw=dependabot_raw, kb_signal=kb_signal,
+    )
 
     write_atomic(board_file, json.dumps(board, indent=2, sort_keys=False))
     write_atomic(report_file, render_report(board))

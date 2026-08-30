@@ -279,5 +279,158 @@ class TestLint(unittest.TestCase):
         self.assertIn("if: false", result["tests_run_notes"])
 
 
+class TestDependabotSeverity(unittest.TestCase):
+    def test_summarize_severity_counts_and_ignores_unknown(self):
+        alerts = [
+            {"severity": "critical", "ghsa_id": "GHSA-1"},
+            {"severity": "high", "ghsa_id": "GHSA-2"},
+            {"severity": "high", "ghsa_id": "GHSA-3"},
+            {"severity": "HIGH", "ghsa_id": "GHSA-4"},  # case-insensitive
+            {"severity": "weird", "ghsa_id": "GHSA-5"},  # not a known bucket
+        ]
+        counts = watch.summarize_severity(alerts)
+        self.assertEqual(counts, {"critical": 1, "high": 3, "moderate": 0, "low": 0})
+
+
+class TestFetchDependabotAlerts(unittest.TestCase):
+    def _run_with_stubbed_subprocess(self, returncode, stdout="", stderr=""):
+        import subprocess as sp
+
+        class FakeCompleted:
+            pass
+
+        fc = FakeCompleted()
+        fc.returncode = returncode
+        fc.stdout = stdout
+        fc.stderr = stderr
+
+        orig_run = sp.run
+        sp.run = lambda *a, **k: fc
+        try:
+            return watch.fetch_dependabot_alerts("acme/widgets")
+        finally:
+            sp.run = orig_run
+
+    def test_success_parses_jsonl(self):
+        stdout = '{"severity": "critical", "ghsa_id": "GHSA-1"}\n{"severity": "high", "ghsa_id": "GHSA-2"}\n'
+        alerts, error = self._run_with_stubbed_subprocess(0, stdout=stdout)
+        self.assertIsNone(error)
+        self.assertEqual(len(alerts), 2)
+
+    def test_success_empty_is_valid_zero_alerts(self):
+        alerts, error = self._run_with_stubbed_subprocess(0, stdout="")
+        self.assertIsNone(error)
+        self.assertEqual(alerts, [])
+
+    def test_403_scope_missing_degrades_to_none_not_zero(self):
+        alerts, error = self._run_with_stubbed_subprocess(
+            1, stderr="HTTP 403: Resource not accessible by integration (needs the 'security_events' scope)"
+        )
+        self.assertIsNone(alerts)
+        self.assertIsNotNone(error)
+        self.assertIn("scope", error.lower())
+
+    def test_other_failure_also_degrades_to_none(self):
+        alerts, error = self._run_with_stubbed_subprocess(1, stderr="connection reset")
+        self.assertIsNone(alerts)
+        self.assertIsNotNone(error)
+
+
+class TestDependabotPass(unittest.TestCase):
+    def setUp(self):
+        self.published = []
+        self.beads_created = []
+        self._orig_publish = watch.publish_dependabot_event
+        self._orig_bead = watch.file_dependabot_bead
+        watch.publish_dependabot_event = lambda payload, dry_run=False: self.published.append(payload) or True
+        watch.file_dependabot_bead = (
+            lambda repo, ghsa_id, dry_run=False: self.beads_created.append((repo, ghsa_id)) or f"bd-{ghsa_id}"
+        )
+
+    def tearDown(self):
+        watch.publish_dependabot_event = self._orig_publish
+        watch.file_dependabot_bead = self._orig_bead
+
+    def test_first_seen_emits_and_files_bead_for_each_critical(self):
+        def fetch(repo):
+            if repo != "acme/widgets":
+                return [], None
+            return [{"severity": "critical", "ghsa_id": "GHSA-1"}, {"severity": "high", "ghsa_id": "GHSA-2"}], None
+
+        state = {}
+        results = watch.run_dependabot_pass(FIXTURE_ROSTER, state, fetch_fn=fetch, dry_run=False)
+        acme = [r for r in results if r["repo"] == "acme/widgets"][0]
+        self.assertEqual(acme["counts"], {"critical": 1, "high": 1, "moderate": 0, "low": 0})
+        self.assertEqual(acme["new_critical_ghsa_ids"], ["GHSA-1"])
+        self.assertEqual(self.beads_created, [("acme/widgets", "GHSA-1")])
+        self.assertTrue(any(p["repo"] == "acme/widgets" and p["reason"] == "first-seen" for p in self.published))
+        self.assertEqual(state["acme/widgets"]["known_critical_ghsa_ids"], ["GHSA-1"])
+
+    def test_no_change_no_event_no_refile(self):
+        def fetch(repo):
+            if repo != "acme/widgets":
+                return [], None
+            return [{"severity": "critical", "ghsa_id": "GHSA-1"}], None
+
+        state = {"acme/widgets": {"counts": {"critical": 1, "high": 0, "moderate": 0, "low": 0},
+                                   "known_critical_ghsa_ids": ["GHSA-1"]},
+                 "acme/gizmos": {"counts": {"critical": 0, "high": 0, "moderate": 0, "low": 0},
+                                  "known_critical_ghsa_ids": []}}
+        watch.run_dependabot_pass(FIXTURE_ROSTER, state, fetch_fn=fetch, dry_run=False)
+        self.assertEqual(self.published, [])
+        self.assertEqual(self.beads_created, [])
+
+    def test_new_critical_on_top_of_existing_only_files_for_the_new_one(self):
+        def fetch(repo):
+            if repo != "acme/widgets":
+                return [], None
+            return [
+                {"severity": "critical", "ghsa_id": "GHSA-1"},
+                {"severity": "critical", "ghsa_id": "GHSA-2"},
+            ], None
+
+        state = {"acme/widgets": {"counts": {"critical": 1, "high": 0, "moderate": 0, "low": 0},
+                                   "known_critical_ghsa_ids": ["GHSA-1"]}}
+        results = watch.run_dependabot_pass(FIXTURE_ROSTER, state, fetch_fn=fetch, dry_run=False)
+        acme = [r for r in results if r["repo"] == "acme/widgets"][0]
+        self.assertEqual(acme["new_critical_ghsa_ids"], ["GHSA-2"])
+        self.assertEqual(self.beads_created, [("acme/widgets", "GHSA-2")])
+
+    def test_error_leaves_prior_state_untouched_and_never_emits(self):
+        def fetch(repo):
+            return None, "missing scope"
+
+        prior_counts = {"critical": 1, "high": 0, "moderate": 0, "low": 0}
+        state = {"acme/widgets": {"counts": prior_counts, "known_critical_ghsa_ids": ["GHSA-1"]}}
+        results = watch.run_dependabot_pass(FIXTURE_ROSTER, state, fetch_fn=fetch, dry_run=False)
+        acme = [r for r in results if r["repo"] == "acme/widgets"][0]
+        self.assertIsNone(acme["counts"])
+        self.assertEqual(acme["error"], "missing scope")
+        self.assertEqual(self.published, [])
+        self.assertEqual(self.beads_created, [])
+        # prior state preserved verbatim -- error never overwrites known-good data
+        self.assertEqual(state["acme/widgets"]["counts"], prior_counts)
+
+    def test_dry_run_never_persists_state_or_creates_real_beads(self):
+        def fetch(repo):
+            return [{"severity": "critical", "ghsa_id": "GHSA-1"}], None
+
+        state = {}
+        watch.run_dependabot_pass(FIXTURE_ROSTER, state, fetch_fn=fetch, dry_run=True)
+        self.assertEqual(state, {})
+
+
+class TestBuildDependabotSignal(unittest.TestCase):
+    def test_success_and_error_repos_both_represented(self):
+        results = [
+            {"repo": "acme/widgets", "counts": {"critical": 1, "high": 2, "moderate": 0, "low": 0}},
+            {"repo": "acme/gizmos", "counts": None, "error": "missing scope"},
+        ]
+        signal = watch.build_dependabot_signal(results, now=1_800_000_000.0)
+        self.assertEqual(signal["widgets"]["critical"], 1)
+        self.assertIn("updated_at", signal["widgets"])
+        self.assertEqual(signal["gizmos"], {"error": "missing scope"})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

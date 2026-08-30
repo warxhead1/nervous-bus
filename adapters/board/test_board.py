@@ -364,5 +364,136 @@ class TestFetchPrEvents(unittest.TestCase):
         self.assertEqual(result, {})
 
 
+# --------------------------------------------------------------------------
+# Signals -- ci-watch join, dependabot join, kb health, and the assembled
+# per-project shape written into board.json's top-level "signals" key.
+# --------------------------------------------------------------------------
+
+class TestGroupCiStateByRepo(unittest.TestCase):
+    def test_groups_by_basename_across_workflows_and_branches(self):
+        state = {
+            "warxhead1/hearth-loom|CI|main": {"state": "red", "updated_at": "2026-08-30T10:00:00Z"},
+            "warxhead1/hearth-loom|Lint|main": {"state": "green", "updated_at": "2026-08-30T09:00:00Z"},
+            "warxhead1/orca|CI|main": {"state": "green", "updated_at": "2026-08-30T08:00:00Z"},
+            "malformed-key-no-pipes": {"state": "red"},
+        }
+        grouped = board.group_ci_state_by_repo(state)
+        self.assertEqual(len(grouped["hearth-loom"]), 2)
+        self.assertEqual(len(grouped["orca"]), 1)
+        self.assertNotIn("malformed-key-no-pipes", grouped)
+
+
+class TestDeriveCiSignal(unittest.TestCase):
+    def test_no_data_is_unknown(self):
+        sig = board.derive_ci_signal(None)
+        self.assertEqual(sig, {"status": "unknown", "failing_workflows": [], "updated_at": None})
+        self.assertEqual(sig, board.derive_ci_signal([]))
+
+    def test_any_red_workflow_makes_repo_red_and_lists_it(self):
+        entries = [
+            {"workflow": "CI", "state": "red", "updated_at": "2026-08-30T10:00:00Z"},
+            {"workflow": "Lint", "state": "green", "updated_at": "2026-08-30T09:00:00Z"},
+        ]
+        sig = board.derive_ci_signal(entries)
+        self.assertEqual(sig["status"], "red")
+        self.assertEqual(sig["failing_workflows"], ["CI"])
+        self.assertEqual(sig["updated_at"], "2026-08-30T10:00:00Z")
+
+    def test_all_green_is_green(self):
+        entries = [{"workflow": "CI", "state": "green", "updated_at": "2026-08-30T10:00:00Z"}]
+        self.assertEqual(board.derive_ci_signal(entries)["status"], "green")
+
+    def test_all_inconclusive_states_is_unknown(self):
+        entries = [
+            {"workflow": "CI", "state": "no-runs", "updated_at": None},
+            {"workflow": "Lint", "state": "pending", "updated_at": None},
+        ]
+        sig = board.derive_ci_signal(entries)
+        self.assertEqual(sig["status"], "unknown")
+        self.assertEqual(sig["failing_workflows"], [])
+
+
+class TestDeriveDependabotSignal(unittest.TestCase):
+    def test_none_when_no_entry(self):
+        self.assertIsNone(board.derive_dependabot_signal(None))
+
+    def test_none_when_error_recorded(self):
+        self.assertIsNone(board.derive_dependabot_signal({"error": "missing scope"}))
+
+    def test_maps_counts_through(self):
+        raw = {"critical": 1, "high": 14, "moderate": 9, "low": 1, "updated_at": "2026-08-30T10:00:00Z"}
+        sig = board.derive_dependabot_signal(raw)
+        self.assertEqual(sig, {"critical": 1, "high": 14, "moderate": 9, "low": 1, "updated_at": "2026-08-30T10:00:00Z"})
+
+
+class TestKbSignal(unittest.TestCase):
+    def test_never_run_is_none(self):
+        sig = board.derive_kb_signal(
+            prev_finish_epoch=None, last_finish_epoch=None, error_count=None, vet_backlog=None,
+        )
+        self.assertIsNone(sig)
+
+    def test_recent_run_is_fresh(self):
+        now = 1_800_000_000.0
+        sig = board.derive_kb_signal(
+            prev_finish_epoch=now - 3600, last_finish_epoch=now - 300,
+            error_count=1, vet_backlog=2663, now=now,
+        )
+        self.assertTrue(sig["autoingest_fresh"])
+        self.assertEqual(sig["last_run_errors"], 1)
+        self.assertEqual(sig["vet_backlog"], 2663)
+        self.assertEqual(set(sig.keys()), board.CONTRACT_KB_SIGNAL_KEYS)
+
+    def test_stale_run_is_not_fresh(self):
+        now = 1_800_000_000.0
+        sig = board.derive_kb_signal(
+            prev_finish_epoch=now - 10000, last_finish_epoch=now - 9000,
+            error_count=0, vet_backlog=0, now=now,
+        )
+        self.assertFalse(sig["autoingest_fresh"])
+
+    def test_error_count_and_vet_backlog_individually_nullable(self):
+        now = 1_800_000_000.0
+        sig = board.derive_kb_signal(
+            prev_finish_epoch=None, last_finish_epoch=now - 60,
+            error_count=None, vet_backlog=None, now=now,
+        )
+        self.assertIsNone(sig["last_run_errors"])
+        self.assertIsNone(sig["vet_backlog"])
+        self.assertTrue(sig["autoingest_fresh"])
+
+
+class TestBuildSignals(unittest.TestCase):
+    def test_signal_shape_exact_for_every_project(self):
+        signals = board.build_signals(
+            ["hearth-loom", "orca"],
+            ci_by_repo={"hearth-loom": [{"workflow": "CI", "state": "red", "updated_at": "t"}]},
+            dependabot_raw={"orca": {"critical": 0, "high": 2, "moderate": 0, "low": 0, "updated_at": "t"}},
+            kb_signal={"autoingest_fresh": True, "last_run_errors": 0, "vet_backlog": 5, "updated_at": "t"},
+        )
+        self.assertEqual(set(signals.keys()), {"hearth-loom", "orca"})
+        for project, entry in signals.items():
+            self.assertEqual(set(entry.keys()), board.CONTRACT_SIGNAL_ENTRY_KEYS)
+            self.assertEqual(set(entry["ci"].keys()), board.CONTRACT_CI_SIGNAL_KEYS)
+        self.assertEqual(signals["hearth-loom"]["ci"]["status"], "red")
+        self.assertIsNone(signals["hearth-loom"]["dependabot"])  # no entry -> null, not omitted
+        self.assertEqual(signals["orca"]["dependabot"]["high"], 2)
+        self.assertEqual(set(signals["orca"]["dependabot"].keys()), board.CONTRACT_DEPENDABOT_SIGNAL_KEYS)
+
+    def test_project_absent_from_ci_watch_data_gets_unknown_not_omitted(self):
+        signals = board.build_signals(["biz-worthy"], ci_by_repo={}, dependabot_raw={}, kb_signal=None)
+        self.assertEqual(signals["biz-worthy"]["ci"]["status"], "unknown")
+        self.assertIsNone(signals["biz-worthy"]["dependabot"])
+        self.assertIsNone(signals["biz-worthy"]["kb"])
+
+    def test_build_board_contract_unaffected_by_signals_addition(self):
+        # build_board() itself never grows a "signals" key -- that's merged
+        # by run() from an independent data source, per the frozen top-level
+        # contract note in the module docstring.
+        board_dict = board.build_board([], {}, {}, [], {}, now=time.time())
+        self.assertEqual(set(board_dict.keys()), board.CONTRACT_TOP_LEVEL_KEYS)
+        self.assertNotIn("signals", board_dict)
+
+
 if __name__ == "__main__":
     unittest.main()

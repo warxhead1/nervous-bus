@@ -59,6 +59,12 @@ REPORT_FILE = CACHE_DIR / "report.md"
 ROSTER_FILE = Path(__file__).resolve().parent / "roster.json"
 PROJECTS_ROOT = Path(os.environ.get("NERVOUS_CI_WATCH_PROJECTS_ROOT", str(Path.home() / "projects")))
 
+# Dependabot pass: separate state + signal files from the pipeline pass's
+# state.json (different cadence-worthy data, and board.py only needs to read
+# the signal file, never the dedupe bookkeeping in the state file).
+DEPENDABOT_STATE_FILE = CACHE_DIR / "dependabot_state.json"
+DEPENDABOT_SIGNAL_FILE = CACHE_DIR / "dependabot.json"
+
 NERVOUS_BIN = os.environ.get(
     "NERVOUS_BIN",
     str(Path(__file__).resolve().parent.parent.parent / "sdk" / "shell" / "nervous"),
@@ -492,6 +498,206 @@ def run_pipeline_pass(roster: dict, state: Dict[str, dict], *, default_branch_fn
 
 
 # --------------------------------------------------------------------------
+# Dependabot alerts pass -- shares the roster/gh-auth/dedupe machinery above,
+# separate cadence + state from the pipeline pass.
+# --------------------------------------------------------------------------
+
+DEPENDABOT_SEVERITIES = ("critical", "high", "moderate", "low")
+
+# Substrings that indicate the token lacks the scope needed to read
+# Dependabot alerts (classic PAT: `security_events`; fine-grained: repo
+# "Dependabot alerts" read permission) -- never treated as "zero alerts".
+SCOPE_ERROR_MARKERS = (
+    "403",
+    "resource not accessible",
+    "security_events",
+    "must have push access",
+    "not authorized",
+)
+
+
+def fetch_dependabot_alerts(repo: str, timeout: int = 60) -> Tuple[Optional[List[dict]], Optional[str]]:
+    """Returns (alerts, error). `alerts` is a list of {"severity","ghsa_id"}
+    dicts for every OPEN Dependabot alert on `repo` (empty list is a valid,
+    successful "no alerts" result). `error` is a short diagnostic string when
+    the call failed -- callers must treat error!=None as "unknown", never
+    coerce it to zero counts, per the incident this adapter exists to avoid
+    (a 403 silently rendered as a clean bill of health).
+    """
+    try:
+        out = subprocess.run(
+            [
+                "gh", "api", f"repos/{repo}/dependabot/alerts", "-f", "state=open", "--paginate",
+                "--jq", ".[] | {severity: .security_advisory.severity, ghsa_id: .security_advisory.ghsa_id}",
+            ],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except Exception as e:
+        return None, f"gh api failed: {e}"
+
+    if out.returncode != 0:
+        stderr = (out.stderr or "").strip()
+        low = stderr.lower()
+        if any(marker in low for marker in SCOPE_ERROR_MARKERS):
+            return None, f"missing scope (needs 'security_events' on a classic PAT): {stderr[:200]}"
+        return None, f"gh api exit {out.returncode}: {stderr[:200]}"
+
+    alerts: List[dict] = []
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            alerts.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return alerts, None
+
+
+def summarize_severity(alerts: List[dict]) -> Dict[str, int]:
+    counts = {sev: 0 for sev in DEPENDABOT_SEVERITIES}
+    for a in alerts:
+        sev = (a.get("severity") or "").strip().lower()
+        if sev in counts:
+            counts[sev] += 1
+    return counts
+
+
+def publish_dependabot_event(payload: dict, *, dry_run: bool) -> bool:
+    if dry_run:
+        sys.stderr.write(f"[ci-watch] (dry-run) would publish bus.dependabot.alerts.v1: {payload}\n")
+        return True
+    try:
+        subprocess.run(
+            [NERVOUS_BIN, "publish", "bus.dependabot.alerts.v1", json.dumps(payload)],
+            check=True, capture_output=True, text=True, timeout=10,
+        )
+        return True
+    except Exception as e:
+        sys.stderr.write(f"[ci-watch] dependabot publish failed for {payload.get('repo')}: {e}\n")
+        return False
+
+
+def file_dependabot_bead(repo: str, ghsa_id: str, *, dry_run: bool) -> Optional[str]:
+    title = f"Dependabot critical: {repo}/{ghsa_id}"
+    description = (
+        f"Auto-filed by adapters/ci-watch (nervous-bus) dependabot pass. A NEW critical-severity "
+        f"Dependabot alert ({ghsa_id}) was observed open on {repo}. This bead fires only for newly "
+        f"appearing criticals, deduped by repo+advisory -- the existing backlog is surfaced as "
+        f"signal counts on the estate board, not as one bead per alert.\n\n"
+        f"https://github.com/{repo}/security/advisories/{ghsa_id}\n"
+    )
+    if dry_run:
+        sys.stderr.write(f"[ci-watch] (dry-run) would file dependabot bead: {title}\n")
+        return None
+    data = bd_json(["create", title, "-t", "bug", "-p", "1", "-d", description])
+    if not data:
+        sys.stderr.write(f"[ci-watch] bd create returned no data for {title}\n")
+        return None
+    obj = data[0] if isinstance(data, list) and data else data
+    return obj.get("id") if isinstance(obj, dict) else None
+
+
+def load_dependabot_state(path: Path = DEPENDABOT_STATE_FILE) -> Dict[str, dict]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open() as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_dependabot_state(data: Dict[str, dict], path: Path = DEPENDABOT_STATE_FILE) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+    tmp.rename(path)
+
+
+def run_dependabot_pass(roster: dict, state: Dict[str, dict], *, fetch_fn, dry_run: bool,
+                         now: Optional[float] = None) -> List[dict]:
+    """Returns a list of per-repo result dicts and mutates `state` in place.
+    A repo whose fetch errors (scope-missing or transient) leaves its prior
+    state untouched -- never overwrites known-good counts with a failure, and
+    never emits/fires a bead off of an error.
+    """
+    now = now if now is not None else time.time()
+    results: List[dict] = []
+
+    for entry in roster.get("repos", []):
+        repo = entry["repo"]
+        alerts, error = fetch_fn(repo)
+
+        if error is not None:
+            results.append({"repo": repo, "counts": None, "error": error})
+            continue
+
+        counts = summarize_severity(alerts)
+        critical_ids = {
+            a.get("ghsa_id") for a in alerts
+            if (a.get("severity") or "").strip().lower() == "critical" and a.get("ghsa_id")
+        }
+
+        prior = state.get(repo, {})
+        prev_counts = prior.get("counts")
+        known_critical_ids = set(prior.get("known_critical_ghsa_ids", []))
+        new_critical_ids = sorted(critical_ids - known_critical_ids)
+
+        if prev_counts is None:
+            reason = "first-seen"
+        elif prev_counts != counts:
+            reason = "transition"
+        else:
+            reason = None
+
+        bead_ids: List[str] = []
+        for ghsa_id in new_critical_ids:
+            bead_id = file_dependabot_bead(repo, ghsa_id, dry_run=dry_run)
+            if bead_id:
+                bead_ids.append(bead_id)
+
+        if reason:
+            payload = {
+                "repo": repo, **counts, "prev": prev_counts, "reason": reason,
+                "new_critical_ghsa_ids": new_critical_ids,
+            }
+            publish_dependabot_event(payload, dry_run=dry_run)
+
+        if not dry_run:
+            state[repo] = {
+                "counts": counts,
+                "known_critical_ghsa_ids": sorted(known_critical_ids | critical_ids),
+                "updated_at": iso(now),
+            }
+
+        results.append({
+            "repo": repo, "counts": counts, "new_critical_ghsa_ids": new_critical_ids,
+            "bead_ids": bead_ids, "transitioned": reason == "transition",
+        })
+
+    return results
+
+
+def build_dependabot_signal(results: List[dict], *, now: Optional[float] = None) -> Dict[str, dict]:
+    """repo-basename -> {"critical","high","moderate","low","updated_at"} for
+    a successful poll, or {"error": <reason>} for a repo whose fetch failed
+    this poll -- board.py must map the latter to a null signal, never fake
+    zeros for it.
+    """
+    now = now if now is not None else time.time()
+    out: Dict[str, dict] = {}
+    for r in results:
+        basename = r["repo"].split("/", 1)[-1]
+        if r.get("counts") is not None:
+            out[basename] = {**r["counts"], "updated_at": iso(now)}
+        else:
+            out[basename] = {"error": r.get("error") or "unknown error"}
+    return out
+
+
+# --------------------------------------------------------------------------
 # Contract lint
 # --------------------------------------------------------------------------
 
@@ -616,13 +822,35 @@ def run_lint_pass(roster: dict, projects_root: Path = PROJECTS_ROOT) -> List[dic
 # Report
 # --------------------------------------------------------------------------
 
-def render_report(pipeline_results: List[dict], lint_results: List[dict], *, generated_at: Optional[float] = None) -> str:
+def render_report(pipeline_results: List[dict], lint_results: List[dict], *,
+                   dependabot_results: Optional[List[dict]] = None,
+                   generated_at: Optional[float] = None) -> str:
     generated_at = generated_at if generated_at is not None else time.time()
     lines = [
         "# ci-watch report",
         "",
         f"Generated: {iso(generated_at)}",
         "",
+    ]
+
+    if dependabot_results is not None:
+        lines.append("## Dependabot alerts")
+        lines.append("")
+        lines.append("| repo | critical | high | moderate | low | new criticals | status |")
+        lines.append("|---|---|---|---|---|---|---|")
+        for r in sorted(dependabot_results, key=lambda r: r["repo"]):
+            if r.get("counts") is None:
+                lines.append(f"| {r['repo']} |  |  |  |  |  | ERROR: {r.get('error', '')} |")
+            else:
+                c = r["counts"]
+                new_crit = ", ".join(r.get("new_critical_ghsa_ids") or []) or ""
+                lines.append(
+                    f"| {r['repo']} | {c['critical']} | {c['high']} | {c['moderate']} | {c['low']} | "
+                    f"{new_crit} | ok |"
+                )
+        lines.append("")
+
+    lines += [
         "## Pipeline status",
         "",
         "| repo | workflow | branch | state | consecutive_failures | red_since | bead | run |",
@@ -657,29 +885,44 @@ def render_report(pipeline_results: List[dict], lint_results: List[dict], *, gen
 # --------------------------------------------------------------------------
 
 def run(*, roster_path: Path = ROSTER_FILE, state_path: Path = STATE_FILE, report_path: Path = REPORT_FILE,
+        dependabot_state_path: Path = DEPENDABOT_STATE_FILE, dependabot_signal_path: Path = DEPENDABOT_SIGNAL_FILE,
         projects_root: Path = PROJECTS_ROOT, dry_run: bool = False, no_network: bool = False,
-        run_fetch_fn=None, default_branch_fn=None, log_fetch_fn=None) -> Tuple[List[dict], List[dict]]:
+        run_fetch_fn=None, default_branch_fn=None, log_fetch_fn=None,
+        dependabot_fetch_fn=None) -> Tuple[List[dict], List[dict], List[dict]]:
     roster = load_roster(roster_path)
     state = load_state(state_path)
+    dependabot_state = load_dependabot_state(dependabot_state_path)
 
     run_fetch_fn = run_fetch_fn or fetch_runs
     default_branch_fn = default_branch_fn or fetch_default_branch
     log_fetch_fn = log_fetch_fn or fetch_failing_log
+    dependabot_fetch_fn = dependabot_fetch_fn or fetch_dependabot_alerts
 
     if no_network:
-        raise RuntimeError("no_network=True requires run_fetch_fn/default_branch_fn/log_fetch_fn stubs")
+        raise RuntimeError("no_network=True requires run_fetch_fn/default_branch_fn/log_fetch_fn/dependabot_fetch_fn stubs")
 
     pipeline_results = run_pipeline_pass(
         roster, state, default_branch_fn=default_branch_fn, run_fetch_fn=run_fetch_fn,
         log_fetch_fn=log_fetch_fn, dry_run=dry_run,
     )
     lint_results = run_lint_pass(roster, projects_root=projects_root)
+    dependabot_results = run_dependabot_pass(
+        roster, dependabot_state, fetch_fn=dependabot_fetch_fn, dry_run=dry_run,
+    )
 
     save_state(state, state_path)
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(render_report(pipeline_results, lint_results))
+    if not dry_run:
+        save_dependabot_state(dependabot_state, dependabot_state_path)
+    dependabot_signal_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dependabot_signal_path.with_suffix(".tmp")
+    with tmp.open("w") as f:
+        json.dump(build_dependabot_signal(dependabot_results), f, indent=2, sort_keys=True)
+    tmp.rename(dependabot_signal_path)
 
-    return pipeline_results, lint_results
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(render_report(pipeline_results, lint_results, dependabot_results=dependabot_results))
+
+    return pipeline_results, lint_results, dependabot_results
 
 
 def main() -> int:
@@ -687,22 +930,29 @@ def main() -> int:
     parser.add_argument("--roster", type=Path, default=ROSTER_FILE)
     parser.add_argument("--state-file", type=Path, default=STATE_FILE)
     parser.add_argument("--report-file", type=Path, default=REPORT_FILE)
+    parser.add_argument("--dependabot-state-file", type=Path, default=DEPENDABOT_STATE_FILE)
+    parser.add_argument("--dependabot-signal-file", type=Path, default=DEPENDABOT_SIGNAL_FILE)
     parser.add_argument("--projects-root", type=Path, default=PROJECTS_ROOT)
     parser.add_argument("--dry-run", action="store_true", help="compute + report, never publish or file beads")
     args = parser.parse_args()
 
-    pipeline_results, lint_results = run(
+    pipeline_results, lint_results, dependabot_results = run(
         roster_path=args.roster, state_path=args.state_file, report_path=args.report_file,
+        dependabot_state_path=args.dependabot_state_file, dependabot_signal_path=args.dependabot_signal_file,
         projects_root=args.projects_root, dry_run=args.dry_run,
     )
 
     red = [r for r in pipeline_results if r["state"] == RED]
+    dependabot_errors = [r for r in dependabot_results if r.get("counts") is None]
     sys.stderr.write(
         f"[ci-watch] evaluated {len(pipeline_results)} workflow/branch pairs across "
-        f"{len(load_roster(args.roster).get('repos', []))} repos: red={len(red)} report={args.report_file}\n"
+        f"{len(load_roster(args.roster).get('repos', []))} repos: red={len(red)} "
+        f"dependabot_errors={len(dependabot_errors)} report={args.report_file}\n"
     )
     for r in red:
         sys.stderr.write(f"[ci-watch] RED {r['repo']}/{r['workflow']}@{r['branch']} (n={r.get('consecutive_failures')}) bead={r.get('bead_id')}\n")
+    for r in dependabot_errors:
+        sys.stderr.write(f"[ci-watch] DEPENDABOT ERROR {r['repo']}: {r.get('error')}\n")
     return 0
 
 

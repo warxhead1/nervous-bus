@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.dependabot.alerts.v1.json",
+  "title": "bus.dependabot.alerts v1",
+  "description": "Emitted by the ci-watch adapter's dependabot pass (adapters/ci-watch/) on a severity-count TRANSITION (any of critical/high/moderate/low changes from the previously observed count, or first-seen) for a watched GitHub repo's open Dependabot alerts (`gh api /repos/<owner>/<repo>/dependabot/alerts?state=open`). Never emitted per-poll for an unchanged count. Feeds the estate board's per-project 'signals.dependabot' field (adapters/board/board.py) via a joined machine-readable file, not directly.",
+  "type": "object",
+  "required": ["repo", "critical", "high", "moderate", "low", "reason"],
+  "properties": {
+    "repo": {
+      "type": "string",
+      "description": "owner/name of the GitHub repository (e.g. warxhead1/hearth-loom)"
+    },
+    "critical": { "type": "integer", "minimum": 0, "description": "Open Dependabot alerts of severity 'critical'" },
+    "high": { "type": "integer", "minimum": 0, "description": "Open Dependabot alerts of severity 'high'" },
+    "moderate": { "type": "integer", "minimum": 0, "description": "Open Dependabot alerts of severity 'moderate'" },
+    "low": { "type": "integer", "minimum": 0, "description": "Open Dependabot alerts of severity 'low'" },
+    "prev": {
+      "type": ["object", "null"],
+      "description": "Severity counts recorded on the previous poll, or null if this is the first time ci-watch observed this repo's alerts",
+      "properties": {
+        "critical": { "type": "integer", "minimum": 0 },
+        "high": { "type": "integer", "minimum": 0 },
+        "moderate": { "type": "integer", "minimum": 0 },
+        "low": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "new_critical_ghsa_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "GHSA advisory ids newly seen at severity 'critical' this poll (not present in the persisted known-critical set) -- these are what trigger an auto-filed triage bead, one per id, deduped by repo+advisory across polls"
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["transition", "first-seen"],
+      "description": "Why this event fired: a real severity-count change, or the first successful poll of this repo's alerts"
+    }
+  }
+}
