@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly maintenance-train run at 05:00 (clear of tachyonac full-gate 03:30 and mmx-build-warnings 08:10)
+
+[Timer]
+OnCalendar=*-*-* 05:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
