@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.channel.stale.v1.json",
+  "title": "bus.channel.stale v1",
+  "description": "Emitted by the staleness-monitor adapter (adapters/staleness/) when a channel's silence since its last event exceeds a data-derived threshold. Watches the watchers: makes silent emitter death (a producer that stops publishing without crashing) visible instead of discoverable only by manual investigation weeks/months later.",
+  "type": "object",
+  "required": ["channel", "last_event_at", "expected_gap_seconds", "observed_gap_seconds", "baseline_sample_size"],
+  "properties": {
+    "channel": {
+      "type": "string",
+      "description": "The nbus:<channel> stream name that went stale (event type, e.g. deer-flow.bead.enriched.v1)"
+    },
+    "last_event_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp of the last observed entry on this stream"
+    },
+    "expected_gap_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "The staleness threshold this run computed: max(p95_historical_gap_seconds * multiplier, floor_seconds)"
+    },
+    "observed_gap_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Actual elapsed seconds since last_event_at at the time this alert was computed"
+    },
+    "baseline_sample_size": {
+      "type": "integer",
+      "minimum": 5,
+      "description": "Number of historical inter-event gaps sampled to compute the baseline (channels with <5 lifetime events are 'sparse' and never alerted on, so this is always >=5 for an actual alert)"
+    },
+    "p95_gap_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "The p95 historical inter-event gap this run measured, before multiplier/floor were applied"
+    },
+    "multiplier": {
+      "type": "number",
+      "minimum": 1,
+      "description": "Config multiplier applied to p95_gap_seconds to derive expected_gap_seconds"
+    },
+    "floor_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Config floor applied via max() to derive expected_gap_seconds"
+    }
+  }
+}
