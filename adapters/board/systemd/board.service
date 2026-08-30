@@ -1,0 +1,13 @@
+[Unit]
+Description=nervous-bus total board (federated dolt + orca + hearth-loom aggregator)
+After=network-online.target redis.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.cache/nervous-bus
+ExecStart=%h/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/board/board.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nervous-board
+ReadWritePaths=%h/.cache/nervous-bus
