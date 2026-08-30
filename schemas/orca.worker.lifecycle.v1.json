@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/orca.worker.lifecycle.v1.json",
+  "title": "orca.worker.lifecycle v1",
+  "description": "Emitted by Orca's orchestration coordinator (src/main/runtime/orchestration/coordinator.ts) on every worker-dispatch state transition it observes: dispatched (preamble sent to a worker terminal), heartbeat (liveness ping recorded), completed/failed (worker_done settlement), and stale (heartbeat missed past the hung-dispatch threshold, warning only — the dispatch is not auto-failed). One event per transition, not a polling snapshot. Fire-and-forget via `nervous publish`; never blocks coordinator flow.",
+  "type": "object",
+  "required": ["event_id", "ts", "run_id", "worker_id", "state"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": { "type": "string", "description": "ULID identifying this lifecycle event (nervous-bus IDs convention)." },
+    "ts": { "type": "string", "format": "date-time", "description": "RFC3339 UTC timestamp when this state transition was observed by the coordinator." },
+    "run_id": { "type": "string", "description": "Coordinator run id (orchestration_db coordinator_runs.id) this worker belongs to." },
+    "worker_id": { "type": "string", "description": "Terminal handle of the worker (assignee_handle / dispatch context assignee), or '<unknown>' if the dispatch context could not resolve one at stale-check time." },
+    "dispatch_id": { "type": ["string", "null"], "description": "dispatch_contexts.id for this worker's active dispatch. Null only for pre-dispatch-authority states." },
+    "task_id": { "type": ["string", "null"], "description": "orchestration task id this dispatch is executing. Null for heartbeat events, which carry only dispatch_id." },
+    "state": { "type": "string", "enum": ["dispatched", "heartbeat", "completed", "failed", "stale"], "description": "dispatched: preamble sent to the worker terminal. heartbeat: a heartbeat message was accepted and recorded. completed/failed: a worker_done report was settled with that outcome. stale: warnStaleDispatches flagged a missed heartbeat past the hung threshold (10 min); advisory only, the dispatch stays active." },
+    "task_title": { "type": ["string", "null"], "description": "Task title, or a truncated (200 char max, '…'-suffixed) excerpt of the task spec/prompt when no title was set. Truncated deliberately — task specs can carry secrets and this field must stay a short excerpt, never the full body." },
+    "outcome": { "type": ["string", "null"], "enum": ["succeeded", "failed", null], "description": "Present only when state is completed/failed: the worker_done outcome as reported by the worker." }
+  }
+}

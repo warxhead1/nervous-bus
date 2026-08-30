@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/orca.run.lifecycle.v1.json",
+  "title": "orca.run.lifecycle v1",
+  "description": "Emitted by Orca's orchestration coordinator (src/main/runtime/orchestration/coordinator.ts executeLoop) on run-level state transitions: started (a coordinator run began its dispatch loop), completed (every task settled without failures), failed (the run stopped, converged with outstanding failures, or the coordinator loop threw). One event per transition. Fire-and-forget via `nervous publish`; never blocks coordinator flow.",
+  "type": "object",
+  "required": ["event_id", "ts", "run_id", "coordinator_handle", "state"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": { "type": "string", "description": "ULID identifying this lifecycle event (nervous-bus IDs convention)." },
+    "ts": { "type": "string", "format": "date-time", "description": "RFC3339 UTC timestamp when this state transition was observed by the coordinator." },
+    "run_id": { "type": "string", "description": "Coordinator run id (orchestration_db coordinator_runs.id)." },
+    "coordinator_handle": { "type": "string", "description": "Terminal handle of the coordinator driving this run." },
+    "state": { "type": "string", "enum": ["started", "completed", "failed"], "description": "started: executeLoop began after decompose(). completed: the DAG converged with no failed tasks and no early stop. failed: the loop was stopped early, converged with outstanding/failed tasks, or threw." },
+    "spec_excerpt": { "type": ["string", "null"], "description": "Truncated (200 char max, '…'-suffixed) excerpt of the run's top-level spec/objective. Truncated deliberately — specs can carry secrets and this field must stay a short excerpt, never the full body." },
+    "completed_task_count": { "type": ["integer", "null"], "description": "Count of tasks marked completed by this run at the time of this event." },
+    "failed_task_count": { "type": ["integer", "null"], "description": "Count of tasks marked failed by this run at the time of this event." }
+  }
+}

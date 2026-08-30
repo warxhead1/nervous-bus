@@ -27,8 +27,8 @@
     },
     "baseline_sample_size": {
       "type": "integer",
-      "minimum": 5,
-      "description": "Number of historical inter-event gaps sampled to compute the baseline (channels with <5 lifetime events are 'sparse' and never alerted on, so this is always >=5 for an actual alert)"
+      "minimum": 4,
+      "description": "Number of historical inter-event GAPS sampled to compute the baseline. Channels with <5 lifetime EVENTS are 'sparse' and never alerted on; 5 events yield 4 gaps, so the floor for an actual alert is 4 (N events -> N-1 gaps — the first live run dead-lettered 4 alerts when this said 5)"
     },
     "p95_gap_seconds": {
       "type": "number",
