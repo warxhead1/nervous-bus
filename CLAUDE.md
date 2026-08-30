@@ -93,6 +93,12 @@ bd list --status=open
 hearth-loom is configured to pick up nervous-bus beads. Sophisticated beads
 (machine-readable acceptance + file scope + verification) become PRs autonomously.
 
+## Standing dashboards (survive compaction — check before re-deriving)
+
+- `~/.cache/nervous-bus/ci-watch/report.md` — CI health snapshot.
+- `~/.cache/nervous-bus/staleness/report.md` — producer/schema staleness.
+- `~/.cache/nervous-bus/dlq/summary.json` — dead-letter queue summary.
+
 ## Cross-project links
 
 - **tengine** — emits `tengine.session.*` from shadergen + silo_tester
