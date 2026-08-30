@@ -5,6 +5,10 @@ that turn isolated projects into an observable ecosystem. deer-flow consumes via
 SSE and files beads; hearth-loom picks up those beads and opens PRs; consumers
 that need at-least-once delivery use XREADGROUP consumer groups.
 
+**Also read `AGENTS.md`** (autonomous-worker contract: machine-readable acceptance
+criteria, file-scope escalation, cross-repo bead pairing) — it is a separate document,
+not imported here, and its rules bind interactive sessions doing bead work too.
+
 ## Architecture (one paragraph)
 
 **Primary transport: Redis Streams.** `sdk/shell/nervous publish <channel> <json>`
