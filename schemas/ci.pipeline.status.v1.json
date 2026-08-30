@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/ci.pipeline.status.v1.json",
+  "title": "ci.pipeline.status v1",
+  "description": "Emitted by the ci-watch adapter (adapters/ci-watch/) on a workflow-run state TRANSITION (green->red, red->green, first-seen-red) for a watched GitHub Actions workflow on a watched branch, plus at most one persistent-red reminder per 24h while a workflow stays red. Never emitted per-poll for an unchanged state -- that would spam the bus every 30 minutes for every long-red workflow. Closes a measured gap (2026-08-30): red mains nobody was watching (shader-garden Test battery red 3 days, deer-flow Frontend Unit Tests red on main, tengine cpu-extended red, career-ops 3 red workflows, orca Node next compatibility red, hearth CI showing skipped on main).",
+  "type": "object",
+  "required": ["repo", "workflow", "branch", "state", "prev_state"],
+  "properties": {
+    "repo": {
+      "type": "string",
+      "description": "owner/name of the GitHub repository (e.g. warxhead1/shader-garden)"
+    },
+    "workflow": {
+      "type": "string",
+      "description": "GitHub Actions workflow display name (workflowName from `gh run list`), e.g. 'Test battery'"
+    },
+    "branch": {
+      "type": "string",
+      "description": "headBranch the run was on (usually the repo's default branch, but roster.json can watch others)"
+    },
+    "state": {
+      "type": "string",
+      "enum": ["green", "red", "skipped", "no-runs", "pending"],
+      "description": "Newly computed state for the most recent concluded run of this workflow on this branch. 'pending' (in-progress run, no conclusion yet) never triggers an event on its own."
+    },
+    "prev_state": {
+      "type": "string",
+      "enum": ["green", "red", "skipped", "no-runs", "pending", "unknown"],
+      "description": "State recorded on the previous poll for this repo+workflow+branch. 'unknown' means this is the first time ci-watch has observed this workflow (first-seen-red still fires if state is red)."
+    },
+    "run_url": {
+      "type": "string",
+      "description": "HTML URL of the run that produced this state (gh run list .url)"
+    },
+    "head_sha": {
+      "type": "string",
+      "description": "Commit SHA of the run that produced this state"
+    },
+    "red_since": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp of the first run observed red in the current unbroken red streak, or null if state is not red"
+    },
+    "consecutive_failures": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of consecutive most-recent runs (as sampled, up to the --limit window) that concluded non-green for this workflow+branch"
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["transition", "persistent-red-reminder"],
+      "description": "Why this event fired: a real state change, or the at-most-once-per-24h reminder while a workflow stays red without an intervening green"
+    },
+    "bead_id": {
+      "type": ["string", "null"],
+      "description": "ID of the auto-filed triage bead in nervous-bus for this repo+workflow, if one has been created and is still open; null otherwise"
+    }
+  }
+}
