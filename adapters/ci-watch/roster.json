@@ -1,0 +1,25 @@
+{
+  "_comment": "Roster is config, not code. Add/remove repos and per-repo overrides here; watch.py never hardcodes a repo list. `branches` empty/absent means watch only the repo's GitHub default branch (resolved live via `gh repo view`, never assumed to be 'main'). `ignore_workflows` merges with the global default_ignore_workflows below (case-insensitive substring match on workflowName).",
+  "default_ignore_workflows": [
+    "readme downloads badge",
+    "dependency graph",
+    "dependabot updates"
+  ],
+  "repos": [
+    { "repo": "warxhead1/nervous-bus" },
+    { "repo": "warxhead1/hearth" },
+    { "repo": "warxhead1/deer-flow" },
+    { "repo": "warxhead1/tengine" },
+    { "repo": "warxhead1/career-ops" },
+    { "repo": "warxhead1/orca", "ignore_workflows": ["hourly macos dev build"] },
+    { "repo": "warxhead1/hearth-vault" },
+    { "repo": "warxhead1/shader-garden" },
+    { "repo": "warxhead1/hearth-loom" },
+    { "repo": "warxhead1/nervous-autobench" },
+    { "repo": "warxhead1/claude-hook-fast" },
+    { "repo": "warxhead1/kb" },
+    { "repo": "warxhead1/market-ops" },
+    { "repo": "warxhead1/tachyonac-engine" },
+    { "repo": "warxhead1/hearthsite" }
+  ]
+}
