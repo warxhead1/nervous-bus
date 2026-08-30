@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.maintenance.pr.v1.json",
+  "title": "bus.maintenance.pr v1",
+  "description": "Emitted by tools/maintenance-train/finalize.sh the moment a maintenance-train worker's PR is opened. One event per PR (not per commit, not per retry). The board's in-review lane already lights up from generic hearth-loom PR-lifecycle streams (see adapters/board/board.py PR_STREAMS); this channel is the maintenance-train-specific signal for consumers that only care about automated chore/CI-red/dependabot PRs, not every PR on the bus.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": { "type": "string", "const": "1.0" },
+    "id": { "type": "string" },
+    "source": { "type": "string", "const": "/nervous-bus/maintenance-train" },
+    "type": { "type": "string", "const": "bus.maintenance.pr.v1" },
+    "datacontenttype": { "type": "string", "const": "application/json" },
+    "time": { "type": "string", "format": "date-time" },
+    "data": {
+      "type": "object",
+      "required": ["bead_id", "repo", "pr_url", "title"],
+      "properties": {
+        "bead_id": {
+          "type": "string",
+          "description": "The beads_global bead this PR resolves, e.g. 'nervous-bus-m7xr'."
+        },
+        "repo": {
+          "type": "string",
+          "description": "Target repo short name (matches tools/maintenance-train/repo_config.py keys), e.g. 'deer-flow'."
+        },
+        "pr_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "The opened PR's GitHub URL."
+        },
+        "title": {
+          "type": "string",
+          "description": "The bead title (also used verbatim as the PR title's suffix, '[maint] <bead-id>: <title>')."
+        }
+      }
+    }
+  }
+}

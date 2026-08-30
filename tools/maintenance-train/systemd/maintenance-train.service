@@ -1,0 +1,12 @@
+[Unit]
+Description=Maintenance train — nightly select+dispatch+finalize across the beads_global maintenance queue
+Documentation=file:/home/eric/projects/nervous-bus/tools/maintenance-train/README.md
+
+[Service]
+Type=oneshot
+ExecStart=/home/eric/projects/nervous-bus/tools/maintenance-train/run-nightly.sh
+TimeoutStartSec=21600
+Nice=10
+IOSchedulingClass=idle
+# Not enabled by delivery; Eric enables explicitly:
+#   systemctl --user enable --now maintenance-train.timer
