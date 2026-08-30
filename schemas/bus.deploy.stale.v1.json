@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.deploy.stale.v1.json",
+  "title": "bus.deploy.stale v1",
+  "description": "Emitted by the deploy-staleness monitor adapter (adapters/deploy-staleness/) when a long-running process (systemd user unit or AppImage-style unmanaged process) is found running code older than the code currently on disk -- e.g. a binary replaced by a fix while the old build keeps serving traffic, or a fuse-mounted AppImage that pins its old contents after the underlying file is overwritten. Watches the deploys: makes 'merged + tests green + still running the stale build' visible instead of discoverable only by a manual sweep.",
+  "type": "object",
+  "required": ["target", "kind", "verdict", "code_newest_at", "remedy_hint"],
+  "properties": {
+    "target": {
+      "type": "string",
+      "description": "systemd unit name (e.g. kb-watch.service) or process matcher name (e.g. appimage:orca) that this event describes"
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["unit", "process"],
+      "description": "'unit' for a systemd --user managed service, 'process' for an unmanaged long-running process matched by roster.json appimage_matchers"
+    },
+    "pid": {
+      "type": ["integer", "null"],
+      "description": "PID of the running process this verdict was computed against, when known"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["stale", "fresh"],
+      "description": "This event is only ever published on a transition; 'stale' means the running process predates its code, 'fresh' means a previously-stale target recovered (restarted onto current code)"
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["mtime", "git_commit", "deleted_exe", "file_newer_than_process", "recovered"],
+      "description": "Which freshness signal drove the verdict: script/binary mtime, a later git commit touching the source file, /proc/<pid>/exe resolving to a deleted (replaced) binary, an AppImage-style file newer than the process that mounted it, or a fresh-after-stale recovery"
+    },
+    "running_since": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp the running process/unit started"
+    },
+    "code_newest_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC timestamp of the newest freshness signal found for the code backing this target (max of file mtime and, for git-tracked sources, last commit touching the file)"
+    },
+    "remedy_hint": {
+      "type": "string",
+      "description": "Human-actionable next step, e.g. 'systemctl --user restart kb-watch.service' or 'relaunch orca (kill pid 1500947)'"
+    }
+  }
+}

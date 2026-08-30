@@ -1,0 +1,25 @@
+{
+  "_comment": "Roster is config, not code. check.py auto-discovers Type=simple/exec/notify systemd --user units whose resolved code target lives under project_roots or local_bin_roots (oneshots are always skipped -- they re-exec fresh every run by definition). include_units/exclude_units are overrides on top of that auto-discovery, keyed by unit name. appimage_matchers cover long-running unmanaged processes that never went through systemd (the orca AppImage fuse-mount-pins-old-build case).",
+  "project_roots": ["/home/eric/projects"],
+  "local_bin_roots": ["/home/eric/.local/bin"],
+  "exclude_units": [
+    "staleness.service",
+    "deploy-staleness.service",
+    "ci-watch.service",
+    "kb-autoingest.service",
+    "kb-catchup.service",
+    "kb-decay.service",
+    "kb-enrich.service",
+    "kb-career-ops-ingest.service"
+  ],
+  "include_units": [
+    "kb-watch.service",
+    "redis-mirror.service",
+    "pattern-consumer.service",
+    "bead-enrichment-consumer.service",
+    "dlq.service"
+  ],
+  "appimage_matchers": [
+    { "name": "orca", "cmdline_contains": "orca-linux.AppImage" }
+  ]
+}
