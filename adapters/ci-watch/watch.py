@@ -527,7 +527,11 @@ def fetch_dependabot_alerts(repo: str, timeout: int = 60) -> Tuple[Optional[List
     try:
         out = subprocess.run(
             [
-                "gh", "api", f"repos/{repo}/dependabot/alerts", "-f", "state=open", "--paginate",
+                # NOTE: `-f state=open` (a "field") silently forces `gh api`
+                # to POST -- verified 2026-08-30 (every roster repo came back
+                # 404 including known-good warxhead1/orca). The query string
+                # + explicit -X GET is the form that actually issues a GET.
+                "gh", "api", "-X", "GET", f"repos/{repo}/dependabot/alerts?state=open", "--paginate",
                 "--jq", ".[] | {severity: .security_advisory.severity, ghsa_id: .security_advisory.ghsa_id}",
             ],
             capture_output=True, text=True, timeout=timeout,
