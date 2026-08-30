@@ -23,6 +23,8 @@ def run_checker(
     tmp_path: Path,
     allowlist: Path | None = None,
     baseline: Path | None = None,
+    private_schemas: Path | None = None,
+    private_prefixes: Path | None = None,
     report_only: bool = False,
     strict: bool = False,
 ) -> subprocess.CompletedProcess:
@@ -36,15 +38,28 @@ def run_checker(
     if baseline is None:
         baseline = tmp_path / "base.txt"
         baseline.write_text("")
+    if private_schemas is None:
+        private_schemas = tmp_path / "private-schemas"
+        private_schemas.mkdir(exist_ok=True)
+    if private_prefixes is None:
+        private_prefixes = tmp_path / "private-prefixes.txt"
+        private_prefixes.write_text("")
     cmd = [
         sys.executable,
         str(CHECKER),
-        "--input", str(subs_f),
-        "--emitted", str(emits_f),
-        "--schemas", str(schemas),
-        "--allowlist", str(allowlist),
-        "--baseline", str(baseline),
+        "--input",
+        str(subs_f),
+        "--emitted",
+        str(emits_f),
+        "--schemas",
+        str(schemas),
+        "--allowlist",
+        str(allowlist),
+        "--baseline",
+        str(baseline),
     ]
+    cmd.extend(["--private-schemas", str(private_schemas)])
+    cmd.extend(["--private-prefixes", str(private_prefixes)])
     if report_only:
         cmd.append("--report-only")
     if strict:
@@ -201,6 +216,45 @@ def test_exact_subscribe_to_base_matches_versioned(tmp_path: Path) -> None:
     )
     assert res.returncode == 0, res.stdout
     assert "--- BLOCK" not in res.stdout
+
+
+def test_private_overlay_schema_satisfies_private_subscription(tmp_path: Path) -> None:
+    """A private contract is recognized from the documented local overlay."""
+    schemas = make_schemas(tmp_path, ["deer-flow.foo.v1"])
+    overlay = tmp_path / "private-schemas"
+    overlay.mkdir()
+    (overlay / "tachyonos.command.research_ticker.v1.json").write_text("{}")
+    prefixes = tmp_path / "private-prefixes.txt"
+    prefixes.write_text("tachyonos.\n")
+    res = run_checker(
+        subs=[sub("tachyonos.command.research_ticker", "prefix")],
+        schemas=schemas,
+        emitted=[emit("tachyonos.command.research_ticker.v1")],
+        tmp_path=tmp_path,
+        private_schemas=overlay,
+        private_prefixes=prefixes,
+    )
+    assert res.returncode == 0, res.stdout
+    assert "--- BLOCK" not in res.stdout
+
+
+def test_private_overlay_cannot_satisfy_public_subscription(tmp_path: Path) -> None:
+    """Public subscriptions still require a public repository schema."""
+    schemas = make_schemas(tmp_path, ["deer-flow.foo.v1"])
+    overlay = tmp_path / "private-schemas"
+    overlay.mkdir()
+    (overlay / "deer-flow.private-lookalike.v1.json").write_text("{}")
+    prefixes = tmp_path / "private-prefixes.txt"
+    prefixes.write_text("tachyonos.\n")
+    res = run_checker(
+        subs=[sub("deer-flow.private-lookalike.v1")],
+        schemas=schemas,
+        emitted=[emit("deer-flow.private-lookalike.v1")],
+        tmp_path=tmp_path,
+        private_schemas=overlay,
+        private_prefixes=prefixes,
+    )
+    assert res.returncode == 1, res.stdout
 
 
 # ─── Allowlist ─────────────────────────────────────────────────────────────────

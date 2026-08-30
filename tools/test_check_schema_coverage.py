@@ -21,6 +21,8 @@ def run_checker(
     schemas: Path,
     allowlist: Path,
     deprecated: Path | None = None,
+    private_schemas: Path | None = None,
+    private_prefixes: Path | None = None,
     report_only: bool = False,
 ) -> subprocess.CompletedProcess:
     cmd = [
@@ -33,6 +35,10 @@ def run_checker(
     ]
     if deprecated is not None:
         cmd.extend(["--deprecated", str(deprecated)])
+    if private_schemas is not None:
+        cmd.extend(["--private-schemas", str(private_schemas)])
+    if private_prefixes is not None:
+        cmd.extend(["--private-prefixes", str(private_prefixes)])
     if report_only:
         cmd.append("--report-only")
     return subprocess.run(
@@ -59,7 +65,12 @@ def test_all_covered_exits_zero(tmp_path: Path) -> None:
     (schemas / "loom.coord.v1.json").write_text("{}")
 
     records = [
-        {"producer": "h", "file": "x.go", "line": 1, "channel": "bus.bead.lifecycle.v1"},
+        {
+            "producer": "h",
+            "file": "x.go",
+            "line": 1,
+            "channel": "bus.bead.lifecycle.v1",
+        },
         {"producer": "h", "file": "x.go", "line": 2, "channel": "loom.coord"},
     ]
     res = run_checker(records, schemas, allow, dep)
@@ -78,7 +89,11 @@ def test_missing_channel_exits_one(tmp_path: Path) -> None:
     res = run_checker(records, schemas, allow, dep)
     assert res.returncode == 1, res.stdout
     assert "uncovered.ch" in res.stdout
-    assert "covered.v1" not in res.stdout.split("Missing schemas")[1] if "Missing schemas" in res.stdout else True
+    assert (
+        "covered.v1" not in res.stdout.split("Missing schemas")[1]
+        if "Missing schemas" in res.stdout
+        else True
+    )
 
 
 def test_allowlist_exempts_channel(tmp_path: Path) -> None:
@@ -137,6 +152,60 @@ def test_underscore_prefixed_schemas_ignored(tmp_path: Path) -> None:
     res = run_checker(records, schemas, allow, dep)
     # `_per-project.foo` shouldn't be considered covered by the underscore file.
     assert res.returncode == 1
+
+
+def test_private_channel_requires_local_overlay_schema(tmp_path: Path) -> None:
+    """Private contracts are covered from the overlay, never this public repo."""
+    schemas, allow, dep = make_env(tmp_path)
+    overlay = tmp_path / "private-schemas"
+    overlay.mkdir()
+    (overlay / "tachyonos.research.recommendation.v1.json").write_text("{}")
+    prefixes = tmp_path / "private-prefixes.txt"
+    prefixes.write_text("tachyonos.\n")
+    records = [
+        {
+            "producer": "deer-flow",
+            "file": "consumer.py",
+            "line": 1,
+            "channel": "tachyonos.research.recommendation.v1",
+        }
+    ]
+    res = run_checker(
+        records,
+        schemas,
+        allow,
+        dep,
+        private_schemas=overlay,
+        private_prefixes=prefixes,
+    )
+    assert res.returncode == 0, res.stdout
+
+
+def test_private_overlay_cannot_cover_public_channel(tmp_path: Path) -> None:
+    """A public channel stays merge-blocking even if an overlay has a copy."""
+    schemas, allow, dep = make_env(tmp_path)
+    overlay = tmp_path / "private-schemas"
+    overlay.mkdir()
+    (overlay / "deer-flow.public.event.v1.json").write_text("{}")
+    prefixes = tmp_path / "private-prefixes.txt"
+    prefixes.write_text("tachyonos.\n")
+    records = [
+        {
+            "producer": "deer-flow",
+            "file": "producer.py",
+            "line": 1,
+            "channel": "deer-flow.public.event.v1",
+        }
+    ]
+    res = run_checker(
+        records,
+        schemas,
+        allow,
+        dep,
+        private_schemas=overlay,
+        private_prefixes=prefixes,
+    )
+    assert res.returncode == 1, res.stdout
 
 
 if __name__ == "__main__":

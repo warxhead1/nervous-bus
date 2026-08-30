@@ -29,7 +29,7 @@ def run_scanner(*paths) -> list[dict]:
 def test_python_publish_helpers(tmp_path: Path) -> None:
     fixture = tmp_path / "py_emit.py"
     fixture.write_text(
-        '''
+        """
 from nbus import publish
 import nervous
 
@@ -46,7 +46,7 @@ def bar():
     emit("deer-flow.semantic_cache.hit", {})
     # too short, single token — should NOT match
     emit("ok", {})
-'''
+"""
     )
     out = run_scanner(fixture)
     channels = sorted({r["channel"] for r in out})
@@ -83,6 +83,27 @@ def foo(channel):
     assert out == []
 
 
+def test_python_leading_underscore_channel_constants_are_emitted(
+    tmp_path: Path,
+) -> None:
+    """Deer Flow's indirect feedback/error channels must reach the hard gate."""
+    fixture = tmp_path / "enrichment_feedback.py"
+    fixture.write_text(
+        """
+from typing import Final
+
+_CHANNEL_HINT = "deer-flow.bead.reenrichment_hint.v1"
+_CHANNEL_ERROR: Final[str] = "deer-flow.enrichment_feedback.error.v1"
+
+def dispatch():
+    emit(_CHANNEL_HINT, {})
+"""
+    )
+    channels = {record["channel"] for record in run_scanner(fixture)}
+    assert "deer-flow.bead.reenrichment_hint.v1" in channels
+    assert "deer-flow.enrichment_feedback.error.v1" in channels
+
+
 def test_python_records_have_line_numbers(tmp_path: Path) -> None:
     fixture = tmp_path / "lines.py"
     fixture.write_text(
@@ -98,13 +119,25 @@ nbus.publish("bus.dashboard.v1", {})
     assert out[0]["emit_type"] == "call"
 
 
+def test_tree_walk_skips_test_only_publish_fixtures(tmp_path: Path) -> None:
+    """A test emit is not a deployable producer that needs a live schema."""
+    (tmp_path / "producer.py").write_text('emit("bus.bead.lifecycle.v1", {})\n')
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_producer.py").write_text('emit("test.only.channel.v1", {})\n')
+
+    channels = {record["channel"] for record in run_scanner(tmp_path)}
+    assert "bus.bead.lifecycle.v1" in channels
+    assert "test.only.channel.v1" not in channels
+
+
 # ─── Go ──────────────────────────────────────────────────────────────────────
 
 
 def test_go_publish_call(tmp_path: Path) -> None:
     fixture = tmp_path / "pub.go"
     fixture.write_text(
-        '''package bus
+        """package bus
 
 const BeadLifecycleStream = "bead.lifecycle.v1"
 const LoomCoordStream = "loom.coord"
@@ -119,7 +152,7 @@ func shellOut() {
     exec.Command("nervous", "publish", "agent.message.v1", payload)
     exec.CommandContext(ctx, "nervous", "publish", "agent.session", data)
 }
-'''
+"""
     )
     out = run_scanner(fixture)
     channels = sorted({r["channel"] for r in out})
@@ -142,7 +175,7 @@ def test_go_streambase_prefix_pattern(tmp_path: Path) -> None:
     """
     fixture = tmp_path / "publisher.go"
     fixture.write_text(
-        '''package bus
+        """package bus
 
 const BeadLifecycleStream = "bead.lifecycle.v1"
 const ExecLifecycleStream = "exec.lifecycle.v1"
@@ -163,7 +196,7 @@ func (p *Publisher) Publish(ctx context.Context, stream string, data any) {
     key := p.streamBase + "." + stream
     _ = key
 }
-'''
+"""
     )
     out = run_scanner(fixture)
     channels = sorted({r["channel"] for r in out})
@@ -184,12 +217,12 @@ def test_go_no_streambase_no_prefix(tmp_path: Path) -> None:
     must NOT synthesise prefixed channels."""
     fixture = tmp_path / "no_prefix.go"
     fixture.write_text(
-        '''package bus
+        """package bus
 const SomeStream = "thing.foo.v1"
 func emit(p *Publisher) {
     p.Publish(ctx, SomeStream, evt)
 }
-'''
+"""
     )
     out = run_scanner(fixture)
     channels = sorted({r["channel"] for r in out})
@@ -204,14 +237,14 @@ func emit(p *Publisher) {
 def test_rust_publish_macro_and_const(tmp_path: Path) -> None:
     fixture = tmp_path / "lib.rs"
     fixture.write_text(
-        '''
+        """
 pub const CHANNEL_LIFECYCLE: &str = "loom.lifecycle.v1";
 pub const STREAM_BEAD: &str = "bus.bead.lifecycle.v1";
 
 fn main() {
     publish!("autobench.iteration.v1", payload);
 }
-'''
+"""
     )
     out = run_scanner(fixture)
     channels = sorted({r["channel"] for r in out})
@@ -295,10 +328,10 @@ def test_record_has_emit_type_field(tmp_path: Path) -> None:
     with value 'const' or 'call'."""
     fixture = tmp_path / "mixed.py"
     fixture.write_text(
-        '''
+        """
 CHANNEL_FOO = "foo.bar.v1"
 nbus.publish("baz.qux.v1", {})
-'''
+"""
     )
     out = run_scanner(fixture)
     assert len(out) == 2

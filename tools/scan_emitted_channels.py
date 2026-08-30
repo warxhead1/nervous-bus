@@ -12,7 +12,7 @@ Recognised patterns:
     - nervous.publish("<channel>", ...)
     - obs._publish("<channel>", ...)
     - emit("<channel>", ...)                         # deerflow.bus.emit helper
-    - CHANNEL_*  = "<channel>"                       # module-level constant
+    - CHANNEL_* / _CHANNEL_* = "<channel>"           # module-level constant
 
   Go:
     - <pub>.Publish(<ctx>, "<stream>", ...)
@@ -84,9 +84,9 @@ SKIP_DIRS = {
     ".mypy_cache",
     ".ruff_cache",
     ".cache",
-    ".deer-flow",          # deer-flow runtime cache; 10+ GB of throwaway state
+    ".deer-flow",  # deer-flow runtime cache; 10+ GB of throwaway state
     ".langgraph_api",
-    "logs",                # runtime logs, never sources
+    "logs",  # runtime logs, never sources
     "pr-build",
 }
 
@@ -99,6 +99,17 @@ SKIP_PREFIXES = (
     ".claude/worktrees/",
     ".git/",
 )
+
+# Unit-test publish calls are fixtures, not deployable producer surfaces.  They
+# must not force schema changes for channels that cannot reach the live bus.
+TEST_DIR_NAMES = {"tests", "test", "__tests__"}
+
+
+def _is_test_source(path: Path, rel: str) -> bool:
+    """Return whether a walked source belongs to a test-only tree or module."""
+    return any(
+        part in TEST_DIR_NAMES for part in Path(rel).parts
+    ) or path.name.startswith("test_")
 
 
 def looks_like_channel(s: str) -> bool:
@@ -131,6 +142,33 @@ _PY_CALL_TARGETS = {
 _PY_BARE_CALL_TARGETS = {"emit", "publish", "_emit", "_publish", "_bus_emit"}
 
 
+def _is_channel_constant_name(name: str) -> bool:
+    """Return whether ``name`` follows a producer channel-constant convention.
+
+    Deer Flow uses leading-underscore constants such as ``_CHANNEL_HINT`` and
+    ``_CHANNEL_ERROR`` for channels passed indirectly to ``emit`` and to the
+    shared consumer error emitter.  Treating only public ``CHANNEL_*`` names
+    as emit candidates leaves those real wire channels outside the blocking
+    schema gate.
+    """
+    return name.startswith(("CHANNEL_", "_CHANNEL_")) or name.endswith(
+        ("_CHANNEL", "_STREAM", "_TOPIC")
+    )
+
+
+def _assignment_names_and_value(
+    node: ast.Assign | ast.AnnAssign,
+) -> tuple[list[str], ast.AST | None]:
+    """Return simple assignment targets and their RHS for supported assigns."""
+    if isinstance(node, ast.Assign):
+        return [
+            target.id for target in node.targets if isinstance(target, ast.Name)
+        ], node.value
+    if isinstance(node.target, ast.Name):
+        return [node.target.id], node.value
+    return [], node.value
+
+
 def _attr_chain(node: ast.AST) -> str | None:
     """Return dotted name for ast.Attribute chains; None if not pure attrs."""
     parts: list[str] = []
@@ -158,19 +196,14 @@ def scan_python(path: Path) -> list[tuple[int, str, str]]:
     found: list[tuple[int, str, str]] = []
 
     for node in ast.walk(tree):
-        # Module-level constants: CHANNEL_FOO = "some.channel"
-        if isinstance(node, ast.Assign):
-            for tgt in node.targets:
-                if isinstance(tgt, ast.Name) and (
-                    tgt.id.startswith("CHANNEL_")
-                    or tgt.id.endswith("_CHANNEL")
-                    or tgt.id.endswith("_STREAM")
-                    or tgt.id.endswith("_TOPIC")
+        # Module/class-level channel constants, including annotated constants.
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets, val = _assignment_names_and_value(node)
+            if isinstance(val, ast.Constant) and isinstance(val.value, str):
+                if looks_like_channel(val.value) and any(
+                    _is_channel_constant_name(name) for name in targets
                 ):
-                    val = node.value
-                    if isinstance(val, ast.Constant) and isinstance(val.value, str):
-                        if looks_like_channel(val.value):
-                            found.append((node.lineno, val.value, "const"))
+                    found.append((node.lineno, val.value, "const"))
             continue
 
         # Call sites: <foo>.publish("ch", ...), emit("ch", ...), ...
@@ -424,6 +457,8 @@ def walk_tree(root: Path, producer: str) -> list[dict]:
         if any(part in SKIP_DIRS for part in path.parts):
             continue
         rel = path.relative_to(root).as_posix()
+        if _is_test_source(path, rel):
+            continue
         if any(rel.startswith(p) for p in SKIP_PREFIXES):
             continue
         # Skip test fixtures so we don't pollute coverage with synthetic channels.

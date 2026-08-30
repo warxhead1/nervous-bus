@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.design_request.error.v1.json",
+  "title": "deer-flow.design_request.error v1",
+  "description": "Structured failure from Deer Flow's DesignRequestBusConsumer when command parsing or visualization fails. A companion hearth.design.generated.v1 error result is emitted so the original caller still receives a reply.",
+  "type": "object",
+  "required": ["entity_key", "error_type", "message", "request_event_id"],
+  "properties": {
+    "entity_key": {
+      "type": "string",
+      "description": "Target entity key, or the emitter's 'unknown' fallback when parsing failed before one was available."
+    },
+    "error_type": {
+      "type": "string",
+      "description": "Machine-readable exception class or parse_error."
+    },
+    "message": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "Exception detail, truncated by the emitter."
+    },
+    "request_event_id": {
+      "type": "string",
+      "description": "CloudEvents id of the triggering design request, empty when unavailable."
+    }
+  },
+  "additionalProperties": true
+}

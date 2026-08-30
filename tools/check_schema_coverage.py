@@ -2,12 +2,15 @@
 """check_schema_coverage.py — fail if any emitted channel lacks a schema.
 
 Reads the JSON output of `scan_emitted_channels.py` (from stdin or a file)
-and compares against `schemas/*.json`.
+and compares against public `schemas/*.json` plus the documented private
+overlay for private channel prefixes.
 
 For each unique channel it checks (in order):
   1. `<channel>.json` exists in schemas/
   2. `<channel>.v<N>.json` exists in schemas/ for some N
-  3. channel is on the allowlist (tools/schema_coverage_allowlist.txt)
+  3. a private-prefixed channel has a schema in `$NERVOUS_HOME/schemas/`
+     (default `~/.config/nervous-bus/schemas/`)
+  4. channel is on the allowlist (tools/schema_coverage_allowlist.txt)
 
 If a channel hits a schema marked deprecated (channel listed in
 `tools/schema_coverage_deprecated.txt`) it is treated as MISSING — the
@@ -25,8 +28,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -43,6 +46,21 @@ def load_allowlist(path: Path) -> set[str]:
     return out
 
 
+def default_private_schemas_dir() -> Path:
+    """Return the documented Nervous Bus private-schema overlay directory."""
+    return (
+        Path(
+            os.environ.get("NERVOUS_HOME", str(Path.home() / ".config" / "nervous-bus"))
+        )
+        / "schemas"
+    )
+
+
+def is_private_channel(channel: str, private_prefixes: set[str]) -> bool:
+    """True when the channel contract belongs only in the local overlay."""
+    return any(channel.startswith(prefix) for prefix in private_prefixes)
+
+
 def record_schema_version(schema_path: Path) -> str:
     """Compute hash and record version in evidence_graph.db. Returns version_id."""
     try:
@@ -50,7 +68,6 @@ def record_schema_version(schema_path: Path) -> str:
     except ImportError:
         return ""
     content = schema_path.read_text()
-    schema_hash = hashlib.sha256(content.encode()).hexdigest()
     channel_type = schema_path.stem
     version_id = channel_type.split(".")[-1]
     try:
@@ -133,6 +150,18 @@ def main(argv: list[str]) -> int:
         help="Channels whose schema is marked deprecated → treat as missing.",
     )
     ap.add_argument(
+        "--private-schemas",
+        type=Path,
+        default=default_private_schemas_dir(),
+        help="Local overlay that supplies contracts for private channel prefixes.",
+    )
+    ap.add_argument(
+        "--private-prefixes",
+        type=Path,
+        default=Path(__file__).with_name("private_schema_prefixes.txt"),
+        help="One private channel prefix per line; these must resolve from --private-schemas.",
+    )
+    ap.add_argument(
         "--report-only",
         action="store_true",
         help="Print the report but always exit 0 (useful for first-run rollout).",
@@ -156,7 +185,9 @@ def main(argv: list[str]) -> int:
 
     allowlist = load_allowlist(args.allowlist)
     deprecated = load_allowlist(args.deprecated)
+    private_prefixes = load_allowlist(args.private_prefixes)
     schemas = schema_index(args.schemas)
+    private_schemas = schema_index(args.private_schemas)
 
     # Record schema versions in evidence_graph.db
     scan_schema_versions(args.schemas)
@@ -177,6 +208,12 @@ def main(argv: list[str]) -> int:
         if ch in deprecated:
             missing.append((ch, by_channel[ch]))
             continue
+        if is_private_channel(ch, private_prefixes):
+            if ch in private_schemas:
+                covered.append(ch)
+                continue
+            missing.append((ch, by_channel[ch]))
+            continue
         if ch in schemas:
             covered.append(ch)
             continue
@@ -185,7 +222,7 @@ def main(argv: list[str]) -> int:
         missing.append((ch, by_channel[ch]))
 
     total = len(by_channel)
-    print(f"=== Schema coverage report ===")
+    print("=== Schema coverage report ===")
     print(f"  total unique channels emitted: {total}")
     print(f"  covered by schema:             {len(covered)}")
     print(f"  allowlisted:                   {len(allowlisted)}")
@@ -211,7 +248,9 @@ def main(argv: list[str]) -> int:
         # (exit 0), but we make sure a reviewer cannot miss the gap: a GitHub
         # workflow annotation (::warning::) AND a Markdown block appended to
         # $GITHUB_STEP_SUMMARY (when --summary-file points there).
-        _write_summary(args.summary_file, missing, total, len(covered), len(allowlisted))
+        _write_summary(
+            args.summary_file, missing, total, len(covered), len(allowlisted)
+        )
         _emit_annotation(missing)
 
         if args.report_only:

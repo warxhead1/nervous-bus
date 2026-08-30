@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -62,6 +63,21 @@ def load_allowlist(path: Path) -> set[str]:
         if line:
             out.add(line)
     return out
+
+
+def default_private_schemas_dir() -> Path:
+    """Return the documented Nervous Bus private-schema overlay directory."""
+    return (
+        Path(
+            os.environ.get("NERVOUS_HOME", str(Path.home() / ".config" / "nervous-bus"))
+        )
+        / "schemas"
+    )
+
+
+def is_private_channel(channel: str, private_prefixes: set[str]) -> bool:
+    """True when the channel's contract belongs only in the local overlay."""
+    return any(channel.startswith(prefix) for prefix in private_prefixes)
 
 
 def schema_index(schemas_dir: Path) -> dict[str, list[str]]:
@@ -106,7 +122,12 @@ def exact_matches(channel: str, names: set[str]) -> set[str]:
     base = _strip_v(channel)
     hit: set[str] = set()
     for n in names:
-        if n == channel or n == base or n.startswith(channel + ".") or n.startswith(base + "."):
+        if (
+            n == channel
+            or n == base
+            or n.startswith(channel + ".")
+            or n.startswith(base + ".")
+        ):
             hit.add(n)
     return hit
 
@@ -159,6 +180,18 @@ def main(argv: list[str]) -> int:
         help="Channels downgraded from BLOCK to WARN (known-drift ratchet).",
     )
     ap.add_argument(
+        "--private-schemas",
+        type=Path,
+        default=default_private_schemas_dir(),
+        help="Local overlay that supplies contracts for private channel prefixes.",
+    )
+    ap.add_argument(
+        "--private-prefixes",
+        type=Path,
+        default=Path(__file__).with_name("private_schema_prefixes.txt"),
+        help="One private channel prefix per line; these must resolve from --private-schemas.",
+    )
+    ap.add_argument(
         "--report-only",
         action="store_true",
         help="Print the report but always exit 0.",
@@ -182,8 +215,14 @@ def main(argv: list[str]) -> int:
     allowlist = load_allowlist(args.allowlist)
     baseline = load_allowlist(args.baseline)
     schemas = schema_index(args.schemas)
+    private_prefixes = load_allowlist(args.private_prefixes)
+    private_schemas = schema_index(args.private_schemas)
 
-    schema_names: set[str] = set(schemas.keys())
+    # An overlay may only contribute schemas for an explicitly private prefix.
+    # Public channels remain merge-blocking when absent from this repository.
+    schema_names: set[str] = set(schemas.keys()) | {
+        name for name in private_schemas if is_private_channel(name, private_prefixes)
+    }
     emitted_names: set[str] = {r["channel"] for r in emitted_records}
     universe: set[str] = schema_names | emitted_names
 
@@ -193,7 +232,7 @@ def main(argv: list[str]) -> int:
         by_sub[(r["channel"], r["match_type"])].append(r)
 
     # Drift class buckets.
-    no_schema: list[tuple[str, str, list[dict]]] = []     # class 1 (BLOCK)
+    no_schema: list[tuple[str, str, list[dict]]] = []  # class 1 (BLOCK)
     dead_handler: list[tuple[str, str, list[dict]]] = []  # class 2 (WARN)
     healthy: list[tuple[str, str]] = []
     allowlisted: list[tuple[str, str]] = []
@@ -201,7 +240,7 @@ def main(argv: list[str]) -> int:
     # Track which universe names are "used" by some subscription (for orphans).
     matched_by_sub: set[str] = set()
 
-    for (channel, mtype) in sorted(by_sub):
+    for channel, mtype in sorted(by_sub):
         sites = by_sub[(channel, mtype)]
         if channel in allowlist:
             allowlisted.append((channel, mtype))
@@ -234,7 +273,8 @@ def main(argv: list[str]) -> int:
         if base != name and base in schema_names:
             continue
         emitted_here = any(
-            n == name or n.startswith(name + ".") or _strip_v(n) == name for n in emitted_names
+            n == name or n.startswith(name + ".") or _strip_v(n) == name
+            for n in emitted_names
         )
         if emitted_here:
             continue
@@ -253,8 +293,10 @@ def main(argv: list[str]) -> int:
     print(f"  emitted channels:              {len(emitted_names)}")
     print(f"  healthy (schema + emitted):    {len(healthy)}")
     print(f"  allowlisted:                   {len(allowlisted)}")
-    print(f"  subscribed-but-no-schema:      {len(no_schema)}  "
-          f"(BLOCK={len(blocking)}, baselined-WARN={len(baselined)})")
+    print(
+        f"  subscribed-but-no-schema:      {len(no_schema)}  "
+        f"(BLOCK={len(blocking)}, baselined-WARN={len(baselined)})"
+    )
     print(f"  subscribed-but-never-emitted:  {len(dead_handler)}  (dead handlers)")
     print(f"  schema-exists-but-never-used:  {len(orphans)}  (orphans)")
     print()
@@ -279,7 +321,9 @@ def main(argv: list[str]) -> int:
         print()
 
     if dead_handler:
-        print(f"--- WARN: subscribed-but-never-emitted / dead handler ({len(dead_handler)}) ---")
+        print(
+            f"--- WARN: subscribed-but-never-emitted / dead handler ({len(dead_handler)}) ---"
+        )
         for channel, mtype, sites in dead_handler:
             _print_sites(channel, mtype, sites)
         print()

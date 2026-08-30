@@ -34,7 +34,7 @@ def test_python_glob_list_constant(tmp_path: Path) -> None:
     """`_CHANNEL_GLOBS = [...]` list literal of globs → prefix subs."""
     fixture = tmp_path / "collector.py"
     fixture.write_text(
-        '''
+        """
 _CHANNEL_GLOBS = [
     "autobench.*",
     "deer-flow.guidance.*",
@@ -43,7 +43,7 @@ _CHANNEL_GLOBS = [
     "hearth-loom.ac.verified.*",
     "loomie.bead.checkpoint.*",
 ]
-'''
+"""
     )
     out = run_scanner(fixture)
     bc = _by_channel(out)
@@ -69,12 +69,12 @@ def test_python_exact_channel_constant(tmp_path: Path) -> None:
     """Bare `CHANNEL` and `_CHANNEL` constants → exact subs."""
     fixture = tmp_path / "c.py"
     fixture.write_text(
-        '''
+        """
 class Router:
     CHANNEL = "bus.hearth.bead.changes.v1"
 
 _CHANNEL = "deer-flow.guidance.fact.v1"
-'''
+"""
     )
     out = run_scanner(fixture)
     bc = _by_channel(out)
@@ -86,12 +86,12 @@ def test_python_subscribe_call_resolves_constant(tmp_path: Path) -> None:
     """`subscribe(channel_glob=_BUS_BEAD_GLOB)` resolves the Name constant."""
     fixture = tmp_path / "forge.py"
     fixture.write_text(
-        '''
+        """
 _BUS_BEAD_GLOB = "bus.bead.*"
 
 async def start(self):
     self._sub = await self._broker.subscribe(channel_glob=_BUS_BEAD_GLOB)
-'''
+"""
     )
     out = run_scanner(fixture)
     bc = _by_channel(out)
@@ -112,16 +112,41 @@ def test_python_subscribe_self_attribute(tmp_path: Path) -> None:
     """subscribe(channel_glob=self.CHANNEL) resolves the class constant."""
     fixture = tmp_path / "e.py"
     fixture.write_text(
-        '''
+        """
 class R:
     CHANNEL = "bus.hearth.bead.changes.v1"
     async def start(self):
         await self._broker.subscribe(channel_glob=self.CHANNEL)
-'''
+"""
     )
     out = run_scanner(fixture)
     bc = _by_channel(out)
     assert bc.get("bus.hearth.bead.changes.v1") == "exact"
+
+
+def test_python_base_consumer_subscription_excludes_sibling_emit_constants(
+    tmp_path: Path,
+) -> None:
+    """A BaseBusConsumer subscription is real; its hint/error constants are not."""
+    fixture = tmp_path / "enrichment_feedback.py"
+    fixture.write_text(
+        """
+_CHANNEL_LIFECYCLE = "bus.bead.lifecycle.v1"
+_CHANNEL_HINT = "deer-flow.bead.reenrichment_hint.v1"
+_CHANNEL_ERROR = "deer-flow.enrichment_feedback.error.v1"
+
+class EnrichmentFeedbackConsumer:
+    subscription_glob = _CHANNEL_LIFECYCLE
+    error_channel = _CHANNEL_ERROR
+
+    def dispatch(self):
+        emit(_CHANNEL_HINT, {})
+"""
+    )
+    channels = _by_channel(run_scanner(fixture))
+    assert channels.get("bus.bead.lifecycle.v1") == "exact"
+    assert "deer-flow.bead.reenrichment_hint.v1" not in channels
+    assert "deer-flow.enrichment_feedback.error.v1" not in channels
 
 
 # ─── Rust ────────────────────────────────────────────────────────────────────
@@ -130,7 +155,7 @@ class R:
 def test_rust_starts_with_and_eq(tmp_path: Path) -> None:
     fixture = tmp_path / "consumer.rs"
     fixture.write_text(
-        '''
+        """
 fn event_type_matches(&self) -> bool {
     let t = &self.event_type;
     t.starts_with("bus.bead.")
@@ -142,7 +167,7 @@ fn event_type_matches(&self) -> bool {
         || t.starts_with("loom.lifecycle")
         || t == "turn_end"
 }
-'''
+"""
     )
     out = run_scanner(fixture)
     bc = _by_channel(out)
@@ -162,7 +187,7 @@ fn event_type_matches(&self) -> bool {
 def test_rust_dispatch_chain_exacts(tmp_path: Path) -> None:
     fixture = tmp_path / "dispatch.rs"
     fixture.write_text(
-        '''
+        """
 fn dispatch(t: &str) {
     if t.starts_with("deer-flow.cycle.snapshot") {
     } else if t.starts_with("deer-flow.run.") {
@@ -170,7 +195,7 @@ fn dispatch(t: &str) {
     } else if t == "bus.notify.v1" {
     }
 }
-'''
+"""
     )
     out = run_scanner(fixture)
     bc = _by_channel(out)
@@ -186,7 +211,7 @@ fn dispatch(t: &str) {
 def test_go_newconsumer_string_list(tmp_path: Path) -> None:
     fixture = tmp_path / "polling.go"
     fixture.write_text(
-        '''package main
+        """package main
 
 func boot() {
     nbusConsumer = gateway.NewNbusConsumer(
@@ -194,7 +219,7 @@ func boot() {
         []string{"agent.session", "loom.lifecycle.v1"},
     )
 }
-'''
+"""
     )
     out = run_scanner(fixture)
     bc = _by_channel(out)
@@ -206,7 +231,7 @@ def test_go_nbus_stream_strip(tmp_path: Path) -> None:
     """`const X Stream = "nbus:<ch>"` → strip `nbus:` prefix."""
     fixture = tmp_path / "stream.go"
     fixture.write_text(
-        '''package gateway
+        """package gateway
 
 const (
     lifecycleStream = "nbus:loom.lifecycle.v1"
@@ -214,7 +239,7 @@ const (
 )
 const busAgentActivityStream = "nbus:bus.agent.activity.v1"
 const nbusUniversalStream = "nbus:all"
-'''
+"""
     )
     out = run_scanner(fixture)
     bc = _by_channel(out)
@@ -228,7 +253,7 @@ const nbusUniversalStream = "nbus:all"
 def test_go_switch_case(tmp_path: Path) -> None:
     fixture = tmp_path / "consumer.go"
     fixture.write_text(
-        '''package bus
+        """package bus
 func route(channel string) {
     switch channel {
     case "agent.session":
@@ -236,7 +261,7 @@ func route(channel string) {
     case "json":
     }
 }
-'''
+"""
     )
     out = run_scanner(fixture)
     bc = _by_channel(out)
@@ -252,22 +277,22 @@ def test_ts_channels_map_resolution(tmp_path: Path) -> None:
     """CHANNELS map + onNbusEvent(CHANNELS.KEY) resolves to literal."""
     schemas = tmp_path / "schemas.ts"
     schemas.write_text(
-        '''
+        """
 export const CHANNELS = {
   COMMAND_HALT: 'tachyonos.command.halt.v1',
   TRADE_APPROVED: 'tachyonos.trade.approved.v1',
   COMMAND_RESEARCH_TICKER: 'tachyonos.command.research_ticker.v1',
 } as const;
-'''
+"""
     )
     instrumentation = tmp_path / "instrumentation.ts"
     instrumentation.write_text(
-        '''
+        """
 import { onNbusEvent } from './subscriber';
 onNbusEvent(CHANNELS.COMMAND_HALT, async (event) => {});
 onNbusEvent(CHANNELS.TRADE_APPROVED, async (event) => {});
 onNbusEvent(CHANNELS.COMMAND_RESEARCH_TICKER, async (event) => {});
-'''
+"""
     )
     out = run_scanner(tmp_path)
     bc = _by_channel(out)
@@ -292,12 +317,12 @@ def test_ts_direct_literal(tmp_path: Path) -> None:
 def test_annotation_python_comment(tmp_path: Path) -> None:
     fixture = tmp_path / "dyn.py"
     fixture.write_text(
-        '''
+        """
 def subscribe_dynamic(self):
     # nbus-sub: deer-flow.dynamic.foo.v1
     ch = compute_channel()
     self._broker.subscribe(channel_glob=ch)
-'''
+"""
     )
     out = run_scanner(fixture)
     bc = _by_channel(out)
@@ -307,10 +332,10 @@ def subscribe_dynamic(self):
 def test_annotation_slash_comment_prefix(tmp_path: Path) -> None:
     fixture = tmp_path / "dyn.go"
     fixture.write_text(
-        '''package x
+        """package x
 // nbus-sub: deer-flow.computed.*
 func sub() {}
-'''
+"""
     )
     out = run_scanner(fixture)
     bc = _by_channel(out)
@@ -354,12 +379,26 @@ def test_nested_git_worktree_not_scanned(tmp_path: Path) -> None:
     assert not any(f.startswith("nested-worktree/") for f in files), files
 
 
+def test_tree_walk_skips_test_only_subscription_fixtures(tmp_path: Path) -> None:
+    """Test-only channels must not become production schema-coverage blocks."""
+    (tmp_path / "consumer.py").write_text('_GLOB = "bus.bead.*"\n')
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_consumer.py").write_text('_GLOB = "test.channel.*"\n')
+
+    channels = _by_channel(run_scanner(tmp_path))
+    assert channels.get("bus.bead") == "prefix"
+    assert "test.channel" not in channels
+
+
 # ─── Output format ───────────────────────────────────────────────────────────
 
 
 def test_records_have_match_type_and_consumer(tmp_path: Path) -> None:
     fixture = tmp_path / "x.py"
-    fixture.write_text('_GLOB = "bus.bead.*"\n_CHANNEL = "deer-flow.guidance.fact.v1"\n')
+    fixture.write_text(
+        '_GLOB = "bus.bead.*"\n_CHANNEL = "deer-flow.guidance.fact.v1"\n'
+    )
     out = run_scanner(f"my-consumer={tmp_path}")
     assert out
     for r in out:

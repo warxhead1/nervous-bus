@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.enrichment_feedback.error.v1.json",
+  "title": "deer-flow.enrichment_feedback.error v1",
+  "description": "Structured failure emitted by Deer Flow's EnrichmentFeedbackConsumer through BaseBusConsumer.emit_error when an inbound lifecycle event cannot be parsed or handled. The consumer keeps its loop alive after emitting this record.",
+  "type": "object",
+  "required": ["consumer", "event_channel", "error_type", "message"],
+  "properties": {
+    "consumer": {
+      "type": "string",
+      "const": "enrichment-feedback-consumer",
+      "description": "Stable name of the consumer that encountered the failure."
+    },
+    "event_channel": {
+      "type": "string",
+      "description": "Inbound channel being handled when the failure occurred."
+    },
+    "subject": {
+      "type": ["string", "null"],
+      "description": "CloudEvents subject when one was available to the consumer."
+    },
+    "error_type": {
+      "type": "string",
+      "description": "Machine-readable failure class, such as missing_bead_id, parse_error, or handler_error."
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable failure detail."
+    }
+  },
+  "additionalProperties": true
+}

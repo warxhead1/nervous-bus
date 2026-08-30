@@ -4,7 +4,7 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**352 channels** across 5 clusters.
+**356 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
@@ -12,7 +12,7 @@ Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster
 | [Autobench](#autobench) | 54 | autobench.* evolution loop (case/judge/improver/budget/...) |
 | [Hearth](#hearth) | 52 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 183 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 187 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -288,6 +288,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `deer-flow.bead.enrichment.complete.v1` | deer-flow.bead.enrichment.complete v1 |
 | `deer-flow.bead.filed.v1` | deer-flow.bead.filed v1 |
 | `deer-flow.bead.pushback.v1` | deer-flow.bead.pushback v1 |
+| `deer-flow.bead.reenrichment_hint.v1` | deer-flow.bead.reenrichment_hint v1 |
 | `deer-flow.bus.subscription.error.v1` | deer-flow.bus.subscription.error v1 |
 | `deer-flow.citation.missing.v1` | deer-flow.citation.missing v1 |
 | `deer-flow.council.completed.v1` | deer-flow.council.completed v1 |
@@ -298,6 +299,8 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `deer-flow.cumulative.hard.v1` | deer-flow.cumulative.hard v1 |
 | `deer-flow.cycle.snapshot.v1` | 🔇 **superseded** — deer-flow.cycle.snapshot v1 |
 | `deer-flow.cycle.wait.exit.v1` | deer-flow.cycle.wait.exit v1 |
+| `deer-flow.design_request.error.v1` | deer-flow.design_request.error v1 |
+| `deer-flow.enrichment_feedback.error.v1` | deer-flow.enrichment_feedback.error v1 |
 | `deer-flow.feedback.acted.v1` | deer-flow.feedback.acted v1 |
 | `deer-flow.feedback.received.v1` | deer-flow.feedback.received v1 |
 | `deer-flow.forge.seal.stamped.v1` | deer-flow.forge.seal.stamped v1 |
@@ -331,6 +334,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `deer-flow.telemetry.dualwrite_parity.v1` | deer-flow.telemetry.dualwrite_parity v1 |
 | `deer-flow.tool.call.v1` | deer-flow.tool.call v1 |
 | `deer-flow.tool.usage.v1` | deer-flow.tool.usage v1 |
+| `deer-flow.trading_research.error.v1` | deer-flow.trading_research.error v1 |
 | `funsearch.artifact.v1` | funsearch.artifact v1 |
 | `funsearch.assessment.v1` | funsearch.assessment.v1 |
 | `funsearch.calibration.v1` | funsearch.calibration v1 |

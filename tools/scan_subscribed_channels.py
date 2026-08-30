@@ -11,9 +11,11 @@ Recognised patterns:
   Python (.py) — via ast:
     - Module/class-level constant assignments whose target name matches one of
       the subscribe-constant conventions (`_*_GLOB`, `_*_GLOBS`, `CHANNEL`,
-      `_CHANNEL`, `_CHANNEL_*`, `_DISPATCH_CHANNEL`, `_SUBSCRIPTION_GLOB`,
-      `_BUS_*_GLOB`, `_COMMAND_CHANNEL`, `_ERROR_CHANNEL`) whose RHS is a string
-      constant — or a list/tuple literal of strings — that `looks_like_channel`.
+      `_CHANNEL`, `_DISPATCH_CHANNEL`, `_SUBSCRIPTION_GLOB`, `_BUS_*_GLOB`,
+      `_COMMAND_CHANNEL`, `_ERROR_CHANNEL`) whose RHS is a string constant —
+      or a list/tuple literal of strings — that `looks_like_channel`.
+    - A class/module ``subscription_glob = <literal-or-constant>`` assignment;
+      this is how Deer Flow BaseBusConsumer subclasses declare subscriptions.
     - Call sites `*.subscribe(channel_glob=<arg>)`: a string constant is
       recorded directly; a `Name` referencing a collected constant resolves to
       that constant's value(s).
@@ -97,9 +99,9 @@ SKIP_DIRS = {
     ".mypy_cache",
     ".ruff_cache",
     ".cache",
-    ".deer-flow",          # deer-flow runtime cache; 10+ GB of throwaway state
+    ".deer-flow",  # deer-flow runtime cache; 10+ GB of throwaway state
     ".langgraph_api",
-    "logs",                # runtime logs, never sources
+    "logs",  # runtime logs, never sources
     "pr-build",
 }
 
@@ -112,6 +114,17 @@ SKIP_PREFIXES = (
     ".claude/worktrees/",
     ".git/",
 )
+
+# Unit-test subscriptions exercise fake channels and are not deployable consumer
+# surfaces.  Including them turns test fixtures into merge-blocking schema drift.
+TEST_DIR_NAMES = {"tests", "test", "__tests__"}
+
+
+def _is_test_source(path: Path, rel: str) -> bool:
+    """Return whether a walked source belongs to a test-only tree or module."""
+    return any(
+        part in TEST_DIR_NAMES for part in Path(rel).parts
+    ) or path.name.startswith("test_")
 
 
 def looks_like_channel(s: str) -> bool:
@@ -181,9 +194,17 @@ def scan_annotations(src: str) -> list[tuple[int, str, str]]:
 _PY_GLOB_SUFFIXES = ("_GLOB", "_GLOBS")
 # Exact-match names (bare). endswith() would drag in emit-only constants
 # (e.g. _STARTED_CHANNEL, _COMPLETED_CHANNEL); match these exactly.
-_PY_EXACT_NAMES = {"CHANNEL", "_CHANNEL", "_DISPATCH_CHANNEL", "_COMMAND_CHANNEL", "_ERROR_CHANNEL"}
-# Prefix-name conventions (a constant whose *name* starts with these).
-_PY_PREFIX_NAMES = ("_CHANNEL_", "_SUBSCRIPTION_GLOB", "_BUS_")
+_PY_EXACT_NAMES = {
+    "CHANNEL",
+    "_CHANNEL",
+    "_DISPATCH_CHANNEL",
+    "_COMMAND_CHANNEL",
+    "_ERROR_CHANNEL",
+}
+# Prefix-name conventions (a constant whose *name* starts with these).  Do not
+# include `_CHANNEL_`: that is also Deer Flow's emitter convention, so treating
+# every such declaration as a subscription creates false blocking findings.
+_PY_PREFIX_NAMES = ("_SUBSCRIPTION_GLOB", "_BUS_")
 
 
 def _is_subscribe_const_name(name: str) -> bool:
@@ -210,6 +231,19 @@ def _const_string_values(val: ast.AST) -> list[str]:
     return out
 
 
+def _assignment_names_and_value(
+    node: ast.Assign | ast.AnnAssign,
+) -> tuple[list[str], ast.AST | None]:
+    """Return simple assignment targets and their RHS for supported assigns."""
+    if isinstance(node, ast.Assign):
+        return [
+            target.id for target in node.targets if isinstance(target, ast.Name)
+        ], node.value
+    if isinstance(node.target, ast.Name):
+        return [node.target.id], node.value
+    return [], node.value
+
+
 def scan_python(path: Path) -> list[tuple[int, str, str]]:
     """Return list of (lineno, channel, match_type) tuples for a .py file."""
     try:
@@ -224,19 +258,45 @@ def scan_python(path: Path) -> list[tuple[int, str, str]]:
 
     found: list[tuple[int, str, str]] = []
 
-    # First pass: collect subscribe-side constants by name → list of raw values.
+    # First pass: collect all literal constants for later reference resolution,
+    # then emit only declarations whose names are dedicated subscribe conventions.
     const_values: dict[str, list[str]] = {}
+    declared_constants: list[tuple[int, str, list[str]]] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for tgt in node.targets:
-                if isinstance(tgt, ast.Name) and _is_subscribe_const_name(tgt.id):
-                    vals = _const_string_values(node.value)
-                    if vals:
-                        const_values.setdefault(tgt.id, []).extend(vals)
-                        for v in vals:
-                            res = classify(v)
-                            if res is not None:
-                                found.append((node.lineno, res[0], res[1]))
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets, value = _assignment_names_and_value(node)
+            vals = _const_string_values(value) if value is not None else []
+            if not vals:
+                continue
+            for name in targets:
+                const_values.setdefault(name, []).extend(vals)
+                declared_constants.append((node.lineno, name, vals))
+
+    for lineno, name, vals in declared_constants:
+        if not _is_subscribe_const_name(name):
+            continue
+        for value in vals:
+            res = classify(value)
+            if res is not None:
+                found.append((lineno, res[0], res[1]))
+
+    # BaseBusConsumer subclasses declare the subscription as a class attribute,
+    # not a direct broker.subscribe(...) call in their own module.
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets, value = _assignment_names_and_value(node)
+        if "subscription_glob" not in targets or value is None:
+            continue
+        raw_values: list[str] = []
+        if isinstance(value, ast.Name):
+            raw_values = const_values.get(value.id, [])
+        else:
+            raw_values = _const_string_values(value)
+        for raw in raw_values:
+            res = classify(raw)
+            if res is not None:
+                found.append((node.lineno, res[0], res[1]))
 
     # Second pass: *.subscribe(channel_glob=<arg>) call sites.
     for node in ast.walk(tree):
@@ -378,7 +438,9 @@ def _ts_channels_map(src: str) -> dict[str, str]:
     return out
 
 
-def scan_typescript(path: Path, channels_map: dict[str, str] | None = None) -> list[tuple[int, str, str]]:
+def scan_typescript(
+    path: Path, channels_map: dict[str, str] | None = None
+) -> list[tuple[int, str, str]]:
     try:
         src = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -437,7 +499,9 @@ def _nested_repo_prefixes(root: Path) -> tuple[str, ...]:
     return tuple(sorted(prefixes))
 
 
-def _collect_ts_channels_map(root: Path, nested: tuple[str, ...] = ()) -> dict[str, str]:
+def _collect_ts_channels_map(
+    root: Path, nested: tuple[str, ...] = ()
+) -> dict[str, str]:
     """Pre-scan the whole tree for the CHANNELS map (lives in schemas.ts)."""
     cmap: dict[str, str] = {}
     for path in root.rglob("*.ts"):
@@ -446,6 +510,8 @@ def _collect_ts_channels_map(root: Path, nested: tuple[str, ...] = ()) -> dict[s
         if any(part in SKIP_DIRS for part in path.parts):
             continue
         rel = path.relative_to(root).as_posix()
+        if _is_test_source(path, rel):
+            continue
         if any(rel.startswith(p) for p in SKIP_PREFIXES):
             continue
         if any(rel.startswith(p) for p in nested):
@@ -498,6 +564,8 @@ def walk_tree(root: Path, consumer: str) -> list[dict]:
         if any(part in SKIP_DIRS for part in path.parts):
             continue
         rel = path.relative_to(root).as_posix()
+        if _is_test_source(path, rel):
+            continue
         if any(rel.startswith(p) for p in SKIP_PREFIXES):
             continue
         # Don't descend into nested git repos / worktrees (separate checkouts).

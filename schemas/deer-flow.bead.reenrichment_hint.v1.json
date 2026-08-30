@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.bead.reenrichment_hint.v1.json",
+  "title": "deer-flow.bead.reenrichment_hint v1",
+  "description": "Advisory emitted by Deer Flow's EnrichmentFeedbackConsumer after it records a loomie failure memo for a bead. Consumers may use it to schedule a re-enrichment pass that includes the prior failure reason.",
+  "type": "object",
+  "required": ["bead_id", "event_type", "reason"],
+  "properties": {
+    "bead_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The bead whose failure memo was updated."
+    },
+    "event_type": {
+      "type": "string",
+      "enum": ["bead_failed", "container_died", "scope_divergence"],
+      "description": "The lifecycle failure category that produced the memo entry."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Concise, emitter-truncated explanation of the failed attempt."
+    }
+  },
+  "additionalProperties": true
+}

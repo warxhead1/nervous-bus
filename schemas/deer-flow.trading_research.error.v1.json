@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/deer-flow.trading_research.error.v1.json",
+  "title": "deer-flow.trading_research.error v1",
+  "description": "Structured failure from Deer Flow's TradingResearchBusConsumer when a research-ticker command cannot be parsed or its research pipeline fails.",
+  "type": "object",
+  "required": ["ticker", "error_type", "message"],
+  "properties": {
+    "ticker": {
+      "type": "string",
+      "description": "Requested ticker, or the emitter's 'unknown' fallback when parsing failed."
+    },
+    "error_type": {
+      "type": "string",
+      "description": "Machine-readable exception class or parse_error."
+    },
+    "message": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "Exception detail, truncated by the emitter."
+    },
+    "run_id": {
+      "type": "string",
+      "description": "UUID assigned to a research run; omitted for command parse failures."
+    }
+  },
+  "additionalProperties": true
+}
