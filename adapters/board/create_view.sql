@@ -78,20 +78,29 @@ SELECT 'unreal-battlebots-gamedev', id, title, description, status, priority,
 -- "nervous-bus-05g1"), so no separate project column is required here --
 -- board.py can resolve an id's project the same way it resolves it for
 -- all_issues rows.
+-- SCHEMA DRIFT WARNING: bd >= 1.2 migrates a project DB's dependencies table
+-- from `depends_on_id` to `depends_on_issue_id`/`depends_on_wisp_id`/
+-- `depends_on_external`. The migration runs per-DB (first bd 1.2 client to
+-- touch it), so the fleet is mixed: as of 2026-08-31 biz_worthy, hearth,
+-- hearth-loom, nervous_bus and sweepers_adventures are on the NEW schema;
+-- the rest are still OLD. Each SELECT below must match its DB's current
+-- schema — a single stale arm breaks the whole view for every consumer
+-- (bit 2026-08-31: maintenance-train selector died at 05:01, zero dispatch).
+-- When another DB migrates, move its arm to the COALESCE form and re-apply.
 CREATE OR REPLACE VIEW beads_global.all_dependencies AS
 SELECT issue_id, depends_on_id, type, created_at FROM app_to_market.dependencies
 UNION ALL
-SELECT issue_id, depends_on_id, type, created_at FROM biz_worthy.dependencies
+SELECT issue_id, COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external), type, created_at FROM biz_worthy.dependencies
 UNION ALL
 SELECT issue_id, depends_on_id, type, created_at FROM deer_flow.dependencies
 UNION ALL
-SELECT issue_id, depends_on_id, type, created_at FROM hearth.dependencies
+SELECT issue_id, COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external), type, created_at FROM hearth.dependencies
 UNION ALL
-SELECT issue_id, depends_on_id, type, created_at FROM `hearth-loom`.dependencies
+SELECT issue_id, COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external), type, created_at FROM `hearth-loom`.dependencies
 UNION ALL
-SELECT issue_id, depends_on_id, type, created_at FROM nervous_bus.dependencies
+SELECT issue_id, COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external), type, created_at FROM nervous_bus.dependencies
 UNION ALL
-SELECT issue_id, depends_on_id, type, created_at FROM sweepers_adventures.dependencies
+SELECT issue_id, COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external), type, created_at FROM sweepers_adventures.dependencies
 UNION ALL
 SELECT issue_id, depends_on_id, type, created_at FROM temple_stuart_accounting.dependencies
 UNION ALL

@@ -4,6 +4,10 @@ Documentation=file:/home/eric/projects/nervous-bus/tools/maintenance-train/READM
 
 [Service]
 Type=oneshot
+# pyenv shims first: selector.py needs pymysql, which lives in the pyenv
+# 3.11 site-packages — the bare systemd PATH resolves python3 to /usr/bin
+# (no pymysql) and the whole train dies at select (bit 2026-08-31 05:01).
+Environment=PATH=/home/eric/.pyenv/shims:/usr/local/bin:/usr/bin:/bin
 ExecStart=/home/eric/projects/nervous-bus/tools/maintenance-train/run-nightly.sh
 TimeoutStartSec=21600
 Nice=10
