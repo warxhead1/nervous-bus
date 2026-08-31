@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.github.issue.v1.json",
+  "title": "bus.github.issue v1",
+  "description": "Emitted by the github-relay adapter (adapters/github-relay/) on a state TRANSITION observed for a GitHub Issue on a roster repo (`gh issue list --state all`), diffed against persisted state (~/.cache/nervous-bus/github-relay/state.json): a new issue, a state change (opened/closed/reopened), a new comment, or a label change. Never emitted per-poll for an unchanged issue. Pull requests are always excluded (`is_pull_request` is present only for schema future-proofing against a GitHub API change; `gh issue list` itself never returns PRs today -- verified 2026-08-30). Closes the estate's GitHub-Issues gap: ci-watch/maintenance-train cover Actions + PRs, nothing previously ingested Issues. Consumers: deer-flow SSE, bead-filing inside github-relay itself, and (future) any dashboard wanting issue-level signal alongside ci.pipeline.status.v1 / bus.dependabot.alerts.v1.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": { "type": "string", "const": "1.0" },
+    "id": { "type": "string" },
+    "source": { "type": "string" },
+    "type": { "type": "string", "const": "bus.github.issue.v1" },
+    "datacontenttype": { "type": "string", "const": "application/json" },
+    "time": { "type": "string", "format": "date-time" },
+    "data": {
+      "type": "object",
+      "required": [
+        "repo", "number", "action", "title", "state", "labels", "author",
+        "url", "body_excerpt", "ts", "comment_count", "is_pull_request"
+      ],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "description": "owner/name of the GitHub repository (e.g. warxhead1/hearth-loom)"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "GitHub issue number (unique within repo)."
+        },
+        "action": {
+          "type": "string",
+          "enum": ["opened", "closed", "reopened", "commented", "labeled", "assigned", "updated"],
+          "description": "Why this event fired: a lifecycle transition, a new comment count, a label-set change, an assignee change, or an updatedAt bump not otherwise classified (`updated`)."
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "state": {
+          "type": "string",
+          "enum": ["open", "closed"],
+          "description": "GitHub issue state at observation time (gh's `state` field, lowercased)."
+        },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Label names currently on the issue."
+        },
+        "author": {
+          "type": "string",
+          "description": "GitHub login of the issue author (gh's `author.login`)."
+        },
+        "url": { "type": "string", "description": "Issue URL (gh's `url` field)." },
+        "body_excerpt": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Issue body truncated to 500 chars (never redacted for content -- only truncated; this is a PUBLIC repo's public issue text)."
+        },
+        "comment_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of comments on the issue at observation time (len of gh's `comments` array)."
+        },
+        "is_pull_request": {
+          "type": "boolean",
+          "const": false,
+          "description": "Always false -- PR-shaped issues are filtered out before an event is ever built; kept in the schema so a future ingestion path that does see PRs fails validation loudly instead of silently mixing PR events into this channel."
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC3339 UTC timestamp of the measurement (gh's `updatedAt` for the issue, normalized to Z)."
+        }
+      }
+    }
+  }
+}

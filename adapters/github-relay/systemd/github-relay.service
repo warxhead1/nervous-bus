@@ -1,0 +1,13 @@
+[Unit]
+Description=nervous-bus GitHub Issues inbound relay + gated outbound comments (github-relay)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/.cache/nervous-bus
+ExecStart=%h/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/github-relay/watch.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nervous-github-relay
+ReadWritePaths=%h/.cache/nervous-bus

@@ -11,12 +11,15 @@ repos total. Writes the night's manifest to
 
 Maintenance classes (a bead qualifies if ANY match):
   - title starts with "CI red:"                          (ci-watch filed)
+  - title starts with "gh-issue:"                         (github-relay filed,
+    see nervous-bus/adapters/github-relay/watch.py:file_issue_bead)
   - title/description mentions "dependabot" (case-fold)   (dependabot-filed)
   - labelled "maintenance" or "chore"                      (labels table)
   - issue_type == "chore" AND estimated_minutes <= 60      (small chores)
 
 Target repo resolution:
   - "CI red: <owner>/<repo>/<check>" -> <repo>            (embedded in title)
+  - "gh-issue: <owner>/<repo>#<number>: <title>" -> <repo> (embedded in title)
   - otherwise -> the bead's own `project` column           (assumes 1:1
     project-db-name <-> repo name, true for every REPOS entry today)
 
@@ -49,6 +52,7 @@ MAX_REPOS_PER_NIGHT = int(os.environ.get("MMTRAIN_MAX_REPOS", "3"))
 MAX_ESTIMATE_MINUTES = int(os.environ.get("MMTRAIN_MAX_ESTIMATE_MIN", "60"))
 
 CI_RED_RE = re.compile(r"^CI red: [^/]+/([^/]+)/", re.IGNORECASE)
+GH_ISSUE_RE = re.compile(r"^gh-issue: [^/]+/([^#]+)#\d+:", re.IGNORECASE)
 DEPENDABOT_RE = re.compile(r"dependabot", re.IGNORECASE)
 
 
@@ -85,6 +89,9 @@ def parse_dt(v) -> Optional[datetime]:
 
 def resolve_repo(project: str, title: str) -> str:
     m = CI_RED_RE.match(title)
+    if m:
+        return m.group(1)
+    m = GH_ISSUE_RE.match(title)
     if m:
         return m.group(1)
     return project
@@ -148,6 +155,8 @@ def classify(row: dict) -> Optional[str]:
     desc = row.get("notes") or ""
     if title.startswith("CI red:"):
         return "ci-watch"
+    if title.startswith("gh-issue:"):
+        return "github-relay"
     if DEPENDABOT_RE.search(title) or DEPENDABOT_RE.search(desc):
         return "dependabot"
     labels = {l.lower() for l in row.get("labels", [])}

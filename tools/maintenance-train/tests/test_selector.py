@@ -60,6 +60,10 @@ class ClassifyTests(unittest.TestCase):
         r = row("x-7", "repo-a", "implement new feature")
         self.assertIsNone(selector.classify(r))
 
+    def test_gh_issue_title(self):
+        r = row("x-8", "nervous-bus", "gh-issue: warxhead1/tengine#42: crash on load")
+        self.assertEqual(selector.classify(r), "github-relay")
+
 
 class ResolveRepoTests(unittest.TestCase):
     def test_ci_red_extracts_repo_from_title(self):
@@ -70,6 +74,12 @@ class ResolveRepoTests(unittest.TestCase):
 
     def test_non_ci_red_falls_back_to_project(self):
         self.assertEqual(selector.resolve_repo("repo-b", "chore: tidy"), "repo-b")
+
+    def test_gh_issue_extracts_repo_from_title(self):
+        self.assertEqual(
+            selector.resolve_repo("nervous-bus", "gh-issue: warxhead1/tengine#42: crash on load"),
+            "tengine",
+        )
 
 
 class SelectTests(unittest.TestCase):

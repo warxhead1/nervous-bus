@@ -1,0 +1,25 @@
+{
+  "_comment": "Per-repo relay config, config not code (mirrors adapters/ci-watch/roster.json's pattern). A repo NOT listed under `repos` is out of scope by construction: github-relay never ingests or comments on it, fail-closed like tools/maintenance-train/repo_config.py's allowlist. `default` supplies any field a per-repo entry omits. `outbound` gates adapters/github-relay/watch.py:post_issue_comment: off=skip silently, dry-run=write the would-be comment to report.md + stderr but never call `gh issue comment`, live=actually post. NEVER set `outbound` to \"live\" here -- flipping a repo to live outbound posting is an explicit operator decision made on the host after reviewing dry-run output in report.md, not something this adapter ships pre-armed for.",
+  "default": {
+    "ingest": true,
+    "file_beads": true,
+    "outbound": "dry-run"
+  },
+  "repos": {
+    "warxhead1/nervous-bus": { "outbound": "off" },
+    "warxhead1/hearth": {},
+    "warxhead1/deer-flow": {},
+    "warxhead1/tengine": {},
+    "warxhead1/career-ops": {},
+    "warxhead1/orca": {},
+    "warxhead1/hearth-vault": {},
+    "warxhead1/shader-garden": {},
+    "warxhead1/hearth-loom": {},
+    "warxhead1/nervous-autobench": {},
+    "warxhead1/claude-hook-fast": {},
+    "warxhead1/kb": {},
+    "warxhead1/market-ops": {},
+    "warxhead1/tachyonac-engine": {},
+    "warxhead1/hearthsite": {}
+  }
+}

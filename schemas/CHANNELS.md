@@ -4,7 +4,7 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**356 channels** across 5 clusters.
+**366 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
@@ -12,7 +12,7 @@ Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster
 | [Autobench](#autobench) | 54 | autobench.* evolution loop (case/judge/improver/budget/...) |
 | [Hearth](#hearth) | 52 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 187 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 197 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -222,17 +222,23 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `_per-project.research.finding.v1` ⚠️ | _per-project.research.finding.v1 |
 | `_per-project.rule.push.v1` ⚠️ | _per-project.rule.push.v1 |
 | `_per-project.skill.push.v1` ⚠️ | _per-project.skill.push.v1 |
+| `bus.channel.stale.v1` | bus.channel.stale v1 |
 | `bus.container.killed.v1` | bus.container.killed v1 |
 | `bus.dashboard.v1` | bus.dashboard v1 |
 | `bus.dead_letter.v1` | bus.dead_letter v1 |
+| `bus.dependabot.alerts.v1` | bus.dependabot.alerts v1 |
+| `bus.deploy.stale.v1` | bus.deploy.stale v1 |
 | `bus.dispatch.recycle.completed.v1` | bus.dispatch.recycle.completed v1 |
 | `bus.dispatch.recycle.skipped.v1` | bus.dispatch.recycle.skipped v1 |
+| `bus.dlq.summary.v1` | bus.dlq.summary v1 |
 | `bus.exec.evidence.v1` | bus.exec.evidence v1 |
 | `bus.exec.lifecycle.v1` | bus.exec.lifecycle v1 |
 | `bus.gamedev.progress.v1` | bus.gamedev.progress.v1 |
 | `bus.gamedev.progress.v2` | bus.gamedev.progress.v2 |
+| `bus.github.issue.v1` | bus.github.issue v1 |
 | `bus.hearth-loom.ac.verified.v1` | bus.hearth-loom.ac.verified v1 |
 | `bus.intrinsic.marker.v1` | bus.intrinsic.marker v1 |
+| `bus.maintenance.pr.v1` | bus.maintenance.pr v1 |
 | `bus.notify.v1` | bus.notify v1 |
 | `bus.pattern.bundle.v1` | bus.pattern.bundle v1 |
 | `bus.pattern.feedback.v1` | bus.pattern.feedback v1 |
@@ -244,6 +250,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `bus.saga.v1` | bus.saga v1 |
 | `bus.subscribers.snapshot.v1` | bus.subscribers.snapshot v1 |
 | `bus.system.heartbeat.v1` | bus.system.heartbeat v1 |
+| `bus.system.pressure.v1` | bus.system.pressure v1 |
 | `bus.tengine.agent.lifecycle.v1` | bus.tengine.agent.lifecycle v1 |
 | `bus.tengine.agent.thought.v1` | bus.tengine.agent.thought v1 |
 | `bus.tengine.antidefer.flagged.v1` | bus.tengine.antidefer.flagged v1 |
@@ -278,6 +285,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `career-ops.steering-queue.dismissed.v1` | career-ops.steering-queue.dismissed v1 |
 | `career-ops.steering-queue.requested.v1` | career-ops.steering-queue.requested v1 |
 | `career-ops.steering.answered.v1` | career-ops.steering.answered v1 |
+| `ci.pipeline.status.v1` | ci.pipeline.status v1 |
 | `codeforces_problem.v1` ⚠️ | CodeforcesProblem |
 | `codemap.graph.rebuilt.v1` | codemap.graph.rebuilt v1 |
 | `codemap.public_api.changed.v1` | codemap.public_api.changed v1 |
@@ -400,6 +408,8 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `market-ops.knowledge.imported.v1` | market-ops knowledge imported |
 | `market-ops.position.drifted.v1` | market-ops position drifted |
 | `market-ops.radar.scored.v1` | market-ops radar scored |
+| `orca.run.lifecycle.v1` | orca.run.lifecycle v1 |
+| `orca.worker.lifecycle.v1` | orca.worker.lifecycle v1 |
 | `pulse.kernel.snapshot.v1` | pulse.kernel.snapshot v1 |
 | `pulse.render.quality.v1` | pulse.render.quality v1 |
 | `shader.preadmit.evaluated.v1` | shader.preadmit.evaluated.v1 v1 |
