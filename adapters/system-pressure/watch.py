@@ -45,6 +45,7 @@ from typing import Dict, List, Optional
 CACHE_DIR = Path(os.environ.get("NERVOUS_SYSTEM_PRESSURE_CACHE", str(Path.home() / ".cache" / "nervous-bus" / "system-pressure")))
 STATE_FILE = CACHE_DIR / "state.json"
 REPORT_FILE = CACHE_DIR / "report.md"
+SNAPSHOT_FILE = CACHE_DIR / "snapshot.json"
 NERVOUS_BIN = os.environ.get(
     "NERVOUS_BIN",
     str(Path(__file__).resolve().parent.parent.parent / "sdk" / "shell" / "nervous"),
@@ -293,6 +294,20 @@ def main() -> int:
                  f"{sum(1 for f in findings if f[0] == 'unit_restarts')} units). "
                  f"Emitted {len(emitted)} transition(s) this poll.")
     REPORT_FILE.write_text("\n".join(lines) + "\n")
+
+    # Machine-readable snapshot for UI consumers (orca status bar, dashboards):
+    # full current state every poll, not just transitions.
+    snapshot = {
+        "host": host, "ts": ts,
+        "worst_level": max((f[2] for f in findings), key=lambda l: LEVELS[l], default="ok"),
+        "items": [
+            {"kind": kind, "key": key, "level": level, "summary": summary, **extra}
+            for kind, key, level, summary, extra in findings
+        ],
+    }
+    tmp = SNAPSHOT_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(snapshot, indent=1))
+    tmp.replace(SNAPSHOT_FILE)
 
     for sk, level, summary in emitted:
         print(f"[system-pressure] {level}: {summary}")
