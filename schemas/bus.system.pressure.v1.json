@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.system.pressure.v1.json",
+  "title": "bus.system.pressure v1",
+  "description": "Host resource-pressure state transitions from the system-pressure adapter: filesystem fill levels, runaway directory growth, and systemd unit restart storms. Motivating incident (2026-08-30): hearth/.beads/backup wrote ~280G in a 2h window (per-write dolt backup sync amplified by a poller comment loop) and filled /home to 100%, while beads-dolt.service crash-looped through 800 restarts — both invisible until sessions started failing on ENOSPC. Emitted ONLY on level transitions (ok→warn→critical and recovery) plus a bounded re-reminder for sustained pressure, never per-poll. Consumers: deer-flow SSE, zjstatus, and bus.notify fan-out for critical levels.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.system.pressure.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["host", "kind", "key", "level", "prev_level", "summary", "ts"],
+      "properties": {
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Hostname the measurement was taken on."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["disk", "dir_growth", "unit_restarts"],
+          "description": "Pressure dimension: filesystem fill percentage, watched-directory growth rate, or systemd user-unit restart storm."
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The subject: a mountpoint (`/home`), a watched directory path, or a systemd unit name."
+        },
+        "level": {
+          "type": "string",
+          "enum": ["ok", "warn", "critical"],
+          "description": "New pressure level after this transition."
+        },
+        "prev_level": {
+          "type": "string",
+          "enum": ["ok", "warn", "critical", "unknown"],
+          "description": "Level before this transition; `unknown` on first observation."
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "One-sentence human-readable statement of the condition, e.g. `/home at 96% (41G free)` or `hearth/.beads/backup growing 38.2 GB/h`."
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC3339 UTC timestamp of the measurement."
+        },
+        "used_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "For kind=disk: percent of the filesystem used."
+        },
+        "free_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "For kind=disk: bytes free."
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "For kind=dir_growth: current directory size in bytes."
+        },
+        "growth_gb_per_hour": {
+          "type": "number",
+          "description": "For kind=dir_growth: measured growth rate since the previous poll (negative = shrinking)."
+        },
+        "restarts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "For kind=unit_restarts: the unit's cumulative NRestarts counter."
+        },
+        "restart_delta": {
+          "type": "integer",
+          "description": "For kind=unit_restarts: restarts added since the previous poll."
+        },
+        "active_state": {
+          "type": "string",
+          "description": "For kind=unit_restarts: systemd ActiveState at measurement time."
+        }
+      }
+    }
+  }
+}
