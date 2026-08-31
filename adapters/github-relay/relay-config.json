@@ -6,7 +6,9 @@
     "outbound": "dry-run"
   },
   "repos": {
-    "warxhead1/nervous-bus": { "outbound": "off" },
+    "warxhead1/nervous-bus": {
+      "outbound": "off"
+    },
     "warxhead1/hearth": {},
     "warxhead1/deer-flow": {},
     "warxhead1/tengine": {},

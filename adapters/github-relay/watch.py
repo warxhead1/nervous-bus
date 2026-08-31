@@ -518,7 +518,11 @@ def run(*, relay_config_path: Path = RELAY_CONFIG_FILE, state_path: Path = STATE
         report_lines=outbound_lines,
     )
 
-    save_state(state, state_path)
+    # A dry run must not consume transitions: persisting state here would make
+    # the next REAL run see "no change" for issues the dry run merely printed
+    # (bit 2026-08-31: three live hearthsite issues were baselined away).
+    if not dry_run:
+        save_state(state, state_path)
 
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(render_report(results, relay_config, outbound_lines=outbound_lines))

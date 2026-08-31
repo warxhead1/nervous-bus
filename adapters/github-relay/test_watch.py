@@ -365,5 +365,38 @@ class StateIOTests(unittest.TestCase):
         self.assertEqual(watch.issue_state_key("o/r", 7), "o/r#7")
 
 
+class RunStatePersistenceTests(unittest.TestCase):
+    """A dry run must not consume transitions by persisting state (2026-08-31)."""
+
+    def _run(self, tmp: Path, *, dry_run: bool) -> Path:
+        cfg = tmp / "relay-config.json"
+        cfg.write_text(json.dumps({"defaults": {"outbound": "off"},
+                                   "repos": {"o/r": {"ingest": True, "file_beads": False,
+                                                     "outbound": "off"}}}))
+        state = tmp / "state.json"
+
+        def fetch(repo, *args):
+            return [{"number": 1, "title": "t", "state": "OPEN", "labels": [],
+                     "author": {"login": "a"}, "updatedAt": "2026-08-31T00:00:00Z",
+                     "url": "https://x", "body": "", "comments": []}]
+
+        watch.run(relay_config_path=cfg, state_path=state,
+                  report_path=tmp / "report.md", snapshot_path=tmp / "snap.json",
+                  dry_run=dry_run, no_beads=True, fetch_fn=fetch)
+        return state
+
+    def test_dry_run_does_not_persist_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = self._run(Path(d), dry_run=True)
+            self.assertFalse(state.exists(),
+                             "dry-run persisted state; next real run would miss transitions")
+
+    def test_real_run_persists_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = self._run(Path(d), dry_run=False)
+            self.assertTrue(state.exists())
+            self.assertIn("o/r#1", json.loads(state.read_text()))
+
+
 if __name__ == "__main__":
     unittest.main()
