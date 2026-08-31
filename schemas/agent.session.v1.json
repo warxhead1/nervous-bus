@@ -100,6 +100,10 @@
     "bead_id": {
       "type": "string",
       "description": "Bead being worked on in this session, if any. Present on pane-monitor 'updated' events; empty string when none."
+    },
+    "managed_by": {
+      "type": "string",
+      "description": "Orchestrator that owns this session's lifecycle (e.g. 'orca'). Stamped by the emitting hook when it detects an orchestrator-spawned environment (orca PTYs export ORCA_HISTFILE). Consumers (hearth) suppress per-agent stop/idle notifications for managed sessions — the orchestrator provides its own surface — and fold state into that orchestrator's session registry instead. Absent for unmanaged sessions."
     }
   }
 }
