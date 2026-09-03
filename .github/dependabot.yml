@@ -1,0 +1,71 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      actions-all:
+        patterns: ["*"]
+    labels: [dependencies, github-actions]
+
+  - package-ecosystem: cargo
+    directory: "/plugin"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+      cargo-major:
+        update-types: [major]
+    labels: [dependencies, rust]
+
+  - package-ecosystem: cargo
+    directory: "/sdk/rust"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+      cargo-major:
+        update-types: [major]
+    labels: [dependencies, rust]
+
+  - package-ecosystem: gomod
+    directory: "/sdk/go"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      gomod-minor-patch:
+        update-types: [minor, patch]
+      gomod-major:
+        update-types: [major]
+    labels: [dependencies, go]
+
+  - package-ecosystem: pip
+    directory: "/adapters/exporter"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      pip-minor-patch:
+        update-types: [minor, patch]
+      pip-major:
+        update-types: [major]
+    labels: [dependencies, python]
+
+  - package-ecosystem: pip
+    directory: "/adapters/dashboard/autobench-pulse"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      pip-minor-patch:
+        update-types: [minor, patch]
+      pip-major:
+        update-types: [major]
+    labels: [dependencies, python]

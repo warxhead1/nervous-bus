@@ -14,9 +14,15 @@ on:
       - 'adapters/**'
       - '.github/workflows/ci-shell-sdk-lint.yml'
 
+
+concurrency:
+  group: ci-shell-sdk-lint-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   shell-sdk-lint:
     name: shell-sdk-lint
+    if: github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, nervous-bus]
     steps:
       - uses: actions/checkout@v6
