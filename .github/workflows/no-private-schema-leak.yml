@@ -26,7 +26,7 @@ jobs:
     steps:
       - name: Configure PATH
         run: echo "$HOME/.pyenv/shims" >> $GITHUB_PATH
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false
       - name: Fail if private schemas are tracked
