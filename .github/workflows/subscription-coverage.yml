@@ -22,9 +22,15 @@ on:
     branches: [main]
   workflow_dispatch:
 
+
+concurrency:
+  group: subscription-coverage-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   scan-consumers:
     name: scan-consumers
+    if: github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, nervous-bus]
     steps:
       - name: Configure PATH and project dirs

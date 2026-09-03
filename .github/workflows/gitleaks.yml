@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: ["**"]
 
+
+concurrency:
+  group: gitleaks-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   scan:
     runs-on: ubuntu-latest

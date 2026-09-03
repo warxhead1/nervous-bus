@@ -16,9 +16,15 @@ on:
       - 'tools/*.txt'
       - '.github/workflows/ci-schema-lint.yml'
 
+
+concurrency:
+  group: ci-schema-lint-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   schema-lint:
     name: schema-lint
+    if: github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, nervous-bus]
     steps:
       - name: Configure PATH

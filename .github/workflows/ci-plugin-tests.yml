@@ -12,9 +12,15 @@ on:
       - 'plugin/**'
       - '.github/workflows/ci-plugin-tests.yml'
 
+
+concurrency:
+  group: ci-plugin-tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   plugin-tests:
     name: plugin-tests
+    if: github.actor != 'dependabot[bot]'
     runs-on: [self-hosted, linux, nervous-bus]
     steps:
       - name: Configure PATH
