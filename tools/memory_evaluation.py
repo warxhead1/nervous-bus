@@ -23,7 +23,16 @@ Design contract (v1):
   unknown. Monetary values are summed with :class:`decimal.Decimal` and
   serialised to JSON as decimal *strings* so no cent is lost to binary
   floating point. The CLI parses JSON floats with ``parse_float=Decimal``
-  for the same reason.
+  for the same reason. Monetary sums are computed by ``_exact_sum``,
+  which sizes its own arithmetic context from the operands so the result
+  never depends on the caller's ambient ``decimal`` precision (the
+  default 28 digits would silently drop the ``1`` from ``1e28 + 1``).
+  The one documented bound: a set of ``cost_usd`` values whose digit span
+  — smallest exponent to largest adjusted exponent, plus carry headroom —
+  exceeds ``MAX_MONETARY_PRECISION`` (10,000 significant digits) is
+  refused with :class:`UnsupportedCostRangeError` rather than rounded.
+  The CLI turns that into a stderr message and a non-zero exit with
+  nothing written to stdout.
 * Receipt and event identities are globally unique across the ledger. A
   ``receipt_id`` or ``event_id`` reused for a different execution
   attempt is rejected via the reference consumer in
@@ -48,7 +57,15 @@ import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import (
+    MAX_EMAX,
+    MIN_EMIN,
+    Decimal,
+    DecimalException,
+    Inexact,
+    Overflow,
+    localcontext,
+)
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -135,6 +152,15 @@ INTEGER_COST_METRICS: frozenset[str] = frozenset(
     {"duration_ms", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"}
 )
 
+# Upper bound on the number of significant digits a monetary sum may need.
+# ``_exact_sum`` sizes its arithmetic context from the actual inputs, so a
+# ledger mixing 1e28 with 1e-18 is summed exactly; but a caller could hand
+# us ``1E+999999999`` next to ``1E-999999999`` and ask for a billion-digit
+# coefficient. Rather than allocate that, the sum is refused with
+# :class:`UnsupportedCostRangeError`. 10,000 significant digits covers every
+# plausible monetary ledger by a very wide margin.
+MAX_MONETARY_PRECISION = 10_000
+
 # W3C trace-context v00: ``00-<32 hex trace-id>-<16 hex span-id>-<2 hex flags>``.
 # Lowercase only and the trace/span ids must not be all-zero — a fresh
 # root span is required before any event is allowed to claim context.
@@ -161,6 +187,13 @@ class ConflictingDuplicateError(MemoryEvaluationError):
 
 class ReceiptIdentityConflictError(MemoryEvaluationError):
     """A receipt_id or event_id was reused across different attempts."""
+
+
+class UnsupportedCostRangeError(MemoryEvaluationError):
+    """A monetary sum spans more digits than the tool will compute exactly.
+
+    Raised instead of silently rounding. See ``MAX_MONETARY_PRECISION``.
+    """
 
 
 @dataclass(frozen=True)
@@ -517,6 +550,71 @@ def _as_decimal(value: int | float | Decimal) -> Decimal:
     return Decimal(str(value))
 
 
+def _exact_sum(values: list[Decimal]) -> Decimal:
+    """Sum monetary values exactly, independent of the ambient context.
+
+    ``Decimal`` addition rounds to the *active context's* precision, which
+    defaults to 28 significant digits. Summing ``Decimal("1E28")`` with
+    ``Decimal("1")`` under that default silently discards the ``1``. Costs
+    are money, so no addition here may round.
+
+    The fix is to size the context from the operands rather than inherit
+    it. For finite non-negative inputs, an exact sum needs every digit
+    position from the smallest exponent present up to the largest adjusted
+    exponent, plus room for the carry produced by adding ``len(values)``
+    terms. That figure is computed up front and installed in a local
+    context; ``Inexact`` and ``Overflow`` are trapped so any miscalculation
+    surfaces as an error rather than as a quietly wrong total.
+
+    Spans wider than :data:`MAX_MONETARY_PRECISION` significant digits are
+    refused with :class:`UnsupportedCostRangeError` instead of allocating
+    an unbounded coefficient.
+    """
+
+    if not values:
+        return Decimal("0")
+
+    # ``exponent`` is the least-significant digit position; ``adjusted()``
+    # is the most-significant one. Both are plain ints for finite values,
+    # and every value reaching here has been validated as finite.
+    min_exponent = min(int(value.as_tuple().exponent) for value in values)
+    max_adjusted = max(value.adjusted() for value in values)
+    span = max(max_adjusted - min_exponent + 1, 1)
+    # Adding n terms can carry at most ``len(str(n))`` extra leading digits;
+    # one more keeps the bound comfortable rather than exact-to-the-edge.
+    carry_headroom = len(str(len(values))) + 1
+    precision = span + carry_headroom
+
+    if precision > MAX_MONETARY_PRECISION:
+        raise UnsupportedCostRangeError(
+            "cost_usd values span "
+            f"{precision} significant digits (exponents {min_exponent} to "
+            f"{max_adjusted}), above the supported maximum of "
+            f"{MAX_MONETARY_PRECISION}; refusing to round a monetary total"
+        )
+
+    with localcontext() as ctx:
+        ctx.prec = precision
+        # Widen the exponent range so a legitimate in-precision sum cannot
+        # overflow the *default* Emax/Emin of the caller's context.
+        ctx.Emax = MAX_EMAX
+        ctx.Emin = MIN_EMIN
+        ctx.traps[Inexact] = True
+        ctx.traps[Overflow] = True
+        # Seeded with the first value rather than ``Decimal(0)``: a zero seed
+        # carries exponent 0 and would drag the ideal exponent of an
+        # all-large-magnitude sum down to units for no benefit.
+        total = values[0]
+        try:
+            for value in values[1:]:
+                total = total + value
+        except DecimalException as exc:  # pragma: no cover - guard rail
+            raise UnsupportedCostRangeError(
+                f"cost_usd values cannot be summed exactly: {exc}"
+            ) from exc
+    return total
+
+
 def _check_receipt_identity_conflicts(records: list[_ValidatedRecord]) -> None:
     """Reject receipt/event identities reused across different attempts.
 
@@ -562,21 +660,23 @@ def _aggregate_cost_metrics(
     for phase in COST_PHASES:
         phase_view: dict[str, dict[str, Any]] = {}
         for metric in COST_METRICS:
-            if metric in INTEGER_COST_METRICS:
-                known_total: int = 0
-            else:
-                known_total = Decimal("0")
+            is_integer_metric = metric in INTEGER_COST_METRICS
+            integer_total = 0
+            monetary_values: list[Decimal] = []
             unknown_count = 0
             for record in records:
                 value = record.costs[phase][metric]
                 if value is None:
                     unknown_count += 1
                     continue
-                if metric in INTEGER_COST_METRICS:
-                    known_total = known_total + value  # type: ignore[operator]
+                if is_integer_metric:
+                    integer_total += value  # type: ignore[operator]
                 else:
-                    known_total = known_total + _as_decimal(value)  # type: ignore[operator]
+                    monetary_values.append(_as_decimal(value))
 
+            known_total: int | Decimal = (
+                integer_total if is_integer_metric else _exact_sum(monetary_values)
+            )
             total_value: int | Decimal | None = known_total if unknown_count == 0 else None
             phase_view[metric] = {
                 "known_total": known_total,
@@ -593,17 +693,22 @@ def _aggregate_cost_totals(records: list[_ValidatedRecord]) -> dict[str, dict[st
 
     out: dict[str, dict[str, Any]] = {}
     for metric in COST_METRICS:
-        known_total: int | Decimal = 0 if metric in INTEGER_COST_METRICS else Decimal("0")
+        is_integer_metric = metric in INTEGER_COST_METRICS
+        integer_total = 0
+        monetary_values: list[Decimal] = []
         unknown_count = 0
         for record in records:
             for phase in COST_PHASES:
                 value = record.costs[phase][metric]
                 if value is None:
                     unknown_count += 1
-                elif metric in INTEGER_COST_METRICS:
-                    known_total = known_total + value  # type: ignore[operator]
+                elif is_integer_metric:
+                    integer_total += value  # type: ignore[operator]
                 else:
-                    known_total = known_total + _as_decimal(value)  # type: ignore[operator]
+                    monetary_values.append(_as_decimal(value))
+        known_total: int | Decimal = (
+            integer_total if is_integer_metric else _exact_sum(monetary_values)
+        )
         total_value: int | Decimal | None = known_total if unknown_count == 0 else None
         out[metric] = {
             "known_total": known_total,
@@ -626,7 +731,7 @@ def _summarize_groups(records: list[_ValidatedRecord]) -> list[dict[str, Any]]:
         # ``unknown_count`` counts unknown phase entries, matching the unit
         # used by ``costs_by_phase``/``costs_total`` so the three fields of
         # the same name are never read against different denominators.
-        known_total_cost = Decimal("0")
+        group_cost_values: list[Decimal] = []
         unknown_cost_entries = 0
         for record in bucket:
             for phase in COST_PHASES:
@@ -634,7 +739,8 @@ def _summarize_groups(records: list[_ValidatedRecord]) -> list[dict[str, Any]]:
                 if value is None:
                     unknown_cost_entries += 1
                     continue
-                known_total_cost = known_total_cost + _as_decimal(value)
+                group_cost_values.append(_as_decimal(value))
+        known_total_cost = _exact_sum(group_cost_values)
         cost_entry: dict[str, Any] = {
             "known_total": known_total_cost,
             "unknown_count": unknown_cost_entries,
@@ -832,6 +938,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except MemoryEvaluationError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except DecimalException as exc:
+        # Decimal arithmetic signals derive from ArithmeticError, not
+        # ValueError, so they need their own clause. ``_exact_sum`` converts
+        # the ones it can anticipate, but a trapped signal escaping from
+        # anywhere else must still become a clear error with no partial
+        # stdout rather than an uncaught traceback.
+        print(f"error: decimal arithmetic failed: {exc}", file=sys.stderr)
         return 1
     except ValueError as exc:
         # Non-finite value reaching serialisation, or an unencodable total.

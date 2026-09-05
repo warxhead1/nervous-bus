@@ -1362,3 +1362,217 @@ def test_cli_reports_promotion_not_evaluated(tmp_path: Path) -> None:
     assert payload["promotion"] == "NOT_EVALUATED"
     assert payload["evidence_level"] == "recorded_receipts"
     assert payload["verified_attempts"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Exact monetary summation, independent of the ambient decimal context
+# ---------------------------------------------------------------------------
+
+
+BIG_MONEY = Decimal("10000000000000000000000000000")  # 1e28, 29 significant digits
+
+
+def _record_with_cost(attempt_id: str, phase: str, value) -> dict:
+    costs = _zero_costs()
+    costs[phase]["cost_usd"] = value
+    return make_record(
+        attempt_id=attempt_id,
+        execution_id=f"exec-{attempt_id}",
+        costs=costs,
+    )
+
+
+def test_large_and_small_money_sum_without_context_rounding() -> None:
+    # The default decimal context carries 28 significant digits, so a naive
+    # ``Decimal`` accumulator drops the trailing ``1`` from ``1e28 + 1``.
+    records = [
+        _record_with_cost("a-big", "research", BIG_MONEY),
+        _record_with_cost("a-small", "review", Decimal("1")),
+    ]
+
+    report = summarize(records)
+
+    expected = Decimal("10000000000000000000000000001")
+    assert report["costs_total"]["cost_usd"]["known_total"] == expected
+    assert report["costs_total"]["cost_usd"]["total"] == expected
+    # The per-phase views each hold exactly one of the two operands.
+    assert report["costs_by_phase"]["research"]["cost_usd"]["total"] == BIG_MONEY
+    assert report["costs_by_phase"]["review"]["cost_usd"]["total"] == Decimal("1")
+    # Both records land in the same project/model/condition/corpus bucket.
+    assert len(report["groups"]) == 1
+    assert report["groups"][0]["costs_total"]["total"] == expected
+
+
+def test_per_phase_total_sums_exactly_across_records() -> None:
+    # Both operands in the SAME phase, so the per-phase aggregate itself
+    # (not just the grand total) must carry the extra digit.
+    records = [
+        _record_with_cost("a-big", "execution", BIG_MONEY),
+        _record_with_cost("a-small", "execution", Decimal("1")),
+    ]
+
+    report = summarize(records)
+
+    expected = Decimal("10000000000000000000000000001")
+    assert report["costs_by_phase"]["execution"]["cost_usd"]["known_total"] == expected
+    assert report["costs_by_phase"]["execution"]["cost_usd"]["total"] == expected
+
+
+def test_group_totals_sum_exactly_per_bucket() -> None:
+    # Two distinct groups, each needing 29 digits; neither may borrow the
+    # other's precision or round.
+    records = [
+        _record_with_cost("a-big", "research", BIG_MONEY),
+        _record_with_cost("a-small", "review", Decimal("1")),
+    ]
+    other = _record_with_cost("b-big", "research", BIG_MONEY)
+    other["model"] = "other-model"
+    other_small = _record_with_cost("b-small", "review", Decimal("2"))
+    other_small["model"] = "other-model"
+
+    report = summarize([*records, other, other_small])
+
+    totals = {group["model"]: group["costs_total"]["total"] for group in report["groups"]}
+    assert totals["gpt-5"] == Decimal("10000000000000000000000000001")
+    assert totals["other-model"] == Decimal("10000000000000000000000000002")
+
+
+def test_high_precision_fractional_money_is_not_rounded() -> None:
+    # 28 digits of fraction plus a whole-dollar term: 29 significant digits
+    # of span, one past the default context precision.
+    records = [
+        _record_with_cost("a-int", "construction", Decimal("1")),
+        _record_with_cost(
+            "a-frac", "retrieval", Decimal("0.0000000000000000000000000001")
+        ),
+    ]
+
+    report = summarize(records)
+
+    expected = Decimal("1.0000000000000000000000000001")
+    assert report["costs_total"]["cost_usd"]["total"] == expected
+
+
+def test_summation_is_independent_of_ambient_decimal_precision() -> None:
+    import decimal
+
+    records = [
+        _record_with_cost("a-big", "research", BIG_MONEY),
+        _record_with_cost("a-small", "review", Decimal("1")),
+    ]
+    expected = Decimal("10000000000000000000000000001")
+
+    for precision in (1, 5, 28, 60):
+        with decimal.localcontext() as ctx:
+            ctx.prec = precision
+            report = summarize(copy.deepcopy(records))
+        assert report["costs_total"]["cost_usd"]["total"] == expected, precision
+
+
+def test_empty_ledger_money_totals_are_zero() -> None:
+    report = summarize([])
+
+    assert report["costs_total"]["cost_usd"]["known_total"] == Decimal("0")
+    assert report["costs_total"]["cost_usd"]["unknown_count"] == 0
+    assert report["costs_total"]["cost_usd"]["total"] == Decimal("0")
+    for phase in memory_evaluation.COST_PHASES:
+        entry = report["costs_by_phase"][phase]["cost_usd"]
+        assert entry["known_total"] == Decimal("0")
+        assert entry["total"] == Decimal("0")
+
+
+def test_null_only_money_totals_stay_zero_known_and_null_total() -> None:
+    record = make_record(attempt_id="a-null", execution_id="exec-null", costs=_null_costs())
+
+    report = summarize([record])
+
+    entry = report["costs_total"]["cost_usd"]
+    assert entry["known_total"] == Decimal("0")
+    assert entry["unknown_count"] == 6
+    assert entry["total"] is None
+    assert report["groups"][0]["costs_total"]["known_total"] == Decimal("0")
+    assert report["groups"][0]["costs_total"]["total"] is None
+
+
+def test_out_of_supported_range_money_span_is_rejected() -> None:
+    # A billion-digit span would need a billion-digit coefficient. The tool
+    # refuses rather than allocating it or silently rounding.
+    records = [
+        _record_with_cost("a-huge", "research", Decimal("1E+999999999")),
+        _record_with_cost("a-tiny", "review", Decimal("1E-999999999")),
+    ]
+
+    with pytest.raises(memory_evaluation.UnsupportedCostRangeError) as excinfo:
+        summarize(records)
+
+    assert "significant digits" in str(excinfo.value)
+
+
+def test_supported_range_boundary_is_summed_exactly() -> None:
+    # Just inside MAX_MONETARY_PRECISION: a 9_000-digit span still sums.
+    records = [
+        _record_with_cost("a-hi", "research", Decimal("1E+8999")),
+        _record_with_cost("a-lo", "review", Decimal("1")),
+    ]
+
+    report = summarize(records)
+
+    expected = Decimal("1" + "0" * 8998 + "1")
+    assert report["costs_total"]["cost_usd"]["total"] == expected
+
+
+def test_cli_emits_exact_large_money_total(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    lines = [
+        json.dumps(_record_with_cost("a-big", "research", int(BIG_MONEY))),
+        json.dumps(_record_with_cost("a-small", "review", 1)),
+    ]
+    ledger.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    result = _run_cli(ledger)
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    # Money is serialised as a decimal string, never a JSON number.
+    assert payload["costs_total"]["cost_usd"]["total"] == "10000000000000000000000000001"
+    assert payload["groups"][0]["costs_total"]["total"] == "10000000000000000000000000001"
+
+
+def test_cli_emits_exact_high_precision_fractional_money(tmp_path: Path) -> None:
+    # Exercises ``parse_float=Decimal``: these arrive as JSON float literals.
+    ledger = tmp_path / "ledger.jsonl"
+    records = [
+        _record_with_cost("a-int", "construction", 1),
+        _record_with_cost("a-frac", "retrieval", 1e-28),
+    ]
+    # ``json.dumps`` of 1e-28 emits ``1e-28``; the CLI re-reads it as Decimal.
+    ledger.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8"
+    )
+
+    result = _run_cli(ledger)
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["costs_total"]["cost_usd"]["total"] == "1.0000000000000000000000000001"
+
+
+def test_cli_rejects_out_of_range_money_span_with_empty_stdout(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    records = [
+        _record_with_cost("a-huge", "research", 1e300),
+        _record_with_cost("a-tiny", "review", 1e-300),
+    ]
+    # 1e300 alongside 1e-300 spans ~601 digits, which is supported; push it
+    # past the bound with explicit exponent literals instead.
+    lines = [
+        json.dumps(records[0]).replace("1e+300", "1E+999999999"),
+        json.dumps(records[1]).replace("1e-300", "1E-999999999"),
+    ]
+    ledger.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    result = _run_cli(ledger)
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "significant digits" in result.stderr
