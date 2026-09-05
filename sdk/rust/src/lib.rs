@@ -84,6 +84,126 @@ pub enum NativePublishError {
     Zellij(String),
 }
 
+/// Why a supplied W3C `traceparent` header was rejected.
+///
+/// Deliberately dependency-free (hand-written `Display`/`Error` rather than a
+/// `thiserror` derive): the trace-context surface is the one part of the
+/// envelope a caller may have to match on from a crate that does not — and
+/// should not have to — share this crate's error-derive dependency.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TraceContextError {
+    /// The header was not `00-<32 hex>-<16 hex>-<2 hex>` (exactly 4
+    /// hyphen-separated fields of the right widths).
+    MalformedStructure,
+    /// The version field was present but is not the supported `00`.
+    ///
+    /// Only W3C trace-context v00 is accepted; a future version's header may
+    /// carry additional fields this SDK would silently truncate on replay.
+    UnsupportedVersion,
+    /// The trace-id field was not 32 lowercase hex characters.
+    InvalidTraceId,
+    /// The trace-id was well-formed but all-zero, which W3C defines as
+    /// invalid.
+    ZeroTraceId,
+    /// The span-id (parent-id) field was not 16 lowercase hex characters.
+    InvalidSpanId,
+    /// The span-id was well-formed but all-zero, which W3C defines as
+    /// invalid.
+    ZeroSpanId,
+    /// The trace-flags field was not 2 lowercase hex characters.
+    ///
+    /// Any two lowercase hex digits are accepted — flag *semantics*
+    /// (sampling) are explicitly out of scope, only the wire shape is
+    /// enforced.
+    InvalidFlags,
+}
+
+impl std::fmt::Display for TraceContextError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = match self {
+            Self::MalformedStructure => {
+                "traceparent must be 00-<32 hex trace-id>-<16 hex span-id>-<2 hex flags>"
+            }
+            Self::UnsupportedVersion => "traceparent version must be 00 (W3C trace-context v00)",
+            Self::InvalidTraceId => "traceparent trace-id must be 32 lowercase hex characters",
+            Self::ZeroTraceId => "traceparent trace-id must not be all zeroes",
+            Self::InvalidSpanId => "traceparent span-id must be 16 lowercase hex characters",
+            Self::ZeroSpanId => "traceparent span-id must not be all zeroes",
+            Self::InvalidFlags => "traceparent flags must be 2 lowercase hex characters",
+        };
+        f.write_str(msg)
+    }
+}
+
+impl std::error::Error for TraceContextError {}
+
+fn is_lower_hex(s: &str, width: usize) -> bool {
+    s.len() == width
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Validate a W3C trace-context v00 `traceparent` header.
+///
+/// Strict by construction: uppercase hex, short/long fields, a non-`00`
+/// version, and the two W3C-invalid all-zero ids are all rejected. This is
+/// the single validation point shared by [`Envelope::with_traceparent`] and
+/// the deserialization boundary, so a header can never enter an `Envelope`
+/// by one path that the other would have refused.
+fn validate_traceparent(traceparent: &str) -> Result<(), TraceContextError> {
+    let mut fields = traceparent.split('-');
+    let (version, trace_id, span_id, flags) =
+        match (fields.next(), fields.next(), fields.next(), fields.next()) {
+            (Some(v), Some(t), Some(s), Some(f)) => (v, t, s, f),
+            _ => return Err(TraceContextError::MalformedStructure),
+        };
+    if fields.next().is_some() {
+        return Err(TraceContextError::MalformedStructure);
+    }
+
+    if !is_lower_hex(version, 2) {
+        return Err(TraceContextError::MalformedStructure);
+    }
+    if version != "00" {
+        return Err(TraceContextError::UnsupportedVersion);
+    }
+    if !is_lower_hex(trace_id, 32) {
+        return Err(TraceContextError::InvalidTraceId);
+    }
+    if trace_id.bytes().all(|b| b == b'0') {
+        return Err(TraceContextError::ZeroTraceId);
+    }
+    if !is_lower_hex(span_id, 16) {
+        return Err(TraceContextError::InvalidSpanId);
+    }
+    if span_id.bytes().all(|b| b == b'0') {
+        return Err(TraceContextError::ZeroSpanId);
+    }
+    if !is_lower_hex(flags, 2) {
+        return Err(TraceContextError::InvalidFlags);
+    }
+    Ok(())
+}
+
+/// Deserialize + validate an envelope-level `traceparent`.
+///
+/// Only called when the key is PRESENT (absence is handled by
+/// `#[serde(default)]`), so a legacy untraced envelope round-trips
+/// untouched. A present-but-invalid header — including `null` and any
+/// non-string JSON type, which fail in `String::deserialize` — is a hard
+/// deserialization error rather than a silently dropped field: a replayed
+/// envelope whose trace context we cannot vouch for must not masquerade as
+/// an untraced one.
+fn deserialize_traceparent<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+    let raw = String::deserialize(deserializer)?;
+    validate_traceparent(&raw).map_err(D::Error::custom)?;
+    Ok(Some(raw))
+}
+
 fn default_source() -> String {
     std::env::var("NERVOUS_SOURCE").unwrap_or_else(|_| {
         // This used `Path::new(".").file_name()`, which is ALWAYS `None` —
@@ -116,6 +236,15 @@ pub struct Envelope {
     time: String,
     datacontenttype: String,
     data: serde_json::Value,
+    /// Optional W3C trace-context membership (CloudEvents Distributed
+    /// Tracing extension). Absent — never `null` — on untraced envelopes, so
+    /// the serialized bytes of every existing producer are unchanged.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_traceparent"
+    )]
+    traceparent: Option<String>,
 }
 
 impl Envelope {
@@ -137,6 +266,13 @@ impl Envelope {
             time: iso_now(),
             datacontenttype: "application/json".into(),
             data: serde_json::to_value(data)?,
+            // Trace membership is opt-in and explicit. The SDK never reads
+            // the environment for an ambient traceparent and never mints one
+            // on its own: a caller that wants this envelope in a chain calls
+            // `with_traceparent`, and a caller minting a *fresh* span does so
+            // outside the SDK (the envelope `id` above is available as
+            // entropy).
+            traceparent: None,
         })
     }
 
@@ -163,6 +299,47 @@ impl Envelope {
     /// The JSON payload retained for durable persistence and replay.
     pub fn data(&self) -> &serde_json::Value {
         &self.data
+    }
+
+    /// The envelope-level W3C `traceparent`, if this envelope is part of a
+    /// traced causal chain.
+    ///
+    /// The value is byte-for-byte the header that was supplied, whether by
+    /// [`Envelope::with_traceparent`] or by deserializing a persisted
+    /// envelope — trace and span ids are never regenerated on replay.
+    pub fn traceparent(&self) -> Option<&str> {
+        self.traceparent.as_deref()
+    }
+
+    /// Attach a validated W3C trace-context v00 `traceparent` to this
+    /// envelope.
+    ///
+    /// The header is preserved exactly, so re-publishing a persisted
+    /// envelope keeps it in the same chain. Minting a *new* span for a new
+    /// event is deliberately the caller's job — see [`Envelope::id`] for
+    /// per-envelope entropy.
+    ///
+    /// # Errors
+    ///
+    /// [`TraceContextError`] if the header is not
+    /// `00-<32 lowercase hex>-<16 lowercase hex>-<2 lowercase hex>` with
+    /// non-zero trace- and span-ids.
+    ///
+    /// ```
+    /// # use nbus::Envelope;
+    /// let envelope = Envelope::new("/kb", "kb.entry.created.v2", &serde_json::json!({}))
+    ///     .unwrap()
+    ///     .with_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+    ///     .unwrap();
+    /// assert_eq!(
+    ///     envelope.traceparent(),
+    ///     Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+    /// );
+    /// ```
+    pub fn with_traceparent(mut self, traceparent: &str) -> Result<Self, TraceContextError> {
+        validate_traceparent(traceparent)?;
+        self.traceparent = Some(traceparent.to_string());
+        Ok(self)
     }
 
     /// Serialize the complete envelope for any existing publish transport.
@@ -658,6 +835,227 @@ mod tests {
             .to_string();
         assert_eq!(default_source(), format!("/{expected}"));
         assert_ne!(default_source(), "/unknown");
+    }
+
+    const VALID: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+    /// An untraced envelope must serialize to the SAME bytes as before this
+    /// field existed: absent, never `null`. Every legacy consumer (including
+    /// `additionalProperties: false` envelope schemas) depends on this.
+    #[test]
+    fn untraced_envelope_omits_the_field_entirely() {
+        let envelope =
+            Envelope::new("/kb", "kb.entry.created.v2", &serde_json::json!({"n": 1})).unwrap();
+        assert_eq!(envelope.traceparent(), None);
+
+        let raw = envelope.to_json().unwrap();
+        assert!(
+            !raw.contains("traceparent"),
+            "untraced envelope must not emit the key at all: {raw}"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(parsed.as_object().unwrap().get("traceparent").is_none());
+    }
+
+    /// Legacy envelopes persisted before this field existed must still
+    /// deserialize — absence is normal, not an error.
+    #[test]
+    fn legacy_envelope_without_the_field_still_deserializes() {
+        let legacy = r#"{"specversion":"1.0","id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","source":"/tengine","type":"tengine.silo.verify.v1","time":"2026-05-11T10:00:00Z","datacontenttype":"application/json","data":{"silo":"racing"}}"#;
+        let envelope: Envelope = serde_json::from_str(legacy).expect("legacy envelope must parse");
+        assert_eq!(envelope.traceparent(), None);
+        assert_eq!(envelope.channel(), "tengine.silo.verify.v1");
+    }
+
+    /// The exact supplied header survives serialize → deserialize → replay.
+    /// Nothing regenerates the trace- or span-id.
+    #[test]
+    fn traceparent_survives_a_serde_roundtrip_byte_for_byte() {
+        let envelope = Envelope::new("/kb", "kb.entry.created.v2", &serde_json::json!({"n": 1}))
+            .unwrap()
+            .with_traceparent(VALID)
+            .expect("valid header");
+
+        let raw = envelope.to_json().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["traceparent"], VALID);
+
+        let replayed: Envelope = serde_json::from_str(&raw).expect("replay");
+        assert_eq!(replayed.traceparent(), Some(VALID));
+        assert_eq!(
+            replayed, envelope,
+            "replay must be identical, not merely similar"
+        );
+
+        // Re-serializing the replayed envelope reproduces the same bytes, so
+        // a durable retry publishes the same chain membership.
+        assert_eq!(replayed.to_json().unwrap(), raw);
+    }
+
+    #[test]
+    fn with_traceparent_accepts_any_two_lowercase_hex_flags() {
+        for flags in ["00", "01", "ff", "3a"] {
+            let header = format!("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-{flags}");
+            let envelope = Envelope::new("/x", "c.v1", &serde_json::json!({}))
+                .unwrap()
+                .with_traceparent(&header)
+                .unwrap_or_else(|e| panic!("flags {flags} must be accepted: {e}"));
+            assert_eq!(envelope.traceparent(), Some(header.as_str()));
+        }
+    }
+
+    #[test]
+    fn with_traceparent_rejects_malformed_headers() {
+        let cases: &[(&str, TraceContextError)] = &[
+            // Wrong field count / structure.
+            ("", TraceContextError::MalformedStructure),
+            (
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7",
+                TraceContextError::MalformedStructure,
+            ),
+            (
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra",
+                TraceContextError::MalformedStructure,
+            ),
+            (
+                "004bf92f3577b34da6a3ce929d0e0e473600f067aa0ba902b701",
+                TraceContextError::MalformedStructure,
+            ),
+            // Version.
+            (
+                "0-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                TraceContextError::MalformedStructure,
+            ),
+            (
+                "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                TraceContextError::UnsupportedVersion,
+            ),
+            (
+                "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                TraceContextError::UnsupportedVersion,
+            ),
+            // Trace-id: short, long, uppercase, non-hex, all-zero.
+            (
+                "00-4bf92f3577b34da6a3ce929d0e0e473-00f067aa0ba902b7-01",
+                TraceContextError::InvalidTraceId,
+            ),
+            (
+                "00-4bf92f3577b34da6a3ce929d0e0e47360-00f067aa0ba902b7-01",
+                TraceContextError::InvalidTraceId,
+            ),
+            (
+                "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01",
+                TraceContextError::InvalidTraceId,
+            ),
+            (
+                "00-4bf92f3577b34da6a3ce929d0e0e473g-00f067aa0ba902b7-01",
+                TraceContextError::InvalidTraceId,
+            ),
+            (
+                "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
+                TraceContextError::ZeroTraceId,
+            ),
+            // Span-id: short, long, uppercase, all-zero.
+            (
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b-01",
+                TraceContextError::InvalidSpanId,
+            ),
+            (
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b70-01",
+                TraceContextError::InvalidSpanId,
+            ),
+            (
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00F067AA0BA902B7-01",
+                TraceContextError::InvalidSpanId,
+            ),
+            (
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
+                TraceContextError::ZeroSpanId,
+            ),
+            // Flags: short, long, uppercase.
+            (
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-1",
+                TraceContextError::InvalidFlags,
+            ),
+            (
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-011",
+                TraceContextError::InvalidFlags,
+            ),
+            (
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-FF",
+                TraceContextError::InvalidFlags,
+            ),
+        ];
+        for (header, expected) in cases {
+            let envelope = Envelope::new("/x", "c.v1", &serde_json::json!({})).unwrap();
+            match envelope.with_traceparent(header) {
+                Ok(_) => panic!("must reject {header:?}"),
+                Err(e) => assert_eq!(&e, expected, "wrong error for {header:?}"),
+            }
+        }
+    }
+
+    /// A rejected header leaves nothing behind: the error carries no
+    /// half-traced envelope, so there is no way to publish an unvalidated
+    /// trace context.
+    #[test]
+    fn trace_context_error_is_a_std_error_with_a_message() {
+        let err = Envelope::new("/x", "c.v1", &serde_json::json!({}))
+            .unwrap()
+            .with_traceparent("00-00000000000000000000000000000000-00f067aa0ba902b7-01")
+            .unwrap_err();
+        let as_dyn: &dyn std::error::Error = &err;
+        assert!(as_dyn.to_string().contains("all zeroes"), "{as_dyn}");
+    }
+
+    /// Validation binds at the DESERIALIZATION boundary too — a hand-edited
+    /// or third-party-written line cannot smuggle an invalid header in.
+    #[test]
+    fn deserialization_rejects_an_invalid_traceparent() {
+        let bad_values = [
+            "\"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7\"", // too few fields
+            "\"01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\"", // bad version
+            "\"00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01\"", // uppercase
+            "\"00-00000000000000000000000000000000-00f067aa0ba902b7-01\"", // zero trace
+            "\"00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01\"", // zero span
+            "\"\"",                                                     // empty string
+            "null", // explicitly null — absence is allowed, null is not
+            "42",   // non-string
+            "true", // non-string
+            "[\"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\"]", // non-string
+        ];
+        for value in bad_values {
+            let raw = format!(
+                r#"{{"specversion":"1.0","id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","source":"/x","type":"c.v1","time":"2026-05-11T10:00:00Z","datacontenttype":"application/json","data":{{}},"traceparent":{value}}}"#
+            );
+            assert!(
+                serde_json::from_str::<Envelope>(&raw).is_err(),
+                "traceparent {value} must be rejected at the deserialization boundary"
+            );
+        }
+    }
+
+    #[test]
+    fn deserialization_accepts_a_valid_traceparent() {
+        let raw = format!(
+            r#"{{"specversion":"1.0","id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","source":"/x","type":"c.v1","time":"2026-05-11T10:00:00Z","datacontenttype":"application/json","data":{{}},"traceparent":"{VALID}"}}"#
+        );
+        let envelope: Envelope = serde_json::from_str(&raw).expect("valid header must parse");
+        assert_eq!(envelope.traceparent(), Some(VALID));
+    }
+
+    /// `make_envelope` and `Envelope::new` keep their pre-existing
+    /// signatures and untraced output — no implicit trace issuance, no
+    /// environment reads.
+    #[test]
+    fn constructors_never_mint_a_traceparent_implicitly() {
+        std::env::set_var("TRACEPARENT", VALID);
+        let raw = make_envelope("c.v1", &serde_json::json!({}), "/x").unwrap();
+        std::env::remove_var("TRACEPARENT");
+        assert!(
+            !raw.contains("traceparent"),
+            "the SDK must not read an ambient traceparent: {raw}"
+        );
     }
 
     #[cfg(feature = "native")]

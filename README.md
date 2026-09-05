@@ -266,6 +266,23 @@ Set `NERVOUS_HOME` to override the default location. This pattern also applies t
 
 ## Sister projects
 
+**KB and Deer Flow are sister projects in the global agent effort.** KB holds
+durable knowledge and evidence; Deer Flow provides research and synthesis;
+nervous-bus carries their versioned integration events. Beads tracks scoped
+work, while Orca manages agent execution and completion receipts.
+
+Agents can use the shared `global-agent-ecosystem` skill to find the relevant
+CLI and detailed skills from any project. See the
+[memory, context, and integration research](docs/research/agent-memory-context-2026.md)
+for evidence, current gaps, and proposed improvements.
+
+### Deer Flow
+
+Deer Flow is the research and cross-project analysis sister project. Discover
+its installed surface with `deer --help`; use KB retrieval first when the
+question may already have a grounded answer. Verify current CLI capabilities
+and model routing before dispatching new research.
+
 ### kb
 
 [`kb`](https://github.com/warxhead1/kb) is a knowledge base CLI written in Rust that integrates with nervous-bus as a first-class citizen. It emits structured events when entries are created, vetted, and cited — making your knowledge base observable alongside all your other tools.
