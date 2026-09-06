@@ -19,6 +19,13 @@ tick_interval_s = 30.0
 stream_read_count = 200
 stream_block_ms = 2000
 
+# Wall-clock budget for the graceful-shutdown flush on SIGTERM. Must stay
+# comfortably under systemd/reflex-recorder.service's TimeoutStopSec=15,
+# which SIGKILLs the unit mid-flush once it expires. Only the best-effort
+# `nervous publish` fan-out is dropped when the budget runs out; the SQLite
+# writes for open runs and their buffered events always happen.
+shutdown_budget_s = 10.0
+
 [store]
 # SQLite database path (default: ~/.cache/nervous-bus/reflex/runs.db)
 # db_path = "~/.cache/nervous-bus/reflex/runs.db"
