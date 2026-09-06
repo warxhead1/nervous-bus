@@ -369,5 +369,60 @@ class TestClosedPayloadSchema(unittest.TestCase):
         self.assertIsNone(closed[0]["labeled_at"])
 
 
+# ── data2 worktree layout (2026-08-24 move) ──────────────────────────────────
+
+
+class TestReconstructWorktreePathData2Layout(unittest.TestCase):
+    """The current layout is ~/data2/worktrees/<project>/<slug>.
+
+    Before this was fixed, `reconstruct_worktree_path` only knew the retired
+    `.claude/worktrees/` sentinel, so every data2-era run stored a NULL
+    absolute worktree path — which in turn removed the only join key between
+    a recorder run and the `orca.worker.lifecycle.v1` envelopes that carry
+    task/dispatch/bead identity.
+    """
+
+    def test_data2_layout_reconstructs(self):
+        a = {"cwd": "/home/eric/data2/worktrees/tachyonac-engine/green-pastures/scripts"}
+        self.assertEqual(
+            reconstruct_worktree_path(a, "green-pastures"),
+            "/home/eric/data2/worktrees/tachyonac-engine/green-pastures",
+        )
+
+    def test_data2_layout_at_worktree_root(self):
+        a = {"cwd": "/home/eric/data2/worktrees/nervous-bus/next24-telemetry"}
+        self.assertEqual(
+            reconstruct_worktree_path(a, "next24-telemetry"),
+            "/home/eric/data2/worktrees/nervous-bus/next24-telemetry",
+        )
+
+    def test_slug_equal_to_project_segment_is_not_truncated_early(self):
+        """A worktree named after its own project must not cut at the project dir."""
+        a = {"cwd": "/home/eric/data2/worktrees/nervous-bus/nervous-bus/tools"}
+        self.assertEqual(
+            reconstruct_worktree_path(a, "nervous-bus"),
+            "/home/eric/data2/worktrees/nervous-bus/nervous-bus",
+        )
+
+    def test_slug_appearing_outside_worktrees_is_ignored_when_a_worktrees_match_exists(self):
+        a = {"cwd": "/home/eric/shared/worktrees/proj/shared/src"}
+        self.assertEqual(
+            reconstruct_worktree_path(a, "shared"),
+            "/home/eric/shared/worktrees/proj/shared",
+        )
+
+    def test_slug_not_a_path_segment_returns_none(self):
+        a = {"cwd": "/home/eric/data2/worktrees/nervous-bus/next24-telemetry"}
+        self.assertIsNone(reconstruct_worktree_path(a, "some-other-slug"))
+
+    def test_empty_slug_returns_none(self):
+        a = {"cwd": "/home/eric/data2/worktrees/nervous-bus/next24-telemetry"}
+        self.assertIsNone(reconstruct_worktree_path(a, ""))
+
+    def test_substring_of_a_segment_does_not_match(self):
+        a = {"cwd": "/home/eric/data2/worktrees/nervous-bus/next24-telemetry-2"}
+        self.assertIsNone(reconstruct_worktree_path(a, "next24-telemetry"))
+
+
 if __name__ == "__main__":
     unittest.main()
