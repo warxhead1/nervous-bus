@@ -343,6 +343,13 @@ class TestMixedFleetUnion(unittest.TestCase):
         got = self.conn.execute(self.body).fetchall()
         self.assertTrue(got)
 
+    def test_existing_column_positions_remain_compatible(self):
+        cursor = self.conn.execute(self.body)
+        self.assertEqual(
+            [column[0] for column in cursor.description],
+            ["issue_id", "depends_on_id", "type", "created_at", "depends_on_kind"],
+        )
+
     def test_row_count_preserved_exactly(self):
         expected = sum(len(v) for v in self.rows.values())
         got = self.conn.execute(f"SELECT COUNT(*) FROM ({self.body})").fetchone()[0]
@@ -356,14 +363,14 @@ class TestMixedFleetUnion(unittest.TestCase):
                 self.assertIn(issue_id, by_issue, f"{db} lost edge {issue_id}")
 
     def test_edge_identity_preserved_by_kind(self):
-        got = {r[0]: (r[1], r[2]) for r in self.conn.execute(self.body).fetchall()}
+        got = {r[0]: (r[1], r[4]) for r in self.conn.execute(self.body).fetchall()}
         self.assertEqual(got["hearth-w"], ("wisp-123", "wisp"))
         self.assertEqual(got["tengine-e"], ("https://example.invalid/x", "external"))
         self.assertEqual(got["nervous-bus-n"], (None, "unknown"))
         self.assertEqual(got["tengine-a8"][1], "issue")
 
     def test_legacy_arm_reports_issue_kind(self):
-        got = {r[0]: r[2] for r in self.conn.execute(self.body).fetchall()}
+        got = {r[0]: r[4] for r in self.conn.execute(self.body).fetchall()}
         self.assertEqual(got["app-to-market-a0"], "issue")
 
     def test_wisp_and_external_edges_are_not_dropped(self):

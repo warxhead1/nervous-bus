@@ -80,51 +80,51 @@ SELECT 'unreal-battlebots-gamedev', `id`, `title`, `description`, `status`, `pri
 
 CREATE OR REPLACE VIEW `beads_global`.`all_dependencies` AS
 SELECT `issue_id` AS `issue_id`, `depends_on_id` AS `depends_on_id`,
-       CASE WHEN `depends_on_id` IS NOT NULL THEN 'issue' ELSE 'unknown' END AS `depends_on_kind`,
-       `type` AS `type`, `created_at` AS `created_at`
+       `type` AS `type`, `created_at` AS `created_at`,
+       CASE WHEN `depends_on_id` IS NOT NULL THEN 'issue' ELSE 'unknown' END AS `depends_on_kind`
   FROM `app_to_market`.`dependencies`
 UNION ALL
 SELECT `issue_id`, COALESCE(`depends_on_issue_id`, `depends_on_wisp_id`, `depends_on_external`),
-       CASE WHEN `depends_on_issue_id` IS NOT NULL THEN 'issue' WHEN `depends_on_wisp_id` IS NOT NULL THEN 'wisp' WHEN `depends_on_external` IS NOT NULL THEN 'external' ELSE 'unknown' END,
-       `type`, `created_at`
+       `type`, `created_at`,
+       CASE WHEN `depends_on_issue_id` IS NOT NULL THEN 'issue' WHEN `depends_on_wisp_id` IS NOT NULL THEN 'wisp' WHEN `depends_on_external` IS NOT NULL THEN 'external' ELSE 'unknown' END
   FROM `biz_worthy`.`dependencies`
 UNION ALL
 SELECT `issue_id`, COALESCE(`depends_on_issue_id`, `depends_on_wisp_id`, `depends_on_external`),
-       CASE WHEN `depends_on_issue_id` IS NOT NULL THEN 'issue' WHEN `depends_on_wisp_id` IS NOT NULL THEN 'wisp' WHEN `depends_on_external` IS NOT NULL THEN 'external' ELSE 'unknown' END,
-       `type`, `created_at`
+       `type`, `created_at`,
+       CASE WHEN `depends_on_issue_id` IS NOT NULL THEN 'issue' WHEN `depends_on_wisp_id` IS NOT NULL THEN 'wisp' WHEN `depends_on_external` IS NOT NULL THEN 'external' ELSE 'unknown' END
   FROM `deer_flow`.`dependencies`
 UNION ALL
 SELECT `issue_id`, COALESCE(`depends_on_issue_id`, `depends_on_wisp_id`, `depends_on_external`),
-       CASE WHEN `depends_on_issue_id` IS NOT NULL THEN 'issue' WHEN `depends_on_wisp_id` IS NOT NULL THEN 'wisp' WHEN `depends_on_external` IS NOT NULL THEN 'external' ELSE 'unknown' END,
-       `type`, `created_at`
+       `type`, `created_at`,
+       CASE WHEN `depends_on_issue_id` IS NOT NULL THEN 'issue' WHEN `depends_on_wisp_id` IS NOT NULL THEN 'wisp' WHEN `depends_on_external` IS NOT NULL THEN 'external' ELSE 'unknown' END
   FROM `hearth`.`dependencies`
 UNION ALL
 SELECT `issue_id`, COALESCE(`depends_on_issue_id`, `depends_on_wisp_id`, `depends_on_external`),
-       CASE WHEN `depends_on_issue_id` IS NOT NULL THEN 'issue' WHEN `depends_on_wisp_id` IS NOT NULL THEN 'wisp' WHEN `depends_on_external` IS NOT NULL THEN 'external' ELSE 'unknown' END,
-       `type`, `created_at`
+       `type`, `created_at`,
+       CASE WHEN `depends_on_issue_id` IS NOT NULL THEN 'issue' WHEN `depends_on_wisp_id` IS NOT NULL THEN 'wisp' WHEN `depends_on_external` IS NOT NULL THEN 'external' ELSE 'unknown' END
   FROM `hearth-loom`.`dependencies`
 UNION ALL
 SELECT `issue_id`, COALESCE(`depends_on_issue_id`, `depends_on_wisp_id`, `depends_on_external`),
-       CASE WHEN `depends_on_issue_id` IS NOT NULL THEN 'issue' WHEN `depends_on_wisp_id` IS NOT NULL THEN 'wisp' WHEN `depends_on_external` IS NOT NULL THEN 'external' ELSE 'unknown' END,
-       `type`, `created_at`
+       `type`, `created_at`,
+       CASE WHEN `depends_on_issue_id` IS NOT NULL THEN 'issue' WHEN `depends_on_wisp_id` IS NOT NULL THEN 'wisp' WHEN `depends_on_external` IS NOT NULL THEN 'external' ELSE 'unknown' END
   FROM `nervous_bus`.`dependencies`
 UNION ALL
 SELECT `issue_id`, COALESCE(`depends_on_issue_id`, `depends_on_wisp_id`, `depends_on_external`),
-       CASE WHEN `depends_on_issue_id` IS NOT NULL THEN 'issue' WHEN `depends_on_wisp_id` IS NOT NULL THEN 'wisp' WHEN `depends_on_external` IS NOT NULL THEN 'external' ELSE 'unknown' END,
-       `type`, `created_at`
+       `type`, `created_at`,
+       CASE WHEN `depends_on_issue_id` IS NOT NULL THEN 'issue' WHEN `depends_on_wisp_id` IS NOT NULL THEN 'wisp' WHEN `depends_on_external` IS NOT NULL THEN 'external' ELSE 'unknown' END
   FROM `sweepers_adventures`.`dependencies`
 UNION ALL
 SELECT `issue_id`, `depends_on_id`,
-       CASE WHEN `depends_on_id` IS NOT NULL THEN 'issue' ELSE 'unknown' END,
-       `type`, `created_at`
+       `type`, `created_at`,
+       CASE WHEN `depends_on_id` IS NOT NULL THEN 'issue' ELSE 'unknown' END
   FROM `temple_stuart_accounting`.`dependencies`
 UNION ALL
 SELECT `issue_id`, COALESCE(`depends_on_issue_id`, `depends_on_wisp_id`, `depends_on_external`),
-       CASE WHEN `depends_on_issue_id` IS NOT NULL THEN 'issue' WHEN `depends_on_wisp_id` IS NOT NULL THEN 'wisp' WHEN `depends_on_external` IS NOT NULL THEN 'external' ELSE 'unknown' END,
-       `type`, `created_at`
+       `type`, `created_at`,
+       CASE WHEN `depends_on_issue_id` IS NOT NULL THEN 'issue' WHEN `depends_on_wisp_id` IS NOT NULL THEN 'wisp' WHEN `depends_on_external` IS NOT NULL THEN 'external' ELSE 'unknown' END
   FROM `tengine`.`dependencies`
 UNION ALL
 SELECT `issue_id`, `depends_on_id`,
-       CASE WHEN `depends_on_id` IS NOT NULL THEN 'issue' ELSE 'unknown' END,
-       `type`, `created_at`
+       `type`, `created_at`,
+       CASE WHEN `depends_on_id` IS NOT NULL THEN 'issue' ELSE 'unknown' END
   FROM `unreal_battlebots_gamedev`.`dependencies`;

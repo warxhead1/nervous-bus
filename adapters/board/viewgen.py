@@ -172,7 +172,7 @@ VARIANT_DEPS_SPLIT = "split"
 
 # The output shape of all_dependencies. board.py depends on this exact set.
 DEPENDENCY_VIEW_COLUMNS: Tuple[str, ...] = (
-    "issue_id", "depends_on_id", "depends_on_kind", "type", "created_at",
+    "issue_id", "depends_on_id", "type", "created_at", "depends_on_kind",
 )
 ISSUES_VIEW_COLUMNS: Tuple[str, ...] = ("project",) + ISSUE_COLUMNS
 
@@ -469,8 +469,8 @@ def render_dependencies_arm(entry: ProjectDB, variant: str, *, first: bool) -> s
 
     return (
         f"SELECT {issue_id}{a('issue_id')}, {target},\n"
-        f"       {kind},\n"
-        f"       {typ}{a('type')}, {created}{a('created_at')}\n"
+        f"       {typ}{a('type')}, {created}{a('created_at')},\n"
+        f"       {kind}\n"
         f"  FROM {qualified(entry.db, DEPENDENCIES_TABLE)}"
     )
 
