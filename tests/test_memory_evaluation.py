@@ -667,6 +667,56 @@ def test_group_verified_attempts_is_independent_of_other_groups() -> None:
     assert groups_by_model["gpt-5-mini"]["verified_attempts"] == 0
 
 
+def test_groups_split_per_model_when_a_retry_changes_model() -> None:
+    # Two attempts share one execution_id: the first failed on gpt-5, the
+    # retry completed on gpt-5-mini with a matching receipt. The execution
+    # denominator stays 1, but groups must split per model so the verified
+    # retry is not attributed to the model that did not run it (and the
+    # unverified attempt is not double-counted as verified).
+    r1 = make_record(
+        attempt_id="a-1",
+        execution_id="exec-1",
+        model="gpt-5",
+        status="failed",
+    )
+    r2 = make_record(
+        attempt_id="a-2",
+        execution_id="exec-1",
+        model="gpt-5-mini",
+        status="completed",
+        receipt=make_receipt(
+            attempt_id="a-2",
+            execution_id="exec-1",
+            receipt_id="receipt-2",
+            event_id="event-2",
+            model="gpt-5-mini",
+            attempt_number=2,
+        ),
+    )
+
+    report = summarize([r1, r2])
+
+    assert report["executions"] == 1
+    assert report["verified_executions"] == 1
+    assert report["attempts"] == 2
+
+    # Exactly one group per model — the execution lands in two buckets.
+    assert len(report["groups"]) == 2
+    groups_by_model = {g["model"]: g for g in report["groups"]}
+    assert set(groups_by_model) == {"gpt-5", "gpt-5-mini"}
+
+    # Per-group attempt counts sum to the global attempts denominator;
+    # no attempt is lost, none is double-counted.
+    assert sum(group["attempts"] for group in report["groups"]) == report["attempts"]
+    assert groups_by_model["gpt-5"]["attempts"] == 1
+    assert groups_by_model["gpt-5-mini"]["attempts"] == 1
+
+    # Verified attribution follows the model that actually ran the retry;
+    # the model that only saw the failed attempt sees zero verified.
+    assert groups_by_model["gpt-5"]["verified_attempts"] == 0
+    assert groups_by_model["gpt-5-mini"]["verified_attempts"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Empty corpus
 # ---------------------------------------------------------------------------
