@@ -757,8 +757,8 @@ class TestIdentityCorrelation(unittest.TestCase):
             self.assertEqual(correlation["matched_ambiguous"], 1)
             self.assertEqual(correlation["matched_unique"], 0)
 
-    def test_slug_fallback_when_absolute_path_was_lost(self):
-        """Pre-fix recorder rows have a NULL worktree; the slug still joins."""
+    def test_missing_absolute_path_remains_unmatched(self):
+        """Historical NULL worktree rows lack enough evidence for an identity join."""
         with TemporaryDirectory() as tmp:
             directory = Path(tmp)
             live = self._journal_with_lifecycle(
@@ -778,7 +778,8 @@ class TestIdentityCorrelation(unittest.TestCase):
                 ],
             )
             correlation = run(live, db=db)["identity_correlation"]
-            self.assertEqual(correlation["matched_unique"], 1)
+            self.assertEqual(correlation["matched_unique"], 0)
+            self.assertEqual(correlation["unmatched"], 1)
 
     def test_correlation_unavailable_without_a_database(self):
         with TemporaryDirectory() as tmp:
