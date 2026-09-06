@@ -13,12 +13,43 @@ Usage:
     python recorder.py --replay /path/to/debug.jsonl   # offline fixture mode
 
 See reflex-recorder.toml for configuration.
+
+Durability boundary (XREADGROUP ack timing vs run_events persistence)
+---------------------------------------------------------------------
+`_run_xreadgroup` XACKs each stream entry as soon as `_ingest_activity`
+returns.  At that moment the event is NOT durable: `_ingest_activity` only
+folds it into the in-memory `Segmenter` run and appends the raw envelope to
+`Recorder._pending_events`.  Nothing reaches SQLite until the run closes
+(`ended`, `idle_timeout` after idle_timeout_s = 900s by default, or
+`recorder_shutdown`).  So the ack means "delivered", not "recorded", and the
+window between the two is up to a full idle timeout — or unbounded for a
+conversation that keeps emitting.
+
+Because the entry has already left the pending-entries list (PEL), Redis will
+not redeliver it to a restarted recorder.  That makes the in-process shutdown
+path the ONLY thing standing between a stop and losing every event buffered
+since the last run close, which is why SIGTERM is handled here rather than
+left to the kernel default.
+
+What graceful SIGTERM handling does and does not buy:
+
+  covered      systemctl stop/restart, `kill <pid>` — the handler sets a
+               latch, the read loop breaks, and the `finally` runs the same
+               `Recorder.shutdown()` flush that `--replay` and Ctrl-C use.
+  NOT covered  SIGKILL (including systemd's own escalation once
+               TimeoutStopSec=15 expires), OOM kill, host power loss, or a
+               hard interpreter crash.  No handler runs, the buffered events
+               are gone, and the PEL cannot replay them because they were
+               already acked.  Closing that gap needs the ack moved behind
+               durable per-event persistence (or a write-ahead of
+               `_pending_events`), which is a separate change.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -48,6 +79,15 @@ DEFAULT_IDLE_TIMEOUT_S = 900.0   # 15 min
 DEFAULT_METRICS_INTERVAL_S = 60.0
 DEFAULT_TICK_INTERVAL_S = 30.0
 
+# Wall-clock budget for the graceful-shutdown flush.  systemd's
+# TimeoutStopSec=15 (systemd/reflex-recorder.service) is the hard ceiling: once
+# it expires the unit is SIGKILLed mid-flush, so the budget must leave headroom
+# for the SQLite writes that have already started.  Persistence is never
+# skipped; only the best-effort `nervous publish` fan-out is dropped once the
+# budget is spent.
+DEFAULT_SHUTDOWN_BUDGET_S = 10.0
+DEFAULT_PUBLISH_TIMEOUT_S = 10.0
+
 
 def _now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -69,6 +109,7 @@ def _load_config(path: Path) -> dict:
         "db_path": None,  # None → use DEFAULT_DB_PATH
         "stream_read_count": 200,
         "stream_block_ms": 2000,
+        "shutdown_budget_s": DEFAULT_SHUTDOWN_BUDGET_S,
     }
     if not path.exists():
         return cfg
@@ -92,7 +133,8 @@ def _load_config(path: Path) -> dict:
         cfg["connect_timeout_s"] = float(redis_cfg["connect_timeout_s"])
 
     rec_cfg = raw.get("recorder", {})
-    for key in ("idle_timeout_s", "metrics_interval_s", "tick_interval_s"):
+    for key in ("idle_timeout_s", "metrics_interval_s", "tick_interval_s",
+                "shutdown_budget_s"):
         if key in rec_cfg:
             cfg[key] = float(rec_cfg[key])
     if "stream_read_count" in rec_cfg:
@@ -105,6 +147,73 @@ def _load_config(path: Path) -> dict:
         cfg["db_path"] = Path(store_cfg["db_path"]).expanduser()
 
     return cfg
+
+
+# ── Graceful shutdown ─────────────────────────────────────────────────────────
+
+class ShutdownSignal:
+    """A latch set from a signal handler and polled by the read loop.
+
+    The handler does nothing but flip a bool and bump a counter, so it is
+    re-entrancy safe: the flush itself runs on the main thread inside the
+    ordinary ``finally`` path rather than inside the handler.  That is what
+    makes a second SIGTERM arriving mid-flush harmless.
+    """
+
+    def __init__(self) -> None:
+        self._set = False
+        self.count = 0
+        self.signum: Optional[int] = None
+
+    def request(self, signum=None, frame=None) -> None:  # noqa: ARG002 (signal ABI)
+        self._set = True
+        self.count += 1
+        if signum is not None:
+            self.signum = signum
+
+    def is_set(self) -> bool:
+        return self._set
+
+
+def install_shutdown_handlers(
+    flag: Optional[ShutdownSignal] = None,
+    signums=(signal.SIGTERM,),
+) -> ShutdownSignal:
+    """Route ``signums`` at the shutdown latch instead of the default action.
+
+    Python's default disposition for SIGTERM is the C default — the process
+    dies inside the kernel, so no ``finally``/``atexit`` runs and every run
+    still open in the segmenter (plus its buffered activity events, which live
+    only in ``Recorder._pending_events`` until the run closes) is lost.  A
+    ``systemctl restart`` sends exactly that signal.
+    """
+    flag = flag or ShutdownSignal()
+    for signum in signums:
+        try:
+            signal.signal(signum, flag.request)
+        except (ValueError, OSError) as e:
+            # ValueError: not on the main thread. OSError: signal not settable.
+            sys.stderr.write(f"[reflex-recorder] cannot install handler for {signum}: {e}\n")
+            sys.stderr.flush()
+    return flag
+
+
+def _sleep_interruptible(seconds: float, shutdown: Optional[ShutdownSignal],
+                         slice_s: float = 0.25) -> None:
+    """Sleep, but give up early once shutdown is requested.
+
+    Backoff sleeps are the one place a bounded stop can silently become an
+    unbounded one: a redis outage during a restart would otherwise hold the
+    loop for the full retry interval before the latch is ever polled.
+    """
+    deadline = time.time() + seconds
+    while True:
+        if shutdown is not None and shutdown.is_set():
+            return
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return
+        time.sleep(min(slice_s, remaining))
 
 
 # ── Redis helpers ─────────────────────────────────────────────────────────────
@@ -129,17 +238,20 @@ def _ensure_consumer_group(r: redis.Redis) -> None:
 
 # ── Publish via shell SDK ─────────────────────────────────────────────────────
 
-def _publish_run(payload: dict) -> bool:
+def _publish_run(payload: dict, timeout: float = DEFAULT_PUBLISH_TIMEOUT_S) -> bool:
     """Emit a bus.agent.run.closed.v1 via `nervous publish` (shell SDK).
 
     Returns True on success, False on failure (non-fatal — run is already
     persisted to SQLite, publish failure just means no live bus delivery).
+
+    `timeout` is squeezed by the caller during shutdown so that N open runs
+    cannot multiply one 10s subprocess timeout into an N*10s stop.
     """
     try:
         result = subprocess.run(
             [str(_NERVOUS_BIN), "publish", PUBLISH_CHANNEL, json.dumps(payload)],
             capture_output=True,
-            timeout=10,
+            timeout=max(0.1, timeout),
         )
         if result.returncode != 0:
             stderr = result.stderr.decode(errors="replace")[:300]
@@ -165,6 +277,11 @@ class Recorder:
         self._events_ingested = 0
         self._events_skipped = 0
         self._started_at = time.time()
+        # Graceful-shutdown bookkeeping.
+        self._shutdown_started = False
+        self._shutdown_deadline: Optional[float] = None
+        self._shutdown_publishes_skipped = 0
+        self._shutdown_flush_errors = 0
 
         # Map run_key → pending events buffer (for run_events table)
         # We buffer events until the run closes, then persist them.
@@ -206,7 +323,26 @@ class Recorder:
             sys.stderr.flush()
 
     def _on_run_closed(self, payload: dict) -> None:
-        """Called by the segmenter when a run is closed."""
+        """Called by the segmenter when a run is closed.
+
+        During shutdown any failure here is contained: one unpersistable run
+        must not abort the flush of the runs behind it in the queue.  On the
+        normal path the exception still propagates so the read loop logs it.
+        """
+        if not self._shutdown_started:
+            self._persist_and_publish(payload)
+            return
+        try:
+            self._persist_and_publish(payload)
+        except Exception as e:
+            self._shutdown_flush_errors += 1
+            sys.stderr.write(
+                f"[reflex-recorder] shutdown flush failed for run "
+                f"{payload.get('run_id')}: {e}\n"
+            )
+            sys.stderr.flush()
+
+    def _persist_and_publish(self, payload: dict) -> None:
         run_id = payload["run_id"]
         run_key = payload["run_key"]
 
@@ -218,8 +354,16 @@ class Recorder:
         for (event_ts, event_type, raw_json) in events:
             self.store.append_event(run_id, event_ts, event_type, raw_json)
 
-        # 3. Emit via nervous publish
-        ok = _publish_run(payload)
+        # 3. Emit via nervous publish — best effort, and the only step allowed
+        #    to be dropped when the shutdown budget is spent.  Persistence
+        #    above has already happened, so a skipped publish costs live bus
+        #    delivery, never the record.
+        budget = self._publish_budget()
+        if budget is None:
+            ok = False
+            self._shutdown_publishes_skipped += 1
+        else:
+            ok = _publish_run(payload, timeout=budget)
         self._runs_closed += 1
         if ok:
             self._runs_published += 1
@@ -229,9 +373,18 @@ class Recorder:
             f"key={run_key!r} reason={payload.get('close_reason')} "
             f"events={payload['event_count']} "
             f"tools={list(payload['tool_histogram'].keys())[:5]} "
-            f"published={'ok' if ok else 'FAILED'}\n"
+            f"published={'ok' if ok else ('skipped_budget' if budget is None else 'FAILED')}\n"
         )
         sys.stderr.flush()
+
+    def _publish_budget(self) -> Optional[float]:
+        """Seconds `nervous publish` may take, or None to skip it entirely."""
+        if self._shutdown_deadline is None:
+            return DEFAULT_PUBLISH_TIMEOUT_S
+        remaining = self._shutdown_deadline - time.time()
+        if remaining <= 0:
+            return None
+        return min(DEFAULT_PUBLISH_TIMEOUT_S, remaining)
 
     def _ingest_activity(self, raw_json: str, stream_id: str) -> None:
         """Parse and ingest one raw CloudEvents envelope from the stream."""
@@ -251,7 +404,9 @@ class Recorder:
 
         now = time.time()
         run_key_tuple = self._get_run_key(data)
-        if run_key_tuple:
+        # An empty run_key is refused by Segmenter.ingest, so buffering under it
+        # would accumulate events that no run close can ever flush.
+        if run_key_tuple and run_key_tuple[0]:
             rk = run_key_tuple[0]
             ts = data.get("ts") or data.get("time") or _now_utc()
             # Buffer event for run_events persistence
@@ -282,14 +437,53 @@ class Recorder:
         )
         sys.stderr.flush()
 
-    def shutdown(self) -> None:
-        self.segmenter.shutdown()
-        self.store.close()
+    def shutdown(self, budget_s: Optional[float] = None) -> bool:
+        """Flush every open run to SQLite, then close the store.
+
+        Idempotent: the second call is a no-op and returns False, so a signal
+        arriving while the flush is already running, or a signal followed by
+        the normal ``finally`` path, cannot double-close or double-append.
+        (The underlying writes are idempotent too — ``save_run`` is INSERT OR
+        REPLACE on the run_id primary key and ``_pending_events`` is popped as
+        it is drained — but the latch is what keeps the accounting honest.)
+
+        `budget_s` bounds the wall clock spent on best-effort publishing; the
+        SQLite writes themselves are never skipped.
+        """
+        if self._shutdown_started:
+            return False
+        self._shutdown_started = True
+        if budget_s is None:
+            budget_s = float(self.cfg.get("shutdown_budget_s", DEFAULT_SHUTDOWN_BUDGET_S))
+        self._shutdown_deadline = time.time() + budget_s
+
+        open_runs = self.segmenter.open_run_count
+        started = time.time()
+        sys.stderr.write(
+            f"[reflex-recorder] graceful shutdown: flushing {open_runs} open run(s), "
+            f"budget={budget_s:.1f}s\n"
+        )
+        sys.stderr.flush()
+        try:
+            self.segmenter.shutdown()
+        finally:
+            elapsed = time.time() - started
+            sys.stderr.write(
+                f"[reflex-recorder] shutdown flush done in {elapsed:.2f}s: "
+                f"runs_closed={self._runs_closed} "
+                f"publishes_skipped={self._shutdown_publishes_skipped} "
+                f"flush_errors={self._shutdown_flush_errors}\n"
+            )
+            sys.stderr.flush()
+            self.log_metrics()
+            self.store.close()
+        return True
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
-def _run_xreadgroup(r: redis.Redis, recorder: Recorder, cfg: dict, once: bool = False) -> None:
+def _run_xreadgroup(r: redis.Redis, recorder: Recorder, cfg: dict, once: bool = False,
+                    shutdown: Optional[ShutdownSignal] = None) -> None:
     last_metrics = time.time()
     last_tick = time.time()
     read_count = cfg["stream_read_count"]
@@ -298,6 +492,14 @@ def _run_xreadgroup(r: redis.Redis, recorder: Recorder, cfg: dict, once: bool = 
     tick_interval = cfg["tick_interval_s"]
 
     while True:
+        if shutdown is not None and shutdown.is_set():
+            sys.stderr.write(
+                f"[reflex-recorder] shutdown requested (signal={shutdown.signum}); "
+                f"leaving read loop\n"
+            )
+            sys.stderr.flush()
+            break
+
         try:
             results = r.xreadgroup(
                 groupname=CONSUMER_GROUP,
@@ -335,11 +537,11 @@ def _run_xreadgroup(r: redis.Redis, recorder: Recorder, cfg: dict, once: bool = 
         except redis.ConnectionError as e:
             sys.stderr.write(f"[reflex-recorder] redis connection lost: {e}; retrying in 5s\n")
             sys.stderr.flush()
-            time.sleep(5)
+            _sleep_interruptible(5, shutdown)
         except Exception as e:
             sys.stderr.write(f"[reflex-recorder] error: {e}\n")
             sys.stderr.flush()
-            time.sleep(1)
+            _sleep_interruptible(1, shutdown)
 
         if once:
             break
@@ -415,7 +617,12 @@ def main() -> int:
         recorder.store.close()
         return 0
 
-    # Live mode: XREADGROUP
+    # Live mode: XREADGROUP.
+    # The latch is armed here rather than at the top of main() so --replay, which
+    # has no read loop to poll it, keeps the default disposition instead of
+    # silently ignoring SIGTERM.
+    shutdown = install_shutdown_handlers()
+
     try:
         r = redis.Redis.from_url(
             cfg["redis_url"],
@@ -432,11 +639,9 @@ def main() -> int:
     _ensure_consumer_group(r)
 
     try:
-        _run_xreadgroup(r, recorder, cfg, once=args.once)
+        _run_xreadgroup(r, recorder, cfg, once=args.once, shutdown=shutdown)
     finally:
-        recorder.segmenter.shutdown()
-        recorder.log_metrics()
-        recorder.store.close()
+        recorder.shutdown()
 
     return 0
 
