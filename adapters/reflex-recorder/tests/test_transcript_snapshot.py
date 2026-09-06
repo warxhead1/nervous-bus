@@ -172,7 +172,7 @@ class TestTruncationRotation(unittest.TestCase):
             self.assertEqual(entry["size"], f.stat().st_size)
 
     def test_inode_replaced(self):
-        """A unlink+rewrite changes the inode; that should also re-copy."""
+        """An atomic replace changes the inode; that should also re-copy."""
         with tempfile.TemporaryDirectory() as src_root, tempfile.TemporaryDirectory() as dst_root:
             d = Path(src_root) / "-home-eric-projects-myapp"
             d.mkdir(parents=True)
@@ -182,11 +182,20 @@ class TestTruncationRotation(unittest.TestCase):
 
             ts.sync_once(src_root=src_root, dst_root=dst_root)
 
-            # Replace the file: unlink + create. New inode guaranteed on POSIX.
-            os.unlink(f)
-            _write_jsonl(f, 4)
-            new_inode = f.stat().st_ino
+            # Replace the file the way a rotator does: allocate the replacement
+            # under a sibling name WHILE the original still holds its inode,
+            # then os.replace onto the path. The previous fixture unlinked
+            # first, which frees the inode number for immediate reuse — on this
+            # box the very next create reclaimed it (measured 3/3), so the
+            # fixture failed before reaching the behaviour under test. Holding
+            # the original open until the rename makes a distinct inode a
+            # property of the allocator's constraints, not of luck.
+            replacement = d / "sess-1.jsonl.new"
+            _write_jsonl(replacement, 4)
+            new_inode = replacement.stat().st_ino
             self.assertNotEqual(old_inode, new_inode)
+            os.replace(replacement, f)
+            self.assertEqual(f.stat().st_ino, new_inode)
 
             stats = ts.sync_once(src_root=src_root, dst_root=dst_root)
             self.assertEqual(stats["files_recopied"], 1)
