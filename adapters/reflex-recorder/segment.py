@@ -81,19 +81,49 @@ def extract_worktree_slug(activity: dict) -> Optional[str]:
 def reconstruct_worktree_path(activity: dict, slug: str) -> Optional[str]:
     """Derive the ABSOLUTE worktree root path from cwd + slug.
 
-    cwd example: /home/eric/projects/foo/.claude/worktrees/agent-abc/subdir
-    result:      /home/eric/projects/foo/.claude/worktrees/agent-abc
+    Two layouts are in use on this host:
 
-    Returns None if we can't locate the sentinel in cwd.
+      retired:  /home/eric/projects/foo/.claude/worktrees/<slug>/subdir
+      current:  /home/eric/data2/worktrees/<project>/<slug>/subdir
+
+    The old implementation searched cwd for the literal ``.claude/worktrees/``
+    sentinel, so every worktree minted after the 2026-08-24 move to
+    ``~/data2/worktrees/<project>/<name>`` reconstructed as None. Measured on
+    the live recorder DB: 85/85 worktree-kind runs started 2026-09-05 had a
+    NULL ``worktree`` column while ``worktree_slug`` was populated for all of
+    them, i.e. the slug survived and only the absolute path was lost.
+
+    The slug is already known by the caller, so we truncate cwd at the path
+    segment that IS the slug rather than at a hardcoded sentinel. The last
+    ``worktrees`` directory anchors which segment that is, so both layouts
+    resolve correctly even when the slug also appears elsewhere in the path.
+
+    Returns None if the slug does not appear as a path segment of cwd.
     """
     cwd = activity.get("cwd", "")
-    if not cwd:
+    if not cwd or not slug:
         return None
-    idx = cwd.find(_WORKTREES_SENTINEL)
-    if idx == -1:
-        return None
-    worktree_root = cwd[: idx + len(_WORKTREES_SENTINEL)] + slug
-    return worktree_root
+
+    parts = cwd.split("/")
+
+    # Anchor on the LAST 'worktrees' directory in cwd, then look at the two
+    # segments that either layout puts the worktree root in:
+    #   .claude/worktrees/<slug>            -> worktrees + 1
+    #   <root>/worktrees/<project>/<slug>   -> worktrees + 2
+    # `.claude` before the anchor pins the retired layout, so a worktree whose
+    # slug equals a sibling directory name cannot pull the truncation to the
+    # wrong depth.
+    anchors = [i for i, seg in enumerate(parts) if seg == "worktrees"]
+    if anchors:
+        w = anchors[-1]
+        retired = w > 0 and parts[w - 1] == ".claude"
+        offsets = (1, 2) if retired else (2, 1)
+        for off in offsets:
+            idx = w + off
+            if idx < len(parts) and parts[idx] == slug:
+                return "/".join(parts[: idx + 1])
+
+    return None
 
 
 # ── Run key computation ───────────────────────────────────────────────────────
