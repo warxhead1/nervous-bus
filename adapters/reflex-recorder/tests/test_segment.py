@@ -426,3 +426,7 @@ class TestReconstructWorktreePathData2Layout(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_arbitrary_matching_directory_is_not_worktree_evidence():
+    assert reconstruct_worktree_path({"cwd": "/tmp/shared/source"}, "shared") is None

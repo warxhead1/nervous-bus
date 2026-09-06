@@ -918,3 +918,24 @@ class TestCli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_repeated_collision_variant_is_still_deduplicated():
+    first = envelope(eid="shared", time="2026-09-05T10:00:00Z")
+    second = envelope(eid="shared", time="2026-09-05T11:00:00Z")
+    with TemporaryDirectory() as tmp:
+        live = write_journal(Path(tmp), {"1": [first, second], "": [second, first]})
+        records = run(live)["journal"]["records"]
+        assert records["unique"] == 2
+        assert records["exact_duplicates_collapsed"] == 2
+        assert records["id_collisions_kept"] == 1
+
+
+def test_slug_cannot_override_missing_or_conflicting_absolute_identity():
+    workers = {"/worktrees/project-a/shared": [("run", "task", "dispatch", "bead")]}
+    report = edr.correlate_segments_to_workers([
+        {"worktree": "/worktrees/project-b/shared", "worktree_slug": "shared"},
+        {"worktree": None, "worktree_slug": "shared"},
+    ], workers)
+    assert report["unmatched"] == 2
+    assert report["matched_unique"] == 0

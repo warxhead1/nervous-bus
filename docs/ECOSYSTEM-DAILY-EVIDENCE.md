@@ -102,7 +102,7 @@ separately scoped producer work.
 ## Derived identity correlation (observational only)
 
 `identity_correlation` joins recorder segments to `orca.worker.lifecycle.v1`
-identity by worktree path, falling back to the worktree slug. It is labelled
+identity by exact absolute worktree path. A slug alone is insufficient. It is labelled
 `authority: "observational_join_only"` and reports `matched_unique`,
 `matched_ambiguous` and `unmatched` separately. A worktree reused by successive
 dispatches produces more than one candidate identity; that is reported as
@@ -143,8 +143,7 @@ The function now anchors on the last `worktrees` path segment and truncates at
 the slug, handling both layouts. This is a projection repair only: run keys are
 computed from the slug and are unchanged, no schema moved, and existing rows are
 not backfilled. **The change takes effect only after the coordinator restarts
-`reflex-recorder.service`**; until then the report's slug-fallback join covers
-the gap.
+`reflex-recorder.service`**. Historical rows with missing absolute paths remain unmatched.
 
 ## Scheduling it
 

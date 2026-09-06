@@ -123,11 +123,6 @@ def reconstruct_worktree_path(activity: dict, slug: str) -> Optional[str]:
             if idx < len(parts) and parts[idx] == slug:
                 return "/".join(parts[: idx + 1])
 
-    # No 'worktrees' anchor (or the slug is not where a layout puts it):
-    # fall back to the first exact path-segment match.
-    for i, segment in enumerate(parts):
-        if segment == slug:
-            return "/".join(parts[: i + 1])
     return None
 
 

@@ -404,6 +404,7 @@ def aggregate_journal(
     # retained, never the payload: holding envelopes to diff them later is
     # exactly the unbounded growth this tool promises not to have.
     seen: dict[str, tuple[str, Any, Any]] = {}
+    seen_variants: set[tuple[str, str]] = set()
     id_tracking_truncated = False
 
     by_type = BoundedCounter(max_cardinality)
@@ -519,17 +520,21 @@ def aggregate_journal(
             digest = canonical_digest(envelope)
             previous = seen.get(envelope_id)
             if previous is None:
-                if len(seen) >= max_tracked_ids:
+                if len(seen) + len(seen_variants) >= max_tracked_ids:
                     id_tracking_truncated = True
                 else:
                     seen[envelope_id] = (digest, envelope.get("type"), envelope.get("time"))
-            elif previous[0] == digest:
+            elif previous[0] == digest or (envelope_id, digest) in seen_variants:
                 exact_duplicates += 1
                 counts_as_new = False
             else:
                 # Same id, different bytes. This is a REAL distinct event that
                 # id-only dedup would have deleted. Keep it; flag it.
                 collisions += 1
+                if len(seen) + len(seen_variants) < max_tracked_ids:
+                    seen_variants.add((envelope_id, digest))
+                else:
+                    id_tracking_truncated = True
                 if len(collision_samples) < max_samples:
                     collision_samples.append(
                         {
@@ -1013,10 +1018,6 @@ def correlate_segments_to_workers(
         return base
 
     by_path = {path: list(values) for path, values in worktree_index.items()}
-    by_slug: dict[str, list] = defaultdict(list)
-    for path, values in by_path.items():
-        by_slug[os.path.basename(path)].extend(values)
-
     matched_unique = 0
     matched_ambiguous = 0
     unmatched = 0
@@ -1025,17 +1026,11 @@ def correlate_segments_to_workers(
     for segment in segments:
         candidates: list = []
         absolute = segment.get("worktree")
-        slug = segment.get("worktree_slug")
         if isinstance(absolute, str) and absolute:
             key = absolute.rstrip("/")
             candidates = by_path.get(key, [])
             if candidates:
                 matched_paths.add(key)
-        if not candidates and isinstance(slug, str) and slug:
-            candidates = by_slug.get(slug, [])
-            for path in by_path:
-                if os.path.basename(path) == slug:
-                    matched_paths.add(path)
         distinct = {tuple(candidate) for candidate in candidates}
         if not distinct:
             unmatched += 1
