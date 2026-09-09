@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/hearth.artifact.promoted.v1.json",
+  "title": "hearth.artifact.promoted v1",
+  "description": "Fired by the Hearth project-artifacts transactional outbox (hearth project-artifacts crate) when an immutable artifact revision is durably promoted. The event itself is the identity record: it carries the canonical artifact URI, revision number, content digest, byte size, title/summary, kind, and provenance metadata sufficient for KB ingestion and any other downstream consumers to reference the exact retained revision. Producer: hearth project-artifacts transactional outbox. Consumer: KB kb-artifact ingestion adapter (under development — not yet live/verified consumption; do not treat as an evidenced production handler). Schema-first contract — see docs/HEARTH-ARTIFACTS.md for transport, idempotency, identity, and authorization semantics.",
+  "status": "active-producer-pending-consumer",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_id",
+    "revision",
+    "artifact_uri",
+    "project",
+    "slug",
+    "title",
+    "summary",
+    "kind",
+    "sha256",
+    "bytes",
+    "provenance",
+    "kb_refs",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Major schema version; bump on breaking changes only. Required constant 1."
+    },
+    "artifact_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "UUID of the artifact (the logical entity, not a specific revision). Canonical form: lowercase 8-4-4-4-12 hex. Identifies the retained revision together with `revision` — the pair (artifact_id, revision) MUST be globally unique and is the durable cross-system key."
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Monotonic positive integer revision of the artifact. (artifact_id, revision) is the durable identity. Cross-field equality between `artifact_uri`'s trailing path segment and `revision` cannot be fully schema-enforced and MUST be validated by producer and consumer (see docs/HEARTH-ARTIFACTS.md § 'Cross-field identity')."
+    },
+    "artifact_uri": {
+      "type": "string",
+      "pattern": "^hearth-artifact://[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/revisions/[1-9][0-9]*$",
+      "maxLength": 512,
+      "description": "Canonical immutable URI for the retained revision: `hearth-artifact://<lowercase-uuid>/revisions/<positive-int>`. Identifies the exact revision; dereferencing the URI on the producer host returns the retained bytes; consumers MUST resolve bytes through the authenticated Hearth API, never dereference the producer's source path on their own host (see docs/HEARTH-ARTIFACTS.md § 'Resolution and authorization')."
+    },
+    "project": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "Project namespace slug, lowercase identifier (e.g. `hearth`, `tengine`, `nervous-bus`). Matches the bus channel naming convention."
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "Artifact slug inside the project namespace, lowercase identifier. Combined with `project`, identifies the artifact family; the retained revision is identified by `revision`."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Human-readable title of this revision. Empty strings are NOT accepted — the title is identity metadata, not free text."
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 4000,
+      "description": "Free-form summary of this revision (up to 4000 chars). May be empty."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["html", "markdown", "json", "text"],
+      "description": "Content kind for downstream rendering / storage. Closed enum: html, markdown, json, text. Any other value (e.g. 'pdf', 'binary', arbitrary strings) MUST be rejected."
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Lowercase 64-hex SHA-256 digest of the retained revision bytes. This is the content digest — distinct from the request digest (which would be a hash of the producing request). `sha256` and `bytes` together uniquely identify the immutable payload; consumers SHOULD verify `sha256` against the bytes returned by the authenticated Hearth API."
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2097152,
+      "description": "Size of the retained revision in bytes. Bounded at 2 MiB (2097152) — the bus carries metadata, not bulk bytes; larger artifacts are out of scope for this event."
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Provenance metadata for the retained revision. All properties are optional (the artifact is identity; provenance records how it was produced). Authorization, fetched content, raw HTML, and auth tokens are explicitly OUT of this object — see docs/HEARTH-ARTIFACTS.md § 'What this event does NOT carry'. `dirty` indicates the working tree was not clean at promotion time.",
+      "properties": {
+        "repository":  { "type": "string", "maxLength": 2048 },
+        "commit":     { "type": "string", "maxLength": 2048 },
+        "branch":     { "type": "string", "maxLength": 2048 },
+        "path":       { "type": "string", "maxLength": 2048 },
+        "session_id": { "type": "string", "maxLength": 2048 },
+        "bead_id":    { "type": "string", "maxLength": 2048 },
+        "run_id":     { "type": "string", "maxLength": 2048 },
+        "task_id":    { "type": "string", "maxLength": 2048 },
+        "dispatch_id":{ "type": "string", "maxLength": 2048 },
+        "agent":      { "type": "string", "maxLength": 2048 },
+        "dirty":      { "type": "boolean" }
+      }
+    },
+    "kb_refs": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 32,
+      "description": "Cross-references to KB entries this revision is associated with. Each entry is a safe `kb://<project>/<slug segments>` URI; max 32 entries, all unique. Traversal segments (`..`), absolute paths, query strings, fragments, and percent-encoded slashes are NOT accepted.",
+      "items": {
+        "type": "string",
+        "pattern": "^kb://[a-z0-9][a-z0-9._-]{0,99}(?:/[a-z0-9][a-z0-9._-]{0,99})*$",
+        "maxLength": 512
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})$",
+      "description": "RFC3339 UTC timestamp at which this revision was durably promoted by Hearth. Combined with the CloudEvents envelope `id` and `time`, this is part of the exact-replay identity (see docs/HEARTH-ARTIFACTS.md § 'Replay and idempotency')."
+    }
+  }
+}
