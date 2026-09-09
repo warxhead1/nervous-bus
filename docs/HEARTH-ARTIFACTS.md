@@ -1,167 +1,78 @@
-# Hearth artifact promotion event
+# Hearth artifact promotion
 
-**Channel:** `hearth.artifact.promoted.v1`
-**Schema:** [`schemas/hearth.artifact.promoted.v1.json`](../schemas/hearth.artifact.promoted.v1.json)
-**Producer:** Hearth `project-artifacts` transactional outbox (Hearth repo)
-**Consumer:** KB `kb-artifact` ingestion adapter — **under development; not yet live/verified consumption.** Do not treat the existence of this event as evidence that KB is currently ingesting Hearth artifacts.
+`hearth.artifact.promoted.v1` carries immutable revision metadata. The producer
+and KB adapter are under development; their presence is not evidence of deployed
+delivery or consumption. The draft schema is
+[`hearth.artifact.promoted.v1.json`](../schemas/hearth.artifact.promoted.v1.json).
 
-This document specifies the contract every implementer (producer, mirror, consumer)
-MUST respect. It exists to keep the identity, transport, idempotency, and authorization
-semantics of Hearth artifact promotion crisp across the bus, the Hearth producer, and
-the KB ingest binary. Read it before wiring up either side.
+## Identity and bytes
 
-## 1. Identity
+`artifact_id` plus positive `revision` identifies one retained revision.
+`artifact_uri` must equal `hearth-artifact://<artifact_id>/revisions/<revision>`.
+The producer and consumer enforce this cross-field equality; JSON Schema does
+not. `project` plus `slug` identifies the artifact family.
 
-The event identifies **one retained immutable revision** of one logical artifact.
+`sha256` hashes the exact UTF-8 content bytes; `bytes` is their length, limited
+to 2 MiB. Content is retained in Hearth and is never included in this event.
+Hearth's separate request digest includes content and authored metadata and
+excludes optimistic concurrency input. Replaying the same normalized request
+returns its original revision, including after a newer revision exists.
 
-- `artifact_id` (UUID) + `revision` (positive int) is the durable identity.
-- `artifact_uri` is the canonical immutable handle:
-  `hearth-artifact://<lowercase-uuid>/revisions/<positive-int>`.
-- `sha256` + `bytes` + `kind` describe the retained payload.
-- `project` + `slug` describe the artifact family (the retained revision sits inside it).
+To fetch content, resolve the immutable URI through the authenticated Hearth
+API: `/api/project-artifacts/<id>/revisions/<revision>/content`. Verify its
+digest and byte count. Never resolve `provenance.path` on another host. The URI
+is an identifier, not a public link or an access credential.
 
-Identity refers to the **retained exact revision and the producer's authored claims
-about it**, not to a semantic correctness proof. A consumer that resolves the bytes and
-finds the digest does not check; consumers that need meaning-validity must do their own
-model/tooling pass — the bus does not promise that.
+## Durable transport
 
-### 1.1 Cross-field identity (not schema-enforceable)
+The producer creates a completed `nbus::Envelope` once, then stores its exact
+serialized bytes in the same database transaction as the revision and outbox.
+The envelope ID and time are producer-created. Retry delivery reuses those
+bytes and the same ID. Delivery is at least once: a crash after acknowledgement
+but before the database update can cause a duplicate event.
 
-The schema cannot enforce that the UUID inside `artifact_uri` matches `artifact_id`, or
-that the trailing path segment of `artifact_uri` matches `revision`. Both **MUST** be
-validated by the producer (before publish) and the consumer (before persist):
+Bus and KB delivery have independent states and expiring ownership leases.
+Only a matching lease token can record completion. A failed bus delivery must
+not undo durable content storage or claim KB success. Local event logging alone
+does not prove Redis delivery. A publisher acknowledgement does not prove that
+any consumer ingested the event. Inspect each target's receipt separately.
 
-- **Producer**: refuse to publish if `parse_uri(artifact_uri)` does not equal
-  `(artifact_id_lower, revision)`.
-- **Consumer**: same check on ingest. A mismatch is a producer bug; do not silently
-  rewrite.
+The existing CLI's completed-envelope publication path does not guarantee
+initial schema validation. The mirror's validation and dead-letter behavior
+are a separate boundary. Deploy the schema before enabling the producer; test
+actual mirror behavior during rollout. Never infer exactly-once delivery,
+ordering, schema acceptance, or consumer acknowledgement from an exit code alone.
 
-## 2. Request digest vs. content digest
+## KB linkage
 
-`sha256` is the **content digest** of the retained bytes. It is **not** the request
-digest (i.e. it is NOT a hash of the producing request, the producer's working tree, or
-the raw fetched HTML). Conflating the two is a category error:
+`kb-artifact ingest --manifest - --json` accepts the immutable event `data`,
+without its envelope or content. It validates revision identity and creates a
+metadata pointer using KB's normal atomic entry writer. Its receipt includes
+`entry_id`, `uri`, `path`, `created`, `artifact_uri`, and `sha256`.
 
-- Request digest answers "did the producer's request produce the same input?". It is
-  unstable across re-runs.
-- Content digest answers "is the retained revision byte-for-byte identical?". It is
-  stable across retention; this is what consumers use.
+The adapter deduplicates by canonical revision URI and full manifest identity.
+A replay returns the existing entry; conflicting metadata for the same URI is
+an error. A receipt proves the pointer was persisted. It does not prove content
+was fetched, rendered, indexed, or judged correct. Normal KB event emission is
+distinct from successful pointer persistence. No live stream consumer is claimed.
 
-The `provenance` object is where request-side context goes (`commit`, `path`,
-`session_id`, `bead_id`, etc.). It is metadata; it does not appear in `sha256`.
+`kb_refs` contains at most 32 unique `kb://` references. Each has at least two
+nonempty path segments consisting of lowercase letters, digits, `.`, `_`, or
+`-`; `.` and `..` segments are forbidden. Total length is at most 512 bytes.
+No query, fragment, percent encoding, or arbitrary URL is accepted.
 
-## 3. Replay and idempotency
+## Provenance and limits
 
-At-least-once transport is assumed (redis-mirror / XREADGROUP). Consumers MUST be
-idempotent. The event's exact-replay identity is:
+The provenance object permits only the fields declared in the schema. These
+are observational claims, not authorization or signed attestations. Omitted
+`dirty` means unknown; do not infer a clean working tree. Do not include secrets,
+signed URLs, cookies, or bearer tokens in authored fields. The schema rejects
+unknown fields but cannot recognize every secret embedded in allowed strings.
 
-- CloudEvents envelope `id` (broker-assigned)
-- CloudEvents envelope `time` (broker-assigned)
-- `data.created_at` (producer-assigned)
+Title must contain non-whitespace text. Title and summary limits count
+characters; producer and KB additionally cap each provenance string at 2048
+UTF-8 bytes and the immutable manifest/envelope transport at 64 KiB. JSON
+Schema's string length constraint alone does not enforce those byte limits.
 
-A duplicate delivery (same `artifact_id` + `revision` + `created_at`) MUST NOT create a
-second derived record on the consumer side. Recommended approach: key consumer-side
-writes on `(artifact_id, revision)`; treat `created_at` as informational only. If a
-consumer must preserve the broker-assigned envelope identifiers, store them as
-provenance-style fields but never as a key.
-
-The producer is responsible for emitting exactly once per logical promotion. The schema
-cannot prevent double-emission at the producer layer; the consumer's idempotency is the
-defense.
-
-## 4. Transport guarantees (and what they don't get you)
-
-The Hearth producer publishes via the nervous-bus shell SDK or the Rust SDK
-(`sdk/rust/`). That guarantees:
-
-- Schema validation at publish time (validation failure → DLQ, never main stream).
-- The CloudEvents-lite envelope: `specversion`, `id`, `source`, `type`,
-  `datacontenttype`, `time`, `data`.
-
-It does **not** guarantee:
-
-- Ordering between revisions of the same artifact. If a producer publishes revisions
-  N and N+1 out of order, the consumer sees them out of order. Consumers that need
-  strictly monotonic revisions MUST sort on `revision` after dedup.
-- Delivery on a per-artifact partition. `kb_refs` and `project` are hints, not
-  partitioning keys.
-
-## 5. Authorization
-
-There is **no authorization** carried in this event. Concretely, the following MUST
-NOT appear anywhere in `data`:
-
-- Auth tokens (bearer, cookie, API key, signed URL, etc.)
-- Internal service accounts or impersonation claims
-- Tenant identifiers beyond the public `project` slug
-- Signed/presigned URLs that grant bearer access to artifact bytes
-- Cookie jars, session cookies, or `Authorization:` headers
-
-If a producer needs to gate access, gate it at the Hearth API. Consumers that resolve
-bytes do so via the **authenticated Hearth API**, using their own credentials. The bus
-event is identity; the API call is authorization.
-
-Trace metadata (`session_id`, `bead_id`, `run_id`, `task_id`, `dispatch_id`, `agent`,
-`commit`, `repository`, `branch`, `path`) is correlation context — useful for
-debugging, but it is NOT an authorization signal and MUST NOT be treated as one. A
-trace id from a producer that is no longer trusted is still just a trace id.
-
-## 6. What this event does NOT carry
-
-- **Fetched content, raw HTML, or raw response bodies.** The bus carries metadata; the
-  bytes live behind the Hearth API. Payload cap on `bytes` is 2 MiB for the size
-  *declaration*, not for inline content.
-- **Authorization** of any kind (see §5).
-- **Provenance-derived signed attestations** (e.g. Sigstore, SLSA, in-toto). The
-  `provenance` object is observational metadata for correlation, not a signed chain of
-  custody.
-- **Semantic correctness proof.** Identity refers to the retained revision and the
-  producer's authored claims, not to whether the content is true, accurate, or safe.
-
-## 7. Resolution
-
-To resolve a referenced revision to bytes, a consumer MUST:
-
-1. Parse `artifact_uri` to `(artifact_id, revision)`.
-2. Call the authenticated Hearth API to fetch the bytes for that `(artifact_id,
-   revision)` pair. Authentication uses the consumer's own credentials, not anything
-   from the bus event.
-3. Verify that the bytes match `sha256` and `bytes` from the event. Mismatch is a
-   producer/retention inconsistency; surface it and refuse the bytes.
-
-Consumers MUST NOT:
-
-- Dereference the producer's local source path (anything in `provenance.path`). The
-  path is observational; the producer's filesystem layout is not part of the contract.
-- Treat `provenance.commit` / `provenance.repository` / `provenance.branch` as
-  resolvable locations. They are recorded for human correlation, not for
-  reproducible byte retrieval. Bytes come from the Hearth API.
-
-## 8. `provenance.dirty`
-
-`provenance.dirty = true` means the working tree was not clean at the moment of
-promotion. Consumers SHOULD surface this (e.g. as a flag in derived records) — it does
-not invalidate the event, but it does change how a careful operator reasons about the
-revision's reproducibility. `dirty = false` is the expected default for CI-driven
-promotion; manual promotion may legitimately set `true`.
-
-## 9. Migration from a prior version
-
-There is no prior version. This is v1 of the channel; no migration window applies. If a
-breaking change is needed in the future, the publisher will bump to
-`hearth.artifact.promoted.v2` and a new schema file will land alongside this one
-(deprecation-in-place per the project's major-version policy).
-
-## 10. KB ingest specifically
-
-The KB consumer (under development) MUST:
-
-- Reject events whose `schema_version != 1`.
-- Validate cross-field identity per §1.1 before doing anything else.
-- Key writes on `(artifact_id, revision)`; tolerate redelivery per §3.
-- Resolve bytes via the authenticated Hearth API per §7; never via `provenance.path`.
-- Strip any value that looks like an auth token from any incoming payload before
-  persistence — defense in depth, even though the producer contract forbids them.
-
-KB is NOT yet live consuming this channel. Do not assume that any event observed on the
-bus has been ingested; verify against KB's own state if it matters.
+This is the first, unpublished schema candidate. Future breaking changes after
+publication require a new major-version file and an explicit migration window.

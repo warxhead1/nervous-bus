@@ -1,28 +1,4 @@
-"""Contract tests for ``hearth.artifact.promoted.v1``.
-
-The Hearth project-artifacts transactional outbox (Hearth repo) emits one of these
-per durably-promoted immutable revision. The KB kb-artifact ingestion adapter is
-under development and not yet live/verified; these fixtures validate the schema
-contract alone and document the producer/consumer invariants called out in
-``docs/HEARTH-ARTIFACTS.md``.
-
-What this module proves:
-
-  * The schema is a valid Draft 2020-12 metaschema.
-  * A canonical, complete event matching the producer/KB contract validates.
-  * Required field omissions, malformed identity, empty titles, oversized bytes,
-    arbitrary ``kind`` values, unknown metadata, credential fields, traversal
-    ``kb_refs``, and ``artifact_uri`` ↔ ``(artifact_id, revision)`` mismatches are
-    rejected. Cross-field identity cannot be enforced by the schema, so a couple
-    of these tests live as explicit invariants on the validator pipeline rather
-    than as schema rejections.
-  * The producer-only invariants stated in the docs (``provenance.dirty`` defaults,
-    optional provenance fields) hold.
-
-We use ``jsonschema.Draft202012Validator`` with the installed ``FormatChecker`` — no
-extra dependencies. Validation errors are matched loosely so the tests stay focused
-on shape rather than exact error message text.
-"""
+"""Unpublished Hearth artifact schema contract and identity fixtures."""
 
 from __future__ import annotations
 
@@ -35,36 +11,23 @@ import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
-
 REPO = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = REPO / "schemas" / "hearth.artifact.promoted.v1.json"
-
-
-# ── helpers ────────────────────────────────────────────────────────────────
 
 
 def _load_schema() -> dict:
     return json.loads(SCHEMA_PATH.read_text())
 
-
 @pytest.fixture(scope="module")
 def schema() -> dict:
     return _load_schema()
-
 
 @pytest.fixture(scope="module")
 def validator(schema: dict) -> Draft202012Validator:
     return Draft202012Validator(schema, format_checker=FormatChecker())
 
-
 def _valid_event() -> dict:
-    """A canonical, complete event matching the producer + KB contract.
-
-    ``artifact_id`` is a lowercase UUID, ``artifact_uri`` mirrors it, ``revision`` is
-    a positive integer, ``sha256`` is lowercase 64-hex, ``bytes`` is inside the 2 MiB
-    cap, ``kind`` is one of the closed enum values, ``kb_refs`` are safe kb:// URIs,
-    and ``provenance`` is fully populated with the documented optional fields.
-    """
+    """Complete producer metadata fixture."""
     return {
         "schema_version": 1,
         "artifact_id": "9e0c4be4-96f8-47d4-a9d9-997b24931a52",
@@ -98,16 +61,11 @@ def _valid_event() -> dict:
     }
 
 
-# ── metaschema + happy path ────────────────────────────────────────────────
-
-
 def test_schema_is_valid_draft_2020_12(schema: dict) -> None:
     Draft202012Validator.check_schema(schema)
 
-
 def test_canonical_event_validates(validator: Draft202012Validator) -> None:
     validator.validate(_valid_event())
-
 
 def test_minimal_provenance_with_only_dirty_flag_validates(
     validator: Draft202012Validator,
@@ -117,27 +75,21 @@ def test_minimal_provenance_with_only_dirty_flag_validates(
     event["provenance"] = {"dirty": True}
     validator.validate(event)
 
-
 def test_empty_provenance_object_validates(validator: Draft202012Validator) -> None:
     event = _valid_event()
     event["provenance"] = {}
     validator.validate(event)
-
 
 def test_empty_kb_refs_array_validates(validator: Draft202012Validator) -> None:
     event = _valid_event()
     event["kb_refs"] = []
     validator.validate(event)
 
-
 def test_each_closed_kind_validates(validator: Draft202012Validator) -> None:
     for kind in ("html", "markdown", "json", "text"):
         event = _valid_event()
         event["kind"] = kind
         validator.validate(event)
-
-
-# ── required-field omissions ───────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -166,9 +118,6 @@ def test_required_field_omission_rejected(
     del event[field]
     with pytest.raises(ValidationError):
         validator.validate(event)
-
-
-# ── identity / format / length guards ──────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -230,18 +179,12 @@ def test_identity_format_length_guards(
         validator.validate(event)
 
 
-# ── arbitrary kind rejection ───────────────────────────────────────────────
-
-
 @pytest.mark.parametrize("kind", ["pdf", "binary", "xml", "image/png", "MARKDOWN", "", "md"])
 def test_arbitrary_kind_rejected(validator: Draft202012Validator, kind: str) -> None:
     event = _valid_event()
     event["kind"] = kind
     with pytest.raises(ValidationError):
         validator.validate(event)
-
-
-# ── extra-property rejection (data is sealed) ──────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -268,7 +211,6 @@ def test_extra_property_on_data_rejected(
     with pytest.raises(ValidationError):
         validator.validate(event)
 
-
 def test_extra_property_on_provenance_rejected(
     validator: Draft202012Validator,
 ) -> None:
@@ -278,9 +220,6 @@ def test_extra_property_on_provenance_rejected(
     event["provenance"]["fetched_url"] = "https://example.com/private"
     with pytest.raises(ValidationError):
         validator.validate(event)
-
-
-# ── provenance value-shape guards ──────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -306,7 +245,6 @@ def test_provenance_string_fields_have_2048_byte_cap(
     with pytest.raises(ValidationError):
         validator.validate(event)
 
-
 def test_provenance_dirty_must_be_boolean(
     validator: Draft202012Validator,
 ) -> None:
@@ -314,9 +252,6 @@ def test_provenance_dirty_must_be_boolean(
     event["provenance"]["dirty"] = "true"
     with pytest.raises(ValidationError):
         validator.validate(event)
-
-
-# ── kb_refs safety ─────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -354,13 +289,11 @@ def test_traversal_or_unsafe_kb_ref_rejected(
     with pytest.raises(ValidationError):
         validator.validate(event)
 
-
 def test_kb_refs_must_be_unique(validator: Draft202012Validator) -> None:
     event = _valid_event()
     event["kb_refs"] = ["kb://hearth/x", "kb://hearth/x"]
     with pytest.raises(ValidationError):
         validator.validate(event)
-
 
 def test_kb_refs_capped_at_32(validator: Draft202012Validator) -> None:
     event = _valid_event()
@@ -368,14 +301,10 @@ def test_kb_refs_capped_at_32(validator: Draft202012Validator) -> None:
     with pytest.raises(ValidationError):
         validator.validate(event)
 
-
 def test_kb_refs_at_32_validates(validator: Draft202012Validator) -> None:
     event = _valid_event()
     event["kb_refs"] = [f"kb://hearth/entry-{i}" for i in range(32)]
     validator.validate(event)
-
-
-# ── credential-field rejection across the whole payload ────────────────────
 
 
 @pytest.mark.parametrize(
@@ -401,9 +330,6 @@ def test_credential_or_content_field_rejected_no_matter_the_name(
     event[field] = value
     with pytest.raises(ValidationError):
         validator.validate(event)
-
-
-# ── cross-field identity invariants (documented in HEARTH-ARTIFACTS.md) ────
 
 
 def _uri_invariants_hold(event: dict) -> tuple[bool, str]:
@@ -438,7 +364,6 @@ def _uri_invariants_hold(event: dict) -> tuple[bool, str]:
         )
     return True, ""
 
-
 def test_schema_does_not_enforce_cross_field_uri_identity(
     validator: Draft202012Validator,
 ) -> None:
@@ -462,7 +387,6 @@ def test_schema_does_not_enforce_cross_field_uri_identity(
     )
     assert "does not match artifact_id" in msg
 
-
 def test_schema_does_not_enforce_cross_field_uri_revision(
     validator: Draft202012Validator,
 ) -> None:
@@ -478,14 +402,10 @@ def test_schema_does_not_enforce_cross_field_uri_revision(
     assert not ok
     assert "does not match revision" in msg
 
-
 def test_uri_invariants_hold_for_canonical_event() -> None:
     event = _valid_event()
     ok, msg = _uri_invariants_hold(event)
     assert ok, msg
-
-
-# ── additionalProperties false on data is enforced even via mutation ───────
 
 
 def test_renaming_required_field_to_extra_key_still_rejected(
@@ -501,9 +421,6 @@ def test_renaming_required_field_to_extra_key_still_rejected(
         validator.validate(event)
 
 
-# ── provenance defaults and absence ────────────────────────────────────────
-
-
 @pytest.mark.parametrize("absent_field", ["repository", "commit", "branch", "path"])
 def test_provenance_string_field_absence_is_valid(
     validator: Draft202012Validator, absent_field: str
@@ -513,28 +430,20 @@ def test_provenance_string_field_absence_is_valid(
     validator.validate(event)
 
 
-# ── kinds we explicitly support ────────────────────────────────────────────
-
-
 def test_kind_html_validates(validator: Draft202012Validator) -> None:
     event = _valid_event()
     event["kind"] = "html"
     validator.validate(event)
-
 
 def test_kind_json_validates(validator: Draft202012Validator) -> None:
     event = _valid_event()
     event["kind"] = "json"
     validator.validate(event)
 
-
 def test_kind_text_validates(validator: Draft202012Validator) -> None:
     event = _valid_event()
     event["kind"] = "text"
     validator.validate(event)
-
-
-# ── summary length boundary ────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("length", [0, 4000])
@@ -545,15 +454,11 @@ def test_summary_boundary_lengths_validate(
     event["summary"] = "x" * length
     validator.validate(event)
 
-
 def test_summary_at_4001_rejected(validator: Draft202012Validator) -> None:
     event = _valid_event()
     event["summary"] = "x" * 4001
     with pytest.raises(ValidationError):
         validator.validate(event)
-
-
-# ── bytes boundary ─────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("size", [1, 2097152])
@@ -563,9 +468,6 @@ def test_bytes_boundary_validates(
     event = _valid_event()
     event["bytes"] = size
     validator.validate(event)
-
-
-# ── duplicate-key check (kb_refs) ──────────────────────────────────────────
 
 
 def test_kb_refs_with_safe_prefix_segments_validates(
@@ -580,3 +482,22 @@ def test_kb_refs_with_safe_prefix_segments_validates(
         "kb://nervous-bus/specs/hearth-artifacts",
     ]
     validator.validate(event)
+
+@pytest.mark.parametrize("reference", ["kb://hearth", "kb://./x", "kb://hearth/.", "kb://../x"])
+def test_kb_ref_requires_safe_project_and_path(validator, reference):
+    event = _valid_event()
+    event["kb_refs"] = [reference]
+    with pytest.raises(ValidationError):
+        validator.validate(event)
+
+@pytest.mark.parametrize("reference", ["kb://hearth/_draft", "kb://hearth/" + "a" * 200, "kb://hearth/.entry"])
+def test_kb_ref_matches_producer_grammar(validator, reference):
+    event = _valid_event()
+    event["kb_refs"] = [reference]
+    validator.validate(event)
+
+def test_blank_title_rejected(validator):
+    event = _valid_event()
+    event["title"] = " \t\n"
+    with pytest.raises(ValidationError):
+        validator.validate(event)
