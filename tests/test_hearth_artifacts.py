@@ -257,18 +257,13 @@ def test_provenance_dirty_must_be_boolean(
 @pytest.mark.parametrize(
     "kb_ref",
     [
-        # traversal segments
         "kb://hearth/../etc/passwd",
         "kb://hearth/foo/../../bar",
-        # leading slash inside the path
         "kb://hearth//foo",
-        # uppercase or invalid characters
         "kb://Hearth/foo",
         "kb://hearth/Foo",
-        # empty segments
         "kb://hearth/",
         "kb:///",
-        # query / fragment
         "kb://hearth/foo?token=secret",
         "kb://hearth/foo#frag",
         # percent-encoded slash (deceptive traversal)
@@ -277,7 +272,6 @@ def test_provenance_dirty_must_be_boolean(
         "https://hearth.example/article",
         "file:///etc/passwd",
         "javascript:alert(1)",
-        # too long
         "kb://hearth/" + ("a" * 600),
     ],
 )
