@@ -137,7 +137,7 @@ _hearth-loom PR pipeline, bead lifecycle, loom executions_
 | `hearth-loom.bench.completed.v1` | hearth-loom.bench.completed v1 |
 | `hearth-loom.pr.merged.v1` | hearth-loom.pr.merged v1 |
 | `hearth-loom.pr.opened.v1` | hearth-loom.pr.opened v1 |
-| `hearth.artifact.promoted.v1` | 🟢 **active-producer-pending-consumer** — hearth.artifact.promoted v1 |
+| `hearth.artifact.promoted.v1` | 🔇 **unconsumed** — hearth.artifact.promoted v1 |
 | `hearth.command.design_request.v1` | hearth.command.design_request v1 |
 | `hearth.design.generated.v1` | hearth.design.generated v1 |
 | `hearth.drift.detected.v1` | hearth.drift.detected v1 |
