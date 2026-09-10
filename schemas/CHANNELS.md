@@ -4,13 +4,13 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**366 channels** across 5 clusters.
+**367 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
 | [Session Lifecycle](#session-lifecycle) | 21 | agent session lifecycle, heartbeats, thread/run start-stop |
 | [Autobench](#autobench) | 54 | autobench.* evolution loop (case/judge/improver/budget/...) |
-| [Hearth](#hearth) | 52 | hearth-loom PR pipeline, bead lifecycle, loom executions |
+| [Hearth](#hearth) | 53 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
 | [Cross-cutting](#cross-cutting) | 197 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
@@ -137,6 +137,7 @@ _hearth-loom PR pipeline, bead lifecycle, loom executions_
 | `hearth-loom.bench.completed.v1` | hearth-loom.bench.completed v1 |
 | `hearth-loom.pr.merged.v1` | hearth-loom.pr.merged v1 |
 | `hearth-loom.pr.opened.v1` | hearth-loom.pr.opened v1 |
+| `hearth.artifact.promoted.v1` | 🟢 **active-producer-pending-consumer** — hearth.artifact.promoted v1 |
 | `hearth.command.design_request.v1` | hearth.command.design_request v1 |
 | `hearth.design.generated.v1` | hearth.design.generated v1 |
 | `hearth.drift.detected.v1` | hearth.drift.detected v1 |
