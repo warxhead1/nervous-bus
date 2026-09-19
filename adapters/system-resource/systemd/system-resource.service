@@ -5,14 +5,18 @@ Description=nervous-bus bounded Linux resource history collector
 Type=oneshot
 WorkingDirectory=%h/.cache/nervous-bus
 ExecStart=/usr/bin/python3 %h/projects/nervous-bus/adapters/system-resource/watch.py
-Environment=NERVOUS_SYSTEM_RESOURCE_CGROUPS=user.slice
+Environment=NERVOUS_SOURCE=/system-resource
+Environment=NERVOUS_STRICT_VALIDATION=1
+Environment=NERVOUS_NO_ZELLIJ=1
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=read-only
-ReadWritePaths=%h/.cache/nervous-bus/system-resource
+ReadWritePaths=%h/.cache/nervous-bus
 CPUQuota=10%
-MemoryMax=96M
-IOWeight=100
+MemoryMax=128M
+IOWeight=20
+TimeoutStartSec=30s
+UMask=0077
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nervous-system-resource

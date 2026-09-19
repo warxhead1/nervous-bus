@@ -1,70 +1,188 @@
-import argparse
+import copy
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).parent))
+import jsonschema
+
 import collector
-from store import Store
 import watch
+from history import diagnose, report
+from intervals import intervalize
+from store import Store
 
 
-class CollectorTests(unittest.TestCase):
-    def test_psi_and_io_preserve_missing(self):
-        self.assertEqual(collector.psi("some avg10=1.00 avg60=2.00 avg300=3.00 total=4\n")["some"]["total_usec"], 4)
-        self.assertEqual(collector.io_totals("8:0 rbytes=3 wbytes=5 rios=1\n"), (3, 5))
-        self.assertEqual(collector.io_totals(None), (None, None))
-        self.assertEqual(collector.meminfo("MemTotal: 2 kB\nMemAvailable: 1 kB\n")["host_memory_total_bytes"], 2048)
-        self.assertEqual(collector.diskstats("8 0 sda 1 0 4 0 2 0 6 0\n")["host_disk_write_sectors"], 6)
-
-    def test_identity_and_counter_fences(self):
-        now = {"state": "ok", "boot_id": "a", "cgroup_id": "1", "cpu_usage_usec": 20}
-        old = {"state": "ok", "boot_id": "a", "cgroup_id": "1", "cpu_usage_usec": 10}
-        self.assertEqual(collector.intervalize(now, old, 2)["cpu_usage_usec_per_s"], 5)
-        self.assertEqual(collector.intervalize(now, {**old, "cgroup_id": "2"}, 2)["interval_state"], "reset")
-        self.assertEqual(collector.intervalize({**now, "cpu_usage_usec": 1}, old, 2)["interval_state"], "reset")
-        self.assertEqual(collector.intervalize({**now, "boot_id": None}, old, 2)["interval_state"], "unavailable")
-
-    def test_partial_cgroup_is_unavailable(self):
-        with tempfile.TemporaryDirectory() as td:
-            path = Path(td) / "user.slice"; path.mkdir()
-            (path / "cpu.stat").write_text("usage_usec 1\n")
-            (path / "cpu.max").write_text("max 100000\n")
-            (path / "memory.current").write_text("2\n")
-            self.assertEqual(collector.cgroup_sample(Path(td), "user.slice")["state"], "unavailable")
+def entity(counter=0, pressure=0, name="/work", state="ok"):
+    return {"entity": name, "kind": "host" if name == "@host" else "cgroup",
+            "identity": "inode-1", "device_identity": "a" * 64, "state": state,
+            "reason": None if state == "ok" else "missing", "counters": {
+                "cpu_usage_usec": counter, "io_read_bytes": counter * 2,
+                "io_write_bytes": counter, "memory_high_events": 0},
+            "gauges": {"memory_current_bytes": 1024}, "limits": {}, "devices": {},
+            "pressure": {kind: {"some": {"avg10": pressure, "avg60": 0,
+                                       "avg300": 0, "total_usec": 0}} for kind in ("cpu", "memory", "io")}}
 
 
-class StoreTests(unittest.TestCase):
-    def test_retention_rollup_query_and_cooldown(self):
-        with tempfile.TemporaryDirectory() as td:
-            store = Store(Path(td) / "x.sqlite3")
-            base = {"ts": 600.0, "host": "h", "boot_id": "b", "cgroup": "user.slice", "cgroup_id": "1", "state": "ok", "interval_state": "ok", "elapsed_s": 60, "cpu_usage_usec": 1, "memory_current_bytes": 8, "pressure_json": '{"memory":{"some":{"avg10":12}}}', "cgroup_pressure_json": '{"memory":{"some":{"avg10":12}}}', "events_json": "{}", "collector_version": "v", "collector_digest": "d", "duration_ms": 1, "delivery": "pending"}
-            store.insert(base); store.rollup(900); store.commit()
-            self.assertTrue(store.sustained_pressure("h", "user.slice", 1)); self.assertTrue(store.finding("x", 700, {}, 3600)); self.assertFalse(store.finding("x", 701, {}, 3600))
-            result = store.report(0, 999, now=700)
-            self.assertEqual(result["query_limit"], 500); self.assertEqual(len(result["pressure_over_time"]), 1)
-            other_boot = {**base, "ts": 601.0, "boot_id": "new"}
-            store.insert(other_boot); store.rollup(900); store.commit()
-            self.assertEqual(len(store.report(0, now=900)["pressure_over_time"]), 2)
-            store.retain(90000, raw_hours=1, rollup_days=30)
-            self.assertEqual(store.report(0, now=90000)["health"]["sample_count"], 0)
+class ResourceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name)
+        self.db_path = self.path / "history.sqlite3"
+        self.config = {"selectors": ["work"], "raw_hours": 24, "rollup_days": 30,
+                       "cooldown_s": 3600, "expected_interval_s": 60}
 
+    def store(self):
+        result = Store(self.db_path)
+        self.addCleanup(result.close)
+        return result
 
-class WatchTests(unittest.TestCase):
-    def test_sample_is_schema_valid_and_finding_requires_three(self):
-        with tempfile.TemporaryDirectory() as td:
-            args = argparse.Namespace(db=str(Path(td) / "x.sqlite3"), cgroups="user.slice", max_cgroups=8, raw_hours=24, rollup_days=30, cooldown_s=3600, dry_run=True)
-            def measure(**_):
-                return {"boot_id": "b", "host": {}, "pressure": {"memory": {"some": {"avg10": 11}}}, "cgroups": [{"cgroup": "user.slice", "cgroup_id": "1", "state": "ok", "cpu_usage_usec": 1, "cpu_throttled_usec": 0, "cpu_period_usec": 100000, "memory_current_bytes": 2, "io_read_bytes": 0, "io_write_bytes": 0, "memory_events": {}, "pressure": {}}]}
-            events = []
-            for now in (1000, 1060, 1120): events = watch.sample(args, now, measure)["events"]
-            finding = [e for e in events if "finding" in e][0]
-            self.assertTrue(finding["finding"].endswith(":user.slice"))
-            import jsonschema
-            schema = json.loads((Path(__file__).parents[2] / "schemas/bus.system.resource.sample.v1.json").read_text())
-            jsonschema.validate({"kind": "sample", **events[0]}, schema)
+    def sample(self, t, rows=None, boot="boot-1", mono=None, publisher=None):
+        data = {"boot_id": boot, "entities": rows or [entity(t)], "warnings": []}
+        return watch.sample(self.db_path, self.config, True, measure=lambda **_: copy.deepcopy(data),
+                            now=t, mono=t if mono is None else mono,
+                            publisher=publisher or (lambda *_: "dry_run"))
+
+    def test_physical_disks_exclude_layers_and_partitions(self):
+        fields = "1 0 2 3 4 0 5 6 0 7 8"
+        rows = collector.disks("\n".join(f"{dev} {name} {fields}" for dev, name in
+                                        (("259 0", "nvme0n1"), ("259 1", "nvme0n1p1"),
+                                         ("253 0", "dm-0"), ("8 0", "sda"), ("8 1", "sda1"))))
+        self.assertEqual(set(rows), {"259:0", "8:0"})
+        self.assertEqual(rows["259:0"]["read_bytes"], 1024)
+        self.assertEqual(rows["8:0"]["write_bytes"], 2560)
+
+    def test_cgroup_io_missing_is_not_idle(self):
+        physical = {"259:0": {"name": "nvme0n1"}}
+        self.assertEqual(collector.cgroup_io(None, physical)[:2], (None, None))
+        self.assertEqual(collector.cgroup_io("", physical)[:2], (0, 0))
+        self.assertEqual(collector.cgroup_io("253:0 rbytes=12 wbytes=24", physical)[:2], (None, None))
+        raw = "259:0 rbytes=12 wbytes=24\n253:0 rbytes=12 wbytes=24"
+        self.assertEqual(collector.cgroup_io(raw, physical)[:2], (12, 24))
+        self.assertEqual(collector.cgroup_io("259:0 rbytes=bad wbytes=24", physical)[:2], (None, None))
+
+    def test_kernel_zero_unlimited_and_missing_remain_distinct(self):
+        self.assertEqual(collector.limit("max"), {"state": "unlimited", "value": None})
+        self.assertEqual(collector.limit("0"), {"state": "limited", "value": 0})
+        self.assertEqual(collector.limit(None)["state"], "unavailable")
+        self.assertIsNone(collector.number("nan"))
+        self.assertEqual(collector.number("9007199254740993"), 9007199254740993)
+
+    def test_absent_kernel_and_cgroup_still_produce_valid_event(self):
+        data = collector.collect(self.path / "proc", self.path / "cg", ["missing"])
+        event, receipt = watch.sample(self.db_path, self.config, True, measure=lambda **_: data)
+        self.assertEqual(receipt["state"], "partial")
+        self.assertEqual(event["entities"][1]["pressure"], {"cpu": None, "memory": None, "io": None})
+        self.validate(event)
+
+    def test_selection_is_bounded_and_recursive_patterns_rejected(self):
+        for i in range(20):
+            (self.path / "cg" / f"unit{i}").mkdir(parents=True)
+        data = collector.collect(self.path / "proc", self.path / "cg", ["unit*"])
+        self.assertEqual(len(data["entities"]), 9)
+        self.assertIn("cgroup_selection_truncated", data["warnings"])
+        for selector in ("../escape", "**/unit", "*/unit"):
+            with self.assertRaises(ValueError):
+                collector.collect(self.path, self.path, [selector])
+
+    def test_rates_use_interval_not_lifetime(self):
+        self.sample(1000, [entity(1_000_000)])
+        event, _ = self.sample(1060, [entity(121_000_000)])
+        value = event["entities"][0]["interval"]
+        self.assertEqual(value["deltas"]["cpu_usage_usec"], 120_000_000)
+        self.assertEqual(value["rates"]["cpu_usage_usec_per_s"], 2_000_000)
+        self.validate(event)
+
+    def test_reboot_inode_device_change_and_counter_decrease_reset(self):
+        old = {"entity_data": entity(100), "boot_id": "b", "ts": 1000, "monotonic_s": 1000}
+        cases = [(entity(99), "b"), (entity(101), "new")]
+        changed = entity(101); changed["identity"] = "inode-2"; cases.append((changed, "b"))
+        changed = entity(101); changed["device_identity"] = "b" * 64; cases.append((changed, "b"))
+        for current, boot in cases:
+            result = intervalize(current, old, boot, 1060, 1060)
+            self.assertEqual(result["state"], "reset")
+            self.assertEqual(result["rates"], {})
+
+    def test_clock_and_collection_gaps_do_not_emit_rates(self):
+        old = {"entity_data": entity(100), "boot_id": "b", "ts": 1000, "monotonic_s": 1000}
+        for mono, wall in ((999, 1060), (1300, 1300), (1060, 10060)):
+            self.assertEqual(intervalize(entity(200), old, "b", mono, wall)["state"], "unavailable")
+
+    def test_rollup_restart_retention_query_and_late_data_are_idempotent(self):
+        for t in (1000, 1060, 1120, 1180, 1240):
+            self.sample(t)
+        store = self.store()
+        store.rollup(1500); store.commit()
+        count = store.db.execute("SELECT SUM(sample_count) FROM rollups").fetchone()[0]
+        self.assertEqual(count, 5)
+        store.rollup(1500); store.commit()
+        self.assertEqual(store.db.execute("SELECT SUM(sample_count) FROM rollups").fetchone()[0], 5)
+        store.retain(5000, raw_hours=1); store.commit()
+        self.assertEqual(store.db.execute("SELECT COUNT(*) FROM samples").fetchone()[0], 0)
+        result = report(store, 900, now=5000)
+        row = result["top_consumers"]["cpu"][0]
+        self.assertEqual(row["sample_count"], 5)
+        self.assertEqual(row["cpu_usec"], 240)
+        self.sample(1100, [entity(2000)])
+        store.rollup(5000); store.commit()
+        self.assertEqual(store.db.execute("SELECT SUM(sample_count) FROM rollups").fetchone()[0], 6)
+
+    def test_raw_and_rollups_do_not_double_count(self):
+        for t in (1000, 1060, 1120, 1240, 1300):
+            self.sample(t)
+        result = report(self.store(), 900, now=1350)
+        self.assertEqual(result["top_consumers"]["cpu"][0]["sample_count"], 5)
+
+    def test_caps_and_empty_history_health(self):
+        store = self.store()
+        self.assertTrue(report(store, 0, now=1000)["health"]["stale"])
+        for t in (1000, 1060, 1120):
+            self.sample(t)
+        store.retain(1200, raw_cap=2, rollup_cap=1); store.commit()
+        self.assertEqual(store.db.execute("SELECT COUNT(*) FROM samples").fetchone()[0], 2)
+        self.assertEqual(report(store, 0, limit=9999, now=1200)["query_limit"], 500)
+        self.assertEqual(report(store, 0, now=1200)["health"]["raw_cap_evictions"], 1)
+
+    def test_pressure_requires_distinct_contiguous_observations_and_cooldown(self):
+        self.sample(1000, [entity(1, 25)])
+        self.assertEqual(self.sample(1001, [entity(2, 25)])[0]["findings"], [])
+        self.assertEqual(self.sample(1060, [entity(3, 25)])[0]["findings"], [])
+        self.assertEqual(self.sample(1120, [entity(4, 25)])[0]["findings"], [])
+        event, _ = self.sample(1180, [entity(5, 25)])
+        self.assertEqual({f["resource"] for f in event["findings"]}, {"memory", "io"})
+        self.validate(event)
+        self.assertEqual(self.sample(1240, [entity(6, 25)])[0]["findings"], [])
+
+    def test_missing_sample_and_long_gap_break_pressure_sequence(self):
+        for t, state in ((1000, "ok"), (1060, "partial"), (1120, "ok"), (2000, "ok"), (2060, "ok")):
+            self.assertEqual(self.sample(t, [entity(t, 25, state=state)])[0]["findings"], [])
+
+    def test_host_pressure_does_not_falsely_attribute_to_cgroup(self):
+        for t in (1000, 1060, 1120):
+            event, _ = self.sample(t, [entity(t, 25, "@host"), entity(t, 0)])
+        self.assertEqual({f["entity"] for f in event["findings"]}, {"@host"})
+
+    def test_publisher_failure_preserves_local_rows_and_honest_receipt(self):
+        event, receipt = self.sample(1000, publisher=lambda *_: "failed")
+        store = self.store()
+        self.assertEqual(store.db.execute("SELECT delivery FROM samples").fetchone()[0], "failed")
+        self.assertEqual(receipt["delivery"], "failed")
+        self.assertEqual(store.previous(event["host"], "/work")["collector"], event["collector"])
+        with patch.dict(watch.os.environ, {"NERVOUS_BIN": str(self.path / "absent")}):
+            self.assertEqual(watch.publish(event), "unavailable")
+
+    def validate(self, value):
+        schema = json.loads((watch.ROOT / "schemas" / (watch.CHANNEL + ".json")).read_text())
+        jsonschema.Draft202012Validator(schema).validate(value)
+
+    def test_contract_rejects_untyped_measurement_and_incomplete_finding(self):
+        event, _ = self.sample(1000)
+        invalid = copy.deepcopy(event); invalid["entities"][0]["gauges"]["memory_current_bytes"] = "unknown"
+        with self.assertRaises(jsonschema.ValidationError): self.validate(invalid)
+        invalid = copy.deepcopy(event); invalid["findings"] = [{"key": "a" * 32}]
+        with self.assertRaises(jsonschema.ValidationError): self.validate(invalid)
 
 
 if __name__ == "__main__":

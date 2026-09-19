@@ -4,7 +4,7 @@ Description=Run bounded nervous-bus resource collection every minute
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=60s
-AccuracySec=15s
+AccuracySec=5s
 Persistent=true
 
 [Install]
