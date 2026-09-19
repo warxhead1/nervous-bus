@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.system.resource.sample.v1.json",
+  "title": "bus.system.resource.sample v1",
+  "description": "Bounded Linux cgroup-v2 and PSI measurements, plus deduplicated sustained-pressure findings. Values are measurements, not causal attribution; unavailable and reset states are explicit.",
+  "type": "object",
+  "required": ["kind", "sampled_at", "pressure"],
+  "properties": {
+    "kind": {"type": "string", "enum": ["sample", "finding"]},
+    "host": {"type": "string", "minLength": 1},
+    "boot_id": {"type": ["string", "null"]},
+    "sampled_at": {"type": "string", "format": "date-time"},
+    "measurement_window_s": {"type": ["number", "null"], "minimum": 0},
+    "collector_version": {"type": "string"},
+    "collector_digest": {"type": "string"},
+    "cgroup": {"type": "object"},
+    "host_resources": {"type": "object"},
+    "interval": {"type": "object"},
+    "pressure": {"type": "object"},
+    "health": {"type": "object"},
+    "finding": {"type": "string"},
+    "cooldown_s": {"type": "integer", "minimum": 0}
+  },
+  "allOf": [
+    {"if": {"properties": {"kind": {"const": "sample"}}}, "then": {"required": ["host", "boot_id", "collector_version", "collector_digest", "cgroup", "interval", "health"]}},
+    {"if": {"properties": {"kind": {"const": "finding"}}}, "then": {"required": ["finding", "cooldown_s"]}}
+  ]
+}

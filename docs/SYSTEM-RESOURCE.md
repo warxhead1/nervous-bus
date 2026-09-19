@@ -1,0 +1,11 @@
+# System resource history
+
+`adapters/system-resource/watch.py` is a bounded Linux cgroup-v2 and PSI collector. It reads only `/proc/pressure/{cpu,memory,io}`, boot ID, host `/proc/meminfo` and `/proc/diskstats`, and a configured list of at most eight cgroups' `cpu.stat`, `cpu.max`, per-cgroup PSI, memory files/events, and `io.stat`; it never enumerates processes, command lines, environments, transcripts, directories, or providers.
+
+The default cgroup is `user.slice`; set `NERVOUS_SYSTEM_RESOURCE_CGROUPS` to a comma-separated, deliberately selected list. Every sample includes boot and cgroup inode identities. Interval rates are emitted only across matching identities; first observations, missing files, counter decreases, and recreated cgroups are explicitly `unavailable` or `reset`, never silently treated as zero or a lifetime percentage.
+
+History lives at `~/.cache/nervous-bus/system-resource/history.sqlite3`: typed raw samples retain 24 hours by default and five-minute rollups retain 30 days. Rollups are rebuilt only for completed windows after restart and include boot ID, so samples across a reboot never merge. Query a bounded JSON report with `python3 watch.py --report --since <unix-seconds> --limit 120`; the maximum query/row bound is 500 and query windows clamp to 30 days. It aggregates top observed consumers over the requested window and reports pressure rollups, sample freshness, failed samples, and stale/empty history rather than asserting runtime health from absent data.
+
+Each collection attempts a compact `bus.system.resource.sample.v1` publication only after the local SQLite write. Delivery is recorded independently as `bus_delivered`, `bus_unavailable_file_retained`, `failed`, or `dry_run`, so bus unavailability does not lose local history. A memory PSI `some.avg10 >= 10` finding needs three consecutive persisted samples and is deduplicated by a one-hour default cooldown; its evidence and delivery receipt stay local. Findings never restart services, inspect workloads, or alter cgroup limits.
+
+The included systemd unit and timer are templates only: they are not installed or started by this change. The template applies a small collector footprint (`CPUQuota=10%`, `MemoryMax=96M`, `IOWeight=100`) while its own configuration remains read-only except for the adapter cache.
