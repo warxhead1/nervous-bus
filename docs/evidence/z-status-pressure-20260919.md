@@ -1,0 +1,3 @@
+The installed z-status-daemon pressure publisher was the confirmed flat Redis event producer. Its former XADD omitted `_raw`, so envelope-based consumers could not process the entry. The versioned source now includes the canonical CloudEvents envelope and matching routing fields. A transition is committed only after successful XADD; redis-cli -e and a two-second process deadline make failed delivery retryable.
+
+Validation: bash syntax and two isolated publisher fixtures passed. Fixtures verify exact envelope/data/ID consistency, one publication per successful transition, and retry after a failed acknowledgement. They never publish into the production stream. Deployment and subsequent real pressure-transition evidence are recorded separately.

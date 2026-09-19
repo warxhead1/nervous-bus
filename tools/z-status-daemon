@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# z-status-daemon — single-process metrics poller for zjstatus bars.
+#
+# Runs ALL metrics in one bash process via a tick-based scheduler.
+# This is way lighter than 17 background subshells:
+#   - 1 process instead of 17 idle bash sleepers
+#   - One coordinated tick = predictable subprocess spawn pattern
+#   - Easier to renice, ionice, and trace
+#
+# Each metric has a "period" (seconds between polls). On each tick, we run
+# every metric whose period boundary has elapsed. Tick is 1s — gives 1s
+# resolution while keeping the loop body cheap.
+#
+# Reads from systemd: Nice=19, IOSchedulingClass=idle. Will only run when
+# nothing else wants the CPU.
+
+set -uo pipefail
+
+log() { echo "[$(date '+%H:%M:%S')] $*"; }
+
+# ── Metric definition: name period_seconds ttl_seconds ─────────────────────
+# Period = how often we poll. TTL = Redis key lifetime (period × 1.4 buffer).
+# All values multiples of 1s for tick alignment.
+read -r -d '' METRICS <<'EOF' || true
+te-fps           15  22
+te-mcp           15  22
+ha-status        15  22
+tx-db            15  22
+te-svc           20  30
+hl-dispatcher    20  30
+hl-loomies       20  30
+hl-ccm-by-agent  20  30
+hl-ccm-count     20  30
+te-brain         60  90
+te-ccm           30  45
+hl-runners       30  45
+ha-devices       30  45
+ha-subsys-active 30  45
+ha-runners       30  45
+tx-state         30  45
+ha-news          90 130
+hl-kanban       120 175
+sys-mem           5   8
+sys-load          5   8
+sys-gpu          10  15
+sys-disk         30  45
+sys-swap         10  15
+sys-builds        5   8
+sys-pressure      5   8
+EOF
+
+# Parse into parallel arrays (bash 4+).
+declare -a M_NAME M_PERIOD M_TTL
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  # Split on whitespace
+  set -- $line
+  M_NAME+=("$1")
+  M_PERIOD+=("$2")
+  M_TTL+=("$3")
+done <<< "$METRICS"
+
+count=${#M_NAME[@]}
+log "z-status-daemon starting — $count metrics, single-process tick scheduler"
+
+# Track when each metric was last polled (epoch seconds, 0 = never)
+declare -a LAST_POLL
+for ((i=0; i<count; i++)); do LAST_POLL+=(0); done
+PRESSURE_TICK=0
+
+# ── Pressure monitoring ──────────────────────────────────────────────────────
+# Tracks system resource thresholds and emits bus.system.pressure.v1 events
+# to the nbus:all Redis stream when state changes (ok → warning → critical).
+# Uses direct redis-cli XADD — does NOT depend on zellij being running.
+PRESSURE_STATE="ok"
+
+check_pressure() {
+    # Read raw numbers from /proc (zero subprocess, kernel-memory reads)
+    local mem_avail_kb load_1m
+    mem_avail_kb=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    local mem_avail_gb
+    mem_avail_gb=$(awk "BEGIN{printf \"%.2f\", $mem_avail_kb/1048576}")
+    load_1m=$(awk '{print $1}' /proc/loadavg 2>/dev/null || echo 0)
+
+    local swap_total swap_free swap_used_gb disk_free_gb
+    swap_total=$(awk '/^SwapTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    swap_free=$(awk '/^SwapFree:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    swap_used_gb=$(awk "BEGIN{printf \"%.2f\", ($swap_total - $swap_free)/1048576}")
+    disk_free_gb=$(df -BG /home/eric 2>/dev/null | awk 'NR==2{gsub("G",""); print $4+0}' || echo 0)
+
+    local build_count
+    build_count=$(pgrep -c -E '^rustc$|^cargo$|^java$|^slangc$|^glslc$' 2>/dev/null || echo 0)
+
+    # Classify severity (critical wins over warning wins over ok)
+    local severity="ok"
+    local triggers=""
+
+    # RAM: <4GB=critical, <8GB=warning (system has 62GB total)
+    if awk "BEGIN{exit !($mem_avail_gb < 4.0)}"; then
+        severity="critical"; triggers="${triggers:+$triggers,}\"ram_low\""
+    elif awk "BEGIN{exit !($mem_avail_gb < 8.0)}"; then
+        [[ "$severity" == "ok" ]] && severity="warning"
+        triggers="${triggers:+$triggers,}\"ram_low\""
+    fi
+
+    # CPU load: >15=critical, >12=warning (16-thread Ryzen 7800X3D)
+    if awk "BEGIN{exit !($load_1m > 15.0)}"; then
+        severity="critical"; triggers="${triggers:+$triggers,}\"cpu_saturated\""
+    elif awk "BEGIN{exit !($load_1m > 12.0)}"; then
+        [[ "$severity" == "ok" ]] && severity="warning"
+        triggers="${triggers:+$triggers,}\"cpu_saturated\""
+    fi
+
+    # Disk: <10GB=critical, <20GB=warning
+    if awk "BEGIN{exit !($disk_free_gb < 10)}"; then
+        severity="critical"; triggers="${triggers:+$triggers,}\"disk_low\""
+    elif awk "BEGIN{exit !($disk_free_gb < 20)}"; then
+        [[ "$severity" == "ok" ]] && severity="warning"
+        triggers="${triggers:+$triggers,}\"disk_low\""
+    fi
+
+    # Build overload: >16 processes=critical, >8=warning
+    if [[ "$build_count" -gt 16 ]]; then
+        severity="critical"; triggers="${triggers:+$triggers,}\"builds_overloaded\""
+    elif [[ "$build_count" -gt 8 ]]; then
+        [[ "$severity" == "ok" ]] && severity="warning"
+        triggers="${triggers:+$triggers,}\"builds_high\""
+    fi
+
+    # Cache current severity for zjstatus (always update)
+    redis-cli --no-auth-warning set "zs:sys-pressure" "$severity" EX 8 >/dev/null 2>&1
+
+    # Emit to nervous-bus ONLY on state transition (edge-triggered)
+    if [[ "$severity" != "$PRESSURE_STATE" ]]; then
+        local ts data envelope event_id
+        ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        event_id=$(cat /proc/sys/kernel/random/uuid) || return
+        data=$(printf '{"severity":"%s","ram_available_gb":%s,"load_avg_1m":%s,"disk_free_gb":%s,"swap_used_gb":%s,"build_processes":%d,"triggers":[%s]}' \
+            "$severity" "$mem_avail_gb" "$load_1m" "$disk_free_gb" "$swap_used_gb" "$build_count" "$triggers")
+        envelope=$(jq -cn --arg id "$event_id" --arg ts "$ts" --argjson data "$data" \
+            '{specversion:"1.0",id:$id,source:"hearth-sysmon",type:"bus.system.pressure.v1",time:$ts,datacontenttype:"application/json",data:$data}') || return
+        # Keep the exact canonical envelope that stream consumers require.
+        # A failed publish must not consume the transition; retry next tick.
+        if timeout 2s redis-cli -e --no-auth-warning XADD nbus:all '*' \
+            _raw "$envelope" type bus.system.pressure.v1 source hearth-sysmon \
+            specversion "1.0" time "$ts" timestamp "$ts" event_id "$event_id" \
+            data "$data" >/dev/null 2>&1; then
+            PRESSURE_STATE="$severity"
+            log "pressure: $PRESSURE_STATE [RAM:${mem_avail_gb}GB load:${load_1m} disk:${disk_free_gb}GB builds:$build_count]"
+        fi
+    fi
+}
+
+# Push one metric to Redis. Backgrounded so the tick loop doesn't block on
+# slow curl calls. The `wait -n` in the tick loop reaps these.
+push() {
+  local key="$1" ttl="$2"
+  local result
+  result=$(z-status --refresh "$key" 2>/dev/null) || return 0
+  if [[ -n "$result" ]]; then
+    redis-cli --no-auth-warning set "zs:${key}" "$result" EX "$ttl" >/dev/null 2>&1
+  fi
+}
+
+# Tick loop: every 1s, fire any metric whose period elapsed.
+# Limit concurrent push() jobs to avoid spawn bursts.
+MAX_CONCURRENT=4
+running=0
+
+while true; do
+  now=$(date +%s)
+  for ((i=0; i<count; i++)); do
+    last=${LAST_POLL[$i]}
+    period=${M_PERIOD[$i]}
+    if (( now - last >= period )); then
+      LAST_POLL[$i]=$now
+      # Throttle: if too many in flight, wait for one to finish
+      while (( running >= MAX_CONCURRENT )); do
+        wait -n 2>/dev/null && running=$((running - 1)) || break
+      done
+      push "${M_NAME[$i]}" "${M_TTL[$i]}" &
+      running=$((running + 1))
+    fi
+  done
+  # Reap any finished jobs without blocking
+  while (( running > 0 )); do
+    if wait -n 2>/dev/null; then
+      running=$((running - 1))
+    else
+      break
+    fi
+  done
+  # Pressure check every 5s (5 ticks at 1s resolution)
+  if (( PRESSURE_TICK % 5 == 0 )); then
+    check_pressure
+  fi
+  PRESSURE_TICK=$(( PRESSURE_TICK + 1 ))
+  sleep 1
+done
