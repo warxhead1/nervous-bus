@@ -43,12 +43,19 @@ use redis::aio::ConnectionManager;
 use redis::{AsyncCommands, RedisError, RedisResult, Value as RedisValue};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 /// Field name carrying the full CloudEvents-lite envelope JSON. Every
 /// consumer in the ecosystem (tengine/hearth/tachyonac/redis-mirror) parses
 /// this field; anything else on the entry is best-effort metadata.
 pub const RAW_FIELD: &str = "_raw";
+
+/// Flat fields retained on invalid entries as bounded, non-payload
+/// provenance. Arbitrary fields (and `_raw` itself) are never copied into an
+/// invalid result because they can be unbounded application data.
+const SAFE_PROVENANCE_FIELDS: [&str; 4] = ["type", "event_id", "timestamp", "source"];
+const MAX_PROVENANCE_VALUE_BYTES: usize = 256;
 
 /// Minimum idle time (ms) before [`StreamConsumer::reap_stale`] is allowed
 /// to reclaim a pending entry. This is the value tengine established and
@@ -114,6 +121,57 @@ impl StreamEntry {
     /// Parse [`Self::raw`] as a full CloudEvents-lite envelope.
     pub fn envelope(&self) -> Option<JsonValue> {
         serde_json::from_str(&self.raw).ok()
+    }
+}
+
+/// Why an entry could not be exposed as a [`StreamEntry`]. This describes the
+/// transport representation only; consumers must not infer an application
+/// failure from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidStreamEntryReason {
+    MissingRaw,
+    MalformedRawJson,
+    MalformedFields,
+}
+
+/// A stream entry that cannot be handled as an envelope.
+///
+/// `id` is the exact Redis stream ID and may be ACKed only after a caller has
+/// durably dead-lettered the entry. `provenance` contains capped routing
+/// metadata, never arbitrary fields or the original `_raw` payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidStreamEntry {
+    pub id: String,
+    pub reason: InvalidStreamEntryReason,
+    pub provenance: BTreeMap<String, String>,
+}
+
+/// The explicit result of parsing one Redis stream entry.
+///
+/// Valid envelope handling remains available through [`Self::Valid`]. The
+/// invalid variant is deliberately delivered to callers instead of silently
+/// disappearing, so it can be dead-lettered before acknowledgement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamReadEntry {
+    Valid(StreamEntry),
+    Invalid(InvalidStreamEntry),
+}
+
+impl StreamReadEntry {
+    /// The exact Redis stream ID for either result variant.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Valid(entry) => &entry.id,
+            Self::Invalid(entry) => &entry.id,
+        }
+    }
+
+    /// Return the envelope entry when this result is valid.
+    pub fn valid(&self) -> Option<&StreamEntry> {
+        match self {
+            Self::Valid(entry) => Some(entry),
+            Self::Invalid(_) => None,
+        }
     }
 }
 
@@ -191,14 +249,15 @@ impl StreamConsumer {
 
     /// Blocking `XREADGROUP GROUP <group> <consumer> COUNT <count> BLOCK
     /// <block_ms> STREAMS <stream> >`. Returns new entries only (empty vec on
-    /// block-timeout). Entries without a `_raw` field are dropped — matches
-    /// tengine/hearth's convention of ignoring malformed/foreign entries
-    /// rather than erroring the whole batch.
+    /// block-timeout). Every entry with a Redis ID is returned: valid `_raw`
+    /// envelopes are [`StreamReadEntry::Valid`], and flat or malformed
+    /// entries are [`StreamReadEntry::Invalid`] with that exact ID. This
+    /// method never ACKs invalid entries.
     pub async fn read_new(
         &mut self,
         count: usize,
         block: Duration,
-    ) -> RedisResult<Vec<StreamEntry>> {
+    ) -> RedisResult<Vec<StreamReadEntry>> {
         let reply: RedisValue = redis::cmd("XREADGROUP")
             .arg("GROUP")
             .arg(&self.group)
@@ -258,7 +317,7 @@ impl StreamConsumer {
     /// consumer name, and should be pushed back through the normal
     /// handle→ack path. Pass a short `min_idle` in tests; production callers
     /// should use [`REAP_MIN_IDLE_MS`].
-    pub async fn reap_stale(&mut self, min_idle: Duration) -> RedisResult<Vec<StreamEntry>> {
+    pub async fn reap_stale(&mut self, min_idle: Duration) -> RedisResult<Vec<StreamReadEntry>> {
         let reply: RedisValue = redis::cmd("XAUTOCLAIM")
             .arg(&self.stream)
             .arg(&self.group)
@@ -315,7 +374,7 @@ pub async fn run_consumer_loop<F, Fut>(
     mut should_stop: impl FnMut() -> bool,
 ) -> RedisResult<()>
 where
-    F: FnMut(StreamEntry) -> Fut,
+    F: FnMut(StreamReadEntry) -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
     let mut last_reap = std::time::Instant::now();
@@ -324,7 +383,7 @@ where
             last_reap = std::time::Instant::now();
             let reclaimed = consumer.reap_stale(opts.reap_min_idle).await?;
             for entry in reclaimed {
-                let id = entry.id.clone();
+                let id = entry.id().to_string();
                 if handler(entry).await {
                     consumer.ack(&id).await?;
                 }
@@ -333,7 +392,7 @@ where
 
         let entries = consumer.read_new(opts.read_count, opts.block).await?;
         for entry in entries {
-            let id = entry.id.clone();
+            let id = entry.id().to_string();
             if handler(entry).await {
                 consumer.ack(&id).await?;
             }
@@ -466,10 +525,10 @@ fn redis_value_to_string(v: &RedisValue) -> Option<String> {
     }
 }
 
-/// Parse an `XREADGROUP` reply into [`StreamEntry`] values.
+/// Parse an `XREADGROUP` reply into [`StreamReadEntry`] values.
 /// Shape: `[ [stream_name, [ [id, [f,v,...]], ... ] ], ... ]`, or Nil on
 /// block-timeout.
-fn parse_xread_reply(reply: &RedisValue) -> Vec<StreamEntry> {
+fn parse_xread_reply(reply: &RedisValue) -> Vec<StreamReadEntry> {
     let mut out = Vec::new();
     let RedisValue::Array(streams) = reply else {
         return out;
@@ -486,9 +545,9 @@ fn parse_xread_reply(reply: &RedisValue) -> Vec<StreamEntry> {
     out
 }
 
-/// Parse an `XAUTOCLAIM` reply into [`StreamEntry`] values.
+/// Parse an `XAUTOCLAIM` reply into [`StreamReadEntry`] values.
 /// Shape: `[next_cursor, [ [id, [f,v,...]], ... ], [deleted_ids]]`.
-fn parse_xautoclaim_reply(reply: &RedisValue) -> Vec<StreamEntry> {
+fn parse_xautoclaim_reply(reply: &RedisValue) -> Vec<StreamReadEntry> {
     let mut out = Vec::new();
     let RedisValue::Array(parts) = reply else {
         return out;
@@ -499,10 +558,10 @@ fn parse_xautoclaim_reply(reply: &RedisValue) -> Vec<StreamEntry> {
     out
 }
 
-/// Shared helper: walk `[ [id, [f,v,...]], ... ]` collecting entries with a
-/// `_raw` field. Tombstones (deleted-from-stream entries `XAUTOCLAIM` can
-/// hand back with `Nil` fields) are skipped.
-fn collect_entries(entries: &[RedisValue], out: &mut Vec<StreamEntry>) {
+/// Shared helper: walk `[ [id, [f,v,...]], ... ]` and expose each entry with
+/// a Redis ID. Tombstones (`XAUTOCLAIM` entries whose fields are `Nil`) stay
+/// skipped because Redis has already deleted their body.
+fn collect_entries(entries: &[RedisValue], out: &mut Vec<StreamReadEntry>) {
     for entry in entries {
         let RedisValue::Array(idfields) = entry else {
             continue;
@@ -510,13 +569,70 @@ fn collect_entries(entries: &[RedisValue], out: &mut Vec<StreamEntry>) {
         let Some(id) = idfields.first().and_then(redis_value_to_string) else {
             continue;
         };
-        let Some(RedisValue::Array(fields)) = idfields.get(1) else {
+        let Some(fields_value) = idfields.get(1) else {
+            out.push(StreamReadEntry::Invalid(InvalidStreamEntry {
+                id,
+                reason: InvalidStreamEntryReason::MalformedFields,
+                provenance: BTreeMap::new(),
+            }));
             continue;
         };
-        if let Some(raw) = extract_raw_field(fields) {
-            out.push(StreamEntry { id, raw });
+        let RedisValue::Array(fields) = fields_value else {
+            if !matches!(fields_value, RedisValue::Nil) {
+                out.push(StreamReadEntry::Invalid(InvalidStreamEntry {
+                    id,
+                    reason: InvalidStreamEntryReason::MalformedFields,
+                    provenance: BTreeMap::new(),
+                }));
+            }
+            continue;
+        };
+        let provenance = safe_provenance(fields);
+        match extract_raw_field(fields) {
+            Some(raw) if serde_json::from_str::<JsonValue>(&raw).is_ok() => {
+                out.push(StreamReadEntry::Valid(StreamEntry { id, raw }));
+            }
+            Some(_) => out.push(StreamReadEntry::Invalid(InvalidStreamEntry {
+                id,
+                reason: InvalidStreamEntryReason::MalformedRawJson,
+                provenance,
+            })),
+            None => out.push(StreamReadEntry::Invalid(InvalidStreamEntry {
+                id,
+                reason: InvalidStreamEntryReason::MissingRaw,
+                provenance,
+            })),
         }
     }
+}
+
+fn safe_provenance(fields: &[RedisValue]) -> BTreeMap<String, String> {
+    let mut provenance = BTreeMap::new();
+    let mut i = 0;
+    while i + 1 < fields.len() {
+        let Some(key) = redis_value_to_string(&fields[i]) else {
+            i += 2;
+            continue;
+        };
+        if SAFE_PROVENANCE_FIELDS.contains(&key.as_str()) {
+            if let Some(value) = redis_value_to_string(&fields[i + 1]) {
+                provenance.insert(key, truncate_provenance(value));
+            }
+        }
+        i += 2;
+    }
+    provenance
+}
+
+fn truncate_provenance(value: String) -> String {
+    if value.len() <= MAX_PROVENANCE_VALUE_BYTES {
+        return value;
+    }
+    let mut end = MAX_PROVENANCE_VALUE_BYTES;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_string()
 }
 
 #[cfg(test)]
@@ -556,8 +672,9 @@ mod tests {
         ])]);
         let entries = parse_xread_reply(&reply);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].id, "1717-0");
-        assert_eq!(entries[0].raw, "{\"a\":1}");
+        let entry = entries[0].valid().expect("valid envelope entry");
+        assert_eq!(entry.id, "1717-0");
+        assert_eq!(entry.raw, "{\"a\":1}");
     }
 
     #[test]
@@ -566,15 +683,71 @@ mod tests {
     }
 
     #[test]
-    fn parse_xread_reply_drops_entries_without_raw() {
+    fn parse_xread_reply_preserves_entries_without_raw_for_dlq() {
         let reply = RedisValue::Array(vec![RedisValue::Array(vec![
             data_field("nbus:test.v1"),
             RedisValue::Array(vec![RedisValue::Array(vec![
                 data_field("1-0"),
-                RedisValue::Array(vec![data_field("other"), data_field("x")]),
+                RedisValue::Array(vec![
+                    data_field("type"),
+                    data_field("hearth.sysmon.v1"),
+                    data_field("source"),
+                    data_field("/hearth-sysmon"),
+                    data_field("other"),
+                    data_field("application payload is deliberately omitted"),
+                ]),
             ])]),
         ])]);
-        assert!(parse_xread_reply(&reply).is_empty());
+        let entries = parse_xread_reply(&reply);
+        assert_eq!(entries.len(), 1);
+        let StreamReadEntry::Invalid(entry) = &entries[0] else {
+            panic!("flat entry must remain visible for DLQ");
+        };
+        assert_eq!(entry.id, "1-0");
+        assert_eq!(entry.reason, InvalidStreamEntryReason::MissingRaw);
+        assert_eq!(entry.provenance["type"], "hearth.sysmon.v1");
+        assert_eq!(entry.provenance["source"], "/hearth-sysmon");
+        assert!(!entry.provenance.contains_key("other"));
+    }
+
+    #[test]
+    fn parse_xread_reply_preserves_malformed_raw_with_bounded_provenance() {
+        let reply = RedisValue::Array(vec![RedisValue::Array(vec![
+            data_field("nbus:test.v1"),
+            RedisValue::Array(vec![RedisValue::Array(vec![
+                data_field("2-0"),
+                RedisValue::Array(vec![
+                    data_field("_raw"),
+                    data_field("not-json"),
+                    data_field("event_id"),
+                    data_field("event-2"),
+                    data_field("type"),
+                    data_field("hearth.sysmon.v1"),
+                ]),
+            ])]),
+        ])]);
+        let entries = parse_xread_reply(&reply);
+        let StreamReadEntry::Invalid(entry) = &entries[0] else {
+            panic!("malformed raw must remain visible for DLQ");
+        };
+        assert_eq!(entry.id, "2-0");
+        assert_eq!(entry.reason, InvalidStreamEntryReason::MalformedRawJson);
+        assert_eq!(entry.provenance["event_id"], "event-2");
+        assert_eq!(entry.provenance["type"], "hearth.sysmon.v1");
+    }
+
+    #[test]
+    fn invalid_provenance_is_allow_listed_and_byte_capped() {
+        let long_source = "x".repeat(MAX_PROVENANCE_VALUE_BYTES + 20);
+        let fields = vec![
+            data_field("source"),
+            data_field(&long_source),
+            data_field("private_payload"),
+            data_field("must not be retained"),
+        ];
+        let provenance = safe_provenance(&fields);
+        assert_eq!(provenance["source"].len(), MAX_PROVENANCE_VALUE_BYTES);
+        assert!(!provenance.contains_key("private_payload"));
     }
 
     #[test]
@@ -589,8 +762,9 @@ mod tests {
         ]);
         let entries = parse_xautoclaim_reply(&reply);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].id, "1717-5");
-        assert_eq!(entries[0].raw, "{\"b\":2}");
+        let entry = entries[0].valid().expect("valid reclaimed envelope");
+        assert_eq!(entry.id, "1717-5");
+        assert_eq!(entry.raw, "{\"b\":2}");
     }
 
     #[test]
@@ -713,7 +887,7 @@ mod live_tests {
             .await
             .expect("read_new");
         assert_eq!(entries.len(), 1, "expected exactly one delivered entry");
-        let entry = &entries[0];
+        let entry = entries[0].valid().expect("valid published envelope");
         assert_eq!(
             entry.event_type().as_deref(),
             Some("nbus.sdk_test.roundtrip.v1")
@@ -749,7 +923,7 @@ mod live_tests {
         assert_eq!(entries.len(), 3);
         assert_eq!(consumer.pending_count().await, 3);
 
-        let ids: Vec<String> = entries.iter().map(|e| e.id.clone()).collect();
+        let ids: Vec<String> = entries.iter().map(|entry| entry.id().to_string()).collect();
         consumer.ack_many(&ids).await.unwrap();
         assert_eq!(consumer.pending_count().await, 0);
 
@@ -797,12 +971,13 @@ mod live_tests {
             1,
             "consumer B must reclaim A's orphaned entry"
         );
-        assert_eq!(reclaimed[0].data().unwrap()["orphan"], true);
+        let reclaimed_entry = reclaimed[0].valid().expect("valid reclaimed envelope");
+        assert_eq!(reclaimed_entry.data().unwrap()["orphan"], true);
 
         // The entry is now owned by consumer B — B acking it must clear the
         // PEL entirely (proves ownership actually transferred, not just that
         // the entry was echoed back).
-        consumer_b.ack(&reclaimed[0].id).await.unwrap();
+        consumer_b.ack(reclaimed_entry.id.as_str()).await.unwrap();
         assert_eq!(consumer_b.pending_count().await, 0);
 
         cleanup(&stream).await;
@@ -882,7 +1057,7 @@ mod live_tests {
                 let seen_clone = seen_clone.clone();
                 async move {
                     seen_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    assert_eq!(entry.data().unwrap()["x"], 1);
+                    assert_eq!(entry.valid().unwrap().data().unwrap()["x"], 1);
                     true // ack
                 }
             },

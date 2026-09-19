@@ -57,7 +57,10 @@ tested, non-bespoke place to get Streams support from.
 ## API surface (`streams` module)
 
 ```rust
-use nbus::streams::{StreamConsumer, StreamsPublisher, PublishOptions, RunLoopOptions, run_consumer_loop};
+use nbus::streams::{
+    run_consumer_loop, PublishOptions, StreamConsumer, StreamReadEntry,
+    StreamsPublisher, RunLoopOptions,
+};
 use std::time::Duration;
 use serde_json::json;
 ```
@@ -91,10 +94,19 @@ let mut consumer = StreamConsumer::connect(
 loop {
     let entries = consumer.read_new(16, Duration::from_secs(2)).await?;
     for entry in entries {
-        if let Some(data) = entry.data() {
-            // ... handle it ...
+        let id = entry.id().to_owned();
+        match entry {
+            StreamReadEntry::Valid(entry) => {
+                // ... handle entry.data() ...
+                consumer.ack(&id).await?;
+            }
+            StreamReadEntry::Invalid(invalid) => {
+                // First persist `invalid` to a dead-letter sink. Only ACK
+                // after that durable write succeeds; otherwise leave it PEL.
+                dead_letter(&invalid).await?;
+                consumer.ack(&id).await?;
+            }
         }
-        consumer.ack(&entry.id).await?;
     }
 }
 ```
@@ -103,6 +115,12 @@ loop {
   (group already exists) is treated as success, so every process can call
   `connect` on startup unconditionally.
 - `read_new(count, block)` — blocking `XREADGROUP ... >`, new entries only.
+  It returns `StreamReadEntry::Valid(StreamEntry)` for valid JSON `_raw`
+  envelopes and `StreamReadEntry::Invalid(InvalidStreamEntry)` for entries
+  missing `_raw`, with malformed `_raw` JSON, or with malformed Redis fields.
+  Invalid results retain the exact Redis ID and only capped `type`,
+  `event_id`, `timestamp`, and `source` provenance; they never silently
+  disappear.
 - `ack(id)` / `ack_many(ids)` — `XACK`.
 - `pending_count()` — best-effort `XPENDING` summary (returns `0` on error;
   safe to call from a heartbeat/metrics path).
@@ -112,6 +130,15 @@ loop {
   back around instead of sitting in the PEL forever. Production callers
   should pass `Duration::from_millis(streams::REAP_MIN_IDLE_MS)`
   (2 minutes, matching tengine/hearth); tests can pass a much shorter window.
+
+### Invalid entries: dead-letter before ACK
+
+An invalid result is still a Redis delivery. Do not blindly ACK, delete, or
+ignore it: write a durable dead-letter record containing its Redis ID, reason,
+and bounded provenance first, then ACK only after that write succeeds. If the
+dead-letter write fails, return `false` from `run_consumer_loop` (or skip
+`ack` when using the primitives) so the entry remains pending and can be
+reclaimed by `reap_stale`.
 
 ### Convenience loop
 
@@ -123,9 +150,11 @@ run_consumer_loop(
     &mut consumer,
     RunLoopOptions::default(),
     |entry| async move {
-        // handle `entry`; return true to ack, false to leave pending
-        // (a later reap sweep will redeliver it)
-        true
+        match entry {
+            StreamReadEntry::Valid(entry) => handle_envelope(entry).await,
+            StreamReadEntry::Invalid(invalid) => dead_letter(&invalid).await,
+        }
+        // Each helper returns true only after its durable operation succeeds.
     },
     || should_shut_down.load(Ordering::Relaxed),
 )

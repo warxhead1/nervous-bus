@@ -1,0 +1,25 @@
+{
+  "fixture_version": 1,
+  "redaction": {
+    "rule": "No raw hook trace, transcript path, session identifier, working directory, or provider message is retained.",
+    "message_placeholder": "<redacted-error-string>"
+  },
+  "observed_hook_payload_shape": {
+    "hook_event_name": "StopFailure",
+    "session_id": "<redacted-session-id>",
+    "error": "<redacted-error-string>"
+  },
+  "pre_fix_parser_result": {
+    "error_type": "",
+    "error_message": ""
+  },
+  "post_fix_v1_payload_fields": {
+    "event": "stop_failure",
+    "error_type": "unknown",
+    "error_message": "<redacted-error-string>"
+  },
+  "absent_upstream_error": {
+    "error_type": "unknown",
+    "error_message": "<omitted>"
+  }
+}
