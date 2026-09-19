@@ -3,7 +3,8 @@
     "user.slice/user-1000.slice/user@1000.service/app.slice/hearth-api.service",
     "user.slice/user-1000.slice/user@1000.service/app.slice/tachyonac.service",
     "user.slice/user-1000.slice/user@1000.service/app.slice/app-orca-*.scope",
-    "user.slice/user-1000.slice/user@1000.service/app.slice/app-orca*ide@*.service"
+    "user.slice/user-1000.slice/user@1000.service/app.slice/app-orca*ide@*.service",
+    "user.slice/user-1000.slice/user@1000.service/app.slice/app-app\\x2dorca\\x2dide.slice/app-orca-ide@*.service"
   ],
   "raw_hours": 24,
   "rollup_days": 30,
