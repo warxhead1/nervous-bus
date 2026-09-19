@@ -72,6 +72,13 @@ def publish(event, dry_run=False):
                 process.communicate()
                 return "timed_out"
             if process.returncode:
+                reason = next((name for marker, name in (
+                    (b"Read-only file system", "read_only_filesystem"),
+                    (b"Permission denied", "permission_denied"),
+                    (b"validation SKIPPED", "validation_unavailable"),
+                    (b"schema violation", "schema_violation")) if marker in stderr), "publisher_exit")
+                print(json.dumps({"component": "publisher", "state": "failed",
+                                  "exit_code": process.returncode, "reason": reason}), file=sys.stderr)
                 return "failed"
             if b"Redis delivery failed" in stderr:
                 return "receipt_only"

@@ -8,6 +8,7 @@ ExecStart=/usr/bin/python3 %h/projects/nervous-bus/adapters/system-resource/watc
 Environment=NERVOUS_SOURCE=/system-resource
 Environment=NERVOUS_STRICT_VALIDATION=1
 Environment=NERVOUS_NO_ZELLIJ=1
+Environment=TMPDIR=/tmp
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=read-only
