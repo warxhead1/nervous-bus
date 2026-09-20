@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.system.resource.sample.v3.json",
+  "title": "Bounded Linux resource measurement batch v3",
+  "description": "One host, at most eight cgroups, and at most eight inventory-only NVIDIA GPUs. GPU VRAM is separate from host and cgroup DRAM measurements. V1 and V2 remain available unchanged.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 512},
+    "host": {"type": "string", "minLength": 1, "maxLength": 512},
+    "ts": {"type": "number", "minimum": 0},
+    "monotonic_s": {"type": "number", "minimum": 0},
+    "boot_id": {"type": ["string", "null"], "maxLength": 512},
+    "collector": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "version": {"const": "3.0.0"},
+        "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "config_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "required": ["version", "digest", "config_digest"]
+    },
+    "entities": {
+      "type": "array", "minItems": 1, "maxItems": 9,
+      "items": {"$ref": "#/$defs/entity"}
+    },
+    "gpu": {"$ref": "#/$defs/gpu"},
+    "findings": {
+      "type": "array", "maxItems": 27,
+      "items": {"$ref": "#/$defs/finding"}
+    },
+    "health": {"$ref": "#/$defs/health"}
+  },
+  "required": ["id", "host", "ts", "monotonic_s", "boot_id", "collector", "entities", "gpu", "findings", "health"],
+  "$defs": {
+    "nullable": {"type": ["number", "null"], "minimum": 0},
+    "psi": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "avg10": {"$ref": "#/$defs/nullable"},
+        "avg60": {"$ref": "#/$defs/nullable"},
+        "avg300": {"$ref": "#/$defs/nullable"},
+        "total_usec": {"$ref": "#/$defs/nullable"}
+      },
+      "required": ["avg10", "avg60", "avg300", "total_usec"]
+    },
+    "pressure": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object", "additionalProperties": false,
+          "properties": {"some": {"$ref": "#/$defs/psi"}, "full": {"$ref": "#/$defs/psi"}},
+          "required": ["some"]
+        }
+      ]
+    },
+    "limit": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "state": {"enum": ["limited", "unlimited", "unavailable"]},
+        "value": {"$ref": "#/$defs/nullable"}
+      },
+      "required": ["state", "value"]
+    },
+    "device": {
+      "type": "object", "additionalProperties": {"type": "number", "minimum": 0},
+      "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 512}},
+      "required": ["name", "read_bytes", "write_bytes"]
+    },
+    "interval": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "state": {"enum": ["ok", "unavailable", "reset"]},
+        "reason": {"type": ["string", "null"], "maxLength": 512},
+        "elapsed_s": {"$ref": "#/$defs/nullable"},
+        "deltas": {"type": "object", "maxProperties": 24, "additionalProperties": {"$ref": "#/$defs/nullable"}},
+        "rates": {"type": "object", "maxProperties": 24, "additionalProperties": {"$ref": "#/$defs/nullable"}}
+      },
+      "required": ["state", "reason", "elapsed_s", "deltas", "rates"],
+      "allOf": [
+        {
+          "if": {"properties": {"state": {"const": "ok"}}},
+          "then": {
+            "properties": {
+              "elapsed_s": {"type": "number", "exclusiveMinimum": 0},
+              "reason": {"type": "null"}
+            }
+          },
+          "else": {
+            "properties": {
+              "elapsed_s": {"type": "null"},
+              "deltas": {"maxProperties": 0},
+              "rates": {"maxProperties": 0}
+            }
+          }
+        }
+      ]
+    },
+    "entity": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "entity": {"type": "string", "minLength": 1, "maxLength": 512},
+        "kind": {"enum": ["host", "cgroup"]},
+        "identity": {"type": ["string", "null"], "maxLength": 512},
+        "device_identity": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "state": {"enum": ["ok", "partial", "unavailable"]},
+        "reason": {"type": ["string", "null"], "maxLength": 512},
+        "counters": {"type": "object", "maxProperties": 24, "additionalProperties": {"$ref": "#/$defs/nullable"}},
+        "gauges": {"type": "object", "maxProperties": 24, "additionalProperties": {"$ref": "#/$defs/nullable"}},
+        "limits": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "cpu": {"$ref": "#/$defs/limit"},
+            "memory_high": {"$ref": "#/$defs/limit"},
+            "memory_max": {"$ref": "#/$defs/limit"}
+          }
+        },
+        "pressure": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "cpu": {"$ref": "#/$defs/pressure"},
+            "memory": {"$ref": "#/$defs/pressure"},
+            "io": {"$ref": "#/$defs/pressure"}
+          },
+          "required": ["cpu", "memory", "io"]
+        },
+        "devices": {"type": "object", "maxProperties": 64, "additionalProperties": {"$ref": "#/$defs/device"}},
+        "interval": {"$ref": "#/$defs/interval"}
+      },
+      "required": ["entity", "kind", "identity", "device_identity", "state", "reason", "counters", "gauges", "limits", "pressure", "devices", "interval"]
+    },
+    "gpu_device": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "uuid": {"type": "string", "pattern": "^GPU-[0-9a-f][0-9a-f-]{7,126}$", "maxLength": 131},
+        "driver_version": {"type": ["string", "null"], "maxLength": 64},
+        "state": {"enum": ["ok", "partial"]},
+        "reason": {"enum": [null, "field_unavailable"]},
+        "memory_total_bytes": {"$ref": "#/$defs/nullable"},
+        "memory_used_bytes": {"$ref": "#/$defs/nullable"},
+        "memory_free_bytes": {"$ref": "#/$defs/nullable"},
+        "utilization_pct": {"type": ["number", "null"], "minimum": 0, "maximum": 100}
+      },
+      "required": ["uuid", "driver_version", "state", "reason", "memory_total_bytes", "memory_used_bytes", "memory_free_bytes", "utilization_pct"],
+      "allOf": [
+        {
+          "if": {"properties": {"state": {"const": "ok"}}},
+          "then": {
+            "properties": {
+              "driver_version": {"type": "string"},
+              "reason": {"type": "null"},
+              "memory_total_bytes": {"type": "number"},
+              "memory_used_bytes": {"type": "number"},
+              "memory_free_bytes": {"type": "number"},
+              "utilization_pct": {"type": "number"}
+            }
+          }
+        }
+      ]
+    },
+    "gpu": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "state": {"enum": ["ok", "partial", "unavailable", "empty"]},
+        "reason": {"enum": [null, "unsupported", "timeout", "output_limit", "query_failed", "cleanup_failed", "not_collected", "empty", "malformed_output", "duplicate_uuid", "device_limit", "partial_reading"]},
+        "attempted": {"type": "boolean"},
+        "query_ms": {"type": "number", "minimum": 0},
+        "devices": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/gpu_device"}}
+      },
+      "required": ["state", "reason", "attempted", "query_ms", "devices"],
+      "allOf": [
+        {
+          "if": {"properties": {"state": {"const": "ok"}}},
+          "then": {"properties": {"reason": {"type": "null"}, "devices": {"minItems": 1}}}
+        },
+        {
+          "if": {"properties": {"state": {"const": "empty"}}},
+          "then": {"properties": {"reason": {"const": "empty"}, "devices": {"maxItems": 0}}}
+        },
+        {
+          "if": {"properties": {"state": {"const": "unavailable"}}},
+          "then": {"properties": {"devices": {"maxItems": 0}}}
+        }
+      ]
+    },
+    "health": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "collection_ms": {"type": "number", "minimum": 0},
+        "collector_cpu_ms": {"type": "number", "minimum": 0},
+        "entities": {"type": "integer", "minimum": 1, "maximum": 9},
+        "unavailable_entities": {"type": "integer", "minimum": 0, "maximum": 9},
+        "warnings": {"type": "array", "maxItems": 8, "items": {"type": "string", "minLength": 1, "maxLength": 512}},
+        "gpu_state": {"enum": ["ok", "partial", "unavailable", "empty"]},
+        "gpu_query_ms": {"type": "number", "minimum": 0},
+        "collector_overhead_ms": {"type": "number", "minimum": 0}
+      },
+      "required": ["collection_ms", "collector_cpu_ms", "entities", "unavailable_entities", "warnings", "gpu_state", "gpu_query_ms", "collector_overhead_ms"]
+    },
+    "finding": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "key": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+        "entity": {"type": "string", "minLength": 1, "maxLength": 512},
+        "resource": {"enum": ["cpu", "memory", "io"]},
+        "threshold_pct": {"type": "number", "minimum": 0, "maximum": 100},
+        "observed_pct": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number", "minimum": 0, "maximum": 100}},
+        "from_ts": {"type": "number", "minimum": 0},
+        "to_ts": {"type": "number", "minimum": 0},
+        "duration_s": {"type": "number", "minimum": 0},
+        "cooldown_s": {"type": "integer", "minimum": 60},
+        "interpretation": {"const": "sustained observed pressure; cause unproven"}
+      },
+      "required": ["key", "entity", "resource", "threshold_pct", "observed_pct", "from_ts", "to_ts", "duration_s", "cooldown_s", "interpretation"]
+    }
+  }
+}

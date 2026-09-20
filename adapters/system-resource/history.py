@@ -43,6 +43,96 @@ def diagnose(store, event, expected_interval_s=60, cooldown_s=3600):
     return findings
 
 
+def _gpu_row(row):
+    value = dict(row)
+    if value.get("driver_version") == "":
+        value["driver_version"] = None
+    return value
+
+
+def gpu_report(store, since, now, limit):
+    """Return bounded GPU inventory evidence separately from host/cgroup rankings."""
+    keys = "window_ts,host,boot_id,collector_version,collector_digest"
+    status_cte = f"""
+        WITH raw_status AS (
+          SELECT CAST(b.ts/300 AS INTEGER)*300 AS window_ts,b.host,b.boot_id,
+            b.collector_version,b.collector_digest,COUNT(*) AS status_count,
+            COALESCE(SUM(b.attempted),0) AS attempt_count,
+            SUM(CASE WHEN b.state='ok' THEN 1 ELSE 0 END) AS ok_count,
+            SUM(CASE WHEN b.state='partial' THEN 1 ELSE 0 END) AS partial_count,
+            SUM(CASE WHEN b.state='unavailable' THEN 1 ELSE 0 END) AS unavailable_count,
+            SUM(CASE WHEN b.state='empty' THEN 1 ELSE 0 END) AS empty_count
+          FROM gpu_batches b
+          WHERE b.rolled_up=0 AND b.ts>=? AND b.ts<=?
+          GROUP BY CAST(b.ts/300 AS INTEGER),b.host,b.boot_id,b.collector_version,b.collector_digest),
+        raw_devices AS (
+          SELECT CAST(b.ts/300 AS INTEGER)*300 AS window_ts,b.host,b.boot_id,
+            b.collector_version,b.collector_digest,
+            SUM(CASE WHEN g.state!='unavailable' THEN 1 ELSE 0 END) AS device_sample_count
+          FROM gpu_batches b JOIN gpu_gauges g ON g.batch_id=b.batch_id
+          WHERE b.rolled_up=0 AND b.ts>=? AND b.ts<=?
+          GROUP BY CAST(b.ts/300 AS INTEGER),b.host,b.boot_id,b.collector_version,b.collector_digest),
+        points AS (
+          SELECT {keys},status_count,attempt_count,ok_count,partial_count,
+            unavailable_count,empty_count,device_sample_count
+          FROM gpu_status_rollups WHERE window_ts+300>? AND window_ts<=?
+          UNION ALL
+          SELECT s.window_ts,s.host,s.boot_id,s.collector_version,s.collector_digest,
+            s.status_count,s.attempt_count,s.ok_count,s.partial_count,s.unavailable_count,
+            s.empty_count,COALESCE(d.device_sample_count,0)
+          FROM raw_status s LEFT JOIN raw_devices d USING ({keys})),
+        combined AS (
+          SELECT {keys},SUM(status_count) AS status_count,SUM(attempt_count) AS attempt_count,
+            SUM(ok_count) AS ok_count,SUM(partial_count) AS partial_count,
+            SUM(unavailable_count) AS unavailable_count,SUM(empty_count) AS empty_count,
+            SUM(device_sample_count) AS device_sample_count
+          FROM points GROUP BY {keys})
+        """
+    status_rows = store.db.execute(status_cte + "SELECT * FROM combined ORDER BY window_ts DESC,host LIMIT ?",
+                                   (since, now, since, now, since, now, limit + 1)).fetchall()
+    coverage = store.db.execute(status_cte + """
+        SELECT COALESCE(SUM(status_count),0) AS status_samples,
+          COALESCE(SUM(attempt_count),0) AS query_attempts,
+          COALESCE(SUM(ok_count),0) AS ok_queries,
+          COALESCE(SUM(partial_count),0) AS partial_queries,
+          COALESCE(SUM(unavailable_count),0) AS unavailable_queries,
+          COALESCE(SUM(empty_count),0) AS empty_queries,
+          COALESCE(SUM(device_sample_count),0) AS observed_device_samples
+        FROM combined""", (since, now, since, now, since, now)).fetchone()
+    sampled = store.db.execute("""
+        SELECT * FROM gpu_rollups WHERE window_ts+300>? AND window_ts<=?
+        ORDER BY window_ts DESC,uuid LIMIT ?""", (since, now, limit + 1)).fetchall()
+    raw = store.db.execute("""
+        SELECT g.ts,g.host,g.boot_id,g.collector_version,g.collector_digest,g.uuid,g.driver_version,
+          g.state,g.reason,g.memory_total_bytes,g.memory_used_bytes,g.memory_free_bytes,g.utilization_pct,
+          b.state AS query_state,b.reason AS query_reason,b.attempted,b.query_ms
+        FROM gpu_gauges g JOIN gpu_batches b ON b.batch_id=g.batch_id
+        WHERE b.rolled_up=0 AND g.ts>=? AND g.ts<=?
+        ORDER BY g.ts DESC,g.uuid LIMIT ?""", (since, now, limit + 1)).fetchall()
+    latest_status = store.db.execute("""
+        SELECT batch_id,ts,monotonic_s,host,boot_id,collector_version,collector_digest,state,reason,
+          attempted,query_ms,delivery FROM gpu_batches ORDER BY ts DESC,id DESC LIMIT 1""").fetchone()
+    latest_devices = []
+    if latest_status:
+        latest_devices = [_gpu_row(row) for row in store.db.execute("""
+            SELECT uuid,driver_version,state,reason,memory_total_bytes,memory_used_bytes,
+              memory_free_bytes,utilization_pct FROM gpu_gauges WHERE batch_id=? ORDER BY uuid""",
+            (latest_status["batch_id"],)).fetchall()]
+    return {
+        "rollup_resolution_s": 300,
+        "sample_semantics": "sampled min/max/sum/count; sampled maxima are not instantaneous peaks and counts are not durations",
+        "coverage": dict(coverage),
+        "status_history": [dict(row) for row in status_rows[:limit]],
+        "status_history_truncated": len(status_rows) > limit,
+        "sampled_history": [_gpu_row(row) for row in sampled[:limit]],
+        "sampled_history_truncated": len(sampled) > limit,
+        "raw_samples": [_gpu_row(row) for row in raw[:limit]],
+        "raw_samples_truncated": len(raw) > limit,
+        "latest_status": dict(latest_status) if latest_status else None,
+        "latest_devices": latest_devices,
+    }
+
+
 def report(store, since, limit=120, now=None):
     now = time.time() if now is None else now
     since = max(float(since), now - 30 * 86400)
@@ -82,6 +172,7 @@ def report(store, since, limit=120, now=None):
             "pressure_over_time": [dict(row) for row in recent[:limit]],
             "pressure_series_truncated": len(recent) > limit,
             "latest": [{**dict(row), "payload": json.loads(row["payload"])} for row in latest],
+            "gpu": gpu_report(store, since, now, limit),
             "health": {"latest_ts": latest_ts, "freshness_s": None if latest_ts is None else now-latest_ts,
                        "stale": latest_ts is None or now-latest_ts > 180 or latest_ts > now+5,
                        "unavailable_entities": sum(row["state"] != "ok" for row in latest),

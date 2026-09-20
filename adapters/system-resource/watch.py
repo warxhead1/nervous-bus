@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 
 from collector import collect
+from gpu import collect_gpu, unavailable_gpu
 from history import diagnose, report
 from intervals import intervalize
 from store import Store
@@ -21,8 +22,8 @@ from store import Store
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 CACHE = Path(os.environ.get("NERVOUS_SYSTEM_RESOURCE_CACHE", str(Path.home() / ".cache/nervous-bus/system-resource")))
-CHANNEL = "bus.system.resource.sample.v2"
-VERSION = "2.0.0"
+CHANNEL = "bus.system.resource.sample.v3"
+VERSION = "3.0.0"
 
 
 def atomic_json(path, value):
@@ -87,32 +88,45 @@ def publish(event, dry_run=False):
         return "unavailable"
 
 
-def sample(db_path, config, dry_run=False, measure=collect, publisher=publish, now=None, mono=None):
+def sample(db_path, config, dry_run=False, measure=collect, publisher=publish, now=None, mono=None,
+           gpu_measure=None):
     started, cpu_started = time.monotonic(), time.process_time()
     now = time.time() if now is None else now
     mono = started if mono is None else mono
-    data = measure(selectors=config["selectors"])
+    if measure is collect:
+        data = measure(selectors=config["selectors"], gpu_reader=collect_gpu if gpu_measure is None else gpu_measure)
+    else:
+        data = measure(selectors=config["selectors"])
+        if "gpu" not in data:
+            try:
+                data = {**data, "gpu": gpu_measure() if gpu_measure is not None else unavailable_gpu()}
+            except Exception:
+                data = {**data, "gpu": unavailable_gpu("query_failed", attempted=True)}
     event = {"id": str(uuid.uuid4()), "host": socket.gethostname(), "ts": now,
              "monotonic_s": mono, "boot_id": data["boot_id"], "collector": identity(config),
-             "entities": data["entities"], "findings": [], "health": {}}
+             "entities": data["entities"], "gpu": data["gpu"], "findings": [], "health": {}}
     store = Store(db_path)
     try:
         for entity in event["entities"]:
             entity["interval"] = intervalize(entity, store.previous(event["host"], entity["entity"]),
                                               event["boot_id"], mono, now, config["expected_interval_s"] * 2.5)
-        store.insert_batch(event)
+        store.insert_batch(event, config["expected_interval_s"] * 2.5)
         event["findings"] = diagnose(store, event, config["expected_interval_s"], config["cooldown_s"])
         store.rollup(now)
         store.retain(now, config["raw_hours"], config["rollup_days"])
         store.commit()
-        event["health"] = {"collection_ms": (time.monotonic() - started) * 1000,
+        collection_ms = (time.monotonic() - started) * 1000
+        gpu_query_ms = event["gpu"].get("query_ms", 0)
+        event["health"] = {"collection_ms": collection_ms,
                             "collector_cpu_ms": (time.process_time() - cpu_started) * 1000,
                             "entities": len(event["entities"]),
                             "unavailable_entities": sum(e["state"] != "ok" for e in event["entities"]),
-                            "warnings": data["warnings"]}
+                            "warnings": data["warnings"], "gpu_state": event["gpu"]["state"],
+                            "gpu_query_ms": gpu_query_ms,
+                            "collector_overhead_ms": max(0, collection_ms - gpu_query_ms)}
         delivery = publisher(event, dry_run)
         store.mark_delivery(event["id"], delivery)
-        receipt = {"state": "ok" if not event["health"]["unavailable_entities"] else "partial",
+        receipt = {"state": "ok" if not event["health"]["unavailable_entities"] and event["gpu"]["state"] == "ok" else "partial",
                    "id": event["id"], "ts": now, "collector": event["collector"],
                    "delivery": delivery, "findings": len(event["findings"]), **event["health"],
                    "total_ms": (time.monotonic() - started) * 1000}

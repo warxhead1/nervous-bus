@@ -4,7 +4,7 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**367 channels** across 5 clusters.
+**370 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
@@ -12,7 +12,7 @@ Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster
 | [Autobench](#autobench) | 54 | autobench.* evolution loop (case/judge/improver/budget/...) |
 | [Hearth](#hearth) | 53 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 197 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 200 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -252,6 +252,9 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `bus.subscribers.snapshot.v1` | bus.subscribers.snapshot v1 |
 | `bus.system.heartbeat.v1` | bus.system.heartbeat v1 |
 | `bus.system.pressure.v1` | bus.system.pressure v1 |
+| `bus.system.resource.sample.v1` | bus.system.resource.sample v1 |
+| `bus.system.resource.sample.v2` | Bounded Linux resource measurement batch v2 |
+| `bus.system.resource.sample.v3` | Bounded Linux resource measurement batch v3 |
 | `bus.tengine.agent.lifecycle.v1` | bus.tengine.agent.lifecycle v1 |
 | `bus.tengine.agent.thought.v1` | bus.tengine.agent.thought v1 |
 | `bus.tengine.antidefer.flagged.v1` | bus.tengine.antidefer.flagged v1 |
