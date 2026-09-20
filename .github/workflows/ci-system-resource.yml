@@ -1,0 +1,43 @@
+name: System Resource Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'adapters/system-resource/**'
+      - 'schemas/bus.system.resource.sample.*.json'
+      - '.github/workflows/ci-system-resource.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'adapters/system-resource/**'
+      - 'schemas/bus.system.resource.sample.*.json'
+      - '.github/workflows/ci-system-resource.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-system-resource-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  resource-tests:
+    runs-on: [self-hosted, linux, nervous-bus]
+    timeout-minutes: 5
+    steps:
+      - name: Configure Python PATH
+        run: |
+          echo "$HOME/.pyenv/shims" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@v6
+        with:
+          clean: false
+      - name: Ensure schema validator is available
+        run: |
+          if ! python3 -c 'import jsonschema'; then
+            python3 -m pip install --user --quiet jsonschema
+          fi
+      - name: Test collection, persistence and reports without GPU hardware
+        run: python3 -m unittest discover -s adapters/system-resource -p 'test_*.py'

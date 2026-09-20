@@ -6,6 +6,8 @@ import os
 import re
 from pathlib import Path
 
+from gpu import unavailable_gpu
+
 MAX_GROUPS = 8
 PHYSICAL_DISK = re.compile(r"(?:nvme\d+n\d+|[sv]d[a-z]+|xvd[a-z]+|mmcblk\d+|hd[a-z]+)$")
 
@@ -136,7 +138,8 @@ def cgroup_sample(root, relpath, physical):
     return row
 
 
-def collect(proc_root=Path("/proc"), cgroup_root=Path("/sys/fs/cgroup"), selectors=("user.slice",)):
+def collect(proc_root=Path("/proc"), cgroup_root=Path("/sys/fs/cgroup"), selectors=("user.slice",),
+            gpu_reader=None):
     boot_id = (text(proc_root / "sys/kernel/random/boot_id") or "").strip() or None
     physical = disks(text(proc_root / "diskstats"))
     memory = pairs(text(proc_root / "meminfo"))
@@ -177,4 +180,12 @@ def collect(proc_root=Path("/proc"), cgroup_root=Path("/sys/fs/cgroup"), selecto
     device_identity = hashlib.sha256(repr(sorted((key, d['name']) for key, d in physical.items())).encode()).hexdigest()
     for row in [host, *rows]:
         row["device_identity"] = device_identity
-    return {"boot_id": boot_id, "entities": [host, *rows], "warnings": warnings}
+    result = {"boot_id": boot_id, "entities": [host, *rows], "warnings": warnings}
+    if gpu_reader is not None:
+        # The query is intentionally outside every host/cgroup counter and its
+        # failure is a typed GPU measurement rather than a collection failure.
+        try:
+            result["gpu"] = gpu_reader()
+        except Exception:
+            result["gpu"] = unavailable_gpu("query_failed", attempted=True)
+    return result
