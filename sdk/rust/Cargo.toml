@@ -29,10 +29,10 @@ streams-live-tests = ["streams"]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-notify = { version = "7", optional = true }
+notify = { version = "8", optional = true }
 chrono = "0.4"
-ulid = "1.2"
-redis = { version = "0.27", optional = true, features = ["tokio-comp", "connection-manager", "streams"] }
+ulid = "3.0"
+redis = { version = "1.6", optional = true, features = ["tokio-comp", "connection-manager", "streams"] }
 tokio = { version = "1", optional = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
 
 [dev-dependencies]
