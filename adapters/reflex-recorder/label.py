@@ -70,6 +70,10 @@ _SOURCE_TIER: dict[str, int] = {
     "bead_close": 3,
     "bus_bead_closed": 3,
     "pr_merge": 3,
+    # A worker's own `worker_done --outcome`, tier 3 alongside bead/PR/
+    # git-merged: it is the worker's own explicit terminal report, not a
+    # behavioral guess.
+    "orca_worker_done": 3,
 }
 
 
@@ -407,6 +411,24 @@ def label_from_git_merge(
     return bo.outcome, bo.source
 
 
+# ── Explicit labeling from Orca worker_done self-report ────────────────────────
+
+def label_from_orca_worker_done(run: dict) -> Optional[tuple[str, str]]:
+    """Tier-3 label source: Orca `worker_done --outcome` self-report.
+
+    Thin wrapper so label.py has one call site; see orca_outcome.py for the
+    join mechanics (run['session_id'] == the codex rollout's own id) and the
+    outcome mapping. Degrades to None (never raises) if orca_outcome can't be
+    imported, matching label_from_git_merge's tolerance of a missing sibling
+    module.
+    """
+    try:
+        import orca_outcome
+    except ImportError:
+        return None
+    return orca_outcome.label_from_orca_worker_done(run)
+
+
 # ── Inferred labeling from behavior shape ─────────────────────────────────────
 
 # Tools classified as resolving actions (indicate productive completion):
@@ -709,17 +731,96 @@ def _infer_from_behavior(
 
 # ── Core labeling function ────────────────────────────────────────────────────
 
+def _prefer_higher_tier(
+    a: Optional[tuple[str, str]], b: Optional[tuple[str, str]],
+) -> Optional[tuple[str, str]]:
+    """Pick whichever of two (outcome, source) results has the higher source
+    tier. On a tie, keep `a` — used to prefer a git/PR verdict (more specific:
+    can say "landed") over an orca_worker_done verdict (only ever "clean" or
+    "abandoned") when both are tier 3: orca_worker_done must never downgrade
+    a stronger git/pr landed label.
+    """
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return b if _source_tier(b[1]) > _source_tier(a[1]) else a
+
+
+def _session_has_landed_sibling(conn: sqlite3.Connection, run: dict) -> bool:
+    """True if some OTHER run sharing this run's run_key committed, pushed,
+    or landed.
+
+    Keyed on run_key, NOT session_id/host_conversation_id: those two are
+    shared by a parent host session and every subagent/workflow shard it
+    dispatches (bus.agent.run.closed.v1's own schema note), so keying on
+    either treats unrelated subagents as siblings of the lead and of each
+    other, erasing genuine subagent abandonment. run_key is the
+    idle-timeout-split identity (segment.py's continues_run_id chain: one
+    agent/pane's run fragmented by the idle boundary) — only those segments
+    are the SAME logical run. A sibling counts as "landed elsewhere" on any of:
+      - outcome == 'landed' (any source — the strongest possible signal), or
+      - outcome == 'clean' AND the label's source is an EXPLICIT tier
+        (git/PR/bead/orca_worker_done — not just another behavior_inference
+        'clean', which could itself be the same false-positive this fix
+        guards against), or
+      - features.has_resolving_commit is True (a structured commit/push was
+        seen in that segment's own events, regardless of what it got labelled).
+    Read-only: one indexed SELECT keyed on run_key.
+    """
+    run_key = run.get("run_key")
+    run_id = run.get("run_id")
+    if not run_key:
+        return False
+
+    query = "SELECT outcome, label_history, features FROM runs WHERE run_key = ?"
+    params: list = [run_key]
+    if run_id:
+        query += " AND run_id != ?"
+        params.append(run_id)
+
+    cur = conn.execute(query, params)
+    for sib_outcome, sib_history_json, sib_features_json in cur.fetchall():
+        if sib_outcome == "landed":
+            return True
+        try:
+            features = json.loads(sib_features_json or "{}")
+        except (json.JSONDecodeError, TypeError):
+            features = {}
+        if features.get("has_resolving_commit"):
+            return True
+        if sib_outcome == "clean":
+            try:
+                history = json.loads(sib_history_json or "[]")
+            except (json.JSONDecodeError, TypeError):
+                history = []
+            source = history[-1].get("source") if history else None
+            if source in _EXPLICIT_SOURCES:
+                return True
+    return False
+
+
 def compute_label(
     run: dict,
     run_events: list[dict],
     verbose: bool = False,
+    conn: Optional[sqlite3.Connection] = None,
 ) -> Optional[tuple[str, str]]:
     """Compute the best available outcome + source for a run.
 
     Returns (outcome, source) or None if we cannot determine anything.
 
-    Precedence: bead_id explicit > pr explicit > git_revert > behavior_inferred.
-    Returns None when behavior inference returns None (insufficient signal).
+    Precedence: bead_id explicit > pr explicit > git_revert / orca_worker_done
+    (both tier 3, git preferred on tie) > behavior_inferred. Returns None when
+    behavior inference returns None (insufficient signal).
+
+    conn (optional): when given, an 'abandoned' behavior_inference verdict is
+    checked against sibling runs sharing this run's run_key before being
+    returned — see _session_has_landed_sibling. Callers with no DB connection
+    at hand (unit tests, --run-id single-row paths that haven't opened one)
+    simply skip that check; it can only ever turn a would-be 'abandoned' into
+    None, never the reverse, so omitting conn is always safe, just less
+    accurate.
     """
     bead_id = run.get("bead_id")
     git_branch = run.get("git_branch")
@@ -742,25 +843,41 @@ def compute_label(
         ]
         run_has_commit = _has_resolving_commit(non_heartbeat_calls)
 
-    # EXPLICIT: PR / git_revert
+    # EXPLICIT: PR / git_revert / local git ancestry
+    git_result: Optional[tuple[str, str]] = None
     if git_branch and git_branch not in ("HEAD", "main", "master"):
-        result = label_from_pr(git_branch, worktree)
-        if result:
-            if verbose:
-                print(f"  [label] branch={git_branch} → {result}")
-            return result
+        git_result = label_from_pr(git_branch, worktree)
+        if git_result is None:
+            # EXPLICIT: local git ancestry (squash/merge with no PR — tengine pattern)
+            git_result = label_from_git_merge(git_branch, run, run_has_commit=run_has_commit)
+        if git_result and verbose:
+            print(f"  [label] branch={git_branch} → {git_result}")
 
-        # EXPLICIT: local git ancestry (squash/merge with no PR — tengine pattern)
-        result = label_from_git_merge(git_branch, run, run_has_commit=run_has_commit)
-        if result:
-            if verbose:
-                print(f"  [label] git-ancestry branch={git_branch} → {result}")
-            return result
+    # EXPLICIT: Orca worker_done self-report. Runs entirely in-process from
+    # cached rollout text — no subprocess, so it's cheap to always check even
+    # when git_result already exists (the tier compare below decides which
+    # one wins; it never downgrades git_result).
+    orca_result = label_from_orca_worker_done(run)
+    if orca_result and verbose:
+        print(f"  [label] session_id={run.get('session_id')} orca_worker_done → {orca_result}")
+
+    explicit_result = _prefer_higher_tier(git_result, orca_result)
+    if explicit_result:
+        return explicit_result
 
     # INFERRED: behavior shape (may return None)
     outcome, source = _infer_from_behavior(run, parsed, verbose=verbose)
     if outcome is None:
         return None
+
+    # An 'abandoned' verdict from behavior_inference is a per-segment read;
+    # roll it up to the run's other segments before it's terminal.
+    if outcome == "abandoned" and conn is not None and _session_has_landed_sibling(conn, run):
+        if verbose:
+            print(f"  [label] run={run.get('run_id', '')[:12]} abandoned → None "
+                  f"(sibling segment landed; session rollup)")
+        return None
+
     return outcome, source
 
 
@@ -1003,7 +1120,7 @@ def backfill(
 
         # Compute label
         # B5 fix: None = insufficient signal → leave outcome as null
-        label_result = compute_label(run, run_events, verbose=verbose)
+        label_result = compute_label(run, run_events, verbose=verbose, conn=conn)
         if label_result is None:
             outcome, source = None, "behavior_inference"
         else:
@@ -1192,35 +1309,40 @@ def reverify_run(
     Returns (outcome, source) when an explicit ground-truth verdict exists
     (whether or not it matches the current label — the caller decides what to
     do with a confirmation vs. a flip). Returns None when no explicit signal
-    is available yet (no PR, branch still pending / repo unresolvable) — the
-    run stays exactly as it is; reverify NEVER writes a weaker or absent
-    verdict over an existing label.
+    is available yet (no PR, branch still pending / repo unresolvable, and no
+    orca_worker_done match) — the run stays exactly as it is; reverify NEVER
+    writes a weaker or absent verdict over an existing label.
+
+    Also tries the orca_worker_done tier alongside the git tiers: since every
+    candidate here is, by construction (select_reverify_candidates), currently
+    only behavior_inference, any tier-3 result from either source is a strict
+    upgrade — _prefer_higher_tier just picks git over orca_worker_done on a
+    tie (git's "landed" is more specific than orca's "clean"/"abandoned").
     """
     git_branch = run.get("git_branch")
-    if not git_branch or git_branch in ("HEAD", "main", "master"):
-        return None
-    worktree = run.get("worktree")
+    git_result: Optional[tuple[str, str]] = None
 
-    result = label_from_pr(git_branch, worktree)
-    if result:
-        return result
+    if git_branch and git_branch not in ("HEAD", "main", "master"):
+        worktree = run.get("worktree")
+        git_result = label_from_pr(git_branch, worktree)
 
-    run_has_commit = _run_has_commit_from_features(run)
+        if git_result is None:
+            run_has_commit = _run_has_commit_from_features(run)
+            # require_dispatch_shape=False: reverify only ever touches labels
+            # that are already behavior_inference (never a stronger source,
+            # and never a bead label — see select_reverify_candidates), so
+            # dropping the branch-name shape gate here cannot demote or
+            # misclassify an explicit label; it can only recover ground truth
+            # for branches the fresh-labeling path can't see (Orca-style task
+            # branches — see label_from_git_merge's docstring).
+            git_result = label_from_git_merge(
+                git_branch, run, verify_discards=verify_discards, require_dispatch_shape=False,
+                run_has_commit=run_has_commit,
+            )
 
-    # require_dispatch_shape=False: reverify only ever touches labels that are
-    # already behavior_inference (never a stronger source, and never a bead
-    # label — see select_reverify_candidates), so dropping the branch-name
-    # shape gate here cannot demote or misclassify an explicit label; it can
-    # only recover ground truth for branches the fresh-labeling path can't see
-    # (Orca-style task branches — see label_from_git_merge's docstring).
-    result = label_from_git_merge(
-        git_branch, run, verify_discards=verify_discards, require_dispatch_shape=False,
-        run_has_commit=run_has_commit,
-    )
-    if result:
-        return result
+    orca_result = label_from_orca_worker_done(run)
 
-    return None
+    return _prefer_higher_tier(git_result, orca_result)
 
 
 def reverify_labels(
