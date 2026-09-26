@@ -1,62 +1,33 @@
 """orca_outcome.py — Orca `worker_done --outcome` as a tier-3 label source.
 
-nervous-bus#48 (fix 5, from the codex-success-root-cause report, mechanism H):
 Orca workers self-report their outcome by shelling out to
 `orca orchestration send --type worker_done --outcome succeeded|failed|blocked`
-before stopping. Nothing in label.py reads that signal, so every Orca worker
-child — read-only audits, report-only lanes, anything that does not itself
-`git commit` inside a short command preview — is scored purely by
-`_infer_from_behavior`'s tail-of-events heuristic and falls into `abandoned`.
+before stopping. label.py has no other reader for that signal.
 
-GROUND-TRUTH SOURCE SEARCHED FIRST: Orca's own orchestration store,
-`~/.config/orca/orchestration.db` (sqlite; tables `messages`, `worker_dispatches`,
-`dispatch_contexts`, `external_worker_runs`, `coordinator_runs`). `messages` has a
-`type='worker_done'` row with a `payload` JSON containing `taskId`/`dispatchId`/
-`outcome`/`filesModified`/`reportPath` — the outcome field this module wants.
-But NONE of `messages`, `dispatch_contexts`, `worker_dispatches`, or
-`external_worker_runs` carries a codex rollout id (the `runs.session_id` join
-key): the closest identifiers are `assignee_pane_key`/`process_incarnation`
-(terminal/pane UUIDs) and `sender_pane_key`, none of which match the
-`NNNNNNNN-NNNN-7NNN-...` ULID shape codex-hook stamps into `runs.session_id`.
-Read-only probes run: `.tables`, `.schema` on every table listed above, and
-`orca-ide orchestration inbox/dispatch-show --json` (no send/create/stop
-issued). Absent an id bridge in that DB, this module falls back to the
-documented fallback source instead: the codex rollout files themselves.
-
-FALLBACK SOURCE (what this module actually reads): every codex CLI worker
-shells its own `orca orchestration send --type worker_done --outcome X` call,
-which lands as a `CommandExecution` record in that worker's own rollout
-transcript. The rollout's own id IS `runs.session_id` (verified below), so no
-join table is needed — parse the outcome straight out of the run's own
-rollout file.
-
-session_id == rollout id, verified on real rows (5 shown, not just asserted):
-    sqlite3 runs.db "SELECT session_id FROM runs WHERE agent_kind LIKE '%codex%' LIMIT 5"
-      019ec98a-d2d9-7bd1-a62b-2397c4e9e99a
-      019ec951-1b69-7632-b059-44ce443b6990
-      019ec98b-53ee-7bc0-a705-475226dd9d17
-      019ec98b-5d1c-7150-8e8e-546993e1f1d9
-      019eccb1-2e47-7760-b4c1-36b1ff926b73
-    each has a file literally named
-      rollout-<timestamp>-<that same id>.jsonl
-    under ~/.codex/sessions/YYYY/MM/DD/ and/or
-    ~/.config/orca/codex-accounts/<acct>/home/sessions/YYYY/MM/DD/ (the same
-    rollout is mirrored verbatim under every configured account — dedupe by id).
+Orca's own orchestration store (`~/.config/orca/orchestration.db`) has a
+`messages` row with `type='worker_done'` carrying the outcome, but none of
+`messages`/`dispatch_contexts`/`worker_dispatches`/`external_worker_runs`
+carries a codex rollout id — only pane/dispatch UUIDs, which don't match the
+`runs.session_id` join key. This module instead reads the codex rollout files
+directly: each worker's own `orca orchestration send ... --type worker_done`
+call lands as a `CommandExecution` in that worker's own rollout transcript,
+and the rollout's filename already contains the join key —
+`rollout-<timestamp>-<session_id>.jsonl`, and `runs.session_id` is exactly
+that id (mirrored verbatim under every configured account under
+`~/.config/orca/codex-accounts/<acct>/home/sessions/`; dedupe by session id,
+not path).
 
 Outcome mapping (tier 3, alongside bead_close/pr_merge/git_merged_into_main):
     succeeded -> "clean"     (the coordinator, not the worker, lands/merges —
                               per the Orca contract a worker never commits to
                               main itself, so "clean" not "landed")
-    failed    -> "abandoned" (closest existing outcome in the schema enum;
-                              schemas/bus.agent.run.closed.v1.json's `outcome`
+    failed    -> "abandoned" (closest existing outcome; the schema's outcome
                               enum is frozen to
                               landed/abandoned/reverted/thrashed/corrected/clean/null
-                              — there is no "failed", and adding one is out of
-                              scope for this fix)
-    blocked   -> None        (ambiguous: often a REJECT-worked-as-designed
-                              audit verdict, not a run failure — see the root-
-                              cause report's row 12; leave unlabeled rather than
-                              guess)
+                              — there is no "failed")
+    blocked   -> None        (ambiguous — often a REJECT-worked-as-designed
+                              audit verdict, not a run failure; leave
+                              unlabeled rather than guess)
 """
 from __future__ import annotations
 
@@ -69,8 +40,8 @@ from typing import Optional
 
 # Every place a codex rollout can live. `~/.codex/sessions` is the primary
 # runtime; `~/.config/orca/codex-accounts/<acct>/home/sessions` mirrors the
-# exact same files per configured account (2 accounts observed 2026-09-25) —
-# duplicates, deduped below by session id, not by path.
+# exact same files per configured account — duplicates, deduped below by
+# session id, not by path.
 def _rollout_roots() -> list[str]:
     roots = [str(Path.home() / ".codex" / "sessions")]
     roots.extend(sorted(glob.glob(

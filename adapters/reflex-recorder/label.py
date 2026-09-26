@@ -70,9 +70,9 @@ _SOURCE_TIER: dict[str, int] = {
     "bead_close": 3,
     "bus_bead_closed": 3,
     "pr_merge": 3,
-    # Orca worker self-report (nervous-bus-48 fix 5) — a worker's own
-    # `worker_done --outcome`, tier 3 alongside bead/PR/git-merged: it is the
-    # worker's own explicit terminal report, not a behavioral guess.
+    # A worker's own `worker_done --outcome`, tier 3 alongside bead/PR/
+    # git-merged: it is the worker's own explicit terminal report, not a
+    # behavioral guess.
     "orca_worker_done": 3,
 }
 
@@ -411,7 +411,7 @@ def label_from_git_merge(
     return bo.outcome, bo.source
 
 
-# ── Explicit labeling from Orca worker_done self-report (nervous-bus-48 fix 5) ─
+# ── Explicit labeling from Orca worker_done self-report ────────────────────────
 
 def label_from_orca_worker_done(run: dict) -> Optional[tuple[str, str]]:
     """Tier-3 label source: Orca `worker_done --outcome` self-report.
@@ -737,8 +737,8 @@ def _prefer_higher_tier(
     """Pick whichever of two (outcome, source) results has the higher source
     tier. On a tie, keep `a` — used to prefer a git/PR verdict (more specific:
     can say "landed") over an orca_worker_done verdict (only ever "clean" or
-    "abandoned") when both are tier 3, per nervous-bus-48 fix 5: orca
-    worker_done must never DOWNGRADE a stronger git/pr landed label.
+    "abandoned") when both are tier 3: orca_worker_done must never downgrade
+    a stronger git/pr landed label.
     """
     if a is None:
         return b
@@ -748,14 +748,17 @@ def _prefer_higher_tier(
 
 
 def _session_has_landed_sibling(conn: sqlite3.Connection, run: dict) -> bool:
-    """True if some OTHER run sharing this run's session_id or
-    host_conversation_id committed, pushed, or landed.
+    """True if some OTHER run sharing this run's run_key committed, pushed,
+    or landed.
 
-    nervous-bus-48 fix 8: segment.py's 15-minute idle_timeout (mechanism G in
-    the codex-success-root-cause report) splits one logical session into many
-    runs; a coordinator/lead session can land on main in one segment while
-    idling in another, and only the landing segment ever shows a resolving
-    action. A sibling counts as "landed elsewhere" on any of:
+    Keyed on run_key, NOT session_id/host_conversation_id: those two are
+    shared by a parent host session and every subagent/workflow shard it
+    dispatches (bus.agent.run.closed.v1's own schema note), so keying on
+    either treats unrelated subagents as siblings of the lead and of each
+    other, erasing genuine subagent abandonment. run_key is the
+    idle-timeout-split identity (segment.py's continues_run_id chain: one
+    agent/pane's run fragmented by the idle boundary) — only those segments
+    are the SAME logical run. A sibling counts as "landed elsewhere" on any of:
       - outcome == 'landed' (any source — the strongest possible signal), or
       - outcome == 'clean' AND the label's source is an EXPLICIT tier
         (git/PR/bead/orca_worker_done — not just another behavior_inference
@@ -763,25 +766,15 @@ def _session_has_landed_sibling(conn: sqlite3.Connection, run: dict) -> bool:
         guards against), or
       - features.has_resolving_commit is True (a structured commit/push was
         seen in that segment's own events, regardless of what it got labelled).
-    Read-only: one indexed SELECT keyed on session_id/host_conversation_id.
+    Read-only: one indexed SELECT keyed on run_key.
     """
-    session_id = run.get("session_id")
-    host_conversation_id = run.get("host_conversation_id")
+    run_key = run.get("run_key")
     run_id = run.get("run_id")
-    if not session_id and not host_conversation_id:
+    if not run_key:
         return False
 
-    clauses = []
-    params: list = []
-    if session_id:
-        clauses.append("session_id = ?")
-        params.append(session_id)
-    if host_conversation_id:
-        clauses.append("host_conversation_id = ?")
-        params.append(host_conversation_id)
-    where_id = " OR ".join(clauses)
-
-    query = f"SELECT outcome, label_history, features FROM runs WHERE ({where_id})"
+    query = "SELECT outcome, label_history, features FROM runs WHERE run_key = ?"
+    params: list = [run_key]
     if run_id:
         query += " AND run_id != ?"
         params.append(run_id)
@@ -822,12 +815,12 @@ def compute_label(
     behavior inference returns None (insufficient signal).
 
     conn (optional): when given, an 'abandoned' behavior_inference verdict is
-    checked against sibling runs of the same session before being returned —
-    see _session_has_landed_sibling (nervous-bus-48 fix 8). Callers with no DB
-    connection at hand (unit tests, --run-id single-row paths that haven't
-    opened one) simply skip that check; it can only ever turn a would-be
-    'abandoned' into None, never the reverse, so omitting conn is always safe,
-    just less accurate.
+    checked against sibling runs sharing this run's run_key before being
+    returned — see _session_has_landed_sibling. Callers with no DB connection
+    at hand (unit tests, --run-id single-row paths that haven't opened one)
+    simply skip that check; it can only ever turn a would-be 'abandoned' into
+    None, never the reverse, so omitting conn is always safe, just less
+    accurate.
     """
     bead_id = run.get("bead_id")
     git_branch = run.get("git_branch")
@@ -860,10 +853,10 @@ def compute_label(
         if git_result and verbose:
             print(f"  [label] branch={git_branch} → {git_result}")
 
-    # EXPLICIT: Orca worker_done self-report (nervous-bus-48 fix 5). Runs
-    # entirely in-process from cached rollout text — no subprocess, so it's
-    # cheap to always check even when git_result already exists (the tier
-    # compare below decides which one wins; it never downgrades git_result).
+    # EXPLICIT: Orca worker_done self-report. Runs entirely in-process from
+    # cached rollout text — no subprocess, so it's cheap to always check even
+    # when git_result already exists (the tier compare below decides which
+    # one wins; it never downgrades git_result).
     orca_result = label_from_orca_worker_done(run)
     if orca_result and verbose:
         print(f"  [label] session_id={run.get('session_id')} orca_worker_done → {orca_result}")
@@ -877,8 +870,8 @@ def compute_label(
     if outcome is None:
         return None
 
-    # nervous-bus-48 fix 8: an 'abandoned' verdict from behavior_inference is
-    # a per-segment read; roll it up to the session before it's terminal.
+    # An 'abandoned' verdict from behavior_inference is a per-segment read;
+    # roll it up to the run's other segments before it's terminal.
     if outcome == "abandoned" and conn is not None and _session_has_landed_sibling(conn, run):
         if verbose:
             print(f"  [label] run={run.get('run_id', '')[:12]} abandoned → None "
@@ -1320,12 +1313,11 @@ def reverify_run(
     orca_worker_done match) — the run stays exactly as it is; reverify NEVER
     writes a weaker or absent verdict over an existing label.
 
-    Also tries the orca_worker_done tier (nervous-bus-48 fix 5) alongside the
-    git tiers: since every candidate here is, by construction
-    (select_reverify_candidates), currently only behavior_inference, any
-    tier-3 result from either source is a strict upgrade — _prefer_higher_tier
-    just picks git over orca_worker_done on a tie (git's "landed" is more
-    specific than orca's "clean"/"abandoned").
+    Also tries the orca_worker_done tier alongside the git tiers: since every
+    candidate here is, by construction (select_reverify_candidates), currently
+    only behavior_inference, any tier-3 result from either source is a strict
+    upgrade — _prefer_higher_tier just picks git over orca_worker_done on a
+    tie (git's "landed" is more specific than orca's "clean"/"abandoned").
     """
     git_branch = run.get("git_branch")
     git_result: Optional[tuple[str, str]] = None
