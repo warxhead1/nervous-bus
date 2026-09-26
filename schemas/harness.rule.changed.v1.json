@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/harness.rule.changed.v1.json",
+  "title": "harness.rule.changed v1",
+  "description": "An agent-harness rule file changed (a committed edit to a versioned rules tree such as ~/.claude/memory-global). Emitted by that tree's post-commit hook so remediation effect (detector / correction-theme hit rate before vs after) can be measured against a dated, diffable change. Carries identity only — file names, commit SHA and rule ids — NEVER rule content.",
+  "type": "object",
+  "required": ["tree", "commit", "committed_at", "files"],
+  "properties": {
+    "tree": {
+      "type": "string",
+      "description": "Logical name of the rules tree, e.g. 'claude-memory-global', 'agent-skills', 'hook-rules'."
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$",
+      "description": "Commit SHA in the rules tree's repository."
+    },
+    "committed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Commit time, RFC3339 UTC."
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "change"],
+        "properties": {
+          "path": {"type": "string", "description": "Path relative to the tree root."},
+          "change": {"type": "string", "enum": ["added", "modified", "deleted", "renamed"]}
+        },
+        "additionalProperties": false
+      },
+      "description": "Files touched by the commit."
+    },
+    "rule_ids": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Rule ids affected, resolved from the tree's rules.toml (rule id -> files, target detectors, correction themes). Empty when no mapping exists."
+    }
+  },
+  "additionalProperties": false
+}
