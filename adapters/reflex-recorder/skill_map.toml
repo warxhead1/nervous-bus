@@ -1,0 +1,52 @@
+# skill_map.toml — CLI invocation -> skill name, for detectors/skill_opportunity.py.
+#
+# Each [[map]] entry:
+#   skill           the skill name a run "should have" loaded (matched against
+#                   runs.features.skills keys, populated by skill_usage.py's
+#                   fold_skill_features from bus.agent.activity.v1 tool_call
+#                   events — see that module's docstring).
+#   pattern         regex (re.IGNORECASE, re.search) matched against a Bash
+#                   tool_call's extracted command string.
+#   context_pattern optional second regex that must ALSO match the same
+#                   command string. Used when `pattern` alone is too broad
+#                   (e.g. bare "cargo" needs "hearth" nearby to mean the
+#                   hearth-dev skill specifically, not any Rust project's
+#                   cargo invocation).
+#
+# Issue #39 seed set (nervous-bus#39). Extend this file, never hardcode a
+# mapping in skill_opportunity.py — the detector is generic over this table.
+
+[[map]]
+skill = "hearth-loom-dispatch"
+pattern = '\bhearth-loom\b'
+
+[[map]]
+skill = "beads"
+# `bd` as its own shell token followed by a known subcommand — avoids matching
+# "bd" as a substring of an unrelated word or path.
+pattern = '(?:^|[\s;&|`])bd\s+(?:create|update|show|ready|close|claim|list|prime|remember)\b'
+
+[[map]]
+skill = "hearth-vault"
+pattern = '\bhearth-vault\b'
+
+[[map]]
+skill = "dns"
+pattern = '\b(?:gddy|digitalocean)\b'
+
+[[map]]
+skill = "mmx"
+pattern = '\b(?:mmx-dispatch|mmx)\b'
+
+[[map]]
+skill = "orchestration"
+pattern = '\borca-ide\s+orchestration\b'
+
+[[map]]
+skill = "kb-knowledge"
+pattern = '\bkb\s+(?:query|brief)\b'
+
+[[map]]
+skill = "hearth-dev"
+pattern = '\b(?:hearth-build|cargo)\b'
+context_pattern = '\bhearth\b'
