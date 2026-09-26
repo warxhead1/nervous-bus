@@ -232,6 +232,19 @@ def build_digest(
         step_timeout,
     ) or []
 
+    # user_correction / skill_opportunity: distinct-run counts per signature
+    # (theme / skill name).
+    correction_bypass_hits = _run_json(
+        "query.py sql (user_correction/skill_opportunity digest source)",
+        [sys.executable, "query.py", "--db", str(db_path), "sql",
+         "SELECT detector AS detector, signature AS signature, "
+         "COUNT(DISTINCT run_id) AS n FROM detector_hits "
+         "WHERE detector IN ('user_correction', 'skill_opportunity') "
+         f"AND ts >= '{window_cutoff}' GROUP BY detector, signature",
+         "--json"],
+        step_timeout,
+    ) or []
+
     # Issue #34: per-agent_kind tool_call coverage gauge. segment.py stamps
     # runs.tool_histogram from 'tool_call' events at close time (see
     # segment.py:187-188), so "tool_histogram not empty" IS "runs with >=1
@@ -429,6 +442,21 @@ def build_digest(
     else:
         lines.append("- no failure-taxonomy hits in window (or query unavailable)")
     lines.append("")
+
+    for detector, title, empty in (
+        ("user_correction", "User corrections by theme", "no user corrections"),
+        ("skill_opportunity", "Skill bypasses (CLI used, skill not loaded)", "no skill bypasses"),
+    ):
+        lines.append(f"## {title} ({window_days}d)")
+        lines.append("")
+        rows = [r for r in correction_bypass_hits if r.get("detector") == detector]
+        if rows:
+            for row in sorted(rows, key=lambda r: (-r.get("n", 0), r.get("signature", ""))):
+                sig = row.get("signature", "")
+                lines.append(f"- {sig.rsplit(':', 1)[-1] if sig else '?'}: {row.get('n', 0)} run(s)")
+        else:
+            lines.append(f"- {empty} in window (or query unavailable)")
+        lines.append("")
 
     text = "\n".join(lines) + "\n"
     return text

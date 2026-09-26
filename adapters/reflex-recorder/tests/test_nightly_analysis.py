@@ -216,3 +216,36 @@ def _make_empty_db(db_path: Path) -> None:
     )
     conn.commit()
     conn.close()
+
+
+class TestCorrectionAndBypassSections:
+    def test_digest_reports_user_correction_and_skill_opportunity(self, monkeypatch, tmp_path):
+        db_path = tmp_path / "runs.db"
+        _make_empty_db(db_path)
+
+        def fake_run_json(name, cmd, timeout):
+            if "user_correction/skill_opportunity" in name:
+                return [
+                    {"detector": "user_correction", "signature": "proj:user_correction:sudo", "n": 2},
+                    {"detector": "skill_opportunity", "signature": "beads", "n": 5},
+                ]
+            return []
+
+        monkeypatch.setattr(na, "_run_json", fake_run_json)
+        ok = na.StepResult("x", True, "ok", 1.0, "", "")
+        text = na.build_digest(db_path, ok, ok, window_days=7,
+                               struggle_window_days=14, step_timeout=300)
+        assert "## User corrections by theme (7d)" in text
+        assert "- sudo: 2 run(s)" in text
+        assert "## Skill bypasses (CLI used, skill not loaded) (7d)" in text
+        assert "- beads: 5 run(s)" in text
+
+    def test_digest_sections_present_when_empty(self, monkeypatch, tmp_path):
+        db_path = tmp_path / "runs.db"
+        _make_empty_db(db_path)
+        monkeypatch.setattr(na, "_run_json", lambda *a, **k: [])
+        ok = na.StepResult("x", True, "ok", 1.0, "", "")
+        text = na.build_digest(db_path, ok, ok, window_days=7,
+                               struggle_window_days=14, step_timeout=300)
+        assert "- no user corrections in window" in text
+        assert "- no skill bypasses in window" in text
