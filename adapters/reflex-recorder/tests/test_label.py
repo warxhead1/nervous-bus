@@ -345,6 +345,35 @@ class TestExplicitSourcePrecedence(unittest.TestCase):
         outcome, source = result
         self.assertEqual(source, "behavior_inference")
 
+    def test_compute_label_threads_run_has_commit_true(self):
+        """Follow-up fix (2026-09-25): compute_label must derive run_has_commit
+        from the parsed run_events (a real resolving commit present) and pass
+        it through to label_from_git_merge."""
+        run = _make_run(git_branch="warxhead1/some-lane", close_reason="idle_timeout")
+        events = _wrap([_read(), _bash(), _commit()])
+        with patch("label.label_from_bead", MagicMock(return_value=None)):
+            with patch("label.label_from_pr", MagicMock(return_value=None)):
+                with patch("label.label_from_git_merge") as mock_git_merge:
+                    mock_git_merge.return_value = None
+                    compute_label(run, events, verbose=False)
+        mock_git_merge.assert_called_once()
+        _args, kwargs = mock_git_merge.call_args
+        self.assertTrue(kwargs.get("run_has_commit"))
+
+    def test_compute_label_threads_run_has_commit_false(self):
+        """No resolving commit anywhere in run_events → run_has_commit=False,
+        not None (a real read-only/audit run, not merely 'unknown')."""
+        run = _make_run(git_branch="warxhead1/some-lane", close_reason="idle_timeout")
+        events = _wrap([_read() for _ in range(5)])
+        with patch("label.label_from_bead", MagicMock(return_value=None)):
+            with patch("label.label_from_pr", MagicMock(return_value=None)):
+                with patch("label.label_from_git_merge") as mock_git_merge:
+                    mock_git_merge.return_value = None
+                    compute_label(run, events, verbose=False)
+        mock_git_merge.assert_called_once()
+        _args, kwargs = mock_git_merge.call_args
+        self.assertIs(kwargs.get("run_has_commit"), False)
+
     def test_main_branch_skips_pr_check(self):
         """Runs on 'main' branch skip the PR lookup (structural branch)."""
         run = _make_run(git_branch="main", close_reason="ended", event_count=5)
@@ -618,6 +647,199 @@ class TestBackfillIntegration(unittest.TestCase):
             self.assertEqual(second_pass, [])
         finally:
             db_path.unlink(missing_ok=True)
+
+
+# ── nervous-bus #47: codex false-abandon regression tests ────────────────────
+# See /home/eric/data2/orca/nervous-bus/_evidence/2026-09-25/codex-success-root-cause.md
+# § mechanisms A-K and § Step 4 fixes 1, 4, 6, 7, 9, 10, 11.
+
+def _apply_patch(fail=False):
+    """codex-cli's edit tool (its equivalent of Edit/Write)."""
+    return _event(tool_name="apply_patch", tool_is_error=fail)
+
+
+class TestApplyPatchIsResolvingEdit(unittest.TestCase):
+    """fix 1 / mechanism A: apply_patch must count as an edit."""
+
+    def test_apply_patch_tail_counts_as_resolving_edit(self):
+        self.assertTrue(_has_resolving_edit([_read(), _bash(), _apply_patch()]))
+
+    def test_apply_patch_tail_prevents_abandon(self):
+        """A codex segment ending in apply_patch must not be abandoned, the
+        same way an equivalent Claude segment ending in Edit is not."""
+        run = _make_run(close_reason="idle_timeout", event_count=10)
+        events = [_read() for _ in range(5)] + [_bash() for _ in range(3)] + [_apply_patch()]
+        outcome, _source = _infer_from_behavior(run, events, verbose=False)
+        self.assertNotEqual(outcome, "abandoned")
+
+    def test_apply_patch_in_resolving_tools_set(self):
+        from label import _RESOLVING_TOOLS
+        self.assertIn("apply_patch", _RESOLVING_TOOLS)
+
+
+class TestCommitRegexAnchored(unittest.TestCase):
+    """fix 4 / mechanism C: commit regex must not match `git diff-tree`."""
+
+    def test_diff_tree_no_commit_id_does_not_match(self):
+        ev = _event(
+            tool_name="Bash",
+            tool_summary=json.dumps({"command": "git diff-tree --no-commit-id -r HEAD"}),
+        )
+        self.assertFalse(_has_resolving_commit([ev]))
+
+    def test_git_dash_c_commit_matches(self):
+        ev = _event(
+            tool_name="Bash",
+            tool_summary=json.dumps({"command": "git -C /x commit -m 'msg'"}),
+        )
+        self.assertTrue(_has_resolving_commit([ev]))
+
+    def test_cd_then_commit_matches(self):
+        ev = _event(
+            tool_name="Bash",
+            tool_summary=json.dumps({"command": "cd a && git commit -m 'msg'"}),
+        )
+        self.assertTrue(_has_resolving_commit([ev]))
+
+    def test_plain_git_commit_still_matches(self):
+        self.assertTrue(_has_resolving_commit([_commit()]))
+
+
+class TestHeartbeatExcluded(unittest.TestCase):
+    """fix 6 / mechanism F: heartbeat events must not drive behavior inference."""
+
+    def test_heartbeat_only_run_is_null(self):
+        """A run with only heartbeat events (any tool_name) must label NULL,
+        never 'abandoned' — even though heartbeats carry a tool_name."""
+        run = _make_run(close_reason="idle_timeout", event_count=10)
+        events = [_event(tool_name="Bash", event="heartbeat") for _ in range(12)]
+        outcome, source = _infer_from_behavior(run, events, verbose=False)
+        self.assertIsNone(outcome)
+
+    def test_heartbeat_with_apply_patch_tool_name_still_null(self):
+        """Measured shape: heartbeats can carry tool_name='apply_patch' too."""
+        run = _make_run(close_reason="idle_timeout", event_count=10)
+        events = [_event(tool_name="apply_patch", event="heartbeat") for _ in range(12)]
+        outcome, source = _infer_from_behavior(run, events, verbose=False)
+        self.assertIsNone(outcome)
+
+    def test_heartbeats_dont_rescue_a_real_abandon(self):
+        """Heartbeats mixed with genuine idle non-resolving tool calls must
+        still allow 'abandoned' — this only strips heartbeats, not the signal."""
+        run = _make_run(close_reason="idle_timeout", event_count=10)
+        events = (
+            [_read() for _ in range(5)]
+            + [_bash() for _ in range(5)]
+            + [_event(tool_name="Bash", event="heartbeat") for _ in range(20)]
+        )
+        outcome, source = _infer_from_behavior(run, events, verbose=False)
+        self.assertEqual(outcome, "abandoned")
+
+
+class TestToolCallCountNotRawEventCount(unittest.TestCase):
+    """fix 7 / mechanism E: abandon thresholds count tool_call events, not
+    tool_call+tool_return (segment.py:176 vs :188)."""
+
+    def test_tool_return_events_dont_inflate_abandon_threshold(self):
+        """5 real tool_call events plus 5 paired tool_return events (codex's
+        shape) must NOT reach the 'substantial' (>=2x ABANDON_MIN_EVENTS)
+        threshold on tool_return padding alone."""
+        run = _make_run(close_reason="idle_timeout", event_count=10)
+        tool_calls = [_read() for _ in range(3)] + [_bash() for _ in range(2)]
+        tool_returns = [
+            _event(tool_name=ev["tool_name"], event="tool_return") for ev in tool_calls
+        ]
+        events = tool_calls + tool_returns  # 10 raw events, only 5 are tool_call
+        outcome, source = _infer_from_behavior(run, events, verbose=False)
+        # has_failure_signal is False (no bash fails) and n_tool_call_events(5)
+        # is not >= ABANDON_MIN_EVENTS*2(10), so this must NOT be abandoned
+        # purely from tool_return padding.
+        self.assertNotEqual(outcome, "abandoned")
+
+    def test_ten_real_tool_calls_with_returns_still_abandons(self):
+        """The abandon signal must still fire on a genuinely substantial run
+        once tool_call count (not raw event count) crosses the threshold."""
+        run = _make_run(close_reason="idle_timeout", event_count=10)
+        tool_calls = [_read() for _ in range(6)] + [_bash() for _ in range(6)]
+        tool_returns = [
+            _event(tool_name=ev["tool_name"], event="tool_return") for ev in tool_calls
+        ]
+        events = tool_calls + tool_returns
+        outcome, source = _infer_from_behavior(run, events, verbose=False)
+        self.assertEqual(outcome, "abandoned")
+
+
+class TestDispatchBranchRegexWidened(unittest.TestCase):
+    """fix 9 / mechanism I: _DISPATCH_BRANCH_RE must accept any non-trunk
+    branch, not just the tengine-era worktree-agent-/wf- shapes."""
+
+    def test_orca_style_branch_matches(self):
+        from label import _DISPATCH_BRANCH_RE
+        self.assertTrue(_DISPATCH_BRANCH_RE.match("warxhead1/label-reverify"))
+        self.assertTrue(_DISPATCH_BRANCH_RE.match("codex/some-task"))
+        self.assertTrue(_DISPATCH_BRANCH_RE.match("acquisition-channels"))
+
+    def test_old_dispatch_shapes_still_match(self):
+        from label import _DISPATCH_BRANCH_RE
+        self.assertTrue(_DISPATCH_BRANCH_RE.match("worktree-agent-abc123"))
+        self.assertTrue(_DISPATCH_BRANCH_RE.match("agent-abc123"))
+
+    def test_trunk_branches_excluded(self):
+        from label import _DISPATCH_BRANCH_RE
+        self.assertFalse(_DISPATCH_BRANCH_RE.match("main"))
+        self.assertFalse(_DISPATCH_BRANCH_RE.match("master"))
+        self.assertFalse(_DISPATCH_BRANCH_RE.match("HEAD"))
+
+
+class TestProjectRepoRootGitCommonDir(unittest.TestCase):
+    """fix 9 / mechanism I: _project_repo_root should resolve via
+    `git rev-parse --git-common-dir` from inside the worktree, which works
+    for ANY worktree layout — not just `.claude/worktrees/<slug>`."""
+
+    def test_resolves_data2_worktree_layout_via_git_common_dir(self):
+        import subprocess
+        import tempfile as tf
+        from label import _project_repo_root
+
+        with tf.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "main-repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+            (repo / "f.txt").write_text("x")
+            subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+
+            # Simulate a data2-style worktree path — NOT under .claude/worktrees/
+            wt = Path(tmp) / "data2" / "worktrees" / "someproj" / "lane-x"
+            wt.parent.mkdir(parents=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "worktree", "add", "-q", "-b", "lane-branch", str(wt)],
+                check=True,
+            )
+
+            run = {"project": "someproj", "worktree": str(wt)}
+            resolved = _project_repo_root(run)
+            self.assertEqual(str(Path(resolved).resolve()), str(repo.resolve()))
+
+    def test_falls_back_to_claude_worktrees_strip_when_dir_gone(self):
+        """When the worktree directory no longer exists, fall back to the
+        legacy .claude/worktrees/ string-strip (git-common-dir needs a live
+        worktree to query)."""
+        import tempfile as tf
+        from label import _project_repo_root
+
+        with tf.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "main-repo"
+            repo.mkdir()
+            import subprocess
+            subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+
+            gone_wt = f"{repo}/.claude/worktrees/agent-xyz"
+            run = {"project": "someproj", "worktree": gone_wt}
+            resolved = _project_repo_root(run)
+            self.assertEqual(resolved, str(repo))
 
 
 if __name__ == "__main__":

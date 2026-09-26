@@ -508,37 +508,50 @@ class TestB3ResolvingCommitDetection(unittest.TestCase):
 # ── B4: gh -C invocation ─────────────────────────────────────────────────────
 
 class TestB4GhCInvocation(unittest.TestCase):
-    """gh pr view uses -C <dir>, not --repo ."""
+    """gh pr view runs with cwd=<dir>, not a `-C <dir>` argv flag.
 
-    def test_gh_called_with_dash_c(self):
-        """_gh_pr_state must call gh with -C <dir>, not --repo ."""
+    fix #47/mechanism J: `gh` has no global `-C` flag — verified live:
+    `gh -C /tmp pr view` fails with "unknown shorthand flag: 'C' in -C". The
+    old argv-based test only asserted "-C" appeared SOMEWHERE in the mocked
+    argv, which passed against code that never worked against real gh. This
+    now asserts the real argv shape (no -C before/anywhere near `pr`) and that
+    the working directory is passed as the subprocess cwd instead.
+    """
+
+    def test_gh_called_with_cwd_not_dash_c(self):
+        """_gh_pr_state must call gh with cwd=<dir>, and the argv must have no -C flag."""
         from label import _gh_pr_state
 
         captured_cmds = []
+        captured_kwargs = []
 
-        def mock_run_cmd(cmd, **kwargs):
+        def mock_run_cmd_cwd(cmd, cwd=None, **kwargs):
             captured_cmds.append(cmd)
+            captured_kwargs.append({"cwd": cwd, **kwargs})
             return json.dumps({"state": "MERGED", "mergedAt": "2026-06-13T12:00:00Z"})
 
-        with patch("label._run_cmd", side_effect=mock_run_cmd):
+        with patch("label._run_cmd_cwd", side_effect=mock_run_cmd_cwd):
             result = _gh_pr_state("my-branch", "/home/eric/projects/foo")
 
         self.assertIsNotNone(result)
         self.assertEqual(len(captured_cmds), 1)
         cmd = captured_cmds[0]
-        # Must use -C, not --repo
-        self.assertIn("-C", cmd)
+        # Must NOT use a -C flag anywhere in argv (gh has no such global flag)
+        self.assertNotIn("-C", cmd)
         self.assertNotIn("--repo", cmd)
-        # Must use the worktree path
-        self.assertIn("/home/eric/projects/foo", cmd)
-        # Must include branch name
+        # The subcommand shape must be exactly `gh pr view <branch> ...`
+        self.assertEqual(cmd[0], "gh")
+        self.assertEqual(cmd[1], "pr")
+        self.assertEqual(cmd[2], "view")
         self.assertIn("my-branch", cmd)
+        # Working directory passed as cwd, not baked into argv
+        self.assertEqual(captured_kwargs[0]["cwd"], "/home/eric/projects/foo")
 
     def test_gh_degrades_to_none_on_failure(self):
         """If gh fails (no remote, network error), _gh_pr_state returns None — no mislabel."""
         from label import _gh_pr_state
 
-        with patch("label._run_cmd", return_value=None):
+        with patch("label._run_cmd_cwd", return_value=None):
             result = _gh_pr_state("my-branch", "/nonexistent/path")
         self.assertIsNone(result)
 

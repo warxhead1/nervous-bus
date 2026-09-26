@@ -105,6 +105,26 @@ def _branch_exists(repo: str, branch: str) -> bool:
     return _git(repo, "rev-parse", "--verify", "--quiet", f"{branch}^{{commit}}") is not None
 
 
+def _is_ancestor(repo: str, ancestor_ref: str, descendant_ref: str) -> bool:
+    """True iff `ancestor_ref` is an ancestor of (or equal to) `descendant_ref`.
+
+    Used for the fast-forward-merge disambiguation (fix #47 follow-up): `git
+    cherry main branch` reports ahead==0 both for a branch that never
+    committed AND for a branch that was fast-forward merged (its commits are
+    now literally on main's mainline) — cherry compares by patch-id and can't
+    tell "never diverged" from "diverged, then main caught up". Ancestry
+    settles it directly.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", repo, "merge-base", "--is-ancestor", ancestor_ref, descendant_ref],
+            capture_output=True, timeout=_GIT_TIMEOUT,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
+    return proc.returncode == 0
+
+
 def live_worktree_branches(repo: str) -> set[str]:
     """Return the set of branch names that currently have a live (checked-out) worktree.
 
@@ -129,7 +149,8 @@ def _subject(repo: str, ref: str) -> Optional[str]:
 
 
 def _was_merged_into_main(repo: str, main_ref: str, branch: str) -> bool:
-    """Did main record a merge commit for this branch (`Merge branch '<branch>'`)?
+    """Did main record a merge commit for this branch (`Merge branch '<branch>'`
+    or GitHub's `Merge pull request #N from <owner>/<branch>`)?
 
     This is the signal that disambiguates ahead==0: a branch whose work was
     pulled into main via a real merge commit becomes an ancestor of main, so it
@@ -139,13 +160,29 @@ def _was_merged_into_main(repo: str, main_ref: str, branch: str) -> bool:
     It also rescues the patch-id-drift case: a branch whose commits were merged
     (not squashed) but whose tip was later reset/reused will fail `git cherry`
     yet still have a merge recorded here.
+
+    Crucially, this check reads only commit SUBJECT TEXT on main_ref — it
+    needs no ref on `branch` to resolve, so it still works after the branch
+    itself has been deleted (fix #47/mechanism K: `git_branch_gone`).
     """
     out = _git(repo, "log", main_ref, f"--max-count={_REVERT_SCAN_DEPTH * 3}",
                "--merges", "--format=%s")
     if not out:
         return False
-    needle = f"merge branch '{branch.lower()}'"
-    return any(needle in line.lower() for line in out.splitlines())
+    branch_lower = branch.lower()
+    local_needle = f"merge branch '{branch_lower}'"
+    # GitHub "Create a merge commit" PR merges: "Merge pull request #N from
+    # <owner>/<head-branch>". <owner> can itself contain slashes for a
+    # forked/nested head ref, so we anchor on "from " + any single path
+    # segment + "/" + the exact branch name at end-of-line or before a space.
+    gh_needle = re.compile(
+        r"merge pull request #\d+ from [^\s/]+/" + re.escape(branch_lower) + r"(\s|$)"
+    )
+    for line in out.splitlines():
+        low = line.lower()
+        if local_needle in low or gh_needle.search(low):
+            return True
+    return False
 
 
 def _has_revert_on_main(repo: str, main_ref: str, subject: str) -> bool:
@@ -174,6 +211,7 @@ def classify_branch_outcome(
     *,
     worktree_live: bool,
     main_ref: str = "main",
+    run_has_commit: Optional[bool] = None,
 ) -> BranchOutcome:
     """Classify one worktree branch's outcome relative to `main_ref`.
 
@@ -188,16 +226,52 @@ def classify_branch_outcome(
         Disambiguates pending (live) from discarded (gone) for unlanded work.
     main_ref : str
         The trunk to measure against.  Default 'main'.
+    run_has_commit : Optional[bool]
+        The dispatching run's OWN transcript evidence of a resolving commit
+        action (label.py's `_has_resolving_commit` over run_events), when the
+        caller has it. Only used to UPGRADE an ahead==0 verdict to 'landed'
+        (fast-forward merge, confirmed by the run's own transcript, since
+        patch-id diffing can't tell a truly-empty branch from an ff-merged
+        one — both show ahead==0). Eric ruling (2026-09-25, mid-review):
+        ahead==0 must NEVER assert outcome='abandoned' regardless of this
+        parameter's value (True/False/None) — an empty branch alone is not
+        proof of abandonment (read-only/audit runs never commit by design).
+        None means "no run-level context available" (e.g. the standalone
+        classify_project CLI scan, which enumerates branches with no run to
+        consult); False means the run's transcript positively showed no
+        resolving commit. Both abstain identically when not an ff-landed case.
 
     Returns
     -------
     BranchOutcome
-        outcome is None when the run is pending / in-flight (no terminal label).
+        outcome is None when the run is pending / in-flight / unverifiable —
+        no terminal label should be written on ambiguous evidence.
     """
     if not _branch_exists(repo, branch):
+        # fix #47/mechanism K: a deleted branch is NOT automatically abandoned
+        # — projects that delete branches after merging (tachyonac; GitHub's
+        # "delete branch" button after a PR merges) turn every merged-and-
+        # gone branch into a false abandon. _was_merged_into_main reads only
+        # commit subjects on main_ref, so it works with no ref on `branch` at
+        # all. Three known false abandons this recovers: tachyonac
+        # warxhead1/merge-wtd, claude/phase01-darkfields-20260709, hearth
+        # warxhead1/bizworthy-mailbox-corrections (PR #158).
+        if _was_merged_into_main(repo, main_ref, branch):
+            return BranchOutcome(
+                outcome="landed", source="git_merged_into_main", confidence="high",
+                detail=f"branch {branch} is gone but was merged into {main_ref} "
+                       f"(merge commit recorded before deletion)",
+            )
+        # Follow-up fix (measured 2026-09-25): a deleted branch with NO merge
+        # trace is UNVERIFIED, not proven abandoned — there is no ref left to
+        # diff or pickaxe against. A 30-day dry-run measured 146 git_branch_gone
+        # flips this over-asserted. Abstain (outcome=None) rather than write a
+        # confident-looking 'abandoned' on absence of evidence.
         return BranchOutcome(
-            outcome="abandoned", source="git_branch_gone", confidence="medium",
-            detail=f"branch {branch} no longer exists (deleted without trace in main)",
+            outcome=None, source="git_branch_gone", confidence="low",
+            detail=f"branch {branch} no longer exists and no merge trace was found in "
+                   f"{main_ref} — cannot verify either way; abstaining rather than "
+                   f"asserting abandonment on absence of evidence",
         )
 
     mb = _git(repo, "merge-base", main_ref, branch)
@@ -233,10 +307,58 @@ def classify_branch_outcome(
                 outcome="landed", source="git_merged_into_main", confidence="high",
                 detail=f"{branch}'s work was merged into {main_ref} (merge commit recorded); branch since reset",
             )
+        # Follow-up fix (measured 2026-09-25, nervous-bus #47): `git cherry`
+        # patch-id diffing shows ahead==0 in TWO distinct situations that used
+        # to be conflated as "empty":
+        #   (a) branch never committed anything past merge-base — truly empty.
+        #   (b) branch WAS fast-forward merged: its commits are now literally
+        #       on main's mainline, so cherry (which diffs by patch-id against
+        #       upstream) has nothing left to report, even though real work
+        #       landed. No merge COMMIT is recorded for an ff-merge (that's
+        #       the whole point of fast-forward), so _was_merged_into_main
+        #       above can't catch this case.
+        # A 30-day dry-run measured 178 git_empty_branch flips this
+        # over-asserted, sampled with features.has_resolving_commit=true — the
+        # runs DID commit. When the caller has that same run-level evidence
+        # (run_has_commit), trust it over patch-id silence:
+        if run_has_commit:
+            if _is_ancestor(repo, branch, main_ref):
+                return BranchOutcome(
+                    outcome="landed", source="git_ff_landed", confidence="high",
+                    detail=f"{branch} shows zero patch-diff vs {main_ref} (git cherry) but IS an "
+                           f"ancestor of {main_ref} (fast-forward landed), and the run's own "
+                           f"transcript recorded a resolving commit action",
+                    ahead=0,
+                )
+            # run committed, but branch isn't even an ancestor of main — the
+            # patch-id-empty signal and the run's own evidence disagree.
+            # Ambiguous; abstain rather than guess either way.
+            return BranchOutcome(
+                outcome=None, source="git_ff_ambiguous", confidence="low",
+                detail=f"{branch} shows zero patch-diff vs {main_ref} and is not an ancestor of "
+                       f"it, but the run's own transcript recorded a resolving commit — "
+                       f"ambiguous, abstaining",
+                ahead=0,
+            )
+        # Eric ruling (2026-09-25, mid-review): ahead==0 must NEVER assert
+        # outcome="abandoned" — an empty branch is not proof of abandonment
+        # (read-only/audit runs never commit by design; fast-forward-merged
+        # work also shows ahead==0). This applies whether run_has_commit is
+        # explicitly False OR unknown (None, e.g. the standalone
+        # classify_project CLI scan, which has no run to consult) — there is
+        # no case where patch-id silence alone should write a terminal label.
+        # A 30-day dry-run measured 29->46 clean->abandoned git_empty_branch
+        # flips when the None-context fallback still asserted abandoned;
+        # this closes that path entirely.
+        detail = (
+            f"{branch} never advanced past merge-base and was never merged — "
+            f"zero patch-diff vs {main_ref}, but that alone is not proof of "
+            f"abandonment (could be a by-design read-only/audit run, or "
+            f"unconfirmed fast-forward work); abstaining"
+        )
         return BranchOutcome(
-            outcome="abandoned", source="git_empty_branch", confidence="high",
-            detail=f"{branch} never advanced past merge-base and was never merged — zero commits produced",
-            ahead=0,
+            outcome=None, source="git_empty_branch_unconfirmed", confidence="low",
+            detail=detail, ahead=0,
         )
 
     # (3) Everything landed → landed (unless reverted on main).
