@@ -34,6 +34,7 @@ from enrich import (
     finalize_token_features,
     fold_token_features,
 )
+from skill_usage import fold_skill_features
 
 
 # ── ULID (same approach as pattern-bundler, no external dep) ─────────────────
@@ -190,6 +191,7 @@ class OpenRun:
 
         # PART C: fold token + tool-error features
         fold_token_features(self.features, activity)
+        fold_skill_features(self.features, activity)
 
     def to_closed_payload(self, ended: str, close_reason: str) -> dict:
         """Build the bus.agent.run.closed.v1 data payload.
