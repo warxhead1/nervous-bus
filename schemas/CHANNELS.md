@@ -4,7 +4,7 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**370 channels** across 5 clusters.
+**371 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
@@ -12,7 +12,7 @@ Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster
 | [Autobench](#autobench) | 54 | autobench.* evolution loop (case/judge/improver/budget/...) |
 | [Hearth](#hearth) | 53 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 200 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 201 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -355,6 +355,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `funsearch.review.v1` | funsearch.review.v1 |
 | `greenhouse.candidate.ready.v1` | greenhouse.candidate.ready.v1 v1 |
 | `greenhouse.cycle.completed.v1` | greenhouse.cycle.completed.v1 v1 |
+| `harness.rule.changed.v1` | harness.rule.changed v1 |
 | `kb.ai.summarized.v1` | kb.ai.summarized v1 |
 | `kb.artifact.linked.v1` | 🔇 **unconsumed** — KB Artifact Linked |
 | `kb.ask.v1` | kb.ask v1 |
