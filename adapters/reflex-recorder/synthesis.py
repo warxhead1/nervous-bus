@@ -68,6 +68,8 @@ from detectors.failure_taxonomy import (
     FailureTaxonomyDetector,
     UNCONFIRMED_CADENCE_TIER,
 )
+from detectors.skill_opportunity import SkillOpportunityDetector
+from detectors.user_correction import UserCorrectionDetector
 from adapter_api import load_adapters
 
 # ---------------------------------------------------------------------------
@@ -150,6 +152,11 @@ _BUILTIN_DETECTOR_CLASSES: list[type[BaseDetector]] = [
     DirectiveGroundTruthMismatchDetector,
     InheritedRationalizationDetector,
     HarnessChangeWatchDetector,
+    # user_correction / skill_opportunity (issue #39): themed/config-driven
+    # ground-truth signals, independent of the other detectors — order vs.
+    # them doesn't matter, only "before FailureTaxonomyDetector" matters.
+    UserCorrectionDetector,
+    SkillOpportunityDetector,
     # KbRecallGapDetector MUST come after RepeatedQuestionDetector (it reads
     # repeated_question's detector_hits rows from THIS SAME synthesis pass —
     # see its module docstring) and before FailureTaxonomyDetector (below).
@@ -1450,6 +1457,8 @@ def run_synthesis(
             "file_reads_to_finding": "inform",
             "harness_change_watch": "inform",
             "failure_taxonomy": "inform",
+            "user_correction": "inform",
+            "skill_opportunity": "inform",
         }
 
         # Determine rung from candidate's extra (explicit) or from known-rung registry.
