@@ -535,3 +535,16 @@ class TestNonTerminalOutcomeNotDetected(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestInferRepoRootNonGit(unittest.TestCase):
+    """A non-git path must fall through to the walk-up, not raise.
+
+    A function-local `import os.path` made `os` local to _infer_repo_root, so
+    any path where `git rev-parse` failed raised UnboundLocalError and the
+    detector stopped producing hits.
+    """
+
+    def test_non_git_path_returns_without_raising(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(_infer_repo_root(d))
