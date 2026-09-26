@@ -129,7 +129,6 @@ def _infer_repo_root(worktree_path: str) -> Optional[str]:
             common_dir = result.stdout.strip()
             # common_dir is e.g. /home/eric/projects/foo/.git
             # repo root is its parent
-            import os.path
             if common_dir.endswith("/.git") or common_dir == ".git":
                 candidate = os.path.dirname(os.path.abspath(common_dir))
                 if os.path.isdir(candidate):
