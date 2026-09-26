@@ -49,12 +49,9 @@ def _new_branch(repo: Path, name: str, from_ref: str = "main") -> None:
 
 # ── empty branch ────────────────────────────────────────────────────────────────
 
-def test_empty_branch_is_abandoned(repo: Path):
-    """Eric ruling (2026-09-25, mid-review): ahead==0 must NEVER assert
-    outcome='abandoned' — an empty branch alone is not proof of abandonment
-    (read-only/audit runs never commit by design; ff-merged work also shows
-    ahead==0). A branch that never committed past merge-base, with no
-    run-level context, abstains (None/git_empty_branch_unconfirmed)."""
+def test_empty_branch_abstains(repo: Path):
+    """ahead==0 never asserts 'abandoned': read-only runs never commit and
+    ff-merged work also shows ahead==0."""
     _new_branch(repo, "worktree-agent-empty")
     bo = go.classify_branch_outcome(str(repo), "worktree-agent-empty", worktree_live=False)
     assert bo.outcome is None
@@ -193,15 +190,13 @@ def test_live_worktree_branches(repo: Path, tmp_path: Path):
 # ── missing branch ───────────────────────────────────────────────────────────────
 
 def test_nonexistent_branch(repo: Path):
-    """Follow-up fix (2026-09-25): an unverified gone branch (no merge trace
-    found) must abstain (outcome=None), never assert 'abandoned' on absence
-    of evidence — a 30-day dry-run measured 146 such flips over-asserted."""
+    """A gone branch with no merge trace is unverifiable: abstain."""
     bo = go.classify_branch_outcome(str(repo), "worktree-agent-nope", worktree_live=False)
     assert bo.outcome is None
     assert bo.source == "git_branch_gone"
 
 
-# ── fix #47/mechanism K: git_branch_gone must be verified, not assumed ────────
+# ── git_branch_gone must be verified, not assumed ──────────────────────────────
 
 def test_branch_gone_but_merge_commit_recorded_is_landed(repo: Path):
     """A branch merged via a local merge commit, then DELETED, must recover as
@@ -256,7 +251,7 @@ def test_git_branch_gone_in_source_tier():
     assert label._SOURCE_TIER["git_branch_gone"] > label._SOURCE_TIER["behavior_inference"]
 
 
-# ── follow-up fix (2026-09-25): fast-forward-merge disambiguation ────────────
+# ── fast-forward-merge disambiguation ──────────────────────────────────────────
 # A 30-day dry-run of --reverify-days measured 178 git_empty_branch flips and
 # 146 git_branch_gone flips over-asserting 'abandoned' on runs that actually
 # committed (features.has_resolving_commit=true), or where no ref survived to
@@ -281,9 +276,7 @@ def test_ff_merged_branch_with_run_commit_signal_is_landed(repo: Path):
 
 def test_empty_branch_without_context_abstains(repo: Path):
     """run_has_commit=None (no run-level context, e.g. the standalone
-    classify_project CLI scan) must ALSO abstain — Eric ruling 2026-09-25:
-    ahead==0 never asserts 'abandoned', full stop, not even for callers with
-    no run to consult."""
+    classify_project CLI scan) must also abstain."""
     _new_branch(repo, "worktree-agent-emptyctx")
     bo = go.classify_branch_outcome(str(repo), "worktree-agent-emptyctx", worktree_live=False)
     assert bo.outcome is None

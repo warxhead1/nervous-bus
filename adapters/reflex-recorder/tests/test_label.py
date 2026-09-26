@@ -346,7 +346,7 @@ class TestExplicitSourcePrecedence(unittest.TestCase):
         self.assertEqual(source, "behavior_inference")
 
     def test_compute_label_threads_run_has_commit_true(self):
-        """Follow-up fix (2026-09-25): compute_label must derive run_has_commit
+        """compute_label must derive run_has_commit
         from the parsed run_events (a real resolving commit present) and pass
         it through to label_from_git_merge."""
         run = _make_run(git_branch="warxhead1/some-lane", close_reason="idle_timeout")
@@ -650,8 +650,6 @@ class TestBackfillIntegration(unittest.TestCase):
 
 
 # ── nervous-bus #47: codex false-abandon regression tests ────────────────────
-# See /home/eric/data2/orca/nervous-bus/_evidence/2026-09-25/codex-success-root-cause.md
-# § mechanisms A-K and § Step 4 fixes 1, 4, 6, 7, 9, 10, 11.
 
 def _apply_patch(fail=False):
     """codex-cli's edit tool (its equivalent of Edit/Write)."""

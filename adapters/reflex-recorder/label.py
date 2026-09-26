@@ -59,19 +59,13 @@ _SOURCE_TIER: dict[str, int] = {
     "git_merged_into_main": 3,
     "git_squash_equiv": 3,
     "git_partial_squash": 2,
-    # follow-up fix (2026-09-25): fast-forward landed, confirmed by the run's
-    # own transcript evidence of a resolving commit action (see
-    # git_outcome.classify_branch_outcome's run_has_commit parameter).
+    # fast-forward landed, confirmed by the run's own commit evidence
     "git_ff_landed": 3,
     "git_pickaxe_landed": 3,
     "git_revert_on_main": 3,
     "git_empty_branch": 2,
     "git_discarded_verified": 2,
-    # fix #47/mechanism K: medium-confidence explicit git evidence (branch
-    # deleted, no merge-commit trace found) — was missing entirely, which
-    # defaulted it to tier 1 (same as behavior_inference), letting a later
-    # behavior-inferred label silently overwrite it. 200 such labels measured
-    # in the root-cause report.
+    # explicit git evidence; must outrank behavior_inference
     "git_branch_gone": 2,
     "bead_close": 3,
     "bus_bead_closed": 3,
@@ -161,13 +155,8 @@ def _run_cmd_cwd(cmd: list[str], cwd: str, timeout: int = 8) -> Optional[str]:
 def _gh_pr_state(branch: str, worktree_path: Optional[str]) -> Optional[dict]:
     """Query gh pr for the most recent PR on branch.
 
-    fix #47/mechanism J: `gh` has no global `-C` flag — verified:
-    `gh -C /tmp pr view` fails with "unknown shorthand flag: 'C' in -C". The
-    old `["gh", "-C", work_dir, "pr", "view", ...]` argv meant this tier never
-    ran for ANY run (0 pr_merge labels in the whole DB despite merged codex
-    PRs like hearth #153/#158). Run gh with cwd=work_dir instead, which is how
-    gh actually resolves "the correct repo" (it reads the git remote of the
-    process's cwd). Degrades safely to None on no-PR or network error.
+    `gh` has no `-C` flag; run it with cwd=work_dir so it resolves that
+    repo's remote. Degrades safely to None on no-PR or network error.
 
     Returns dict with {state, mergedAt} or None if no PR found.
     """
@@ -323,30 +312,17 @@ def label_from_pr(branch: str, worktree_path: Optional[str]) -> Optional[tuple[s
 #: Trunk refs: never a dispatch branch, never git-ancestry-labeled here.
 _TRUNK_BRANCHES = frozenset({"main", "master", "HEAD"})
 
-#: fix #47/mechanism I: was `^(worktree-agent-|worktree-wf[_-]|agent-|wf[_-])`,
-#: which only matched tengine-era local-worktree naming and never Orca-style
-#: task branches (`warxhead1/<lane>`, arbitrary slugs, `codex/*`). That is why
-#: codex has ZERO 'landed' labels — the git tier that would upgrade a
-#: squash-merged codex run never ran for it. Widened to accept ANY non-trunk
-#: branch name; this regex is used ONLY by label_from_git_merge's
-#: require_dispatch_shape=True gate (compute_label's fresh-labeling path).
-#: git_outcome.py's own `_worktree_dispatch_branches` (the classify_project
-#: CLI branch-enumeration helper) has its own separate, still-narrow pattern
-#: and is intentionally left alone — grepped: _DISPATCH_BRANCH_RE has no other
-#: callers.
+#: Any non-trunk branch: Orca/codex lanes use arbitrary names (warxhead1/<lane>,
+#: codex/*), not only the worktree-agent-/wf- shapes.
 _DISPATCH_BRANCH_RE = re.compile(r"^(?!(?:main|master|HEAD)$).+$")
 
 
 def _project_repo_root(run: dict) -> Optional[str]:
     """Resolve the MAIN repo path for a run (where `main` lives), not the worktree.
 
-    fix #47/mechanism I: prefer `git rev-parse --git-common-dir` from INSIDE
-    the run's worktree — the robust way, since it works for any worktree
-    layout (`.claude/worktrees/<slug>`, `/home/eric/data2/worktrees/<proj>/<lane>`,
-    or anything else) without hardcoding path shapes. Falls back to the old
-    `.claude/worktrees/` string-strip (still useful once the worktree
-    directory itself has been removed post-landing, since git-common-dir needs
-    a live worktree to query) and then to ~/projects/<project>.
+    Prefers `git rev-parse --git-common-dir` from inside the run's worktree
+    (any layout); falls back to stripping a `.claude/worktrees/` suffix (the
+    worktree may be gone post-landing), then to ~/projects/<project>.
     """
     wt = run.get("worktree")
     if wt and Path(wt).exists():
@@ -382,13 +358,7 @@ def label_from_git_merge(
 
     By default (require_dispatch_shape=True), only non-trunk branch names
     (_DISPATCH_BRANCH_RE: anything except main/master/HEAD) are considered —
-    this is the FRESH-labeling path (compute_label). fix #47/mechanism I
-    widened this from the old tengine-era-only shape (worktree-agent-,
-    worktree-wf-, agent-, wf-), which excluded Orca-style task branches
-    (warxhead1/<lane>, arbitrary slugs, codex/*) and left codex with zero
-    'landed' labels. compute_label's caller already excludes
-    main/master/HEAD before reaching here, so the shape gate is now a no-op
-    safety net rather than the load-bearing filter it used to be.
+    this is the FRESH-labeling path (compute_label).
 
     require_dispatch_shape=False drops the gate entirely: nervous-bus-33's
     reverify path re-checks labels that are ALREADY behavior_inference (never
@@ -403,12 +373,8 @@ def label_from_git_merge(
     pickaxe-checked (follows the code through rebase/squash/reword) before
     being trusted.
 
-    run_has_commit (follow-up fix, 2026-09-25): the run's own transcript
-    evidence of a resolving commit action (label.py's `_has_resolving_commit`
-    over run_events), threaded through to git_outcome.classify_branch_outcome
-    to disambiguate fast-forward-merged branches from truly-empty ones (both
-    show ahead==0 by patch-id diffing). None when the caller has no run-level
-    context (falls back to the git-only heuristic).
+    run_has_commit: the run's own commit evidence, passed to
+    classify_branch_outcome to tell fast-forward-landed from empty branches.
     """
     if not git_branch:
         return None
@@ -444,10 +410,7 @@ def label_from_git_merge(
 # ── Inferred labeling from behavior shape ─────────────────────────────────────
 
 # Tools classified as resolving actions (indicate productive completion):
-# "apply_patch" is codex-cli's edit tool (its equivalent of Edit/Write) — a
-# codex segment that edits files only ever emits apply_patch, never Edit/Write
-# (fix #47/mechanism A: 12,776 tool_call apply_patch events measured in
-# runs.db, zero Edit/Write for codex-cli source_kind).
+# apply_patch is codex-cli's only file-edit tool.
 _RESOLVING_TOOLS = frozenset({"Edit", "Write", "NotebookEdit", "Bash", "apply_patch"})
 
 # Tools classified as exploration (re-Read = rereading already-seen files):
@@ -585,10 +548,7 @@ def _has_resolving_commit(events: list[dict]) -> bool:
             cmd = ""
 
         # Match `git commit`, `git -C <path> commit`, `git push`.
-        # fix #47/mechanism C: the old `\bgit\b.*\bcommit\b` matched
-        # `git diff-tree --no-commit-id`, false-positiving a read-only audit
-        # to 'clean' (root-cause report row C5). Anchor to an actual commit
-        # subcommand, optionally preceded by `-C <dir>`.
+        # Anchored to the subcommand: `--no-commit-id` is not a commit.
         if re.search(r"\bgit(\s+-C\s+\S+)?\s+commit\b", cmd):
             return True
         if re.search(r"\bgit\b.*\bpush\b", cmd):
@@ -604,13 +564,7 @@ def _has_resolving_commit(events: list[dict]) -> bool:
 
 
 def _has_resolving_edit(events: list[dict]) -> bool:
-    """Check if the final ~20% of events contain Edit/Write/apply_patch calls.
-
-    fix #47/mechanism A: apply_patch is codex-cli's edit tool. Without it here,
-    a codex segment that edits files can never have has_edit_tail, so it can
-    never escape the abandon rule through edits the way an equivalent
-    Claude/Edit segment can.
-    """
+    """Check if the final ~20% of events contain Edit/Write/apply_patch calls."""
     if not events:
         return False
     tail_start = max(0, len(events) - max(3, len(events) // 5))
@@ -656,8 +610,8 @@ def _infer_from_behavior(
     ABANDONED:
       - B1 fix: close_reason MUST be 'idle_timeout' (not 'recorder_shutdown').
         recorder_shutdown is operational, not semantic.
-      - tool_call event count (fix #47: NOT raw event_count, which double-counts
-        codex's paired tool_call+tool_return events) >= ABANDON_MIN_EVENTS (5)
+      - tool_call event count (raw event_count double-counts codex's
+        paired tool_call+tool_return) >= ABANDON_MIN_EVENTS (5)
       - No resolving commit (structured gitOperation or command pattern)
       - No resolving edit in the last 20% of events
       - M3 fix: require a failure/error signal at the boundary OR absence of
@@ -678,27 +632,13 @@ def _infer_from_behavior(
     if not events:
         return None, "behavior_inference"
 
-    # fix #47/mechanism F: heartbeat events carry a tool_name (whatever tool
-    # was last active), so counting them as tool activity manufactures
-    # abandons out of panes that only ever heartbeat for 15+ minutes (e.g.
-    # tengine June runs, tool histogram {}). Drop heartbeats before any
-    # signal is derived; a heartbeat-only run then has zero events → NULL,
-    # not abandoned.
+    # Heartbeats carry the last tool_name; counting them manufactures activity.
     events = [ev for ev in events if ev.get("event") != "heartbeat"]
     if not events:
         return None, "behavior_inference"
 
-    # fix #47/mechanism E: segment.py's event_count increments on EVERY
-    # activity (tool_call AND tool_return; segment.py:176), while its own
-    # tool_histogram only counts event=="tool_call" (segment.py:188). Codex
-    # emits both a tool_call and a tool_return per invocation, so a raw
-    # event count roughly doubles for codex vs an equivalent Claude run,
-    # letting 5 real tool calls trip the ABANDON_MIN_EVENTS*2 "substantial"
-    # threshold. n_tool_call_events mirrors segment.py's histogram semantics
-    # (event=="tool_call" only) and is what the thresholds below use. This
-    # is a LOCAL count derived from run_events for labeling only — it does
-    # not touch the runs.event_count column, which other consumers
-    # (query.py, detectors/*, dashboards) read for the raw per-event count.
+    # Local tool_call count (codex emits tool_call+tool_return per call);
+    # runs.event_count is left untouched for other consumers.
     n_events = len(events)
     n_tool_call_events = sum(1 for ev in events if ev.get("event") == "tool_call")
     tool_calls = [ev for ev in events if ev.get("tool_name")]
@@ -793,8 +733,7 @@ def compute_label(
                 print(f"  [label] bead_id={bead_id} → {result}")
             return result
 
-    # Parse events once, up front: both the git-ancestry tier (run_has_commit,
-    # follow-up fix 2026-09-25) and behavior inference need them.
+    # Parsed once: the git tier (run_has_commit) and behavior inference both use them.
     parsed = _parse_events(run_events)
     run_has_commit: Optional[bool] = None
     if parsed:
@@ -1225,16 +1164,8 @@ def select_reverify_candidates(
 def _run_has_commit_from_features(run: dict) -> Optional[bool]:
     """Best-effort run_has_commit signal from a run's PERSISTED features JSON.
 
-    Follow-up fix (2026-09-25): reverify_run has no run_events to re-parse
-    (only the runs-table row), but compute_features_signals already persisted
-    `features.has_resolving_commit=True` at original label time whenever the
-    run's own transcript recorded a resolving commit — exactly the signal a
-    30-day dry-run showed was being ignored (178 git_empty_branch flips
-    sampled with this field true). compute_features_signals only ever writes
-    this key when True (never explicitly False), so its absence means
-    "unknown", not "no commit" — this can recover the (a) fast-forward-landed
-    case but NOT the (b) confirmed-no-commit/read-only case, which needs a
-    fresh parse of run_events (done in compute_label's fresh-labeling path).
+    reverify_run has only the runs row. compute_features_signals writes
+    has_resolving_commit only when True, so absence means unknown, not False.
     """
     raw = run.get("features")
     if not raw:

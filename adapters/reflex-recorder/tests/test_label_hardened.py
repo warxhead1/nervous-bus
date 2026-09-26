@@ -510,12 +510,8 @@ class TestB3ResolvingCommitDetection(unittest.TestCase):
 class TestB4GhCInvocation(unittest.TestCase):
     """gh pr view runs with cwd=<dir>, not a `-C <dir>` argv flag.
 
-    fix #47/mechanism J: `gh` has no global `-C` flag — verified live:
-    `gh -C /tmp pr view` fails with "unknown shorthand flag: 'C' in -C". The
-    old argv-based test only asserted "-C" appeared SOMEWHERE in the mocked
-    argv, which passed against code that never worked against real gh. This
-    now asserts the real argv shape (no -C before/anywhere near `pr`) and that
-    the working directory is passed as the subprocess cwd instead.
+    `gh` has no global `-C` flag; assert the real argv shape and that the
+    directory is passed as the subprocess cwd.
     """
 
     def test_gh_called_with_cwd_not_dash_c(self):
