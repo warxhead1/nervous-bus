@@ -1377,11 +1377,33 @@ def run_synthesis(
                       f"(adapter {getattr(adapter, 'name', '?')}) failed: {exc}",
                       file=sys.stderr)
 
-    # ── Step 1: Run all detectors ──────────────────────────────────────────
+    # ── Step 1: Run all detectors ONCE ──────────────────────────────────────
+    # Fix (issue #32): this used to invoke every detector class up to THREE
+    # times per synthesis pass — once via .run() to persist hits/issues, once
+    # more via a bare .detect() call to rebuild sig_to_candidate, and a third
+    # time just to build detector_instances (a plain constructor call, cheap,
+    # but the two full .detect()/.run() invocations each did the same
+    # expensive DB scan). Measured on the live 2.6G runs.db: detector .run()
+    # calls alone summed to ~288s; the second .detect() pass duplicated that
+    # cost, comfortably blowing the 300s nightly step timeout on its own.
+    # .run() already returns the exact candidate list .detect() would, so one
+    # pass captures everything the two later loops used to recompute.
+    #
+    # since_ts (issue #32 AC: "pass since_ts into every detector's first
+    # query") bounds each detector's own scan to the synthesis window —
+    # detectors that have not been updated to accept it (private-overlay
+    # detectors this engine has no hard dependency on) are unaffected, see
+    # BaseDetector._call_detect().
+    since_ts = _days_ago_utc(window_days)
+    sig_to_candidate: dict[str, PatternCandidate] = {}
+    detector_instances: dict[str, BaseDetector] = {}
     for DetectorClass in DETECTOR_CLASSES:
         try:
             detector = DetectorClass(conn)
-            detector.run(conn)
+            detector_instances[detector.DETECTOR_NAME] = detector
+            candidates = detector.run(conn, since_ts=since_ts)
+            for c in candidates:
+                sig_to_candidate[c.signature] = c
         except Exception as exc:
             print(
                 f"[synthesis] WARNING: detector {DetectorClass.DETECTOR_NAME} failed: {exc}",
@@ -1402,27 +1424,6 @@ def run_synthesis(
 
     if not issues:
         return result
-
-    # Build a mapping from signature → PatternCandidate (last one wins)
-    # We re-run detectors in detection-only mode (no recording) to get candidates
-    sig_to_candidate: dict[str, PatternCandidate] = {}
-    for DetectorClass in DETECTOR_CLASSES:
-        try:
-            detector = DetectorClass(conn)
-            candidates = detector.detect(conn)
-            for c in candidates:
-                sig_to_candidate[c.signature] = c
-        except Exception:
-            pass
-
-    # Build a mapping of detector name → detector instance for replay
-    detector_instances: dict[str, BaseDetector] = {}
-    for DetectorClass in DETECTOR_CLASSES:
-        try:
-            inst = DetectorClass(conn)
-            detector_instances[inst.DETECTOR_NAME] = inst
-        except Exception:
-            pass
 
     # ── Steps 2-6: Score, rung, replay, decision, emit ─────────────────────
     for issue in issues:

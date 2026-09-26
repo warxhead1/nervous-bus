@@ -38,6 +38,7 @@ SQLiteStore.__init__ when this module is present (or called explicitly in tests)
 """
 from __future__ import annotations
 
+import inspect
 import json
 import sqlite3
 import time
@@ -226,13 +227,31 @@ class BaseDetector(ABC):
 
     # ── Public orchestration ──────────────────────────────────────────────────
 
-    def run(self, conn: Optional[sqlite3.Connection] = None) -> list[PatternCandidate]:
+    def run(
+        self,
+        conn: Optional[sqlite3.Connection] = None,
+        since_ts: Optional[str] = None,
+    ) -> list[PatternCandidate]:
         """Run detection + Kyoko bookkeeping.
+
+        Parameters
+        ----------
+        since_ts : Optional[str]
+            RFC3339 UTC cutoff (e.g. "2026-08-26T00:00:00Z"). When given, and
+            when the concrete detector's detect() accepts a `since_ts` keyword
+            (checked via introspection, never assumed), the FIRST query the
+            detector runs against runs/run_events is bounded to
+            started/event_ts >= since_ts. Detectors that have not been
+          migrated to accept `since_ts` (private-overlay detectors this
+            engine has no hard dependency on) are called exactly as before —
+            this is a strictly additive, backward-compatible parameter.
+            None (the default) means "no window" — unbounded, matching the
+            historical behavior every existing caller/test relies on.
 
         Returns the candidates list (same as detect() returns).
         """
         c = conn or self._conn
-        candidates = self.detect(c)
+        candidates = self._call_detect(c, since_ts)
         now = _now_utc()
         for candidate in candidates:
             new_hit_count = 0
@@ -248,6 +267,24 @@ class BaseDetector(ABC):
                 new_hit_count=new_hit_count,
             )
         return candidates
+
+    def _call_detect(
+        self, conn: sqlite3.Connection, since_ts: Optional[str]
+    ) -> list[PatternCandidate]:
+        """Call self.detect(), passing since_ts only if the concrete
+        implementation's signature accepts it.
+
+        Introspection (not a bare try/except TypeError) so a genuine TypeError
+        raised FROM INSIDE a since_ts-aware detect() is never misread as "this
+        detector doesn't take since_ts" and silently retried without it.
+        """
+        try:
+            params = inspect.signature(self.detect).parameters
+        except (TypeError, ValueError):
+            params = {}
+        if "since_ts" in params:
+            return self.detect(conn, since_ts=since_ts)
+        return self.detect(conn)
 
     # ── Kyoko layer: hit recording ────────────────────────────────────────────
 

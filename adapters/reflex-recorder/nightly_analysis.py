@@ -64,9 +64,18 @@ DEFAULT_STEP_TIMEOUT = 300          # seconds; "suggest 300s/step"
 DEFAULT_LABEL_SINCE_DAYS = 30       # bound label.py's pass against a growing history
 DEFAULT_DIGEST_WINDOW_DAYS = 7      # per-project stats + detector prevalence window
 DEFAULT_STRUGGLE_WINDOW_DAYS = 14   # struggle-ledger scan window
+# Issue #32: synthesis.py's own detectors now accept --window-days to bound
+# their queries (previously they scanned the ENTIRE run history every night
+# regardless of this value, which is why the step blew its 300s budget on a
+# 2.6G runs.db). Passed explicitly here rather than relying on synthesis.py's
+# own default so the nightly's cost bound is visible in one place.
+DEFAULT_SYNTHESIS_WINDOW_DAYS = 30
 TOP_DETECTORS = 10
 TOP_STRUGGLES = 8
 TOP_HARNESS_CHANGES = 30
+# Issue #34: coverage gauge — an agent_kind below this rate (of runs in
+# window with >=1 tool_call event) is flagged in the digest.
+COVERAGE_THRESHOLD = 0.80
 
 
 def _days_ago_iso(days: int) -> str:
@@ -116,6 +125,38 @@ def run_step(name: str, cmd: list[str], timeout: int) -> StepResult:
         dur = time.monotonic() - t0
         print(f"[nightly] <<< {name} EXCEPTION: {exc}", file=sys.stderr)
         return StepResult(name, False, str(exc), dur)
+
+
+def compute_coverage(
+    rows: list[dict], threshold: float = COVERAGE_THRESHOLD
+) -> list[dict]:
+    """Pure function (issue #34): per-agent_kind tool_call coverage gauge.
+
+    rows: [{"agent_kind": str, "total_runs": int, "covered_runs": int}, ...]
+    (the shape query.py's `sql` subcommand returns for the coverage-gauge
+    query in build_digest — kept as a separate pure function so this ranking
+    is unit-testable against a fixture without a live DB or subprocess).
+
+    Returns rows augmented with `rate` (0.0 if total_runs == 0 — a
+    heartbeat-only agent_kind with zero closed runs in window is NOT the same
+    as 0% coverage, but there is nothing to divide, so we report 0 runs, 0.0
+    rate, and let the caller decide how to render "no data" vs "flagged") and
+    `flagged` (rate < threshold), sorted by rate ascending (worst first).
+    """
+    out = []
+    for row in rows:
+        total = row.get("total_runs", 0) or 0
+        covered = row.get("covered_runs", 0) or 0
+        rate = (covered / total) if total > 0 else 0.0
+        out.append({
+            "agent_kind": row.get("agent_kind") or "(unknown)",
+            "total_runs": total,
+            "covered_runs": covered,
+            "rate": rate,
+            "flagged": rate < threshold,
+        })
+    out.sort(key=lambda r: r["rate"])
+    return out
 
 
 def _run_json(name: str, cmd: list[str], timeout: int) -> Optional[object]:
@@ -191,6 +232,24 @@ def build_digest(
         step_timeout,
     ) or []
 
+    # Issue #34: per-agent_kind tool_call coverage gauge. segment.py stamps
+    # runs.tool_histogram from 'tool_call' events at close time (see
+    # segment.py:187-188), so "tool_histogram not empty" IS "runs with >=1
+    # tool_call event" without a second run_events scan — verified against
+    # the live DB 2026-09-25 (claude-code 11/257=4.3%, codex-cli 1456/2631=
+    # 55.3%, antigravity-cli 0/731=0%, matching issue #34's cited figures).
+    coverage_rows = _run_json(
+        "query.py sql (tool_call coverage gauge, issue #34)",
+        [sys.executable, "query.py", "--db", str(db_path), "sql",
+         "SELECT agent_kind AS agent_kind, COUNT(*) AS total_runs, "
+         "SUM(CASE WHEN tool_histogram IS NOT NULL AND tool_histogram NOT IN "
+         "('{}', '') THEN 1 ELSE 0 END) AS covered_runs "
+         "FROM runs "
+         f"WHERE started >= '{window_cutoff}' GROUP BY agent_kind",
+         "--json"],
+        step_timeout,
+    ) or []
+
     lines: list[str] = []
     lines.append("---")
     lines.append(f"id: {DIGEST_ID}")
@@ -205,6 +264,14 @@ def build_digest(
     lines.append(f"updated: {now.strftime('%Y-%m-%dT%H:%M:%SZ')}")
     lines.append("---")
     lines.append("")
+    # Issue #32 AC: a synthesis timeout/failure must be LOUD, not swallowed —
+    # this is the digest's first content line (after the YAML frontmatter,
+    # which is metadata a reader skips past) whenever the detectors step did
+    # not complete cleanly. main() also exits non-zero in this case so the
+    # systemd unit itself shows failed, instead of a silently-empty pass.
+    if not detector_result.ok:
+        lines.append(f"**SYNTHESIS FAILED: {detector_result.detail}**")
+        lines.append("")
     lines.append("# Reflex Weekly Digest")
     lines.append("")
     lines.append(
@@ -284,6 +351,33 @@ def build_digest(
             lines.append("- no OPEN struggles in window (may still have dormant/resolved ones)")
     else:
         lines.append("- no struggle-ledger data (or query unavailable)")
+    lines.append("")
+
+    # Issue #34 — per-agent_kind tool_call coverage gauge.
+    lines.append(f"## Tool-call coverage by agent_kind ({window_days}d)")
+    lines.append("")
+    if coverage_rows:
+        coverage = compute_coverage(coverage_rows)
+        flagged = [c for c in coverage if c["flagged"]]
+        lines.append(
+            f"Runs with >=1 tool_call event, by agent_kind. Threshold "
+            f"{COVERAGE_THRESHOLD:.0%} — below it means no cross-harness "
+            f"comparison or skill-usage metric is valid for that kind (see #34)."
+        )
+        lines.append("")
+        lines.append("| agent_kind | runs | covered | rate | flagged |")
+        lines.append("|---|---|---|---|---|")
+        for c in coverage:
+            lines.append(
+                f"| {c['agent_kind']} | {c['total_runs']} | {c['covered_runs']} | "
+                f"{c['rate']:.1%} | {'YES' if c['flagged'] else ''} |"
+            )
+        if flagged:
+            lines.append("")
+            names = ", ".join(c["agent_kind"] for c in flagged)
+            lines.append(f"**{len(flagged)} agent_kind(s) below {COVERAGE_THRESHOLD:.0%}: {names}**")
+    else:
+        lines.append("- no runs in window (or query unavailable)")
     lines.append("")
 
     # A1 — harness-change watch (sensor only, no gate/enforcement).
@@ -368,6 +462,15 @@ def main() -> int:
     ap.add_argument("--window-days", type=int, default=DEFAULT_DIGEST_WINDOW_DAYS)
     ap.add_argument("--struggle-window-days", type=int, default=DEFAULT_STRUGGLE_WINDOW_DAYS)
     ap.add_argument(
+        "--synthesis-window-days", type=int, default=DEFAULT_SYNTHESIS_WINDOW_DAYS,
+        help=(
+            "Passed through to synthesis.py --window-days (issue #32): bounds "
+            "every built-in detector's own query to this rolling window, "
+            "instead of the unbounded full-history scan that blew the step's "
+            f"{DEFAULT_STEP_TIMEOUT}s timeout every night."
+        ),
+    )
+    ap.add_argument(
         "--digest-path", type=Path, default=DIGEST_PATH,
         help=(
             "Where to write the rolling digest. Defaults to the live kb-vault "
@@ -394,7 +497,8 @@ def main() -> int:
 
     detector_result = run_step(
         "synthesis.py",
-        [sys.executable, "synthesis.py", "--db", str(args.db)],
+        [sys.executable, "synthesis.py", "--db", str(args.db),
+         "--window-days", str(args.synthesis_window_days)],
         args.step_timeout,
     )
 
@@ -404,6 +508,20 @@ def main() -> int:
     )
     write_digest(digest, args.digest_path)
     print(f"[nightly] digest written to {args.digest_path}", file=sys.stderr)
+
+    # Issue #32 AC: a synthesis failure/timeout must make the batch loudly
+    # non-zero (systemd then shows the unit as failed) instead of being
+    # swallowed — label.py and struggle_ledger.py stay non-fatal per the
+    # module docstring (label.py resumes incrementally; struggle_ledger has
+    # no store of its own to corrupt), but synthesis.py not completing means
+    # detector_hits/issues/run_evals for tonight never got written at all.
+    if not detector_result.ok:
+        print(
+            f"[nightly] === reflex nightly analysis DONE WITH FAILURE: "
+            f"synthesis.py {detector_result.detail} ===",
+            file=sys.stderr,
+        )
+        return 1
 
     print(f"[nightly] === reflex nightly analysis done ===", file=sys.stderr)
     return 0

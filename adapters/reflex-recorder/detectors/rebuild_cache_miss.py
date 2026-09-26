@@ -208,8 +208,13 @@ class RebuildCacheMissDetector(BaseDetector):
 
     DETECTOR_NAME = "rebuild_cache_miss"
 
-    def detect(self, conn: sqlite3.Connection) -> list[PatternCandidate]:
+    def detect(
+        self, conn: sqlite3.Connection, since_ts: Optional[str] = None
+    ) -> list[PatternCandidate]:
         """Scan run_events for slow cargo builds executed inside worktree cwds.
+
+        since_ts (issue #32): bounds the candidate-run scan to runs started
+        at/after this RFC3339 cutoff. None (default) is unbounded.
 
         Strategy:
           1. Load all Bash events whose raw_json mentions "cargo" and whose cwd
@@ -240,16 +245,20 @@ class RebuildCacheMissDetector(BaseDetector):
         # We join against runs to get project + worktree context.  We need the
         # full event sequence per run so we can compute inter-event gaps, so we
         # pull ALL events for runs that have at least one cargo event.
+        since_clause = "AND r.started >= ?" if since_ts else ""
+        params: list = [since_ts] if since_ts else []
         candidate_run_ids: list[str] = [
             row[0]
             for row in conn.execute(
-                """
+                f"""
                 SELECT DISTINCT re.run_id
                 FROM run_events re
                 JOIN runs r ON r.run_id = re.run_id
                 WHERE re.raw_json LIKE '%cargo%'
                   AND r.close_reason IS NOT NULL
-                """
+                  {since_clause}
+                """,
+                params,
             ).fetchall()
         ]
 

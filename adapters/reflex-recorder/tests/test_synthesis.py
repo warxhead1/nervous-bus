@@ -52,6 +52,21 @@ def _pin_builtin_detectors(monkeypatch):
     monkeypatch.setattr(syn, "DETECTOR_CLASSES", list(syn._BUILTIN_DETECTOR_CLASSES))
 
 
+@pytest.fixture(autouse=True)
+def _forbid_default_db_path(monkeypatch):
+    """Every test in this file drives run_synthesis()/detect() against an
+    explicit in-memory `conn` (see _make_conn()) — none of them should ever
+    touch synthesis.py's DEFAULT_DB_PATH (~/.cache/nervous-bus/reflex/runs.db,
+    the live 2.6G production DB). Point it at a path whose parent directory
+    does not exist, so any accidental fallback to the default fails loudly
+    (sqlite3.OperationalError: unable to open database file) instead of
+    silently opening and scanning the real DB under test-suite load."""
+    monkeypatch.setattr(
+        syn, "DEFAULT_DB_PATH",
+        Path("/nonexistent-test-guard/must-not-use-default-db/runs.db"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Fixture helpers
 # ---------------------------------------------------------------------------

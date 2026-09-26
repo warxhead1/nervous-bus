@@ -70,6 +70,7 @@ decision, not a fixed deterministic toggle.
 from __future__ import annotations
 
 import sqlite3
+from typing import Optional
 from collections import defaultdict
 
 from detectors.base import BaseDetector, PatternCandidate
@@ -96,11 +97,24 @@ def has_kb_recall_gap(kb_recall_event_count: int) -> bool:
     return kb_recall_event_count <= 0
 
 
-def _repeated_question_run_ids(conn: sqlite3.Connection) -> list[tuple[str, str]]:
-    """Return (run_id, project) for every run with a repeated_question hit."""
-    rows = conn.execute(
-        "SELECT DISTINCT run_id, project FROM detector_hits WHERE detector = 'repeated_question'"
-    ).fetchall()
+def _repeated_question_run_ids(
+    conn: sqlite3.Connection, since_ts: Optional[str] = None
+) -> list[tuple[str, str]]:
+    """Return (run_id, project) for every run with a repeated_question hit.
+
+    since_ts (issue #32): bounds to hits recorded at/after this RFC3339
+    cutoff. None (default) is unbounded — unchanged behavior.
+    """
+    if since_ts:
+        rows = conn.execute(
+            "SELECT DISTINCT run_id, project FROM detector_hits "
+            "WHERE detector = 'repeated_question' AND ts >= ?",
+            (since_ts,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT DISTINCT run_id, project FROM detector_hits WHERE detector = 'repeated_question'"
+        ).fetchall()
     return [(r[0], r[1]) for r in rows]
 
 
@@ -119,10 +133,14 @@ class KbRecallGapDetector(BaseDetector):
 
     DETECTOR_NAME = "kb_recall_gap"
 
-    def detect(self, conn: sqlite3.Connection) -> list[PatternCandidate]:
+    def detect(
+        self, conn: sqlite3.Connection, since_ts: Optional[str] = None
+    ) -> list[PatternCandidate]:
+        """since_ts (issue #32): bounds the scan to repeated_question hits
+        recorded at/after this RFC3339 cutoff. None (default) is unbounded."""
         hits_by_project: dict[str, list[dict]] = defaultdict(list)
 
-        for run_id, project in _repeated_question_run_ids(conn):
+        for run_id, project in _repeated_question_run_ids(conn, since_ts=since_ts):
             kb_count = _kb_recall_event_count(conn, run_id)
             if not has_kb_recall_gap(kb_count):
                 continue

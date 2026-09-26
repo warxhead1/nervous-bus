@@ -141,14 +141,22 @@ class HarnessChangeWatchDetector(BaseDetector):
 
     DETECTOR_NAME = "harness_change_watch"
 
-    def detect(self, conn: sqlite3.Connection) -> list[PatternCandidate]:
+    def detect(
+        self, conn: sqlite3.Connection, since_ts: Optional[str] = None
+    ) -> list[PatternCandidate]:
+        """since_ts (issue #32): bounds the run scan to runs started at/after
+        this RFC3339 cutoff. None (default) is unbounded."""
+        since_clause = "AND started >= ?" if since_ts else ""
+        params: list = [since_ts] if since_ts else []
         runs_cur = conn.execute(
-            """
+            f"""
             SELECT run_id, project, session_id
             FROM runs
             WHERE close_reason IS NOT NULL
+              {since_clause}
             ORDER BY started
-            """
+            """,
+            params,
         )
         runs = [(r[0], r[1], r[2]) for r in runs_cur.fetchall()]
 

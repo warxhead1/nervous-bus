@@ -360,7 +360,7 @@ def load_run_events(conn, run_id: str) -> list[dict]:
     return out
 
 
-def session_run_ids(conn) -> dict[str, list[str]]:
+def session_run_ids(conn, since_ts: Optional[str] = None) -> dict[str, list[str]]:
     """Map session_id -> [run_id, ...] from the runs table.
 
     The segmenter splits one host session into several idle-bounded runs, so a
@@ -368,11 +368,21 @@ def session_run_ids(conn) -> dict[str, list[str]]:
     DIFFERENT runs of the same session. Lineage joins (cohort -> child outcome)
     must therefore pool a session's runs, not look within one run. Runs with a
     NULL session_id are skipped (nothing to pool them by).
+
+    since_ts (issue #32): bounds the scan to runs started at/after this
+    RFC3339 cutoff. None (default) is unbounded — unchanged behavior.
     """
     out: dict[str, list[str]] = {}
-    for session_id, run_id in conn.execute(
-        "SELECT session_id, run_id FROM runs WHERE session_id IS NOT NULL ORDER BY started"
-    ).fetchall():
+    if since_ts:
+        query = (
+            "SELECT session_id, run_id FROM runs "
+            "WHERE session_id IS NOT NULL AND started >= ? ORDER BY started"
+        )
+        params: tuple = (since_ts,)
+    else:
+        query = "SELECT session_id, run_id FROM runs WHERE session_id IS NOT NULL ORDER BY started"
+        params = ()
+    for session_id, run_id in conn.execute(query, params).fetchall():
         out.setdefault(session_id, []).append(run_id)
     return out
 
