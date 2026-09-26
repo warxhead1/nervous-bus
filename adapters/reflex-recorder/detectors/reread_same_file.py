@@ -186,7 +186,9 @@ class RereadSameFileDetector(BaseDetector):
 
     DETECTOR_NAME = "reread_same_file"
 
-    def detect(self, conn: sqlite3.Connection) -> list[PatternCandidate]:
+    def detect(
+        self, conn: sqlite3.Connection, since_ts: Optional[str] = None
+    ) -> list[PatternCandidate]:
         """Scan run_events for runs where the same file is Read > REREAD_THRESHOLD times.
 
         Parameters
@@ -194,6 +196,9 @@ class RereadSameFileDetector(BaseDetector):
         conn : sqlite3.Connection
             Live connection to runs.db (same connection passed to __init__).
             Do NOT close it.
+        since_ts : Optional[str]
+            RFC3339 UTC cutoff (issue #32); bounds the scan to runs started
+            at/after this time. None (default) is unbounded.
 
         Returns
         -------
@@ -201,22 +206,57 @@ class RereadSameFileDetector(BaseDetector):
             One candidate per (project, normalized_file_path) that fired.
         """
         # Pull all Read-tool events, ordered for per-run analysis.
-        cur = conn.execute(
-            """
-            SELECT re.run_id,
-                   r.project,
-                   json_extract(re.raw_json, '$.data.tool_summary') AS tool_summary,
-                   re.raw_json
-            FROM run_events AS re
-            JOIN runs AS r USING (run_id)
-            WHERE json_extract(re.raw_json, '$.data.tool_name') IN ({placeholders})
-            ORDER BY re.run_id, re.seq
-            """.format(
-                placeholders=",".join("?" * len(_READ_TOOL_NAMES))
-            ),
-            tuple(_READ_TOOL_NAMES),
-        )
-        rows = cur.fetchall()
+        #
+        # Two-step when since_ts is given, not a single JOIN filtered on
+        # r.started (issue #32 perf fix, same root cause as
+        # repeated_question.py): the tool_name filter is a json_extract() over
+        # re.raw_json with no index, so a single-query JOIN drives from
+        # run_events regardless of the runs.started filter (verified via
+        # EXPLAIN QUERY PLAN on the live DB: `SCAN re USING INDEX
+        # idx_run_events_seq`, i.e. still a full run_events scan). Selecting
+        # windowed run_ids from `runs` first (idx_runs_started) and then
+        # filtering run_events by `run_id IN (...)` bounds the scan.
+        read_tool_placeholders = ",".join("?" * len(_READ_TOOL_NAMES))
+        if since_ts:
+            run_rows = conn.execute(
+                "SELECT run_id, project FROM runs WHERE started >= ?", (since_ts,)
+            ).fetchall()
+            if not run_rows:
+                return []
+            project_by_run = {r[0]: r[1] for r in run_rows}
+            run_ids = list(project_by_run.keys())
+            run_id_placeholders = ",".join("?" * len(run_ids))
+            cur = conn.execute(
+                f"""
+                SELECT run_id,
+                       json_extract(raw_json, '$.data.tool_summary') AS tool_summary,
+                       raw_json
+                FROM run_events
+                WHERE json_extract(raw_json, '$.data.tool_name') IN ({read_tool_placeholders})
+                  AND run_id IN ({run_id_placeholders})
+                ORDER BY run_id, seq
+                """,
+                list(_READ_TOOL_NAMES) + run_ids,
+            )
+            rows = [
+                (run_id, project_by_run.get(run_id), tool_summary, raw_json)
+                for run_id, tool_summary, raw_json in cur.fetchall()
+            ]
+        else:
+            cur = conn.execute(
+                """
+                SELECT re.run_id,
+                       r.project,
+                       json_extract(re.raw_json, '$.data.tool_summary') AS tool_summary,
+                       re.raw_json
+                FROM run_events AS re
+                JOIN runs AS r USING (run_id)
+                WHERE json_extract(re.raw_json, '$.data.tool_name') IN ({placeholders})
+                ORDER BY re.run_id, re.seq
+                """.format(placeholders=read_tool_placeholders),
+                tuple(_READ_TOOL_NAMES),
+            )
+            rows = cur.fetchall()
 
         # Accumulate per-(run_id, norm_path) counts.
         # Structure: {(project, norm_path): {run_id: [(raw_path, count)]}}

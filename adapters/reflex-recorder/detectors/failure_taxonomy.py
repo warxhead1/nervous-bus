@@ -298,23 +298,66 @@ class FailureTaxonomyDetector(BaseDetector):
 
     DETECTOR_NAME = "failure_taxonomy"
 
-    def detect(self, conn: sqlite3.Connection) -> list[PatternCandidate]:
+    def detect(
+        self, conn: sqlite3.Connection, since_ts: Optional[str] = None
+    ) -> list[PatternCandidate]:
+        """since_ts (issue #32): bounds the run scan to runs started at/after
+        this RFC3339 cutoff. None (default) is unbounded.
+
+        Also collapses the per-run N+1 (_hit_detectors_for_run +
+        _permission_request_count, 2 queries x every run in scope) into two
+        bulk queries up front — measured as the single most expensive
+        built-in detector (56.9s of a ~288s total synthesis pass on the live
+        2.6G runs.db, largely this N+1 pattern rather than the windowing
+        itself).
+        """
+        since_clause = "AND started >= ?" if since_ts else ""
+        params: list = [since_ts] if since_ts else []
         runs_cur = conn.execute(
-            """
+            f"""
             SELECT run_id, project, outcome, labeled_at, event_count
             FROM runs
             WHERE close_reason IS NOT NULL
+              {since_clause}
             ORDER BY started
-            """
+            """,
+            params,
         )
         runs = runs_cur.fetchall()
+
+        if not runs:
+            return []
+
+        run_ids = [r[0] for r in runs]
+        placeholders = ",".join("?" * len(run_ids))
+
+        # Bulk-fetch hit detectors per run_id (was: one query per run).
+        hit_detectors_by_run: dict[str, set[str]] = defaultdict(set)
+        for run_id, detector in conn.execute(
+            f"SELECT run_id, detector FROM detector_hits WHERE run_id IN ({placeholders})",
+            run_ids,
+        ).fetchall():
+            hit_detectors_by_run[run_id].add(detector)
+
+        # Bulk-fetch permission_requested counts per run_id (was: one query per run).
+        permission_count_by_run: dict[str, int] = defaultdict(int)
+        for run_id in conn.execute(
+            f"""
+            SELECT run_id FROM run_events
+            WHERE run_id IN ({placeholders})
+              AND event_type = 'bus.agent.activity.v1'
+              AND json_extract(raw_json, '$.data.event') = 'permission_requested'
+            """,
+            run_ids,
+        ).fetchall():
+            permission_count_by_run[run_id[0]] += 1
 
         # {(project, bucket): [{"run_id":..., "reasons":[...]}]}
         cross_run: dict[tuple[str, str], list[dict]] = defaultdict(list)
 
         for run_id, project, outcome, labeled_at, event_count in runs:
-            hit_detectors = _hit_detectors_for_run(conn, run_id)
-            permission_count = _permission_request_count(conn, run_id)
+            hit_detectors = hit_detectors_by_run.get(run_id, set())
+            permission_count = permission_count_by_run.get(run_id, 0)
             buckets = classify_run(
                 hit_detectors, outcome, labeled_at, permission_count, event_count or 0
             )

@@ -162,14 +162,23 @@ class WorktreeLeakDetector(BaseDetector):
 
     DETECTOR_NAME = "worktree_leak"
 
-    def detect(self, conn: sqlite3.Connection) -> list[PatternCandidate]:
+    def detect(
+        self, conn: sqlite3.Connection, since_ts: Optional[str] = None
+    ) -> list[PatternCandidate]:
         """Scan runs for terminal-outcome worktrees that still exist on disk.
 
         Join on reconstructed ABSOLUTE worktree path (runs.worktree) against
         `git worktree list` output — never against the slug alone.
+
+        since_ts (issue #32): bounds the scan to runs started at/after this
+        RFC3339 cutoff. None (default) is unbounded — unchanged behavior.
         """
         # Pull all distinct (project, worktree, worktree_slug) for terminal runs.
         # Include git_branch + bead_id for evidence richness.
+        since_clause = "AND started >= ?" if since_ts else ""
+        params: list = list(_TERMINAL_OUTCOMES)
+        if since_ts:
+            params.append(since_ts)
         cur = conn.execute(
             """
             SELECT project, worktree, worktree_slug, git_branch, bead_id,
@@ -180,11 +189,13 @@ class WorktreeLeakDetector(BaseDetector):
               AND labeled_at IS NOT NULL
               AND worktree IS NOT NULL
               AND worktree != ''
+              {since_clause}
             GROUP BY project, worktree
             """.format(
-                placeholders=",".join("?" * len(_TERMINAL_OUTCOMES))
+                placeholders=",".join("?" * len(_TERMINAL_OUTCOMES)),
+                since_clause=since_clause,
             ),
-            _TERMINAL_OUTCOMES,
+            params,
         )
         rows = cur.fetchall()
         cols = [d[0] for d in cur.description]

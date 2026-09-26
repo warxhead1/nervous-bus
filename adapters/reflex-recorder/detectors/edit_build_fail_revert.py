@@ -233,8 +233,13 @@ class EditBuildFailRevertDetector(BaseDetector):
 
     DETECTOR_NAME = "edit_build_fail_revert"
 
-    def detect(self, conn: sqlite3.Connection) -> list[PatternCandidate]:
+    def detect(
+        self, conn: sqlite3.Connection, since_ts: Optional[str] = None
+    ) -> list[PatternCandidate]:
         """Scan all CLOSED runs for edit-build-fail-revert thrash cycles.
+
+        since_ts (issue #32): bounds the run/event scan to runs started
+        at/after this RFC3339 cutoff. None (default) is unbounded.
 
         COMPLETENESS GATE: only runs with close_reason IS NOT NULL are scanned,
         so an in-flight run (mid-edit/build, truncated event stream) cannot
@@ -249,26 +254,36 @@ class EditBuildFailRevertDetector(BaseDetector):
         the detector_hits table, not here.
         """
         # Fetch all CLOSED run_ids with their projects in chronological order.
+        since_clause = "AND started >= ?" if since_ts else ""
+        since_params: list = [since_ts] if since_ts else []
         runs_cur = conn.execute(
-            """
+            f"""
             SELECT run_id, project
             FROM runs
             WHERE close_reason IS NOT NULL
+              {since_clause}
             ORDER BY started
-            """
+            """,
+            since_params,
         )
         runs = [(row[0], row[1]) for row in runs_cur.fetchall()]
 
         if not runs:
             return []
 
-        # Fetch all run_events in one query, grouped by run_id.
+        # Fetch run_events for just those runs (previously scanned run_events
+        # unconditionally — issue #32 fix: bound via run_id membership, which
+        # is indexed, rather than a table-wide scan every pass).
+        run_ids = [r[0] for r in runs]
+        placeholders = ",".join("?" * len(run_ids))
         events_cur = conn.execute(
-            """
+            f"""
             SELECT run_id, seq, raw_json
             FROM run_events
+            WHERE run_id IN ({placeholders})
             ORDER BY run_id, seq
-            """
+            """,
+            run_ids,
         )
         # Group events by run_id
         from collections import defaultdict

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from typing import Optional
 
 from detectors.base import BaseDetector, PatternCandidate
 from detectors.dispatch_lineage import (
@@ -69,10 +70,21 @@ class DirectiveGroundTruthMismatchDetector(BaseDetector):
 
     DETECTOR_NAME = "directive_ground_truth_mismatch"
 
-    def detect(self, conn: sqlite3.Connection) -> list[PatternCandidate]:
-        runs = conn.execute(
-            "SELECT run_id, project FROM runs WHERE close_reason IS NOT NULL ORDER BY started"
-        ).fetchall()
+    def detect(
+        self, conn: sqlite3.Connection, since_ts: Optional[str] = None
+    ) -> list[PatternCandidate]:
+        """since_ts (issue #32): bounds the run scan to runs started at/after
+        this RFC3339 cutoff. None (default) is unbounded."""
+        if since_ts:
+            runs = conn.execute(
+                "SELECT run_id, project FROM runs "
+                "WHERE close_reason IS NOT NULL AND started >= ? ORDER BY started",
+                (since_ts,),
+            ).fetchall()
+        else:
+            runs = conn.execute(
+                "SELECT run_id, project FROM runs WHERE close_reason IS NOT NULL ORDER BY started"
+            ).fetchall()
 
         is_verify = build_verifier()
         candidates: list[PatternCandidate] = []

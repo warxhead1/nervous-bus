@@ -218,13 +218,18 @@ class RepeatedQuestionDetector(BaseDetector):
 
     DETECTOR_NAME = "repeated_question"
 
-    def detect(self, conn: sqlite3.Connection) -> list[PatternCandidate]:
+    def detect(
+        self, conn: sqlite3.Connection, since_ts: Optional[str] = None
+    ) -> list[PatternCandidate]:
         """Scan run_events for recurring question classes across distinct runs.
 
         Parameters
         ----------
         conn : sqlite3.Connection
             Read-only connection to runs.db.
+        since_ts : Optional[str]
+            RFC3339 UTC cutoff (issue #32); bounds the scan to runs started
+            at/after this time. None (default) is unbounded.
 
         Returns
         -------
@@ -235,22 +240,62 @@ class RepeatedQuestionDetector(BaseDetector):
         # Fetch all candidate events: permission_requested or
         # bus.agent.activity.v1 with tool_name AskUserQuestion (or Bash w/ ?-desc).
         # We also need the project, which lives in runs.project.
-        cur = conn.execute(
-            """
-            SELECT
-                re.run_id,
-                re.event_type,
-                re.raw_json,
-                r.project
-            FROM run_events re
-            JOIN runs r ON r.run_id = re.run_id
-            WHERE re.event_type IN ('permission_requested', 'bus.agent.activity.v1')
-            ORDER BY r.project, re.run_id, re.seq
-            """
-        )
-        rows = cur.fetchall()
-        cols = [d[0] for d in cur.description]
-        event_rows = [dict(zip(cols, row)) for row in rows]
+        #
+        # Two-step, not a single JOIN filtered on r.started (issue #32 perf
+        # fix): EXPLAIN QUERY PLAN on the live DB showed a single-query JOIN
+        # drives from run_events (`SCAN re`) regardless of the runs.started
+        # filter, because event_type has no index — SQLite has nothing to
+        # push the window filter through before the 1.39M-row table scan.
+        # Selecting windowed run_ids from `runs` FIRST (idx_runs_started) and
+        # then filtering run_events by `run_id IN (...)` (idx_run_events_run_id)
+        # actually bounds the scan. Measured: 18.8s -> well under 1s on the
+        # live 2.6G runs.db with a 30-day window.
+        if since_ts:
+            run_rows = conn.execute(
+                "SELECT run_id, project FROM runs WHERE started >= ?", (since_ts,)
+            ).fetchall()
+            if not run_rows:
+                return []
+            project_by_run = {r[0]: r[1] for r in run_rows}
+            run_ids = list(project_by_run.keys())
+            placeholders = ",".join("?" * len(run_ids))
+            cur = conn.execute(
+                f"""
+                SELECT run_id, event_type, raw_json
+                FROM run_events
+                WHERE event_type IN ('permission_requested', 'bus.agent.activity.v1')
+                  AND run_id IN ({placeholders})
+                ORDER BY run_id, seq
+                """,
+                run_ids,
+            )
+            event_rows = [
+                {
+                    "run_id": run_id,
+                    "event_type": event_type,
+                    "raw_json": raw_json,
+                    "project": project_by_run.get(run_id),
+                }
+                for run_id, event_type, raw_json in cur.fetchall()
+            ]
+            event_rows.sort(key=lambda r: (r["project"] or "", r["run_id"]))
+        else:
+            cur = conn.execute(
+                """
+                SELECT
+                    re.run_id,
+                    re.event_type,
+                    re.raw_json,
+                    r.project
+                FROM run_events re
+                JOIN runs r ON r.run_id = re.run_id
+                WHERE re.event_type IN ('permission_requested', 'bus.agent.activity.v1')
+                ORDER BY r.project, re.run_id, re.seq
+                """
+            )
+            rows = cur.fetchall()
+            cols = [d[0] for d in cur.description]
+            event_rows = [dict(zip(cols, row)) for row in rows]
 
         # Accumulate: (project, question_class) → set of run_ids + evidence list
         from collections import defaultdict

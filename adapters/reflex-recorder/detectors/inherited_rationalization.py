@@ -33,6 +33,7 @@ or a false "pre-existing" claim).
 from __future__ import annotations
 
 import sqlite3
+from typing import Optional
 from collections import Counter
 
 from detectors.base import BaseDetector, PatternCandidate
@@ -63,12 +64,21 @@ class InheritedRationalizationDetector(BaseDetector):
 
     DETECTOR_NAME = "inherited_rationalization"
 
-    def detect(self, conn: sqlite3.Connection) -> list[PatternCandidate]:
-        project_of = dict(conn.execute("SELECT run_id, project FROM runs").fetchall())
+    def detect(
+        self, conn: sqlite3.Connection, since_ts: Optional[str] = None
+    ) -> list[PatternCandidate]:
+        """since_ts (issue #32): bounds the run/session scan to runs started
+        at/after this RFC3339 cutoff. None (default) is unbounded."""
+        if since_ts:
+            project_of = dict(conn.execute(
+                "SELECT run_id, project FROM runs WHERE started >= ?", (since_ts,)
+            ).fetchall())
+        else:
+            project_of = dict(conn.execute("SELECT run_id, project FROM runs").fetchall())
         is_verify = build_verifier()
         candidates: list[PatternCandidate] = []
 
-        for session_id, run_ids in session_run_ids(conn).items():
+        for session_id, run_ids in session_run_ids(conn, since_ts=since_ts).items():
             events = load_session_events(conn, run_ids)
             if not events:
                 continue
