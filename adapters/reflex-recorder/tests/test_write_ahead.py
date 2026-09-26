@@ -25,7 +25,6 @@ import signal
 import sqlite3
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -303,12 +302,9 @@ class TestMidBatchReopenBoundary(unittest.TestCase):
 
 
 class TestShutdownScale(unittest.TestCase):
-    """Shutdown of many runs/events must complete well under 1s."""
+    """Shutdown cost scales with runs, not events: one commit per closed run."""
 
-    def test_shutdown_500_events_across_many_runs_is_fast(self):
-        # Stub `nervous publish` — a real subprocess per run (25 of them)
-        # would swamp the 1s budget with process-spawn overhead unrelated to
-        # what this test measures (SQLite persistence).
+    def test_shutdown_commits_once_per_run(self):
         original_publish = recorder_mod._publish_run
         recorder_mod._publish_run = lambda payload, timeout=0: True
         self.addCleanup(setattr, recorder_mod, "_publish_run", original_publish)
@@ -341,12 +337,12 @@ class TestShutdownScale(unittest.TestCase):
             self.assertEqual(rec.store.pending_event_count(), n_runs * events_per_run)
 
             db_path = rec.store.db_path
-            started = time.time()
+            commits = []
+            rec.store._conn.set_trace_callback(
+                lambda sql: commits.append(sql) if sql.strip().upper() == "COMMIT" else None
+            )
             rec.shutdown(budget_s=10.0)
-            elapsed = time.time() - started
-            self.assertLess(elapsed, 1.0,
-                             f"shutdown of {n_runs} runs / {n_runs * events_per_run} "
-                             f"events took {elapsed:.3f}s — expected well under 1s")
+            self.assertEqual(len(commits), n_runs)
 
             # rec.store is closed by shutdown(); reopen to verify the drain.
             verify = SQLiteStore(db_path)
