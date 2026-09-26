@@ -49,11 +49,48 @@ run_key, never rows still waiting to be folded — see `_fold_cursor` and
   NOT covered  a crash strictly between a batch's XREADGROUP delivery and
                its `journal_events` commit. Those entries are undelivered
                to any durable store and sit only in Redis's pending-entries
-               list (PEL) under the dead consumer's name; this recorder does
-               not yet reclaim PEL entries from a prior consumer name on
-               restart (each process uses a pid-suffixed consumer name), so
-               closing that residual window is a separate follow-up
-               (PEL reclaim via XCLAIM/XAUTOCLAIM).
+               list (PEL) under the dead consumer's name until the next
+               startup's PEL reclaim (see below) claims them.
+
+PEL reclaim (nervous-bus#54)
+-----------------------------
+Every process uses a pid-suffixed `CONSUMER_NAME` (`reflex-recorder-<pid>`),
+so a crash strictly between XREADGROUP delivery and the `journal_events`
+commit leaves its PEL entries permanently unclaimed by ordinary
+`XREADGROUP ... >` reads (`>` only ever delivers new stream entries, never
+re-delivers a consumer's own pending ones) once that pid never restarts
+under the same name. `main()` closes this on every startup, before entering
+the read loop: `_reclaim_stranded_pel` runs `XAUTOCLAIM` in a cursor loop
+against `nbus:all`/`reflex-recorder` for entries idle longer than
+`reclaim_min_idle_s` (config, default 10 min) from ANY consumer -- not just
+one known-dead name, since XAUTOCLAIM itself only returns entries that are
+actually idle that long, regardless of current owner -- claims them onto
+this process's own `CONSUMER_NAME`, and feeds them through the same
+journaled `_ingest_batch` path as a live batch: XACK only follows the
+journal commit, same durability boundary as the live loop. A stream_id
+already present in `pending_events` (see `store.journaled_stream_ids`) is
+skipped on re-ingest but still acked -- it was already journaled by a prior
+delivery that crashed before acking it, so re-inserting it would duplicate
+the row `close_run` eventually drains.
+
+`_cleanup_dead_consumers` then runs `XGROUP DELCONSUMER` for any consumer
+(never this process's own `CONSUMER_NAME`) with zero pending entries and
+idle longer than `reclaim_dead_consumer_idle_s` (config, default 1 day) --
+purely cosmetic bookkeeping (`XINFO CONSUMERS` accretes one row per pid ever
+started; DELCONSUMER stops it from growing unbounded), never a precondition
+for the reclaim above, which needs no cooperation from the dead consumer at
+all.
+
+Consumer-naming choice: pid-suffixed names are kept (not switched to a
+stable name, e.g. hostname) precisely because the reclaim above makes a
+crashed consumer's identity irrelevant -- XAUTOCLAIM claims by idle time,
+not by name, so there is no correctness reason to collapse restarts onto
+one name. A stable name would remove the DELCONSUMER cleanup step's reason
+to exist, but would also mean two recorder processes accidentally running
+at once (e.g. old unit still stopping while a new one starts) contend over
+one consumer identity's PEL instead of visibly holding two -- the pid
+suffix keeps that overlap observable in `XINFO CONSUMERS` instead of
+silently merging it.
 """
 from __future__ import annotations
 
@@ -90,6 +127,15 @@ DEFAULT_IDLE_TIMEOUT_S = 900.0   # 15 min
 DEFAULT_METRICS_INTERVAL_S = 60.0
 DEFAULT_TICK_INTERVAL_S = 30.0
 
+# PEL reclaim (nervous-bus#54): entries idle longer than this are claimed by
+# _reclaim_stranded_pel on every startup, regardless of which consumer
+# currently owns them.
+DEFAULT_RECLAIM_MIN_IDLE_S = 600.0          # 10 min
+# _cleanup_dead_consumers deletes a consumer's XINFO CONSUMERS row once it
+# has zero pending entries and has been idle longer than this.
+DEFAULT_RECLAIM_DEAD_CONSUMER_IDLE_S = 86400.0  # 1 day
+DEFAULT_RECLAIM_BATCH_COUNT = 100
+
 # Wall-clock budget for the graceful-shutdown flush.  systemd's
 # TimeoutStopSec=60 (systemd/reflex-recorder.service) is the hard ceiling:
 # once it expires the unit is SIGKILLed mid-flush.  Persistence itself is a
@@ -121,6 +167,9 @@ def _load_config(path: Path) -> dict:
         "stream_read_count": 200,
         "stream_block_ms": 2000,
         "shutdown_budget_s": DEFAULT_SHUTDOWN_BUDGET_S,
+        "reclaim_min_idle_s": DEFAULT_RECLAIM_MIN_IDLE_S,
+        "reclaim_dead_consumer_idle_s": DEFAULT_RECLAIM_DEAD_CONSUMER_IDLE_S,
+        "reclaim_batch_count": DEFAULT_RECLAIM_BATCH_COUNT,
     }
     if not path.exists():
         return cfg
@@ -145,13 +194,16 @@ def _load_config(path: Path) -> dict:
 
     rec_cfg = raw.get("recorder", {})
     for key in ("idle_timeout_s", "metrics_interval_s", "tick_interval_s",
-                "shutdown_budget_s"):
+                "shutdown_budget_s", "reclaim_min_idle_s",
+                "reclaim_dead_consumer_idle_s"):
         if key in rec_cfg:
             cfg[key] = float(rec_cfg[key])
     if "stream_read_count" in rec_cfg:
         cfg["stream_read_count"] = int(rec_cfg["stream_read_count"])
     if "stream_block_ms" in rec_cfg:
         cfg["stream_block_ms"] = int(rec_cfg["stream_block_ms"])
+    if "reclaim_batch_count" in rec_cfg:
+        cfg["reclaim_batch_count"] = int(rec_cfg["reclaim_batch_count"])
 
     store_cfg = raw.get("store", {})
     if "db_path" in store_cfg:
@@ -246,6 +298,107 @@ def _ensure_consumer_group(r: redis.Redis) -> None:
         else:
             raise
     sys.stderr.flush()
+
+
+def _reclaim_stranded_pel(r: redis.Redis, recorder: "Recorder", cfg: dict) -> int:
+    """Claim PEL entries idle > reclaim_min_idle_s from ANY consumer onto
+    this process, journal+fold them via the ordinary journaled path, and
+    XACK only after that journal commit — see the module docstring's "PEL
+    reclaim" section for the full invariant. Runs once per startup, before
+    the read loop, so it also drains whatever the loop's own crash left
+    behind on the PREVIOUS run of this same recorder.
+    """
+    min_idle_ms = int(float(cfg.get("reclaim_min_idle_s", DEFAULT_RECLAIM_MIN_IDLE_S)) * 1000)
+    batch_count = int(cfg.get("reclaim_batch_count", DEFAULT_RECLAIM_BATCH_COUNT))
+    cursor = "0-0"
+    reclaimed = 0
+    while True:
+        result = r.xautoclaim(
+            STREAM_NAME, CONSUMER_GROUP, CONSUMER_NAME,
+            min_idle_time=min_idle_ms, start_id=cursor, count=batch_count,
+        )
+        # redis-py returns (next_cursor, claimed_entries, deleted_message_ids);
+        # tolerate a 2-tuple in case an older client/server pair omits the
+        # third element.
+        if len(result) == 3:
+            cursor, claimed, _deleted = result
+        else:
+            cursor, claimed = result
+
+        if claimed:
+            claimed_ids = [stream_id for stream_id, _fields in claimed]
+            # Dedupe: a stream_id already journaled in pending_events was
+            # delivered (and journaled) by an earlier process that crashed
+            # before acking it — see store.journaled_stream_ids and the
+            # module docstring. Re-ingesting it would duplicate the row
+            # close_run eventually drains; it still needs acking below.
+            already_journaled = recorder.store.journaled_stream_ids(claimed_ids)
+            to_ingest = [
+                (stream_id, fields.get("_raw", "{}"))
+                for stream_id, fields in claimed
+                if stream_id not in already_journaled
+            ]
+            if to_ingest:
+                recorder._ingest_batch(to_ingest)
+            for stream_id in claimed_ids:
+                r.xack(STREAM_NAME, CONSUMER_GROUP, stream_id)
+            reclaimed += len(claimed)
+
+        if cursor == "0-0" or not claimed:
+            break
+
+    if reclaimed:
+        sys.stderr.write(
+            f"[reflex-recorder] PEL reclaim: claimed and journaled "
+            f"{reclaimed} stranded entr{'y' if reclaimed == 1 else 'ies'} "
+            f"onto {CONSUMER_NAME}\n"
+        )
+        sys.stderr.flush()
+    return reclaimed
+
+
+def _cleanup_dead_consumers(r: redis.Redis, cfg: dict) -> int:
+    """XGROUP DELCONSUMER any consumer (never this process's own
+    CONSUMER_NAME) with zero pending entries idle longer than
+    reclaim_dead_consumer_idle_s. Purely cosmetic bookkeeping — XINFO
+    CONSUMERS otherwise accretes one row per pid ever started — and never a
+    precondition for `_reclaim_stranded_pel`, which claims by idle time
+    alone and needs no cooperation from the dead consumer's row.
+    """
+    dead_idle_ms = float(
+        cfg.get("reclaim_dead_consumer_idle_s", DEFAULT_RECLAIM_DEAD_CONSUMER_IDLE_S)
+    ) * 1000
+    try:
+        consumers = r.xinfo_consumers(STREAM_NAME, CONSUMER_GROUP)
+    except redis.ResponseError as e:
+        sys.stderr.write(f"[reflex-recorder] xinfo_consumers failed: {e}\n")
+        sys.stderr.flush()
+        return 0
+
+    deleted = 0
+    for info in consumers:
+        name = info.get("name")
+        if name is None or name == CONSUMER_NAME:
+            continue
+        pending = info.get("pending", 0)
+        idle_ms = info.get("idle", 0)
+        if pending == 0 and idle_ms > dead_idle_ms:
+            try:
+                r.xgroup_delconsumer(STREAM_NAME, CONSUMER_GROUP, name)
+                deleted += 1
+            except redis.ResponseError as e:
+                sys.stderr.write(
+                    f"[reflex-recorder] xgroup_delconsumer({name}) failed: {e}\n"
+                )
+                sys.stderr.flush()
+
+    if deleted:
+        sys.stderr.write(
+            f"[reflex-recorder] deleted {deleted} dead consumer(s) from "
+            f"'{CONSUMER_GROUP}'\n"
+        )
+        sys.stderr.flush()
+    return deleted
 
 
 # ── Publish via shell SDK ─────────────────────────────────────────────────────
@@ -776,6 +929,8 @@ def main() -> int:
         return 1
 
     _ensure_consumer_group(r)
+    _reclaim_stranded_pel(r, recorder, cfg)
+    _cleanup_dead_consumers(r, cfg)
 
     try:
         _run_xreadgroup(r, recorder, cfg, once=args.once, shutdown=shutdown)

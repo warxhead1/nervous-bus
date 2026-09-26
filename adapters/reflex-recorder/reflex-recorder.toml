@@ -28,6 +28,18 @@ stream_block_ms = 2000
 # store.py's pending_events table) always happen.
 shutdown_budget_s = 10.0
 
+# PEL reclaim (nervous-bus#54): on every startup, before the read loop,
+# XAUTOCLAIM entries idle longer than this (from ANY consumer in the
+# 'reflex-recorder' group, not just a specific dead one) onto this process
+# and feed them through the same journaled ingest + XACK path as a live
+# batch. See recorder.py's module docstring, "PEL reclaim" section.
+reclaim_min_idle_s = 600.0
+
+# After reclaiming, XGROUP DELCONSUMER any consumer (never this process's
+# own) with zero pending entries idle longer than this — purely cosmetic
+# bookkeeping so XINFO CONSUMERS doesn't accrete one row per pid forever.
+reclaim_dead_consumer_idle_s = 86400.0
+
 [store]
 # SQLite database path (default: ~/.cache/nervous-bus/reflex/runs.db)
 # db_path = "~/.cache/nervous-bus/reflex/runs.db"

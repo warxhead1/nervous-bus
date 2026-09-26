@@ -252,6 +252,27 @@ class SQLiteStore:
     def pending_event_count(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM pending_events").fetchone()[0]
 
+    def journaled_stream_ids(self, stream_ids: list[str]) -> set[str]:
+        """Which of `stream_ids` already have a `pending_events` row.
+
+        Used by PEL reclaim (recorder.py's `_reclaim_stranded_pel`) to avoid
+        re-journaling a reclaimed entry that some earlier delivery already
+        wrote to the write-ahead journal before crashing strictly between
+        that commit and its XACK -- the row is already durable, so reclaim
+        only needs to XACK it, not re-insert it. `run_events` (the table an
+        acked, closed event ends up in) carries no `stream_id` column at
+        all, so this table is the only place that distinction can be made.
+        """
+        if not stream_ids:
+            return set()
+        placeholders = ",".join("?" for _ in stream_ids)
+        cur = self._conn.execute(
+            f"SELECT DISTINCT stream_id FROM pending_events "
+            f"WHERE stream_id IN ({placeholders})",
+            list(stream_ids),
+        )
+        return {row[0] for row in cur.fetchall()}
+
     def close_run(self, payload: dict, upto_id: Optional[int] = None) -> None:
         """Persist a closed run and drain its journaled events, atomically.
 
