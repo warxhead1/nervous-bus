@@ -59,10 +59,14 @@ _SOURCE_TIER: dict[str, int] = {
     "git_merged_into_main": 3,
     "git_squash_equiv": 3,
     "git_partial_squash": 2,
+    # fast-forward landed, confirmed by the run's own commit evidence
+    "git_ff_landed": 3,
     "git_pickaxe_landed": 3,
     "git_revert_on_main": 3,
     "git_empty_branch": 2,
     "git_discarded_verified": 2,
+    # explicit git evidence; must outrank behavior_inference
+    "git_branch_gone": 2,
     "bead_close": 3,
     "bus_bead_closed": 3,
     "pr_merge": 3,
@@ -137,23 +141,35 @@ def _bd_structured_resolution(bead_id: str) -> Optional[str]:
     return None
 
 
+def _run_cmd_cwd(cmd: list[str], cwd: str, timeout: int = 8) -> Optional[str]:
+    """Like _run_cmd, but runs the subprocess with the given working directory."""
+    try:
+        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
 def _gh_pr_state(branch: str, worktree_path: Optional[str]) -> Optional[dict]:
     """Query gh pr for the most recent PR on branch.
 
-    B4 fix: use `gh -C <dir> pr view <branch>` so gh resolves the remote from
-    the correct repo.  Degrades safely to None on no-PR or network error.
+    `gh` has no `-C` flag; run it with cwd=work_dir so it resolves that
+    repo's remote. Degrades safely to None on no-PR or network error.
 
     Returns dict with {state, mergedAt} or None if no PR found.
     """
     # Determine the working directory for gh: prefer the worktree path, fall
     # back to ".".  We don't gate on Path.exists() here — the worktree may have
     # been cleaned up but the parent project git repo is still valid for gh.
-    # If gh fails (no remote, network error), _run_cmd returns None and we
+    # If gh fails (no remote, network error), _run_cmd_cwd returns None and we
     # degrade safely to None without mislabeling.
     work_dir = worktree_path if worktree_path else "."
 
-    out = _run_cmd(
-        ["gh", "-C", work_dir, "pr", "view", branch, "--json", "state,mergedAt,closedAt"],
+    out = _run_cmd_cwd(
+        ["gh", "pr", "view", branch, "--json", "state,mergedAt,closedAt"],
+        cwd=work_dir,
         timeout=10,
     )
     if out:
@@ -293,18 +309,31 @@ def label_from_pr(branch: str, worktree_path: Optional[str]) -> Optional[tuple[s
 
 # ── Explicit labeling from local git ancestry (no PR required) ────────────────
 
-#: Branch-name shapes that indicate a local worktree dispatch (agent/workflow).
-_DISPATCH_BRANCH_RE = re.compile(r"^(worktree-agent-|worktree-wf[_-]|agent-|wf[_-])")
+#: Trunk refs: never a dispatch branch, never git-ancestry-labeled here.
+_TRUNK_BRANCHES = frozenset({"main", "master", "HEAD"})
+
+#: Any non-trunk branch: Orca/codex lanes use arbitrary names (warxhead1/<lane>,
+#: codex/*), not only the worktree-agent-/wf- shapes.
+_DISPATCH_BRANCH_RE = re.compile(r"^(?!(?:main|master|HEAD)$).+$")
 
 
 def _project_repo_root(run: dict) -> Optional[str]:
     """Resolve the MAIN repo path for a run (where `main` lives), not the worktree.
 
-    Prefers stripping a `.../.claude/worktrees/<slug>` suffix off the run's
-    worktree path; falls back to ~/projects/<project>.  Returns None if neither
-    looks like a git repo.
+    Prefers `git rev-parse --git-common-dir` from inside the run's worktree
+    (any layout); falls back to stripping a `.claude/worktrees/` suffix (the
+    worktree may be gone post-landing), then to ~/projects/<project>.
     """
     wt = run.get("worktree")
+    if wt and Path(wt).exists():
+        out = _run_cmd(["git", "-C", wt, "rev-parse", "--git-common-dir"])
+        if out:
+            common_dir = Path(out)
+            if not common_dir.is_absolute():
+                common_dir = Path(wt) / common_dir
+            repo_root = common_dir.parent
+            if (repo_root / ".git").exists():
+                return str(repo_root)
     if wt:
         m = re.match(r"^(.*?)/\.claude/worktrees/", wt)
         if m and Path(m.group(1), ".git").exists():
@@ -319,7 +348,7 @@ def _project_repo_root(run: dict) -> Optional[str]:
 
 def label_from_git_merge(
     git_branch: str, run: dict, *, verify_discards: bool = True,
-    require_dispatch_shape: bool = True,
+    require_dispatch_shape: bool = True, run_has_commit: Optional[bool] = None,
 ) -> Optional[tuple[str, str]]:
     """Derive outcome from local git ancestry for a worktree-dispatched branch.
 
@@ -327,20 +356,14 @@ def label_from_git_merge(
     locally with NO GitHub PR (e.g. tengine): `gh pr view` finds nothing, but
     git ancestry + main's squash trail recover landed/empty/discarded.
 
-    By default (require_dispatch_shape=True), only branch names matching the
-    known worktree-dispatch shapes (_DISPATCH_BRANCH_RE: worktree-agent-,
-    worktree-wf-, agent-, wf-) are considered — this is the FRESH-labeling
-    path (compute_label), and a name-shape gate is the cheap guard against
-    misclassifying an unrelated human feature branch that happens to share a
-    repo with agent dispatches.
+    By default (require_dispatch_shape=True), only non-trunk branch names
+    (_DISPATCH_BRANCH_RE: anything except main/master/HEAD) are considered —
+    this is the FRESH-labeling path (compute_label).
 
-    require_dispatch_shape=False drops that gate: nervous-bus-33's reverify
-    path re-checks labels that are ALREADY behavior_inference (never a
-    stronger source), against ANY resolvable branch — including Orca-style
-    task branches (e.g. 'acquisition-channels', arbitrary slugs, no
-    'worktree-agent-' prefix) that squash-merge locally the same way but
-    don't match the tengine-era naming convention. Measured on the live DB
-    (nervous-bus-33): 66/80 of a random abandoned+branch sample used
+    require_dispatch_shape=False drops the gate entirely: nervous-bus-33's
+    reverify path re-checks labels that are ALREADY behavior_inference (never
+    a stronger source), against ANY resolvable branch. Measured on the live
+    DB (nervous-bus-33): 66/80 of a random abandoned+branch sample used
     Orca-shaped names, so gating reverify on the old regex would have made
     the vast majority of candidates permanently unreachable.
 
@@ -349,6 +372,9 @@ def label_from_git_merge(
     on patch-id alone). When verify_discards, a medium-confidence discard is
     pickaxe-checked (follows the code through rebase/squash/reword) before
     being trusted.
+
+    run_has_commit: the run's own commit evidence, passed to
+    classify_branch_outcome to tell fast-forward-landed from empty branches.
     """
     if not git_branch:
         return None
@@ -363,7 +389,9 @@ def label_from_git_merge(
         return None
 
     live = go.live_worktree_branches(repo)
-    bo = go.classify_branch_outcome(repo, git_branch, worktree_live=(git_branch in live))
+    bo = go.classify_branch_outcome(
+        repo, git_branch, worktree_live=(git_branch in live), run_has_commit=run_has_commit,
+    )
 
     if bo.outcome is None:          # pending / in-flight — no terminal label
         return None
@@ -382,7 +410,8 @@ def label_from_git_merge(
 # ── Inferred labeling from behavior shape ─────────────────────────────────────
 
 # Tools classified as resolving actions (indicate productive completion):
-_RESOLVING_TOOLS = frozenset({"Edit", "Write", "NotebookEdit", "Bash"})
+# apply_patch is codex-cli's only file-edit tool.
+_RESOLVING_TOOLS = frozenset({"Edit", "Write", "NotebookEdit", "Bash", "apply_patch"})
 
 # Tools classified as exploration (re-Read = rereading already-seen files):
 _READ_TOOLS = frozenset({"Read", "Glob", "Grep"})
@@ -518,8 +547,9 @@ def _has_resolving_commit(events: list[dict]) -> bool:
         else:
             cmd = ""
 
-        # Match `git commit`, `git -C <path> commit`, `git push`
-        if re.search(r"\bgit\b.*\bcommit\b", cmd):
+        # Match `git commit`, `git -C <path> commit`, `git push`.
+        # Anchored to the subcommand: `--no-commit-id` is not a commit.
+        if re.search(r"\bgit(\s+-C\s+\S+)?\s+commit\b", cmd):
             return True
         if re.search(r"\bgit\b.*\bpush\b", cmd):
             return True
@@ -534,12 +564,12 @@ def _has_resolving_commit(events: list[dict]) -> bool:
 
 
 def _has_resolving_edit(events: list[dict]) -> bool:
-    """Check if the final ~20% of events contain Edit/Write calls."""
+    """Check if the final ~20% of events contain Edit/Write/apply_patch calls."""
     if not events:
         return False
     tail_start = max(0, len(events) - max(3, len(events) // 5))
     tail = events[tail_start:]
-    return any(ev.get("tool_name") in ("Edit", "Write") for ev in tail)
+    return any(ev.get("tool_name") in ("Edit", "Write", "apply_patch") for ev in tail)
 
 
 def _infer_corrected(events: list[dict]) -> Optional[tuple[str, str]]:
@@ -580,7 +610,8 @@ def _infer_from_behavior(
     ABANDONED:
       - B1 fix: close_reason MUST be 'idle_timeout' (not 'recorder_shutdown').
         recorder_shutdown is operational, not semantic.
-      - event_count >= ABANDON_MIN_EVENTS (5)
+      - tool_call event count (raw event_count double-counts codex's
+        paired tool_call+tool_return) >= ABANDON_MIN_EVENTS (5)
       - No resolving commit (structured gitOperation or command pattern)
       - No resolving edit in the last 20% of events
       - M3 fix: require a failure/error signal at the boundary OR absence of
@@ -601,7 +632,15 @@ def _infer_from_behavior(
     if not events:
         return None, "behavior_inference"
 
+    # Heartbeats carry the last tool_name; counting them manufactures activity.
+    events = [ev for ev in events if ev.get("event") != "heartbeat"]
+    if not events:
+        return None, "behavior_inference"
+
+    # Local tool_call count (codex emits tool_call+tool_return per call);
+    # runs.event_count is left untouched for other consumers.
     n_events = len(events)
+    n_tool_call_events = sum(1 for ev in events if ev.get("event") == "tool_call")
     tool_calls = [ev for ev in events if ev.get("tool_name")]
     n_tool_calls = len(tool_calls) or 1
 
@@ -624,6 +663,7 @@ def _infer_from_behavior(
     if verbose:
         print(
             f"  [infer] run={run['run_id'][:12]} events={n_events} "
+            f"tool_call_events={n_tool_call_events} "
             f"edit_fail_loops={edit_fail_loops} reread_rate={reread_rate:.2f} "
             f"bash_fail_rate={bash_fail_rate:.2f} bash_total={bash_total} "
             f"has_commit={has_commit} has_edit_tail={has_edit_tail} "
@@ -645,14 +685,14 @@ def _infer_from_behavior(
     # substantial (>= 2 * ABANDON_MIN_EVENTS), not just absence-of-edit.
     if (
         is_idle_timeout
-        and n_events >= ABANDON_MIN_EVENTS
+        and n_tool_call_events >= ABANDON_MIN_EVENTS
         and not has_commit
         and not has_edit_tail
     ):
         # M3: require that the run showed some failure/error state or was
         # substantial enough (many events without resolving = stronger abandon signal)
         has_failure_signal = bash_fails > 0 or bash_fail_rate > 0
-        is_substantial = n_events >= ABANDON_MIN_EVENTS * 2
+        is_substantial = n_tool_call_events >= ABANDON_MIN_EVENTS * 2
         if has_failure_signal or is_substantial:
             return "abandoned", "behavior_inference"
 
@@ -693,6 +733,15 @@ def compute_label(
                 print(f"  [label] bead_id={bead_id} → {result}")
             return result
 
+    # Parsed once: the git tier (run_has_commit) and behavior inference both use them.
+    parsed = _parse_events(run_events)
+    run_has_commit: Optional[bool] = None
+    if parsed:
+        non_heartbeat_calls = [
+            ev for ev in parsed if ev.get("tool_name") and ev.get("event") != "heartbeat"
+        ]
+        run_has_commit = _has_resolving_commit(non_heartbeat_calls)
+
     # EXPLICIT: PR / git_revert
     if git_branch and git_branch not in ("HEAD", "main", "master"):
         result = label_from_pr(git_branch, worktree)
@@ -702,14 +751,13 @@ def compute_label(
             return result
 
         # EXPLICIT: local git ancestry (squash/merge with no PR — tengine pattern)
-        result = label_from_git_merge(git_branch, run)
+        result = label_from_git_merge(git_branch, run, run_has_commit=run_has_commit)
         if result:
             if verbose:
                 print(f"  [label] git-ancestry branch={git_branch} → {result}")
             return result
 
     # INFERRED: behavior shape (may return None)
-    parsed = _parse_events(run_events)
     outcome, source = _infer_from_behavior(run, parsed, verbose=verbose)
     if outcome is None:
         return None
@@ -1113,6 +1161,24 @@ def select_reverify_candidates(
     return [r for r in rows if _label_source(r) not in _EXPLICIT_SOURCES]
 
 
+def _run_has_commit_from_features(run: dict) -> Optional[bool]:
+    """Best-effort run_has_commit signal from a run's PERSISTED features JSON.
+
+    reverify_run has only the runs row. compute_features_signals writes
+    has_resolving_commit only when True, so absence means unknown, not False.
+    """
+    raw = run.get("features")
+    if not raw:
+        return None
+    try:
+        feats = json.loads(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if isinstance(feats, dict) and feats.get("has_resolving_commit"):
+        return True
+    return None
+
+
 def reverify_run(
     run: dict, *, verify_discards: bool = True,
 ) -> Optional[tuple[str, str]]:
@@ -1139,6 +1205,8 @@ def reverify_run(
     if result:
         return result
 
+    run_has_commit = _run_has_commit_from_features(run)
+
     # require_dispatch_shape=False: reverify only ever touches labels that are
     # already behavior_inference (never a stronger source, and never a bead
     # label — see select_reverify_candidates), so dropping the branch-name
@@ -1147,6 +1215,7 @@ def reverify_run(
     # (Orca-style task branches — see label_from_git_merge's docstring).
     result = label_from_git_merge(
         git_branch, run, verify_discards=verify_discards, require_dispatch_shape=False,
+        run_has_commit=run_has_commit,
     )
     if result:
         return result
