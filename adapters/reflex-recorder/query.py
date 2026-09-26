@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
@@ -979,6 +980,9 @@ def query_skills(
     return rows
 
 
+_SKILL_WALK_MAX_DEPTH = 8
+
+
 def discover_skills(roots: Optional[list[Path]] = None) -> dict[str, set[str]]:
     """Map skill name -> set of root labels where a <name>/SKILL.md exists."""
     found: dict[str, set[str]] = {}
@@ -988,8 +992,14 @@ def discover_skills(roots: Optional[list[Path]] = None) -> dict[str, set[str]]:
         root = Path(root).expanduser()
         if not root.is_dir():
             continue
-        for skill_md in root.rglob("SKILL.md"):
-            found.setdefault(skill_md.parent.name, set()).add(str(root))
+        # Skill dirs are symlinks into ~/projects/agent-skills since the #37
+        # cut-over; Path.rglob does not follow directory symlinks before 3.13.
+        base_depth = len(root.parts)
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+            if len(Path(dirpath).parts) - base_depth >= _SKILL_WALK_MAX_DEPTH:
+                dirnames[:] = []
+            if "SKILL.md" in filenames:
+                found.setdefault(Path(dirpath).name, set()).add(str(root))
     return found
 
 
