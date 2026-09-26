@@ -120,19 +120,20 @@ def main() -> int:
     recorder = recorder_mod.Recorder(cfg)
 
     if args.mode == "flush_error":
-        real_save = recorder.store.save_run
+        real_close_run = recorder.store.close_run
         state = {"failed": False}
 
-        def _save(payload):
+        def _close_run(payload, upto_id=None):
             if not state["failed"]:
                 state["failed"] = True
                 raise RuntimeError("simulated store failure on first run")
-            real_save(payload)
-        recorder.store.save_run = _save
+            real_close_run(payload, upto_id=upto_id)
+        recorder.store.close_run = _close_run
 
     # conv-a spans two worktrees (two run_keys); conv-b is a session run.
-    # None of the events are `ended`, so all three runs are still open — and
-    # their raw envelopes still only in _pending_events — when SIGTERM lands.
+    # None of the events are `ended`, so all three runs are still open — but
+    # their raw envelopes are already journaled to pending_events (durable)
+    # by the time SIGTERM lands; only the open-run aggregates are at risk.
     raw = [
         _envelope("conv-a", "wt-one", 1),
         _envelope("conv-a", "wt-one", 2),

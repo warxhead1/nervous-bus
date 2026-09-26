@@ -20,10 +20,12 @@ stream_read_count = 200
 stream_block_ms = 2000
 
 # Wall-clock budget for the graceful-shutdown flush on SIGTERM. Must stay
-# comfortably under systemd/reflex-recorder.service's TimeoutStopSec=15,
-# which SIGKILLs the unit mid-flush once it expires. Only the best-effort
-# `nervous publish` fan-out is dropped when the budget runs out; the SQLite
-# writes for open runs and their buffered events always happen.
+# comfortably under systemd/reflex-recorder.service's TimeoutStopSec=60
+# (bumped from 15 by nervous-bus#51), which SIGKILLs the unit mid-flush once
+# it expires. Only the best-effort `nervous publish` fan-out is dropped when
+# the budget runs out; the SQLite writes for open runs and their buffered
+# events (now a single write-ahead-journaled transaction per run close, see
+# store.py's pending_events table) always happen.
 shutdown_budget_s = 10.0
 
 [store]

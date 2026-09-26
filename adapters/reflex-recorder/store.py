@@ -73,6 +73,43 @@ CREATE TABLE IF NOT EXISTS run_events (
 
 CREATE INDEX IF NOT EXISTS idx_run_events_run_id ON run_events(run_id);
 CREATE INDEX IF NOT EXISTS idx_run_events_seq ON run_events(run_id, seq);
+
+-- Write-ahead journal: the live XREADGROUP loop journals every accepted
+-- activity event here, in one transaction per batch, before XACKing the
+-- batch, so an event is durable independent of whether the run it belongs
+-- to has closed yet. `id` is the true ordering key (autoincrement) —
+-- `stream_id` alone cannot be a primary key because --replay mode reuses the
+-- literal string "replay" for every row.
+CREATE TABLE IF NOT EXISTS pending_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_key     TEXT NOT NULL,
+    stream_id   TEXT NOT NULL,
+    event_ts    TEXT NOT NULL,
+    event_type  TEXT NOT NULL,
+    raw_json    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pending_events_run_key ON pending_events(run_key, id);
+"""
+
+_RUN_UPSERT_SQL = """
+INSERT OR REPLACE INTO runs (
+    run_id, run_key, run_key_kind, host_conversation_id,
+    project, agent_kind, session_id, agent_id,
+    started, ended, close_reason, continues_run_id,
+    event_count, tool_histogram,
+    worktree, worktree_slug, git_branch, bead_id,
+    outcome, labeled_at, label_version, label_history,
+    features, schema_version, recorded_at
+) VALUES (
+    :run_id, :run_key, :run_key_kind, :host_conversation_id,
+    :project, :agent_kind, :session_id, :agent_id,
+    :started, :ended, :close_reason, :continues_run_id,
+    :event_count, :tool_histogram,
+    :worktree, :worktree_slug, :git_branch, :bead_id,
+    :outcome, :labeled_at, :label_version, :label_history,
+    :features, :schema_version, :recorded_at
+)
 """
 
 
@@ -114,60 +151,47 @@ class SQLiteStore:
             # detectors/ not yet present (e.g. unit tests for store only)
             pass
 
-    def save_run(self, payload: dict) -> None:
-        """Persist a closed run payload to the runs table."""
+    def _run_params(self, payload: dict) -> dict:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        self._conn.execute(
-            """
-            INSERT OR REPLACE INTO runs (
-                run_id, run_key, run_key_kind, host_conversation_id,
-                project, agent_kind, session_id, agent_id,
-                started, ended, close_reason, continues_run_id,
-                event_count, tool_histogram,
-                worktree, worktree_slug, git_branch, bead_id,
-                outcome, labeled_at, label_version, label_history,
-                features, schema_version, recorded_at
-            ) VALUES (
-                :run_id, :run_key, :run_key_kind, :host_conversation_id,
-                :project, :agent_kind, :session_id, :agent_id,
-                :started, :ended, :close_reason, :continues_run_id,
-                :event_count, :tool_histogram,
-                :worktree, :worktree_slug, :git_branch, :bead_id,
-                :outcome, :labeled_at, :label_version, :label_history,
-                :features, :schema_version, :recorded_at
-            )
-            """,
-            {
-                "run_id": payload["run_id"],
-                "run_key": payload["run_key"],
-                "run_key_kind": payload["run_key_kind"],
-                "host_conversation_id": payload.get("host_conversation_id"),
-                "project": payload["project"],
-                "agent_kind": payload["agent_kind"],
-                "session_id": payload.get("session_id"),
-                "agent_id": payload.get("agent_id"),
-                "started": payload["started"],
-                "ended": payload["ended"],
-                "close_reason": payload.get("close_reason"),
-                "continues_run_id": payload.get("continues_run_id"),
-                "event_count": payload["event_count"],
-                "tool_histogram": json.dumps(payload.get("tool_histogram", {})),
-                "worktree": payload.get("worktree"),
-                "worktree_slug": payload.get("worktree_slug"),
-                "git_branch": payload.get("git_branch"),
-                "bead_id": payload.get("bead_id"),
-                "outcome": payload.get("outcome"),
-                "labeled_at": payload.get("labeled_at"),
-                "label_version": payload.get("label_version"),
-                "label_history": json.dumps(payload.get("label_history", [])),
-                "features": json.dumps(payload.get("features", {})),
-                "schema_version": payload.get("schema_version", "1"),
-                "recorded_at": now,
-            },
-        )
+        return {
+            "run_id": payload["run_id"],
+            "run_key": payload["run_key"],
+            "run_key_kind": payload["run_key_kind"],
+            "host_conversation_id": payload.get("host_conversation_id"),
+            "project": payload["project"],
+            "agent_kind": payload["agent_kind"],
+            "session_id": payload.get("session_id"),
+            "agent_id": payload.get("agent_id"),
+            "started": payload["started"],
+            "ended": payload["ended"],
+            "close_reason": payload.get("close_reason"),
+            "continues_run_id": payload.get("continues_run_id"),
+            "event_count": payload["event_count"],
+            "tool_histogram": json.dumps(payload.get("tool_histogram", {})),
+            "worktree": payload.get("worktree"),
+            "worktree_slug": payload.get("worktree_slug"),
+            "git_branch": payload.get("git_branch"),
+            "bead_id": payload.get("bead_id"),
+            "outcome": payload.get("outcome"),
+            "labeled_at": payload.get("labeled_at"),
+            "label_version": payload.get("label_version"),
+            "label_history": json.dumps(payload.get("label_history", [])),
+            "features": json.dumps(payload.get("features", {})),
+            "schema_version": payload.get("schema_version", "1"),
+            "recorded_at": now,
+        }
+
+    def save_run(self, payload: dict) -> None:
+        """Persist a closed run payload to the runs table (autocommit)."""
+        self._conn.execute(_RUN_UPSERT_SQL, self._run_params(payload))
 
     def append_event(self, run_id: str, event_ts: str, event_type: str, raw: str) -> None:
-        """Append a raw activity event to run_events for later backfill."""
+        """Append a raw activity event to run_events for later backfill.
+
+        Single-event autocommit write. The live recorder path uses
+        `journal_events` + `close_run` instead, which batch the same writes
+        into one transaction each.
+        """
         seq = self._event_seq.get(run_id, 0) + 1
         self._event_seq[run_id] = seq
         self._conn.execute(
@@ -177,6 +201,114 @@ class SQLiteStore:
             """,
             (run_id, seq, event_ts, event_type, raw),
         )
+
+    def journal_events(self, entries: list[tuple[str, str, str, str, str]]) -> list[int]:
+        """Write-ahead journal a batch of accepted activity events.
+
+        `entries`: (run_key, stream_id, event_ts, event_type, raw_json), one
+        row per event. All rows commit in ONE transaction — the caller must
+        not XACK any stream id in the batch until this returns.
+
+        Returns the assigned `pending_events.id` for each entry, in the same
+        order as `entries` — the caller needs these to bound `close_run`'s
+        drain to "everything folded so far for this run_key", since a single
+        batch can contain more than one run under the same run_key (an
+        `ended` event followed by a reopen).
+        """
+        if not entries:
+            return []
+        ids: list[int] = []
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = self._conn.cursor()
+            for run_key, stream_id, event_ts, event_type, raw_json in entries:
+                cur.execute(
+                    "INSERT INTO pending_events "
+                    "(run_key, stream_id, event_ts, event_type, raw_json) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (run_key, stream_id, event_ts, event_type, raw_json),
+                )
+                ids.append(cur.lastrowid)
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+        return ids
+
+    def recover_pending_events(self) -> list[tuple[int, str, str, str, str]]:
+        """All journaled events not yet closed into run_events, oldest first.
+
+        Returns (id, run_key, event_ts, event_type, raw_json). Read once at
+        startup to re-fold pre-crash events back into the live Segmenter; the
+        rows themselves are left in place here and are only ever cleared by
+        `close_run()`, whichever process eventually closes that run_key.
+        """
+        cur = self._conn.execute(
+            "SELECT id, run_key, event_ts, event_type, raw_json "
+            "FROM pending_events ORDER BY id"
+        )
+        return cur.fetchall()
+
+    def pending_event_count(self) -> int:
+        return self._conn.execute("SELECT COUNT(*) FROM pending_events").fetchone()[0]
+
+    def close_run(self, payload: dict, upto_id: Optional[int] = None) -> None:
+        """Persist a closed run and drain its journaled events, atomically.
+
+        Single explicit transaction: the `runs` upsert, then every
+        `pending_events` row for this run_key (bounded by `upto_id` when
+        given) moved into `run_events` (seq preserved in journal arrival
+        order) and deleted from the journal.
+
+        `upto_id` must be the highest `pending_events.id` actually folded
+        into this closed run. Without that bound, a run_key that reopens
+        later in the SAME journaled batch (an `ended` event followed by more
+        events for a new run under the same key) would have its
+        not-yet-folded rows swept up by this close too. `None` means "no
+        bound" (drain everything currently journaled for this run_key) —
+        only correct when the caller knows no reopen can be pending, e.g. a
+        one-shot test seeding a single run's events.
+        """
+        run_id = payload["run_id"]
+        run_key = payload["run_key"]
+        params = self._run_params(payload)
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._conn.execute(_RUN_UPSERT_SQL, params)
+            if upto_id is None:
+                rows = self._conn.execute(
+                    "SELECT id, event_ts, event_type, raw_json FROM pending_events "
+                    "WHERE run_key = ? ORDER BY id",
+                    (run_key,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT id, event_ts, event_type, raw_json FROM pending_events "
+                    "WHERE run_key = ? AND id <= ? ORDER BY id",
+                    (run_key, upto_id),
+                ).fetchall()
+            if rows:
+                seq = self._event_seq.get(run_id, 0)
+                to_insert = []
+                ids = []
+                for pending_id, event_ts, event_type, raw_json in rows:
+                    seq += 1
+                    to_insert.append((run_id, seq, event_ts, event_type, raw_json))
+                    ids.append((pending_id,))
+                self._conn.executemany(
+                    "INSERT INTO run_events "
+                    "(run_id, seq, event_ts, event_type, raw_json) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    to_insert,
+                )
+                self._conn.executemany(
+                    "DELETE FROM pending_events WHERE id = ?", ids,
+                )
+                self._event_seq[run_id] = seq
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
 
     def close(self) -> None:
         try:

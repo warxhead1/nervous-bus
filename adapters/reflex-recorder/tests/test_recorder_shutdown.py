@@ -1,11 +1,16 @@
 """tests/test_recorder_shutdown.py — graceful SIGTERM handling for the recorder.
 
-The systemd unit restarts the recorder with SIGTERM (TimeoutStopSec=15). Python's
-default disposition for SIGTERM kills the process inside the kernel, so the
-`finally` block in `main()` that flushes open runs never ran: every run still
-open in the Segmenter, and every activity envelope buffered in
-`Recorder._pending_events`, was lost on each restart. Those envelopes had
-already been XACKed, so Redis would not redeliver them either.
+The systemd unit restarts the recorder with SIGTERM (TimeoutStopSec=60, bumped
+from 15 by nervous-bus#51). Python's default disposition for SIGTERM kills the
+process inside the kernel, so the `finally` block in `main()` that flushes
+open runs never ran: every run still open in the Segmenter was lost on each
+restart. Since #51, every accepted activity envelope is journaled to the
+`pending_events` SQLite table (in one transaction per XREADGROUP batch)
+BEFORE it is XACKed, so a SIGKILL that skips this finally block entirely no
+longer loses those envelopes — only the open Segmenter run aggregates, which
+`_recover_pending_events` rebuilds at the next startup. See
+`test_write_ahead.py` for that path; this file covers the still-relevant
+graceful-SIGTERM flush.
 
 The subprocess tests below send a REAL SIGTERM to a REAL Recorder driving the
 REAL `_run_xreadgroup` loop (redis and `nervous publish` are stubbed in
@@ -46,7 +51,10 @@ def _read_db(db_path: Path) -> dict:
         events = conn.execute(
             "SELECT run_id, seq, raw_json FROM run_events ORDER BY run_id, seq"
         ).fetchall()
-        return {"runs": runs, "events": events}
+        pending = conn.execute(
+            "SELECT run_key, stream_id FROM pending_events ORDER BY id"
+        ).fetchall()
+        return {"runs": runs, "events": events, "pending": pending}
     finally:
         conn.close()
 
@@ -115,13 +123,18 @@ class TestSigtermFlush(unittest.TestCase):
             child = _Child(Path(td))
             child.start()
 
-            # Ack timing, grounded: every entry has been XACKed off the PEL, and
-            # NOTHING is durable yet. This is the exact state a default-SIGTERM
-            # kill used to discard with no possibility of Redis replay.
+            # Ack timing, grounded: every entry has been XACKed off the PEL,
+            # and no *run* is closed yet — but nervous-bus#51 moved the
+            # durability boundary to the journal commit, which precedes the
+            # ack, so all 6 events are already durable in pending_events.
+            # This is what a SIGKILL (no finally block at all) now preserves
+            # that it used to discard outright.
             self.assertEqual(json.loads(child.ready.read_text())["acked"], 6)
             pre = _read_db(child.db)
             self.assertEqual(pre["runs"], [], "runs must not be durable before close")
-            self.assertEqual(pre["events"], [], "events must not be durable before close")
+            self.assertEqual(pre["events"], [], "run_events must not be durable before close")
+            self.assertEqual(len(pre["pending"]), 6,
+                             "events must already be journaled before the ack")
 
             child.sigterm()
             self.assertEqual(child.proc.returncode, 0,
@@ -133,6 +146,8 @@ class TestSigtermFlush(unittest.TestCase):
             self.assertEqual(summary["acked"], 6)
 
             post = _read_db(child.db)
+            self.assertEqual(post["pending"], [],
+                             "close_run must drain pending_events for every closed run_key")
 
             # Three open runs flushed: two worktree runs off one conversation
             # plus one session run. Run keys and segmentation are preserved.
@@ -150,8 +165,9 @@ class TestSigtermFlush(unittest.TestCase):
                 self.assertEqual(run[4], 2)
 
             # Every buffered envelope landed, exactly once, and only once —
-            # `_pending_events` is popped as it drains, so the repeated
-            # shutdown in the child cannot double-append.
+            # `store.close_run` deletes each pending_events row it drains in
+            # the same transaction, so the repeated shutdown in the child
+            # cannot double-append.
             self.assertEqual(len(post["events"]), 6)
             seqs = {}
             for run_id, seq, _raw in post["events"]:
@@ -278,7 +294,7 @@ class TestShutdownUnit(unittest.TestCase):
                     "data": {"project": "p", "event": "tool_call"},
                 })
                 rec._ingest_activity(raw, "1-0")
-                self.assertEqual(rec._pending_events, {})
+                self.assertEqual(rec.store.pending_event_count(), 0)
                 self.assertEqual(rec.segmenter.open_run_count, 0)
             finally:
                 rec.shutdown()

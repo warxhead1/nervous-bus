@@ -13,7 +13,7 @@ RestartSec=5s
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=reflex-recorder
-TimeoutStopSec=15
+TimeoutStopSec=60
 ReadWritePaths=%h/.cache/nervous-bus
 
 [Install]
