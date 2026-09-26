@@ -62,6 +62,9 @@ def classify_root(path: str) -> str:
         return "agents"
     if "/.codex/skills/" in path:
         return "codex"
+    if "/agent-skills/skills/" in path:
+        # Resolved target of a ~/.claude|~/.agents link into the canonical tree (#37).
+        return "agent-skills"
     return "project"
 
 

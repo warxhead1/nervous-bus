@@ -24,6 +24,7 @@ from skill_usage import (  # noqa: E402
     fold_skill_features,
 )
 from query import (  # noqa: E402
+    discover_skills,
     query_dispatch,
     query_skill_inventory,
     query_skill_lift,
@@ -104,6 +105,7 @@ class TestExtract(unittest.TestCase):
         self.assertEqual(classify_root("/home/u/.claude/plugins/cache/x/skills/y/SKILL.md"), "plugin")
         self.assertEqual(classify_root("/home/u/projects/r/.claude/skills/y/SKILL.md"), "project")
         self.assertEqual(classify_root("/home/u/.codex/skills/y/SKILL.md"), "codex")
+        self.assertEqual(classify_root("/home/u/projects/agent-skills/skills/mmx/SKILL.md"), "agent-skills")
 
 
 class TestFold(unittest.TestCase):
@@ -241,3 +243,18 @@ class TestQueries(_DBCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDiscoverSymlinks(unittest.TestCase):
+    def test_follows_symlinked_skill_dirs(self):
+        # Live roots hold symlinks into ~/projects/agent-skills (#37 cut-over).
+        with tempfile.TemporaryDirectory() as d:
+            canon = Path(d) / "agent-skills" / "skills" / "mmx"
+            canon.mkdir(parents=True)
+            (canon / "SKILL.md").write_text("---\nname: mmx\n---\n")
+            root = Path(d) / "claude-skills"
+            root.mkdir()
+            (root / "mmx").symlink_to(canon)
+            (root / "self").symlink_to(root)  # cycle must not hang the walk
+            found = discover_skills([root])
+            self.assertEqual(found.get("mmx"), {str(root)})
