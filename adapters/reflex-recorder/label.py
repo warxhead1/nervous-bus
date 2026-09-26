@@ -319,6 +319,7 @@ def _project_repo_root(run: dict) -> Optional[str]:
 
 def label_from_git_merge(
     git_branch: str, run: dict, *, verify_discards: bool = True,
+    require_dispatch_shape: bool = True,
 ) -> Optional[tuple[str, str]]:
     """Derive outcome from local git ancestry for a worktree-dispatched branch.
 
@@ -326,13 +327,32 @@ def label_from_git_merge(
     locally with NO GitHub PR (e.g. tengine): `gh pr view` finds nothing, but
     git ancestry + main's squash trail recover landed/empty/discarded.
 
-    Only worktree-dispatch branch shapes are considered.  Returns a terminal
-    (outcome, source) only for HIGH-confidence verdicts; pending and
-    weak/ambiguous discards return None (never poison the store on patch-id
-    alone).  When verify_discards, a medium-confidence discard is pickaxe-checked
-    (follows the code through rebase/squash/reword) before being trusted.
+    By default (require_dispatch_shape=True), only branch names matching the
+    known worktree-dispatch shapes (_DISPATCH_BRANCH_RE: worktree-agent-,
+    worktree-wf-, agent-, wf-) are considered — this is the FRESH-labeling
+    path (compute_label), and a name-shape gate is the cheap guard against
+    misclassifying an unrelated human feature branch that happens to share a
+    repo with agent dispatches.
+
+    require_dispatch_shape=False drops that gate: nervous-bus-33's reverify
+    path re-checks labels that are ALREADY behavior_inference (never a
+    stronger source), against ANY resolvable branch — including Orca-style
+    task branches (e.g. 'acquisition-channels', arbitrary slugs, no
+    'worktree-agent-' prefix) that squash-merge locally the same way but
+    don't match the tengine-era naming convention. Measured on the live DB
+    (nervous-bus-33): 66/80 of a random abandoned+branch sample used
+    Orca-shaped names, so gating reverify on the old regex would have made
+    the vast majority of candidates permanently unreachable.
+
+    Returns a terminal (outcome, source) only for HIGH-confidence verdicts;
+    pending and weak/ambiguous discards return None (never poison the store
+    on patch-id alone). When verify_discards, a medium-confidence discard is
+    pickaxe-checked (follows the code through rebase/squash/reword) before
+    being trusted.
     """
-    if not git_branch or not _DISPATCH_BRANCH_RE.match(git_branch):
+    if not git_branch:
+        return None
+    if require_dispatch_shape and not _DISPATCH_BRANCH_RE.match(git_branch):
         return None
     repo = _project_repo_root(run)
     if not repo:
@@ -1007,6 +1027,293 @@ def backfill(
     return results
 
 
+# ── Reverification: re-check inferred abandoned/clean labels against git ──────
+#
+# nervous-bus-33: only bead-close/PR-merge/git-ancestry labels are EVER checked
+# against ground truth after being written.  A behavior_inference verdict
+# ('abandoned' or 'clean') is written once from the tail of run_events and then
+# NEVER revisited — but the branch it names keeps living: it can be merged
+# (locally, squash, or via a PR opened after the run closed) days or weeks
+# later.  Measured: at least three branches labelled 'abandoned' were later
+# merged into main.  This section re-runs the same EXPLICIT precedence tiers
+# `compute_label` already applies to fresh runs (PR state, then git ancestry
+# via git_outcome.py) against runs that currently carry only an INFERRED
+# label, and — only on a genuine explicit verdict — appends a new
+# label_history entry via apply_label (never rewrites/removes prior entries).
+#
+# Label source provenance: label_history[-1]['source'] is already the
+# authoritative record of how the CURRENT outcome was set (apply_label appends
+# it on every transition, including the very first label — see
+# TestLabelHistoryTransitions in tests/test_label_hardened.py). No new column
+# or schema migration is needed; _label_source() below is the read-side helper.
+# A run with a non-null outcome but an EMPTY label_history predates this
+# history mechanism (pre-dates the labeling system's own hardening) and its
+# true provenance cannot be recovered from the DB; select_reverify_candidates
+# conservatively treats that case as 'behavior_inference' so it is still
+# eligible for git re-verification (an unprovable label is not the same
+# guarantee as a provably-explicit one, so it must not be skipped).
+
+REVERIFY_OUTCOMES = ("abandoned", "clean")
+
+#: outcome sources that came from an explicit ground-truth check (git ancestry
+#: or PR state), as opposed to behavioural inference over run_events. Mirrors
+#: the non-'behavior_inference' half of _SOURCE_TIER.
+_EXPLICIT_SOURCES = frozenset(k for k in _SOURCE_TIER if k != "behavior_inference")
+
+
+def _label_source(run_row: dict) -> str:
+    """Return the provenance of run_row's CURRENT outcome.
+
+    Reads label_history[-1]['source'] (the field apply_label always writes on
+    every transition). Empty/missing history (pre-dates the history
+    mechanism) is conservatively reported as 'behavior_inference' — see the
+    module-level note above for why that side is the safe default.
+    """
+    try:
+        history = json.loads(run_row.get("label_history") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        history = []
+    if history:
+        return history[-1].get("source") or "behavior_inference"
+    return "behavior_inference"
+
+
+def select_reverify_candidates(
+    conn: sqlite3.Connection,
+    since_days: Optional[int] = None,
+    outcomes: tuple = REVERIFY_OUTCOMES,
+) -> list[dict]:
+    """Select runs eligible for git re-verification.
+
+    Eligible: outcome IN `outcomes` (default abandoned/clean), git_branch is
+    set and is not a trunk ref (main/master/HEAD), the run's CURRENT label
+    source is 'behavior_inference' (see _label_source), and — when
+    `since_days` is given — `started` falls within that window.
+
+    since_days bounds the pass the same way label.py's own --since-days does:
+    without it, a growing run history means an unbounded, ever-slower scan
+    (every candidate shells out to `gh pr view` + local git).
+    """
+    clauses = ["outcome IS NOT NULL", "git_branch IS NOT NULL",
+               "git_branch NOT IN ('HEAD', 'main', 'master')"]
+    params: list = []
+
+    placeholders = ",".join("?" * len(outcomes))
+    clauses.append(f"outcome IN ({placeholders})")
+    params.extend(outcomes)
+
+    if since_days is not None:
+        clauses.append("started >= datetime('now', ?)")
+        params.append(f"-{int(since_days)} days")
+
+    where = "WHERE " + " AND ".join(clauses)
+    cur = conn.execute(f"SELECT * FROM runs {where} ORDER BY started ASC", params)
+    cols = [d[0] for d in cur.description]
+    rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+    return [r for r in rows if _label_source(r) not in _EXPLICIT_SOURCES]
+
+
+def reverify_run(
+    run: dict, *, verify_discards: bool = True,
+) -> Optional[tuple[str, str]]:
+    """Re-run ONLY the explicit precedence tiers (PR state, then git ancestry)
+    for a run whose current label is inferred.
+
+    Deliberately mirrors compute_label's explicit-tier ordering (PR before
+    git-ancestry) but skips the bead_id tier: a bead close is already an
+    explicit source and such runs are excluded by select_reverify_candidates.
+
+    Returns (outcome, source) when an explicit ground-truth verdict exists
+    (whether or not it matches the current label — the caller decides what to
+    do with a confirmation vs. a flip). Returns None when no explicit signal
+    is available yet (no PR, branch still pending / repo unresolvable) — the
+    run stays exactly as it is; reverify NEVER writes a weaker or absent
+    verdict over an existing label.
+    """
+    git_branch = run.get("git_branch")
+    if not git_branch or git_branch in ("HEAD", "main", "master"):
+        return None
+    worktree = run.get("worktree")
+
+    result = label_from_pr(git_branch, worktree)
+    if result:
+        return result
+
+    # require_dispatch_shape=False: reverify only ever touches labels that are
+    # already behavior_inference (never a stronger source, and never a bead
+    # label — see select_reverify_candidates), so dropping the branch-name
+    # shape gate here cannot demote or misclassify an explicit label; it can
+    # only recover ground truth for branches the fresh-labeling path can't see
+    # (Orca-style task branches — see label_from_git_merge's docstring).
+    result = label_from_git_merge(
+        git_branch, run, verify_discards=verify_discards, require_dispatch_shape=False,
+    )
+    if result:
+        return result
+
+    return None
+
+
+def reverify_labels(
+    db_path: Path,
+    since_days: Optional[int] = None,
+    dry_run: bool = True,
+    verbose: bool = False,
+    outcomes: tuple = REVERIFY_OUTCOMES,
+    verify_discards: bool = True,
+    run_id_filter: Optional[str] = None,
+) -> list[dict]:
+    """Re-verify inferred abandoned/clean labels against git ground truth.
+
+    For every eligible run (select_reverify_candidates), re-runs the explicit
+    tiers (reverify_run). When an explicit verdict is found, routes it through
+    apply_label — which appends a NEW label_history entry on any outcome
+    change (never rewrites/removes existing entries) and is a no-op when the
+    outcome is unchanged (the run is still reported as 'confirmed' below, just
+    with no new history entry, matching apply_label's existing no-transition
+    behavior tested in TestLabelHistoryTransitions.test_same_label_does_not_append).
+
+    Idempotent by construction: a run whose label already reflects the
+    explicit tier makes no further change on a second pass, and apply_label's
+    own precedence guard additionally prevents a lower-tier source from ever
+    clobbering a higher tier back down.
+
+    dry_run (default True, read-only): compute everything, write nothing.
+    Only `dry_run=False` (CLI: --apply) persists any change.
+    """
+    conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
+    conn.execute("PRAGMA journal_mode=WAL")
+
+    if run_id_filter:
+        candidates = [r for r in select_reverify_candidates(conn, since_days, outcomes)
+                      if r["run_id"] == run_id_filter]
+    else:
+        candidates = select_reverify_candidates(conn, since_days, outcomes)
+
+    results = []
+    for run in candidates:
+        run_id = run["run_id"]
+        old_outcome = run.get("outcome")
+
+        reverified = reverify_run(run, verify_discards=verify_discards)
+        if reverified is None:
+            results.append({
+                "run_id": run_id, "project": run.get("project"),
+                "git_branch": run.get("git_branch"),
+                "old_outcome": old_outcome, "new_outcome": None, "new_source": None,
+                "would_flip": False, "written": False, "status": "no_explicit_signal",
+            })
+            continue
+
+        new_outcome, new_source = reverified
+        would_flip = new_outcome != old_outcome
+        changed = apply_label(conn, run_id, new_outcome, new_source, dry_run=dry_run)
+        written = bool(changed and not dry_run)
+
+        if verbose:
+            print(f"  [reverify] run={run_id[:12]} branch={run.get('git_branch')} "
+                  f"{old_outcome} -> {new_outcome} (source={new_source}) "
+                  f"would_flip={would_flip} written={written}")
+
+        results.append({
+            "run_id": run_id, "project": run.get("project"),
+            "git_branch": run.get("git_branch"),
+            "old_outcome": old_outcome, "new_outcome": new_outcome, "new_source": new_source,
+            "would_flip": would_flip, "written": written,
+            "status": "flip" if would_flip else "confirmed",
+        })
+
+    conn.close()
+    return results
+
+
+def false_abandon_rate(
+    conn: sqlite3.Connection,
+    n: int = 60,
+    seed: int = 42,
+    verify_discards: bool = True,
+) -> dict:
+    """Measure the false-abandon rate over a reproducible seeded sample.
+
+    Population: runs currently labelled 'abandoned' by behavior_inference with
+    a non-trunk git_branch (select_reverify_candidates(outcomes=('abandoned',))
+    against the connection's live data — READ-ONLY, no label is written here).
+
+    Sample: `random.Random(seed).sample(population, min(n, len(population)))` —
+    deterministic for a given (population identity, n, seed) so re-running
+    this over an unchanged DB reproduces the same rate.
+
+    false_abandon_rate = (# sampled runs whose explicit git tier recovers a
+    non-abandoned outcome) / (# sampled runs), i.e. the denominator is the
+    FULL sample (conservative: a run with no explicit signal yet counts
+    against the rate as 'not proven false', not excluded) — reported alongside
+    `no_signal` so the caller can see how many of those undetermined runs
+    there were.
+
+    Returns a dict: {n_population, n_sampled, seed, n_false, n_confirmed,
+    n_no_signal, rate, examples: [{run_id, project, git_branch, new_outcome,
+    new_source}, ...]} — examples are the flipped (false-abandon) runs only,
+    capped at 20 for report size.
+    """
+    import random
+
+    population = select_reverify_candidates(conn, since_days=None, outcomes=("abandoned",))
+    rng = random.Random(seed)
+    sample = population if len(population) <= n else rng.sample(population, n)
+
+    n_false = n_confirmed = n_no_signal = 0
+    examples: list[dict] = []
+    for run in sample:
+        reverified = reverify_run(run, verify_discards=verify_discards)
+        if reverified is None:
+            n_no_signal += 1
+            continue
+        new_outcome, new_source = reverified
+        if new_outcome != "abandoned":
+            n_false += 1
+            if len(examples) < 20:
+                examples.append({
+                    "run_id": run["run_id"], "project": run.get("project"),
+                    "git_branch": run.get("git_branch"),
+                    "new_outcome": new_outcome, "new_source": new_source,
+                })
+        else:
+            n_confirmed += 1
+
+    n_sampled = len(sample)
+    rate = round(n_false / n_sampled, 4) if n_sampled else None
+    return {
+        "n_population": len(population),
+        "n_sampled": n_sampled,
+        "seed": seed,
+        "n_false": n_false,
+        "n_confirmed": n_confirmed,
+        "n_no_signal": n_no_signal,
+        "rate": rate,
+        "examples": examples,
+    }
+
+
+def print_reverify_report(results: list[dict]) -> None:
+    """Print a reverify-pass table (mirrors print_report's shape)."""
+    header = f"{'run_id':14s}  {'project':16s}  {'old':10s}  {'new':10s}  {'source':22s}  status"
+    print(header)
+    print("-" * len(header))
+    for r in results:
+        rid = r["run_id"][:12] + ".."
+        print(f"{rid:14s}  {(r['project'] or '')[:16]:16s}  "
+              f"{(r['old_outcome'] or ''):10s}  {(r['new_outcome'] or ''):10s}  "
+              f"{(r['new_source'] or ''):22s}  {r['status']}")
+    n_total = len(results)
+    n_flip = sum(1 for r in results if r["status"] == "flip")
+    n_confirmed = sum(1 for r in results if r["status"] == "confirmed")
+    n_no_signal = n_total - n_flip - n_confirmed
+    n_written = sum(1 for r in results if r["written"])
+    print()
+    print(f"Reverify candidates: {n_total}  flip={n_flip}  confirmed={n_confirmed}  "
+          f"no_explicit_signal={n_no_signal}  written={n_written}")
+
+
 # ── Report ────────────────────────────────────────────────────────────────────
 
 def print_report(results: list[dict]) -> None:
@@ -1064,7 +1371,47 @@ def main() -> int:
     parser.add_argument("--unlabeled-only", action="store_true",
                         help="Skip runs that already carry a non-null outcome "
                              "(true incremental pass for nightly automation)")
+    parser.add_argument("--reverify-days", type=int, default=None, metavar="N",
+                        help="Re-verify inferred abandoned/clean labels with a non-trunk "
+                             "git_branch, started in the last N days, against the explicit "
+                             "git/PR tiers (nervous-bus-33). Read-only unless --apply is also "
+                             "given. Mutually exclusive with a normal backfill pass.")
+    parser.add_argument("--apply", action="store_true",
+                        help="With --reverify-days: actually write flips (default is dry-run).")
+    parser.add_argument("--false-abandon-rate", action="store_true",
+                        help="Measure the false-abandon rate over a seeded sample of "
+                             "behavior_inference 'abandoned' runs with a git branch. "
+                             "ALWAYS read-only regardless of --apply. Use with --sample-n/--seed.")
+    parser.add_argument("--sample-n", type=int, default=60,
+                        help="Sample size for --false-abandon-rate (default 60)")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="RNG seed for --false-abandon-rate (default 42, for reproducibility)")
     args = parser.parse_args()
+
+    if args.false_abandon_rate:
+        conn = sqlite3.connect(f"file:{args.db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            report = false_abandon_rate(conn, n=args.sample_n, seed=args.seed)
+        finally:
+            conn.close()
+        print(json.dumps(report, indent=2))
+        return 0
+
+    if args.reverify_days is not None:
+        results = reverify_labels(
+            db_path=args.db_path,
+            since_days=args.reverify_days,
+            dry_run=not args.apply,
+            verbose=args.verbose,
+            run_id_filter=args.run_id,
+        )
+        print_reverify_report(results)
+        mode = "" if args.apply else "[DRY-RUN] "
+        n_flip = sum(1 for r in results if r["status"] == "flip")
+        print(f"\n{mode}Reverified {len(results)} candidates; {n_flip} would flip"
+              f"{' (written)' if args.apply else ''}.")
+        return 0
 
     results = backfill(
         db_path=args.db_path,
