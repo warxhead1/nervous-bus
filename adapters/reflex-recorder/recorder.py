@@ -312,6 +312,7 @@ def _reclaim_stranded_pel(r: redis.Redis, recorder: "Recorder", cfg: dict) -> in
     batch_count = int(cfg.get("reclaim_batch_count", DEFAULT_RECLAIM_BATCH_COUNT))
     cursor = "0-0"
     reclaimed = 0
+    lost = 0
     while True:
         result = r.xautoclaim(
             STREAM_NAME, CONSUMER_GROUP, CONSUMER_NAME,
@@ -321,9 +322,12 @@ def _reclaim_stranded_pel(r: redis.Redis, recorder: "Recorder", cfg: dict) -> in
         # tolerate a 2-tuple in case an older client/server pair omits the
         # third element.
         if len(result) == 3:
-            cursor, claimed, _deleted = result
+            cursor, claimed, deleted = result
         else:
             cursor, claimed = result
+            deleted = []
+        # Trimmed out of the stream before anyone acked them: unrecoverable.
+        lost += len(deleted or [])
 
         if claimed:
             claimed_ids = [stream_id for stream_id, _fields in claimed]
@@ -344,7 +348,8 @@ def _reclaim_stranded_pel(r: redis.Redis, recorder: "Recorder", cfg: dict) -> in
                 r.xack(STREAM_NAME, CONSUMER_GROUP, stream_id)
             reclaimed += len(claimed)
 
-        if cursor == "0-0" or not claimed:
+        # A page can claim nothing yet still advance past trimmed ids.
+        if cursor == "0-0" or (not claimed and not deleted):
             break
 
     if reclaimed:
@@ -352,6 +357,12 @@ def _reclaim_stranded_pel(r: redis.Redis, recorder: "Recorder", cfg: dict) -> in
             f"[reflex-recorder] PEL reclaim: claimed and journaled "
             f"{reclaimed} stranded entr{'y' if reclaimed == 1 else 'ies'} "
             f"onto {CONSUMER_NAME}\n"
+        )
+        sys.stderr.flush()
+    if lost:
+        sys.stderr.write(
+            f"[reflex-recorder] PEL reclaim: {lost} stranded entr"
+            f"{'y' if lost == 1 else 'ies'} already trimmed from {STREAM_NAME} — lost\n"
         )
         sys.stderr.flush()
     return reclaimed
