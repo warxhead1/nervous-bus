@@ -1142,6 +1142,115 @@ def cmd_dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
     print(_fmt_table([{**r, "by_model": json.dumps(r["by_model"])} for r in rows]))
 
 
+# ── remediation effect (rule change points × detector hit rates) ──────────────
+
+DEFAULT_RULES_TREE = Path.home() / ".claude" / "memory-global"
+
+
+def rule_change_points(tree: Path) -> list[dict]:
+    """Dated rule changes from a versioned rules tree (git log + rules.toml).
+
+    Each rule in rules.toml ([rule.<id>] files/detectors/themes/rung) yields one
+    change point per commit that MODIFIED one of its files. The root commit
+    (the tree's baseline snapshot) is not a change point.
+    """
+    import subprocess
+    import tomllib
+
+    rules_file = Path(tree) / "rules.toml"
+    if not rules_file.exists():
+        return []
+    rules = tomllib.loads(rules_file.read_text()).get("rule", {})
+    points = []
+    for rid, r in rules.items():
+        files = r.get("files", [])
+        if not files:
+            continue
+        out = subprocess.run(
+            ["git", "-C", str(tree), "log", "--no-merges", "--diff-filter=M",
+             "--format=%H %cI", "--", *files],
+            capture_output=True, text=True, timeout=30,
+        ).stdout
+        for line in out.splitlines():
+            sha, when = line.split(" ", 1)
+            ts = datetime.fromisoformat(when).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            points.append({"rule": rid, "commit": sha[:12], "at": ts, "rung": r.get("rung"),
+                           "detectors": r.get("detectors", []), "themes": r.get("themes", [])})
+    points.sort(key=lambda p: p["at"])
+    return points
+
+
+def _rate_per_100(conn: sqlite3.Connection, lo: str, hi: str, detector: str,
+                  signature: Optional[str], project: Optional[str]) -> tuple[int, int, Optional[float]]:
+    rq = "SELECT COUNT(*) FROM runs WHERE started >= ? AND started < ?"
+    hq = ("SELECT COUNT(DISTINCT h.run_id) FROM detector_hits h JOIN runs r ON r.run_id = h.run_id "
+          "WHERE r.started >= ? AND r.started < ? AND h.detector = ?")
+    rp, hp = [lo, hi], [lo, hi, detector]
+    if signature is not None:
+        hq += " AND h.signature = ?"
+        hp.append(signature)
+    if project:
+        rq += " AND project = ?"
+        hq += " AND r.project = ?"
+        rp.append(project)
+        hp.append(project)
+    runs = conn.execute(rq, rp).fetchone()[0]
+    hits = conn.execute(hq, hp).fetchone()[0]
+    return runs, hits, (round(100 * hits / runs, 2) if runs else None)
+
+
+def query_remediation_effect(
+    conn: sqlite3.Connection,
+    *,
+    tree: Optional[Path] = None,
+    window_days: int = 14,
+    project: Optional[str] = None,
+    points: Optional[list[dict]] = None,
+) -> list[dict]:
+    """Hit rate per 100 runs in the window before vs after each rule change.
+
+    Targets: each rule's detectors (detector_hits.detector) and themes
+    (detector_hits rows with detector='user_correction', signature=<theme>).
+    Correlational: other changes in the same window confound it.
+    """
+    if points is None:
+        points = rule_change_points(tree or DEFAULT_RULES_TREE)
+    now = datetime.now(timezone.utc)
+    rows = []
+    for p in points:
+        at = datetime.strptime(p["at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        lo = (at - timedelta(days=window_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        hi_dt = at + timedelta(days=window_days)
+        hi = hi_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        targets = [(d, d, None) for d in p["detectors"]] + \
+                  [(f"theme:{t}", "user_correction", t) for t in p["themes"]]
+        for label, det, sig in targets:
+            b_runs, b_hits, b_rate = _rate_per_100(conn, lo, p["at"], det, sig, project)
+            a_runs, a_hits, a_rate = _rate_per_100(conn, p["at"], hi, det, sig, project)
+            rows.append({
+                "rule": p["rule"], "commit": p["commit"], "at": p["at"], "rung": p["rung"],
+                "target": label,
+                "before_runs": b_runs, "before_per_100": b_rate,
+                "after_runs": a_runs, "after_per_100": a_rate,
+                "delta": round(a_rate - b_rate, 2) if a_rate is not None and b_rate is not None else None,
+                "window_complete": hi_dt <= now,
+            })
+    return rows
+
+
+def cmd_remediation(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
+    rows = query_remediation_effect(
+        conn, tree=Path(args.tree) if args.tree else None,
+        window_days=args.window_days, project=args.project,
+    )
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return
+    if not args.json:
+        print("CORRELATIONAL: hit rate per 100 runs, window before vs after each rule change.")
+    print(_fmt_table(rows))
+
+
 # ── Argument parser ───────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1229,6 +1338,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(sp_disp)
     sp_disp.add_argument("--by", choices=["project", "month"], help="Group by")
 
+    # remediation — rule change points vs detector/theme hit rates
+    sp_rem = sub.add_parser("remediation", help="Detector/theme hit rate before vs after each rule change")
+    sp_rem.add_argument("--tree", help="Versioned rules tree with rules.toml (default ~/.claude/memory-global)")
+    sp_rem.add_argument("--window-days", type=int, default=14, help="Days before/after (default 14)")
+    sp_rem.add_argument("--project", "-p", help="Filter by project")
+    sp_rem.add_argument("--json", "-j", action="store_true", help="JSON output")
+
     return p
 
 
@@ -1257,6 +1373,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             "schema": cmd_schema,
             "skills": cmd_skills,
             "dispatch": cmd_dispatch,
+            "remediation": cmd_remediation,
         }
         handler = dispatch.get(args.command)
         if handler is None:
