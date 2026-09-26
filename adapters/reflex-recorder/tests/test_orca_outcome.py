@@ -188,14 +188,16 @@ class TestLabelFromOrcaWorkerDone(unittest.TestCase):
         result = label_from_orca_worker_done(run, roots=[str(self.root)])
         self.assertEqual(result, ("clean", "orca_worker_done"))
 
-    def test_failed_maps_to_abandoned(self):
+    def test_failed_abstains(self):
+        """Workers report failed after committing work when a later gate or
+        push stalls; that is not abandonment."""
         sid = "01a07502-d27d-7c62-b861-c28b1ee4ea02"
         _write_rollout(self.root, sid, [
             'orca orchestration send --type worker_done --outcome failed --body "blocked"',
         ])
         run = {"session_id": sid}
         result = label_from_orca_worker_done(run, roots=[str(self.root)])
-        self.assertEqual(result, ("abandoned", "orca_worker_done"))
+        self.assertIsNone(result)
 
     def test_blocked_maps_to_none(self):
         """'blocked' is ambiguous (often a REJECT-worked-as-designed audit

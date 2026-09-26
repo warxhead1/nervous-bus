@@ -736,8 +736,8 @@ def _prefer_higher_tier(
 ) -> Optional[tuple[str, str]]:
     """Pick whichever of two (outcome, source) results has the higher source
     tier. On a tie, keep `a` — used to prefer a git/PR verdict (more specific:
-    can say "landed") over an orca_worker_done verdict (only ever "clean" or
-    "abandoned") when both are tier 3: orca_worker_done must never downgrade
+    can say "landed") over an orca_worker_done verdict (only ever "clean")
+    when both are tier 3: orca_worker_done must never downgrade
     a stronger git/pr landed label.
     """
     if a is None:
@@ -1317,7 +1317,7 @@ def reverify_run(
     candidate here is, by construction (select_reverify_candidates), currently
     only behavior_inference, any tier-3 result from either source is a strict
     upgrade — _prefer_higher_tier just picks git over orca_worker_done on a
-    tie (git's "landed" is more specific than orca's "clean"/"abandoned").
+    tie (git's "landed" is more specific than orca's "clean").
     """
     git_branch = run.get("git_branch")
     git_result: Optional[tuple[str, str]] = None

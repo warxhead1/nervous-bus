@@ -21,13 +21,10 @@ Outcome mapping (tier 3, alongside bead_close/pr_merge/git_merged_into_main):
     succeeded -> "clean"     (the coordinator, not the worker, lands/merges —
                               per the Orca contract a worker never commits to
                               main itself, so "clean" not "landed")
-    failed    -> "abandoned" (closest existing outcome; the schema's outcome
-                              enum is frozen to
-                              landed/abandoned/reverted/thrashed/corrected/clean/null
-                              — there is no "failed")
-    blocked   -> None        (ambiguous — often a REJECT-worked-as-designed
-                              audit verdict, not a run failure; leave
-                              unlabeled rather than guess)
+    failed    -> None        (workers report failed when a later gate or push
+    blocked   -> None         stalls after committing real work, and audit
+                              REJECTs report failed by design; neither is
+                              abandonment, so abstain)
 """
 from __future__ import annotations
 
@@ -63,7 +60,7 @@ _WORKER_DONE_RE = re.compile(r"--type\s+worker_done\b.*?--outcome\s+([A-Za-z_]+)
 # Tier-3 outcome mapping — see module docstring for rationale on each arm.
 _OUTCOME_MAP: dict[str, Optional[str]] = {
     "succeeded": "clean",
-    "failed": "abandoned",
+    "failed": None,
     "blocked": None,
 }
 
