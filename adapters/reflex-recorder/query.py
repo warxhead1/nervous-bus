@@ -375,7 +375,8 @@ def query_stats(
     Returns list of dicts (one per project) with:
         project, total_runs, labeled_runs, unlabeled_runs,
         outcome_breakdown (dict: outcome→count; "unlabeled" for NULL),
-        avg_event_count, read_to_finding_ratio
+        avg_event_count, read_to_finding_ratio,
+        git_confirmed_landed, git_confirmed_total, git_confirmed_success_rate
 
     Null-vs-clean: outcome NULL rows are counted under "unlabeled" in the
     breakdown, never merged with "clean".
@@ -383,6 +384,21 @@ def query_stats(
     read_to_finding_ratio: average ratio of read-type tool calls (Read, Grep,
     Glob, LS) to write-type tool calls (Edit, Write, NotebookEdit) per run,
     derived from tool_histogram.  None if no runs have histograms.
+
+    git-confirmed-only success column (nervous-bus-33): most of the outcome
+    breakdown above is behavior_inference — a shape read off run_events, never
+    re-checked against ground truth once written. This column answers the
+    narrower, ground-truth-only question: of the runs whose CURRENT label's
+    provenance (label_history[-1]['source'], see label.py's _label_source) is
+    an EXPLICIT tier (PR merge, bead close, or git_outcome.py ancestry — never
+    behavior_inference), how many actually reached 'landed'.
+        git_confirmed_total  — runs with an explicit-source current label
+        git_confirmed_landed — of those, outcome == 'landed'
+        git_confirmed_success_rate — landed / total (None if total == 0)
+    This is deliberately a MUCH smaller denominator than labeled_runs — e.g.
+    151/10,046 runs project-wide were git-confirmed landed at time of writing
+    (nervous-bus-33) — and is meant to be read alongside, never in place of,
+    the inferred outcome_breakdown above.
     """
     cutoff = _cutoff(since, days)
 
@@ -474,6 +490,29 @@ def query_stats(
         reads_by_proj.setdefault(proj, []).append(r)
         writes_by_proj.setdefault(proj, []).append(w)
 
+    # ── Query 4: git-confirmed-only success (nervous-bus-33) ──────────────────
+    # label_history is a JSON column; provenance of the CURRENT outcome can't
+    # be expressed in SQL, so pull (project, outcome, label_history) and fold
+    # in Python — same pattern as the tool_histogram pass above.
+    cur4 = conn.execute(
+        f"SELECT project, outcome, label_history FROM runs {where}",
+        params,
+    )
+    git_confirmed_total: dict[str, int] = {}
+    git_confirmed_landed: dict[str, int] = {}
+    for row in cur4.fetchall():
+        proj = row["project"]
+        try:
+            history = json.loads(row["label_history"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            history = []
+        source = (history[-1].get("source") if history else None) or "behavior_inference"
+        if source == "behavior_inference":
+            continue
+        git_confirmed_total[proj] = git_confirmed_total.get(proj, 0) + 1
+        if row["outcome"] == "landed":
+            git_confirmed_landed[proj] = git_confirmed_landed.get(proj, 0) + 1
+
     result = []
     for proj, entry in sorted(totals_by_proj.items()):
         reads = reads_by_proj.get(proj, [])
@@ -481,6 +520,13 @@ def query_stats(
         # Per-run ratios, then average (skip runs with 0 writes to avoid div/0)
         ratios = [r / w for r, w in zip(reads, writes) if w > 0]
         entry["read_to_finding_ratio"] = round(sum(ratios) / len(ratios), 2) if ratios else None
+
+        total = git_confirmed_total.get(proj, 0)
+        landed = git_confirmed_landed.get(proj, 0)
+        entry["git_confirmed_total"] = total
+        entry["git_confirmed_landed"] = landed
+        entry["git_confirmed_success_rate"] = round(landed / total, 3) if total else None
+
         result.append(entry)
     return result
 
@@ -843,6 +889,11 @@ def cmd_stats(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
             "outcomes": json.dumps(r["outcome_breakdown"]),
             "avg_events": r["avg_event_count"],
             "read/write": r["read_to_finding_ratio"] if r["read_to_finding_ratio"] is not None else "n/a",
+            "git_confirmed": f"{r['git_confirmed_landed']}/{r['git_confirmed_total']}",
+            "git_success_rate": (
+                f"{r['git_confirmed_success_rate']:.1%}"
+                if r["git_confirmed_success_rate"] is not None else "n/a"
+            ),
         }
         for r in rows
     ]
