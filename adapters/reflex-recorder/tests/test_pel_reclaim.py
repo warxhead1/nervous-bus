@@ -19,10 +19,12 @@ real; only the network client is stood in for.
 """
 from __future__ import annotations
 
+import io
 import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 _REC_DIR = Path(__file__).parent.parent
@@ -114,6 +116,24 @@ class TestReclaimStrandedPel(unittest.TestCase):
                 # ...and journaled (durable) before that ack.
                 self.assertEqual(rec.store.pending_event_count(), 2)
                 self.assertEqual(rec.segmenter.open_run_count, 1)
+            finally:
+                rec.shutdown()
+
+    def test_trimmed_only_page_does_not_stop_the_scan(self):
+        """A page whose ids were all trimmed claims nothing but must advance."""
+        with tempfile.TemporaryDirectory() as td:
+            rec = self._recorder(Path(td))
+            try:
+                entries = [("1700000000005-0", {"_raw": _envelope("conv-a", 1)})]
+                fake = _FakeReclaimRedis(pages=[
+                    ("1700000000004-0", [], ["1700000000001-0", "1700000000002-0"]),
+                    ("0-0", entries, []),
+                ])
+                with patch("sys.stderr", new_callable=io.StringIO) as err:
+                    reclaimed = recorder_mod._reclaim_stranded_pel(fake, rec, rec.cfg)
+                self.assertEqual(reclaimed, 1)
+                self.assertEqual(len(fake.xautoclaim_calls), 2)
+                self.assertIn("2 stranded entries already trimmed", err.getvalue())
             finally:
                 rec.shutdown()
 
