@@ -74,11 +74,10 @@ CREATE TABLE IF NOT EXISTS run_events (
 CREATE INDEX IF NOT EXISTS idx_run_events_run_id ON run_events(run_id);
 CREATE INDEX IF NOT EXISTS idx_run_events_seq ON run_events(run_id, seq);
 
--- Write-ahead journal (nervous-bus#51): the live XREADGROUP loop journals
--- every accepted activity event here, in one transaction per batch, BEFORE
--- XACKing the batch. That is what makes an event durable ahead of the ack
--- instead of only living in Recorder._pending_events (in-memory) until the
--- run eventually closes. `id` is the true ordering key (autoincrement) —
+-- Write-ahead journal: the live XREADGROUP loop journals every accepted
+-- activity event here, in one transaction per batch, before XACKing the
+-- batch, so an event is durable independent of whether the run it belongs
+-- to has closed yet. `id` is the true ordering key (autoincrement) —
 -- `stream_id` alone cannot be a primary key because --replay mode reuses the
 -- literal string "replay" for every row.
 CREATE TABLE IF NOT EXISTS pending_events (
@@ -189,11 +188,9 @@ class SQLiteStore:
     def append_event(self, run_id: str, event_ts: str, event_type: str, raw: str) -> None:
         """Append a raw activity event to run_events for later backfill.
 
-        Retained for callers/tests that want a single-event autocommit write;
-        the live recorder path no longer uses this directly — see
-        `journal_events` + `close_run`, which batch the same writes into one
-        transaction (nervous-bus#51 defect a: one commit per event stalled
-        badly under host I/O pressure).
+        Single-event autocommit write. The live recorder path uses
+        `journal_events` + `close_run` instead, which batch the same writes
+        into one transaction each.
         """
         seq = self._event_seq.get(run_id, 0) + 1
         self._event_seq[run_id] = seq
@@ -205,41 +202,49 @@ class SQLiteStore:
             (run_id, seq, event_ts, event_type, raw),
         )
 
-    def journal_events(self, entries: list[tuple[str, str, str, str, str]]) -> None:
+    def journal_events(self, entries: list[tuple[str, str, str, str, str]]) -> list[int]:
         """Write-ahead journal a batch of accepted activity events.
 
         `entries`: (run_key, stream_id, event_ts, event_type, raw_json), one
-        row per event. All rows commit in ONE transaction — the caller (the
-        live XREADGROUP loop) must not XACK any stream id in the batch until
-        this returns, so a SIGKILL any time after only finds the events
-        already durable here rather than only in an in-memory buffer
-        (nervous-bus#51 defect b).
+        row per event. All rows commit in ONE transaction — the caller must
+        not XACK any stream id in the batch until this returns.
+
+        Returns the assigned `pending_events.id` for each entry, in the same
+        order as `entries` — the caller needs these to bound `close_run`'s
+        drain to "everything folded so far for this run_key", since a single
+        batch can contain more than one run under the same run_key (an
+        `ended` event followed by a reopen).
         """
         if not entries:
-            return
+            return []
+        ids: list[int] = []
         self._conn.execute("BEGIN IMMEDIATE")
         try:
-            self._conn.executemany(
-                "INSERT INTO pending_events "
-                "(run_key, stream_id, event_ts, event_type, raw_json) "
-                "VALUES (?, ?, ?, ?, ?)",
-                entries,
-            )
+            cur = self._conn.cursor()
+            for run_key, stream_id, event_ts, event_type, raw_json in entries:
+                cur.execute(
+                    "INSERT INTO pending_events "
+                    "(run_key, stream_id, event_ts, event_type, raw_json) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (run_key, stream_id, event_ts, event_type, raw_json),
+                )
+                ids.append(cur.lastrowid)
             self._conn.execute("COMMIT")
         except Exception:
             self._conn.execute("ROLLBACK")
             raise
+        return ids
 
-    def recover_pending_events(self) -> list[tuple[str, str, str, str]]:
+    def recover_pending_events(self) -> list[tuple[int, str, str, str, str]]:
         """All journaled events not yet closed into run_events, oldest first.
 
-        Returns (run_key, event_ts, event_type, raw_json). Read once at
+        Returns (id, run_key, event_ts, event_type, raw_json). Read once at
         startup to re-fold pre-crash events back into the live Segmenter; the
         rows themselves are left in place here and are only ever cleared by
         `close_run()`, whichever process eventually closes that run_key.
         """
         cur = self._conn.execute(
-            "SELECT run_key, event_ts, event_type, raw_json "
+            "SELECT id, run_key, event_ts, event_type, raw_json "
             "FROM pending_events ORDER BY id"
         )
         return cur.fetchall()
@@ -247,14 +252,22 @@ class SQLiteStore:
     def pending_event_count(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM pending_events").fetchone()[0]
 
-    def close_run(self, payload: dict) -> None:
+    def close_run(self, payload: dict, upto_id: Optional[int] = None) -> None:
         """Persist a closed run and drain its journaled events, atomically.
 
         Single explicit transaction: the `runs` upsert, then every
-        `pending_events` row for this run_key moved into `run_events` (seq
-        preserved in journal arrival order) and deleted from the journal.
-        Replaces the old save_run() + N x append_event() autocommit sequence
-        (nervous-bus#51 defect a).
+        `pending_events` row for this run_key (bounded by `upto_id` when
+        given) moved into `run_events` (seq preserved in journal arrival
+        order) and deleted from the journal.
+
+        `upto_id` must be the highest `pending_events.id` actually folded
+        into this closed run. Without that bound, a run_key that reopens
+        later in the SAME journaled batch (an `ended` event followed by more
+        events for a new run under the same key) would have its
+        not-yet-folded rows swept up by this close too. `None` means "no
+        bound" (drain everything currently journaled for this run_key) —
+        only correct when the caller knows no reopen can be pending, e.g. a
+        one-shot test seeding a single run's events.
         """
         run_id = payload["run_id"]
         run_key = payload["run_key"]
@@ -262,11 +275,18 @@ class SQLiteStore:
         self._conn.execute("BEGIN IMMEDIATE")
         try:
             self._conn.execute(_RUN_UPSERT_SQL, params)
-            rows = self._conn.execute(
-                "SELECT id, event_ts, event_type, raw_json FROM pending_events "
-                "WHERE run_key = ? ORDER BY id",
-                (run_key,),
-            ).fetchall()
+            if upto_id is None:
+                rows = self._conn.execute(
+                    "SELECT id, event_ts, event_type, raw_json FROM pending_events "
+                    "WHERE run_key = ? ORDER BY id",
+                    (run_key,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT id, event_ts, event_type, raw_json FROM pending_events "
+                    "WHERE run_key = ? AND id <= ? ORDER BY id",
+                    (run_key, upto_id),
+                ).fetchall()
             if rows:
                 seq = self._event_seq.get(run_id, 0)
                 to_insert = []

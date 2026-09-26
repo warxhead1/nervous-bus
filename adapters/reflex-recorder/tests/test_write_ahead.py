@@ -14,6 +14,9 @@ survivable regardless of whether any signal handler ever runs.
       neither a partial `runs` row nor drained `pending_events`.
 (iii) Recovery is idempotent across repeated crashes.
 (iv)  Shutdown of N runs x 500 events completes well under 1s.
+(v)   A batch that closes a run_key mid-batch and reopens it later in the
+      SAME batch only drains the closing run's own rows — the reopened
+      run's rows must survive to be drained by ITS eventual close.
 """
 from __future__ import annotations
 
@@ -232,6 +235,71 @@ class TestCloseRunAtomicity(unittest.TestCase):
                 self.assertEqual(store.pending_event_count(), 0)
             finally:
                 store.close()
+
+
+class TestMidBatchReopenBoundary(unittest.TestCase):
+    """A run_key that closes and reopens within ONE journaled batch must not
+    have the reopened run's not-yet-folded rows swept into the closing run."""
+
+    @staticmethod
+    def _activity(conv: str, event: str, ts: str) -> str:
+        data = {
+            "conversation_id": conv, "session_id": conv, "agent_id": conv,
+            "project": "p", "agent_kind": "host_claude_code",
+            "event": event, "tool_name": "Bash", "ts": ts,
+        }
+        return json.dumps({"type": recorder_mod.ACTIVITY_TYPE, "data": data})
+
+    def test_ended_then_reopen_in_same_batch_only_drains_its_own_rows(self):
+        original_publish = recorder_mod._publish_run
+        recorder_mod._publish_run = lambda payload, timeout=0: True
+        self.addCleanup(setattr, recorder_mod, "_publish_run", original_publish)
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = {
+                "idle_timeout_s": 900.0,
+                "db_path": Path(td) / "runs.db",
+                "shutdown_budget_s": 10.0,
+            }
+            rec = recorder_mod.Recorder(cfg)
+            closed = []
+            rec.segmenter.on_run_closed = lambda payload: (
+                closed.append(payload), rec._on_run_closed(payload)
+            )[1]
+
+            # One journaled batch: e1 (run A), ended (closes run A), e3
+            # (reopens run B under the SAME run_key) — all folded from one
+            # `_ingest_batch` call, i.e. one XREADGROUP read.
+            entries = [
+                ("1-0", self._activity("conv-a", "tool_call", "2026-09-26T00:00:00Z")),
+                ("1-1", self._activity("conv-a", "ended", "2026-09-26T00:00:01Z")),
+                ("1-2", self._activity("conv-a", "tool_call", "2026-09-26T00:00:02Z")),
+            ]
+            rec._ingest_batch(entries)
+
+            # Run A closed synchronously inside the fold loop; run B is still
+            # open, its one event still only in the journal.
+            self.assertEqual(len(closed), 1)
+            self.assertEqual(closed[0]["close_reason"], "ended")
+            self.assertEqual(closed[0]["event_count"], 2, "e1 + ended, not e3")
+            self.assertEqual(rec.segmenter.open_run_count, 1)
+
+            run_a_id = closed[0]["run_id"]
+            post_close = _read_db(cfg["db_path"])
+            run_a_events = [r for r in post_close["events"] if r[0] == run_a_id]
+            self.assertEqual(len(run_a_events), 2,
+                              "run A's run_events must be exactly e1 + ended")
+            # e3 must NOT have been swept into run A's close — it is still
+            # sitting in the journal, waiting for run B to close.
+            self.assertEqual(len(post_close["pending"]), 1,
+                              "e3 must remain journaled, not drained by run A's close")
+
+            rec.shutdown()
+            final = _read_db(cfg["db_path"])
+            self.assertEqual(len(final["runs"]), 2)
+            run_b = [r for r in final["runs"] if r[0] != run_a_id][0]
+            self.assertEqual(run_b[4], 1, "run B's event_count must be exactly e3")
+            self.assertEqual(final["pending"], [])
 
 
 class TestShutdownScale(unittest.TestCase):

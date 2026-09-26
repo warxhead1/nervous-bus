@@ -123,11 +123,11 @@ def main() -> int:
         real_close_run = recorder.store.close_run
         state = {"failed": False}
 
-        def _close_run(payload):
+        def _close_run(payload, upto_id=None):
             if not state["failed"]:
                 state["failed"] = True
                 raise RuntimeError("simulated store failure on first run")
-            real_close_run(payload)
+            real_close_run(payload, upto_id=upto_id)
         recorder.store.close_run = _close_run
 
     # conv-a spans two worktrees (two run_keys); conv-b is a session run.

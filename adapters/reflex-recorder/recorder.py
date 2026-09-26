@@ -16,11 +16,11 @@ See reflex-recorder.toml for configuration.
 
 Durability boundary (XREADGROUP ack timing vs run_events persistence)
 ---------------------------------------------------------------------
-(nervous-bus#51 fix) `_run_xreadgroup` no longer XACKs a stream entry until
-the WHOLE batch it arrived in has been journaled to SQLite.  `_ingest_batch`
-parses every entry, writes every accepted `bus.agent.activity.v1` event to
-the `pending_events` table in ONE transaction (`store.journal_events`), and
-only after that commit returns does it fold each event into the in-memory
+`_run_xreadgroup` does not XACK a stream entry until the WHOLE batch it
+arrived in has been journaled to SQLite.  `_ingest_batch` parses every
+entry, writes every accepted `bus.agent.activity.v1` event to the
+`pending_events` table in ONE transaction (`store.journal_events`), and only
+after that commit returns does it fold each event into the in-memory
 `Segmenter` run; the caller then XACKs the batch.  So the ack means
 "durable", not merely "delivered" — the event is on disk in `pending_events`
 before Redis is told it can forget it, independent of whether the run it
@@ -31,17 +31,21 @@ A run's events leave `pending_events` only when that run closes (`ended`,
 `recorder_shutdown`): `store.close_run()` moves them into `run_events` and
 deletes the journal rows, in the same transaction as the `runs` upsert.
 
-What is covered now, and what still is not:
+Fold-cursor invariant: a single journaled batch can contain more than one
+run under the same run_key (an `ended` event followed by a reopen further
+in the batch). `close_run` must only drain rows folded so far for that
+run_key, never rows still waiting to be folded — see `_fold_cursor` and
+`_persist_and_publish`.
 
   covered      systemctl stop/restart, `kill <pid>` (SIGTERM — the handler
                sets a latch, the read loop breaks, and the `finally` runs
-               `Recorder.shutdown()`); AND, new in this fix, SIGKILL /
-               OOM kill / host power loss / a hard interpreter crash at any
-               point after a batch's `journal_events` commit — those events
-               are already durable, and `Recorder._recover_pending_events()`
-               re-folds them into the Segmenter at the next startup (the
-               runs they belonged to simply reopen and close normally
-               later; see `Recorder.__init__`).
+               `Recorder.shutdown()`); SIGKILL / OOM kill / host power loss
+               / a hard interpreter crash at any point after a batch's
+               `journal_events` commit — those events are already durable,
+               and `Recorder._recover_pending_events()` re-folds them into
+               the Segmenter at the next startup (the runs they belonged to
+               simply reopen and close normally later; see
+               `Recorder.__init__`).
   NOT covered  a crash strictly between a batch's XREADGROUP delivery and
                its `journal_events` commit. Those entries are undelivered
                to any durable store and sit only in Redis's pending-entries
@@ -49,7 +53,7 @@ What is covered now, and what still is not:
                not yet reclaim PEL entries from a prior consumer name on
                restart (each process uses a pid-suffixed consumer name), so
                closing that residual window is a separate follow-up
-               (PEL reclaim via XCLAIM/XAUTOCLAIM), not part of #51's scope.
+               (PEL reclaim via XCLAIM/XAUTOCLAIM).
 """
 from __future__ import annotations
 
@@ -87,13 +91,11 @@ DEFAULT_METRICS_INTERVAL_S = 60.0
 DEFAULT_TICK_INTERVAL_S = 30.0
 
 # Wall-clock budget for the graceful-shutdown flush.  systemd's
-# TimeoutStopSec=60 (systemd/reflex-recorder.service; bumped from 15 by
-# nervous-bus#51 — the live host already ran the 60s drop-in) is the hard
-# ceiling: once it expires the unit is SIGKILLed mid-flush.  Persistence
-# itself is now a single `store.close_run()` transaction per run rather than
-# one autocommit per event (#51 defect a), so it is no longer the tall pole;
-# this budget mainly bounds the best-effort `nervous publish` fan-out, which
-# is the only thing dropped once the budget is spent.
+# TimeoutStopSec=60 (systemd/reflex-recorder.service) is the hard ceiling:
+# once it expires the unit is SIGKILLed mid-flush.  Persistence itself is a
+# single `store.close_run()` transaction per run, so it is not the tall
+# pole; this budget mainly bounds the best-effort `nervous publish`
+# fan-out, which is the only thing dropped once the budget is spent.
 DEFAULT_SHUTDOWN_BUDGET_S = 10.0
 DEFAULT_PUBLISH_TIMEOUT_S = 10.0
 
@@ -193,9 +195,9 @@ def install_shutdown_handlers(
     Python's default disposition for SIGTERM is the C default — the process
     dies inside the kernel, so no ``finally``/``atexit`` runs and every run
     still open in the segmenter is lost (its already-journaled events survive
-    in ``pending_events`` per nervous-bus#51, but the open-run aggregates
-    live only in the Segmenter and only ``Recorder.shutdown()`` closes them
-    out cleanly).  A ``systemctl restart`` sends exactly that signal.
+    in ``pending_events``, but the open-run aggregates live only in the
+    Segmenter and only ``Recorder.shutdown()`` closes them out cleanly).  A
+    ``systemctl restart`` sends exactly that signal.
     """
     flag = flag or ShutdownSignal()
     for signum in signums:
@@ -293,9 +295,15 @@ class Recorder:
         self._shutdown_publishes_skipped = 0
         self._shutdown_flush_errors = 0
         # Cumulative wall-clock spent in store.close_run() vs _publish_run(),
-        # surfaced in the shutdown log line (nervous-bus#51 point 4/5).
+        # surfaced in the shutdown log line.
         self._persist_s = 0.0
         self._publish_s = 0.0
+        # run_key -> highest pending_events.id folded into the Segmenter so
+        # far for that key. `close_run` uses this to bound its drain: a
+        # single journaled batch can contain an `ended` event followed by a
+        # reopen of the same run_key, and only rows up to this cursor belong
+        # to the run that is closing. See _ingest_batch / _persist_and_publish.
+        self._fold_cursor: dict[str, int] = {}
 
         def on_run_closed(payload: dict) -> None:
             self._on_run_closed(payload)
@@ -315,10 +323,10 @@ class Recorder:
     def _recover_pending_events(self) -> None:
         """Re-fold journaled pre-crash events back into the live Segmenter.
 
-        nervous-bus#51: `pending_events` is the write-ahead journal that made
-        those events durable before the batch's XACK, independent of whether
-        the run they belonged to ever closed. On a fresh start we replay
-        them (oldest first, across all run_keys) through the ordinary
+        `pending_events` is the write-ahead journal that made these events
+        durable before their batch's XACK, independent of whether the run
+        they belonged to ever closed. On a fresh start we replay them
+        (oldest first, across all run_keys) through the ordinary
         `Segmenter.ingest` path — NOT through `_ingest_batch`/journal_events
         again, since re-journaling would duplicate rows already sitting in
         the table. The runs they belonged to simply reopen in memory and
@@ -329,6 +337,10 @@ class Recorder:
         Idempotent across repeated crashes: nothing here removes journal
         rows, so re-running recovery after another crash just re-folds the
         same (now possibly larger) set into a fresh in-memory Segmenter.
+
+        Sets `_fold_cursor` per row before folding it, same as the live
+        path, so a recovered `ended` event closes correctly bounded to only
+        the rows recovered up to that point.
         """
         try:
             rows = self.store.recover_pending_events()
@@ -340,11 +352,12 @@ class Recorder:
             return
         now = time.time()
         recovered = 0
-        for _run_key, _event_ts, _event_type, raw_json in rows:
+        for pending_id, run_key, _event_ts, _event_type, raw_json in rows:
             parsed = self._parse_envelope(raw_json)
             if parsed is None:
                 continue
             data, _etype, _ts = parsed
+            self._fold_cursor[run_key] = pending_id
             self.segmenter.ingest(data, now=now)
             self._events_ingested += 1
             recovered += 1
@@ -401,12 +414,17 @@ class Recorder:
         run_key = payload["run_key"]
 
         # 1+2. Persist the run AND drain its journaled pending_events into
-        #    run_events, in ONE transaction (store.close_run) — replaces the
-        #    old save_run() + N x append_event() autocommit sequence
-        #    (nervous-bus#51 defect a: one commit per event stalled badly
-        #    under host I/O pressure during the 2026-09-26 SIGKILL incident).
+        #    run_events, in ONE transaction (store.close_run). Bounded by
+        #    the fold cursor for this run_key: a single journaled batch can
+        #    contain an `ended` event followed by a reopen of the same key,
+        #    and only rows folded up to (and including) this close belong
+        #    to the run that is closing — later rows in the same batch
+        #    belong to the run that reopens after it. Popped (not merely
+        #    read) so a later close under the same run_key, once its own
+        #    events have been folded, can't reuse this stale value.
+        upto_id = self._fold_cursor.pop(run_key, None)
         t0 = time.time()
-        self.store.close_run(payload)
+        self.store.close_run(payload, upto_id=upto_id)
         t1 = time.time()
         self._persist_s += t1 - t0
 
@@ -463,9 +481,9 @@ class Recorder:
         """Parse+ingest a single envelope (replay mode / unit tests).
 
         The live XREADGROUP loop uses `_ingest_batch` instead, which journals
-        a whole batch in ONE transaction rather than one commit per event
-        (nervous-bus#51 defect a) — this wraps it as a one-entry batch so
-        callers that only have one envelope in hand keep working unchanged.
+        a whole batch in ONE transaction rather than one commit per event —
+        this wraps it as a one-entry batch so callers that only have one
+        envelope in hand keep working unchanged.
         """
         self._ingest_batch([(stream_id, raw_json)], journal=journal)
 
@@ -478,34 +496,51 @@ class Recorder:
         transaction BEFORE any of them are folded into the Segmenter — the
         caller (`_run_xreadgroup`) must not XACK any stream id in this batch
         until this call returns, so the durability boundary is the journal
-        commit, not the in-memory fold (nervous-bus#51 defect b).
-        `journal=False` is for `_recover_pending_events`, which is re-folding
-        rows that are already the journal and must not be re-inserted.
+        commit, not the in-memory fold. `journal=False` is for
+        `_recover_pending_events`, which is re-folding rows that are already
+        the journal and must not be re-inserted.
+
+        Before folding a journaled event, `_fold_cursor[run_key]` is set to
+        that event's `pending_events.id`. A batch can contain more than one
+        run under the same run_key (an `ended` event followed by a reopen
+        later in the same batch); the cursor is what lets `close_run`
+        (called synchronously from inside `segmenter.ingest` when a run
+        closes) drain only the rows folded so far, not rows still waiting
+        their turn in this same loop.
         """
-        parsed: list[tuple[str, Optional[dict]]] = []
+        # Each entry: [data_or_None, run_key_or_None, pending_id_or_None].
+        # A mutable list per entry so journal_events' assigned ids can be
+        # filled in after journaling, before the fold loop below reads them.
+        plan: list[list] = []
         journal_rows: list[tuple[str, str, str, str, str]] = []
+        journal_slots: list[list] = []
         for stream_id, raw_json in entries:
             result = self._parse_envelope(raw_json)
             if result is None:
                 self._events_skipped += 1
-                parsed.append((stream_id, None))
                 continue
             data, event_type, ts = result
             # An empty run_key is refused by Segmenter.ingest, so journaling
             # under it would accumulate events no run close can ever drain.
             run_key_tuple = self._get_run_key(data)
-            if journal and run_key_tuple and run_key_tuple[0]:
-                journal_rows.append((run_key_tuple[0], stream_id, ts, event_type, raw_json))
-            parsed.append((stream_id, data))
+            run_key = run_key_tuple[0] if (run_key_tuple and run_key_tuple[0]) else None
+            slot = [data, run_key, None]
+            plan.append(slot)
+            if journal and run_key:
+                journal_rows.append((run_key, stream_id, ts, event_type, raw_json))
+                journal_slots.append(slot)
 
         if journal_rows:
-            self.store.journal_events(journal_rows)
+            ids = self.store.journal_events(journal_rows)
+            for slot, pending_id in zip(journal_slots, ids):
+                slot[2] = pending_id
 
         now = time.time()
-        for _stream_id, data in parsed:
-            if data is not None:
-                self.segmenter.ingest(data, now=now)
-                self._events_ingested += 1
+        for data, run_key, pending_id in plan:
+            if pending_id is not None:
+                self._fold_cursor[run_key] = pending_id
+            self.segmenter.ingest(data, now=now)
+            self._events_ingested += 1
 
     def _get_run_key(self, activity: dict) -> Optional[tuple]:
         """Compute run key for buffering without duplicating logic."""
@@ -560,9 +595,9 @@ class Recorder:
             self.segmenter.shutdown()
         finally:
             elapsed = time.time() - started
-            # Per-phase timing (nervous-bus#51 point 4): how much of the flush
-            # was SQLite persistence (store.close_run, never skipped) vs the
-            # best-effort `nervous publish` fan-out (bounded by budget_s).
+            # Per-phase timing: how much of the flush was SQLite persistence
+            # (store.close_run, never skipped) vs the best-effort `nervous
+            # publish` fan-out (bounded by budget_s).
             persist_s = self._persist_s - persist_before
             publish_s = self._publish_s - publish_before
             sys.stderr.write(
@@ -609,10 +644,10 @@ def _run_xreadgroup(r: redis.Redis, recorder: Recorder, cfg: dict, once: bool = 
 
             if results:
                 for _stream, entries in results:
-                    # Journal the whole batch in one transaction (defect a),
-                    # fold each event into the Segmenter, THEN ack the whole
-                    # batch — the ack must not precede the journal commit
-                    # (defect b). See _ingest_batch / store.journal_events.
+                    # Journal the whole batch in one transaction, fold each
+                    # event into the Segmenter, THEN ack the whole batch —
+                    # the ack must not precede the journal commit. See
+                    # _ingest_batch / store.journal_events.
                     batch = [
                         (stream_id, fields.get("_raw", "{}"))
                         for stream_id, fields in entries
