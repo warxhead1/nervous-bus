@@ -849,6 +849,248 @@ def cmd_stats(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
     print(_fmt_table(display))
 
 
+# ── skills / dispatch (features folded by skill_usage.py) ─────────────────────
+
+GOOD_OUTCOMES = {"clean", "landed"}
+
+DEFAULT_SKILL_ROOTS = [
+    Path.home() / ".claude" / "skills",
+    Path.home() / ".agents" / "skills",
+    Path.home() / ".codex" / "skills",
+    Path.home() / ".claude" / "plugins",
+]
+
+
+def _feature_runs(conn: sqlite3.Connection, project: Optional[str], cutoff: Optional[str]):
+    clauses, params = [], []
+    if project:
+        clauses.append("project = ?")
+        params.append(project)
+    if cutoff:
+        clauses.append("started >= ?")
+        params.append(cutoff)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    for r in conn.execute(
+        f"SELECT run_id, project, agent_kind, started, outcome, labeled_at, features FROM runs {where}",
+        params,
+    ):
+        try:
+            feats = json.loads(r["features"] or "{}")
+        except ValueError:
+            feats = {}
+        yield r, feats
+
+
+def query_skills(
+    conn: sqlite3.Connection,
+    *,
+    by: Optional[str] = None,
+    project: Optional[str] = None,
+    since: Optional[str] = None,
+    days: Optional[int] = None,
+) -> list[dict]:
+    """Per-skill usage: invocations, runs, projects, mechanism + harness split.
+
+    ``by`` in {project, month, agent_kind} adds that column as a grouping key.
+    """
+    cutoff = _cutoff(since, days)
+    acc: dict[tuple, dict] = {}
+    for r, feats in _feature_runs(conn, project, cutoff):
+        for name, mechs in (feats.get("skills") or {}).items():
+            group = None
+            if by == "project":
+                group = r["project"]
+            elif by == "month":
+                group = (r["started"] or "")[:7]
+            elif by == "agent_kind":
+                group = r["agent_kind"]
+            a = acc.setdefault((name, group), {
+                "skill": name, "group": group, "invocations": 0, "runs": 0,
+                "projects": set(), "mechanisms": {}, "harness": {},
+                "first_seen": r["started"], "last_seen": r["started"],
+            })
+            n = sum(mechs.values())
+            a["invocations"] += n
+            a["runs"] += 1
+            a["projects"].add(r["project"])
+            for m, c in mechs.items():
+                a["mechanisms"][m] = a["mechanisms"].get(m, 0) + c
+            a["harness"][r["agent_kind"]] = a["harness"].get(r["agent_kind"], 0) + n
+            a["first_seen"] = min(a["first_seen"], r["started"])
+            a["last_seen"] = max(a["last_seen"], r["started"])
+    rows = []
+    for a in acc.values():
+        a["projects"] = len(a["projects"])
+        if by is None:
+            a.pop("group")
+        rows.append(a)
+    rows.sort(key=lambda x: (x.get("group") or "", -x["invocations"]))
+    return rows
+
+
+def discover_skills(roots: Optional[list[Path]] = None) -> dict[str, set[str]]:
+    """Map skill name -> set of root labels where a <name>/SKILL.md exists."""
+    found: dict[str, set[str]] = {}
+    if roots is None:
+        roots = DEFAULT_SKILL_ROOTS + sorted((Path.home() / "projects").glob("*/.claude/skills"))
+    for root in roots:
+        root = Path(root).expanduser()
+        if not root.is_dir():
+            continue
+        for skill_md in root.rglob("SKILL.md"):
+            found.setdefault(skill_md.parent.name, set()).add(str(root))
+    return found
+
+
+def query_skill_inventory(
+    conn: sqlite3.Connection,
+    *,
+    roots: Optional[list[Path]] = None,
+    since: Optional[str] = None,
+    days: Optional[int] = None,
+) -> list[dict]:
+    """On-disk skills joined to observed usage; flags never-seen and unknown names."""
+    on_disk = discover_skills(roots)
+    observed: dict[str, dict] = {}
+    for r in query_skills(conn, since=since, days=days):
+        name = r["skill"]
+        # Plugin skills are invoked as "<plugin>:<skill>" but live on disk as <skill>/SKILL.md.
+        if name not in on_disk and ":" in name and name.rsplit(":", 1)[1] in on_disk:
+            name = name.rsplit(":", 1)[1]
+        o = observed.setdefault(name, {"invocations": 0, "runs": 0})
+        o["invocations"] += r["invocations"]
+        o["runs"] += r["runs"]
+    rows = []
+    for name in sorted(set(on_disk) | set(observed)):
+        o = observed.get(name)
+        rows.append({
+            "skill": name,
+            "roots": sorted(on_disk.get(name, [])),
+            "on_disk": name in on_disk,
+            "invocations": o["invocations"] if o else 0,
+            "runs": o["runs"] if o else 0,
+            "status": ("never-seen" if not o else "used") if name in on_disk else "not-on-disk",
+        })
+    rows.sort(key=lambda x: (x["status"] != "never-seen", -x["invocations"], x["skill"]))
+    return rows
+
+
+def query_skill_lift(
+    conn: sqlite3.Connection,
+    *,
+    min_n: int = 20,
+    since: Optional[str] = None,
+    days: Optional[int] = None,
+) -> list[dict]:
+    """Outcome rate of runs that used a skill vs same project+agent_kind runs that did not.
+
+    Correlational only. Labeled runs only (labeled_at IS NOT NULL). good = clean|landed.
+    The comparison arm is restricted to the (project, agent_kind) strata the skill
+    appears in, so a skill used mostly in a healthy project does not borrow its lift.
+    """
+    cutoff = _cutoff(since, days)
+    strata: dict[tuple, list[tuple[set, bool]]] = {}
+    for r, feats in _feature_runs(conn, None, cutoff):
+        if r["labeled_at"] is None or r["outcome"] is None:
+            continue
+        strata.setdefault((r["project"], r["agent_kind"]), []).append(
+            (set((feats.get("skills") or {}).keys()), r["outcome"] in GOOD_OUTCOMES)
+        )
+    skills = sorted({s for runs in strata.values() for used, _ in runs for s in used})
+    rows = []
+    for s in skills:
+        w_n = w_good = wo_n = wo_good = 0
+        for runs in strata.values():
+            if not any(s in used for used, _ in runs):
+                continue
+            for used, good in runs:
+                if s in used:
+                    w_n += 1
+                    w_good += good
+                else:
+                    wo_n += 1
+                    wo_good += good
+        w_rate = w_good / w_n if w_n else None
+        wo_rate = wo_good / wo_n if wo_n else None
+        rows.append({
+            "skill": s,
+            "with_n": w_n, "with_good_rate": round(w_rate, 3) if w_rate is not None else None,
+            "without_n": wo_n, "without_good_rate": round(wo_rate, 3) if wo_rate is not None else None,
+            "diff": round(w_rate - wo_rate, 3) if w_rate is not None and wo_rate is not None else None,
+            "status": "ok" if w_n >= min_n and wo_n >= min_n else "insufficient",
+        })
+    rows.sort(key=lambda x: (x["status"] != "ok", -(x["with_n"])))
+    return rows
+
+
+def query_dispatch(
+    conn: sqlite3.Connection,
+    *,
+    by: Optional[str] = None,
+    project: Optional[str] = None,
+    since: Optional[str] = None,
+    days: Optional[int] = None,
+) -> list[dict]:
+    """Agent/Task dispatch tiering: model mix, missing-model rate, isolation rate.
+
+    model_missing_rate denominator = dispatches whose model state is known
+    (explicit + missing); truncated summaries (model_unknown) are excluded.
+    """
+    cutoff = _cutoff(since, days)
+    acc: dict = {}
+    for r, feats in _feature_runs(conn, project, cutoff):
+        d = feats.get("dispatch")
+        if not d:
+            continue
+        key = {"project": r["project"], "month": (r["started"] or "")[:7]}.get(by, "all")
+        a = acc.setdefault(key, {"group": key, "dispatches": 0, "by_model": {},
+                                 "model_missing": 0, "model_unknown": 0, "isolated": 0})
+        a["dispatches"] += d.get("total", 0)
+        a["model_missing"] += d.get("model_missing", 0)
+        a["model_unknown"] += d.get("model_unknown", 0)
+        a["isolated"] += d.get("isolated", 0)
+        for m, c in (d.get("by_model") or {}).items():
+            a["by_model"][m] = a["by_model"].get(m, 0) + c
+    rows = []
+    for a in acc.values():
+        known = a["dispatches"] - a["model_unknown"]
+        a["model_missing_rate"] = round(a["model_missing"] / known, 3) if known else None
+        a["isolation_rate"] = round(a["isolated"] / a["dispatches"], 3) if a["dispatches"] else None
+        rows.append(a)
+    rows.sort(key=lambda x: str(x["group"]))
+    return rows
+
+
+def cmd_skills(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
+    if args.inventory:
+        roots = [Path(p) for p in args.root] if args.root else None
+        rows = query_skill_inventory(conn, roots=roots, since=args.since, days=args.days)
+        cols = ["skill", "status", "invocations", "runs", "roots"]
+    elif args.lift:
+        rows = query_skill_lift(conn, min_n=args.min_n, since=args.since, days=args.days)
+        cols = ["skill", "status", "with_n", "with_good_rate", "without_n", "without_good_rate", "diff"]
+        if not args.json:
+            print("CORRELATIONAL, NOT CAUSAL: good=clean|landed among labeled runs; "
+                  "comparison arm = same project+agent_kind runs without the skill.")
+    else:
+        rows = query_skills(conn, by=args.by, project=args.project, since=args.since, days=args.days)
+        cols = (["group"] if args.by else []) + [
+            "skill", "invocations", "runs", "projects", "mechanisms", "harness", "first_seen", "last_seen"]
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return
+    print(_fmt_table([{c: (json.dumps(r[c]) if isinstance(r[c], (dict, list)) else r[c]) for c in cols}
+                      for r in rows], cols))
+
+
+def cmd_dispatch(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
+    rows = query_dispatch(conn, by=args.by, project=args.project, since=args.since, days=args.days)
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return
+    print(_fmt_table([{**r, "by_model": json.dumps(r["by_model"])} for r in rows]))
+
+
 # ── Argument parser ───────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
@@ -919,6 +1161,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp_schema.add_argument("--json", "-j", action="store_true", help="JSON output")
 
+    # skills — skill-load usage, inventory join, outcome lift
+    sp_skills = sub.add_parser("skills", help="Skill usage (Skill tool + SKILL.md reads) per skill")
+    _add_common(sp_skills)
+    sp_skills.add_argument("--by", choices=["project", "month", "agent_kind"], help="Group by")
+    sp_skills.add_argument("--inventory", action="store_true",
+                           help="Join on-disk skills to usage; flag never-seen")
+    sp_skills.add_argument("--root", action="append",
+                           help="Skill root to scan for --inventory (repeatable; default: user roots)")
+    sp_skills.add_argument("--lift", action="store_true",
+                           help="Outcome rate with vs without the skill (same project+agent_kind)")
+    sp_skills.add_argument("--min-n", type=int, default=20, help="Min runs per arm for --lift (default 20)")
+
+    # dispatch — Agent/Task model tiering
+    sp_disp = sub.add_parser("dispatch", help="Agent/Task dispatch model mix and missing-model rate")
+    _add_common(sp_disp)
+    sp_disp.add_argument("--by", choices=["project", "month"], help="Group by")
+
     return p
 
 
@@ -945,6 +1204,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             "stats": cmd_stats,
             "sql": cmd_sql,
             "schema": cmd_schema,
+            "skills": cmd_skills,
+            "dispatch": cmd_dispatch,
         }
         handler = dispatch.get(args.command)
         if handler is None:

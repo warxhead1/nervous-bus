@@ -129,6 +129,7 @@ adapters/reflex-recorder/
   segment.py           # Segmentation logic: run_key computation, OpenRun, Segmenter
   store.py             # SQLite persistence (abstracted for future dolt swap-in)
   query.py             # CLI/library query layer (reflex subcommands + sql passthrough)
+  skill_usage.py       # Skill-load + dispatch-tiering signals, folded into runs.features; backfill CLI
   reflex-recorder.toml # Configuration
   systemd/
     reflex-recorder.service  # User systemd unit (do not enable without orchestrator review)
@@ -136,6 +137,35 @@ adapters/reflex-recorder/
     test_segment.py    # 28 unit tests for segmentation logic
     test_query.py      # 69 unit tests for query layer
 ```
+
+## Skill & dispatch usage
+
+`skill_usage.py` folds three feature keys into every run at fold time (and
+`python3 skill_usage.py backfill [--since ISO] [--apply]` recomputes them for
+stored runs from `run_events`; dry-run and read-only unless `--apply`):
+
+- `skills` — `{name: {mechanism: count}}`. `skill_tool` = Claude's `Skill`
+  tool; `file_read` = a Read or shell command that references
+  `.../skills/<name>/SKILL.md`. Codex has no Skill tool, so `file_read` is how
+  Codex usage shows up. It also counts agents opening a SKILL.md to edit it.
+- `dispatch` — Agent/Task calls: `by_model`, `by_subagent_type`,
+  `model_missing`, `model_unknown`, `isolated`.
+- `workflow_calls` — Workflow tool calls.
+
+```bash
+reflex skills [--by project|month|agent_kind]   # per-skill usage + harness split
+reflex skills --inventory                       # on-disk skills vs usage; never-seen
+reflex skills --lift [--min-n 20]               # outcome rate with vs without (correlational)
+reflex dispatch [--by month|project]            # model mix, missing-model rate
+```
+
+`tool_summary` is bounded by the emitting hook, so read the counts as lower
+bounds: a SKILL.md path past the bound is not seen. On dispatches, JSON keys
+sort alphabetically and `prompt` pushes later keys past the bound, so model and
+subagent_type carry a tri-state (`explicit`/`missing`/`unknown`) — `missing` is
+only asserted when the summary parsed as complete JSON. Slash commands and
+Workflow-internal `agent()` calls are not in the live stream
+(`workflow_dispatch.py` recovers the latter from transcripts).
 
 ## Running
 
