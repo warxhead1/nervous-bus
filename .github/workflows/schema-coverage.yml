@@ -35,7 +35,7 @@ jobs:
           echo "HEARTH_LOOM_DIR=$HOME/projects/hearth-loom/main" >> $GITHUB_ENV
           echo "DEER_FLOW_DIR=$HOME/projects/deer-flow" >> $GITHUB_ENV
           echo "KB_DIR=$HOME/projects/kb" >> $GITHUB_ENV
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           clean: false
 
@@ -94,7 +94,7 @@ jobs:
         # contract.
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: schema-coverage-report
           path: |
