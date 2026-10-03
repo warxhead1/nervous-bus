@@ -18,8 +18,8 @@
     },
     "agent_kind": {
       "type": "string",
-      "enum": ["host_claude_code", "host_codex", "codex-cli", "claude-code", "claude-code-minimax", "host_subagent", "host_hearthloom", "antigravity-cli"],
-      "description": "The host-side agent runtime kind. host_claude_code = Claude Code top-level sessions; host_subagent = Claude Code dispatched subagents (ParentToolUseID present); host_hearthloom = hearth-loom orchestrated sessions; host_codex = Codex CLI agents. codex-cli / claude-code / claude-code-minimax are legacy values emitted by the codex-hook binary's detectAgentKind(). antigravity-cli = Antigravity (agy) sessions via the agy-hook adapter."
+      "enum": ["host_claude_code", "host_codex", "codex-cli", "claude-code", "claude-code-minimax", "host_subagent", "host_hearthloom", "antigravity-cli", "cron", "ingestor", "deerflow"],
+      "description": "The host-side agent runtime kind. host_claude_code = Claude Code top-level sessions; host_subagent = Claude Code dispatched subagents (ParentToolUseID present); host_hearthloom = hearth-loom orchestrated sessions; host_codex = Codex CLI agents. codex-cli / claude-code / claude-code-minimax are legacy values emitted by the codex-hook binary's detectAgentKind(). antigravity-cli = Antigravity (agy) sessions via the agy-hook adapter. cron = a scheduled job execution (session_id = the execution id); ingestor = a data-source fetch cycle; deerflow = a deer-flow run or subagent (session_id = thread:run)."
     },
     "agent_id": {
       "type": "string",

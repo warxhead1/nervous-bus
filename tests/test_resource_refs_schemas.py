@@ -129,3 +129,12 @@ def test_channels_md_documents_resource_refs():
     text = (SCHEMA_DIR / "CHANNELS.md").read_text()
     assert "## Resource refs" in text
     assert "`bus.work.assignment.v1`" in text
+
+
+@pytest.mark.parametrize("kind", ["cron", "ingestor", "deerflow"])
+def test_non_interactive_worker_kinds_validate(activity, kind):
+    assert activity.is_valid(dict(BASE_ACTIVITY, agent_kind=kind, event="ended"))
+
+
+def test_unknown_agent_kind_still_rejected(activity):
+    assert not activity.is_valid(dict(BASE_ACTIVITY, agent_kind="not-a-kind"))
