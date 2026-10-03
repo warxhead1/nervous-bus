@@ -4,7 +4,7 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**371 channels** across 5 clusters.
+**372 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
@@ -12,7 +12,7 @@ Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster
 | [Autobench](#autobench) | 54 | autobench.* evolution loop (case/judge/improver/budget/...) |
 | [Hearth](#hearth) | 53 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 201 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 202 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -279,6 +279,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `bus.tengine.wave.gate.pending.v1` | bus.tengine.wave.gate.pending v1 |
 | `bus.tengine.worktree.leakage.v1` | bus.tengine.worktree.leakage v1 |
 | `bus.triage.findings.v1` | bus.triage.findings v1 |
+| `bus.work.assignment.v1` | bus.work.assignment v1 |
 | `bus.workflow.agent.dispatch.v1` | Workflow agent dispatch |
 | `career-ops.application.submitted.v1` | career-ops.application.submitted v1 |
 | `career-ops.pipeline.added.v1` | career-ops.pipeline.added v1 |
@@ -419,6 +420,26 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `pulse.render.quality.v1` | pulse.render.quality v1 |
 | `shader.preadmit.evaluated.v1` | shader.preadmit.evaluated.v1 v1 |
 | `sys.log.entry.v1` | sys.log.entry v1 |
+
+## Resource refs
+
+A resource ref names a thing that work touches, as a `kind:id` string. Refs appear in the optional `resources` array of `bus.agent.activity.v1` (`[{"ref", "intent", "sha256"?}]`) and in `refs` / `scope` of `bus.work.assignment.v1`. The `kind` vocabulary is open; a ref is unique within its kind, names a thing and never a version of it, and never carries content.
+
+| kind | id | example |
+| --- | --- | --- |
+| `file` | absolute path | `file:/srv/work/app-lane-a/src/main.go` |
+| `repo` | `<repo>/<path-in-repo>`, independent of which checkout or worktree holds the file | `repo:app/src/main.go` |
+| `table` | `<db>.<schema>.<table>` | `table:shop.public.orders` |
+| `route` | `<service>/<route pattern>` | `route:api/v1/orders/{id}` |
+| `issue` | `<repo>#<n>` | `issue:app#42` |
+| `bead` | tracker id | `bead:bd-ab12` |
+| `branch` | `<repo>@<branch>` | `branch:app@feature-x` |
+| `channel` | bus channel | `channel:bus.agent.activity.v1` |
+| `cmd` | executable name, no arguments | `cmd:git` |
+
+`intent` is one of `read`, `write`, `exec`, `query`, `claim`. A path inside a git worktree may be emitted as both its `file:` ref and its `repo:` ref: two worktrees of one repository then collide on the same `repo:` ref even though their `file:` refs differ. Producers attach the optional `sha256` only when they already hold the content identity.
+
+Scope globs in an assignment are written in the same ref space (`repo:app/src/**`); a glob a producer cannot resolve is carried as written. Observers compare an activity's `write` refs against the assignment's `scope.write` globs.
 
 ## Retired channels (no schema file)
 

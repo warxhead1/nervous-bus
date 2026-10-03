@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.work.assignment.v1.json",
+  "title": "bus.work.assignment v1",
+  "description": "A unit of work handed to a worker, published once when it is handed out: who is assigned, by whom, what it refers to, and the declared scope. Pairs with bus.agent.activity.v1 resource touches so an observer can compare declared scope against actual touches. Producers must not infer `scope` from prose; absent or unparseable means null.",
+  "type": "object",
+  "required": [
+    "ts",
+    "assignment_id",
+    "worker",
+    "title",
+    "assigned_by"
+  ],
+  "properties": {
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC time the work was handed out."
+    },
+    "event": {
+      "type": "string",
+      "description": "Lifecycle verb; 'assigned' for the initial publication."
+    },
+    "assignment_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable id of the assignment, unique within its producer."
+    },
+    "worker": {
+      "type": "object",
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "Open vocabulary of worker kinds, e.g. 'claude-subagent', 'cron'."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Worker id within its kind."
+        }
+      },
+      "additionalProperties": true
+    },
+    "title": {
+      "type": "string",
+      "description": "Short human description of the work."
+    },
+    "assigned_by": {
+      "type": "string",
+      "description": "Id of the session or actor that handed the work out."
+    },
+    "refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_-]*:.+$"
+      },
+      "description": "Resource refs the assignment mentions, e.g. 'issue:repo#12'. Only references found verbatim in the assignment text."
+    },
+    "scope": {
+      "description": "Declared scope, or null when none was declared. Globs are in ref space where the producer could resolve them, otherwise carried as written.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "properties": {
+            "write": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              },
+              "description": "Globs the worker may write."
+            },
+            "read_hint": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              },
+              "description": "Globs the worker is expected to read; a hint, not a limit."
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "project": {
+      "type": "string"
+    },
+    "worktree": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "tool_name": {
+      "type": "string",
+      "description": "Dispatch mechanism, when the producer is an agent runtime."
+    },
+    "subagent_type": {
+      "type": "string"
+    },
+    "base": {
+      "type": "string",
+      "description": "Optional. The revision the work starts from."
+    },
+    "expected": {
+      "type": "object",
+      "description": "Optional expectations.",
+      "properties": {
+        "duration_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "deliverable": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
