@@ -155,6 +155,26 @@
       "type": "string",
       "description": "Optional. The `assignment_id` of the bus.work.assignment.v1 event this activity was performed under. Set only by producers that can establish the join; consumers must not assume its absence means the activity was unassigned."
     },
+    "parent_tool_use_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional. On host_subagent events, the tool_use_id of the Agent call that dispatched the subagent; equals that dispatch's bus.work.assignment.v1 assignment_id. Absent when the producer could not resolve it."
+    },
+    "subagent_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional. The runtime's own id for the subagent (Claude Code agent_id)."
+    },
+    "subagent_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional. The subagent's declared type."
+    },
+    "status": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional, on event=ended. Terminal outcome: completed, failed or cancelled; other producer values pass through unchanged."
+    },
     "progress": {
       "type": "object",
       "description": "Optional. Worker-reported progress. Set only when the producer actually knows it; consumers must not draw a bar without a numerator and denominator.",
