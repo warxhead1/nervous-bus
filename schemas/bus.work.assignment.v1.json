@@ -115,6 +115,11 @@
       "type": "string",
       "description": "Optional. The revision the work starts from."
     },
+    "schedule": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional. The recurrence of a scheduled worker as its scheduler writes it (e.g. a cron spec, optionally prefixed CRON_TZ=<zone>), so consumers can project the next run."
+    },
     "expected": {
       "type": "object",
       "description": "Optional expectations.",
