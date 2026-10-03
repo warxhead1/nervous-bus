@@ -211,6 +211,43 @@ RETIRED_NO_SCHEMA: list[tuple[str, str]] = [
     ),
 ]
 
+# Static documentation emitted into CHANNELS.md. Lives here, not in the
+# generated file, so regeneration cannot drop it.
+RESOURCE_REFS_SECTION: list[str] = [
+    "## Resource refs",
+    "",
+    "A resource ref names a thing that work touches, as a `kind:id` string. "
+    "Refs appear in the optional `resources` array of `bus.agent.activity.v1` "
+    "(`[{\"ref\", \"intent\", \"sha256\"?}]`) and in `refs` / `scope` of "
+    "`bus.work.assignment.v1`. The `kind` vocabulary is open; a ref is unique "
+    "within its kind, names a thing and never a version of it, and never "
+    "carries content.",
+    "",
+    "| kind | id | example |",
+    "| --- | --- | --- |",
+    "| `file` | absolute path | `file:/srv/work/app-lane-a/src/main.go` |",
+    "| `repo` | `<repo>/<path-in-repo>`, independent of which checkout or worktree holds the file | `repo:app/src/main.go` |",
+    "| `table` | `<db>.<schema>.<table>` | `table:shop.public.orders` |",
+    "| `route` | `<service>/<route pattern>` | `route:api/v1/orders/{id}` |",
+    "| `issue` | `<repo>#<n>` | `issue:app#42` |",
+    "| `bead` | tracker id | `bead:bd-ab12` |",
+    "| `branch` | `<repo>@<branch>` | `branch:app@feature-x` |",
+    "| `channel` | bus channel | `channel:bus.agent.activity.v1` |",
+    "| `cmd` | executable name, no arguments | `cmd:git` |",
+    "",
+    "`intent` is one of `read`, `write`, `exec`, `query`, `claim`. A path inside a "
+    "git worktree may be emitted as both its `file:` ref and its `repo:` ref: two "
+    "worktrees of one repository then collide on the same `repo:` ref even though "
+    "their `file:` refs differ. Producers attach the optional `sha256` only when "
+    "they already hold the content identity.",
+    "",
+    "Scope globs in an assignment are written in the same ref space "
+    "(`repo:app/src/**`); a glob a producer cannot resolve is carried as "
+    "written. Observers compare an activity's `write` refs against the "
+    "assignment's `scope.write` globs.",
+    "",
+]
+
 
 def main() -> int:
     schemas = sorted(SCHEMA_DIR.glob("*.json"))
@@ -271,6 +308,8 @@ def main() -> int:
                 desc_cell = f"{status_annotation(status)} — {desc_cell}"
             lines.append(f"| `{ch}`{flag} | {desc_cell} |")
         lines.append("")
+
+    lines.extend(RESOURCE_REFS_SECTION)
 
     # Retired channels with no schema file on disk. These can't come from the
     # SCHEMA_DIR.glob() walk above (there's no *.json to walk), so they're

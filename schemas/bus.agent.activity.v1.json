@@ -114,6 +114,69 @@
       "type": "string",
       "maxLength": 64,
       "description": "Short label for the error class (e.g. 'exit_code'), parsed from tool_response. Present only when tool_is_error is true."
+    },
+    "resources": {
+      "type": "array",
+      "description": "Optional. Resources this activity touched, as `kind:id` refs (see schemas/CHANNELS.md, 'Resource refs'). Refs, intents and content hashes only; never file contents or tool output. A path inside a git worktree may appear twice: once as the physical `file:` ref and once as the worktree-independent `repo:` ref, so touches from different worktrees of one repo share a ref. Absent when the producer cannot name what was touched.",
+      "items": {
+        "type": "object",
+        "required": [
+          "ref",
+          "intent"
+        ],
+        "properties": {
+          "ref": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*:.+$",
+            "maxLength": 1024,
+            "description": "Resource ref, `kind:id`. Names a thing, never a version of it."
+          },
+          "intent": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "exec",
+              "query",
+              "claim"
+            ],
+            "description": "How the activity used the resource."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Optional content identity of the resource as touched, when the producer already has it."
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "assignment_id": {
+      "type": "string",
+      "description": "Optional. The `assignment_id` of the bus.work.assignment.v1 event this activity was performed under. Set only by producers that can establish the join; consumers must not assume its absence means the activity was unassigned."
+    },
+    "progress": {
+      "type": "object",
+      "description": "Optional. Worker-reported progress. Set only when the producer actually knows it; consumers must not draw a bar without a numerator and denominator.",
+      "properties": {
+        "phase": {
+          "type": "string",
+          "description": "Current phase name."
+        },
+        "done": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unit": {
+          "type": "string",
+          "description": "What done/total count, e.g. 'modules'."
+        }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true
