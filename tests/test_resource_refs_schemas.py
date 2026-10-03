@@ -77,6 +77,9 @@ def test_activity_with_resources_progress_and_assignment_id(activity):
         {"resources": [{"ref": "file:/x", "intent": "read", "sha256": "short"}]},
         {"resources": "file:/x"},  # not an array
         {"progress": {"done": -1}},
+        {"parent_tool_use_id": ""},
+        {"status": ""},
+        {"subagent_id": 7},
     ],
 )
 def test_activity_rejects_malformed_additions(activity, bad):
@@ -141,3 +144,18 @@ def test_non_interactive_worker_kinds_validate(activity, kind):
 
 def test_unknown_agent_kind_still_rejected(activity):
     assert not activity.is_valid(dict(BASE_ACTIVITY, agent_kind="not-a-kind"))
+
+
+def test_subagent_ended_event_with_join_fields_valid(activity):
+    activity.validate(
+        {
+            **BASE_ACTIVITY,
+            "agent_kind": "host_subagent",
+            "event": "ended",
+            "parent_tool_use_id": "toolu_1",
+            "assignment_id": "toolu_1",
+            "subagent_id": "a1b2c3",
+            "subagent_type": "general-purpose",
+            "status": "completed",
+        }
+    )
