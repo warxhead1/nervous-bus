@@ -96,6 +96,7 @@ def test_assignment_full_valid(assignment):
             "refs": ["issue:app#42", "bead:bd-ab12"],
             "scope": {"write": ["repo:app/src/**"], "read_hint": ["repo:app/docs/**"]},
             "expected": {"duration_s": 600, "deliverable": "PR"},
+            "schedule": "CRON_TZ=America/New_York 0 30 9 * * 1-5",
         }
     )
 
@@ -110,6 +111,8 @@ def test_assignment_full_valid(assignment):
         {"worker": {"kind": "claude-subagent"}},
         {"assignment_id": ""},
         {"refs": ["not a ref"]},
+        {"schedule": ""},
+        {"schedule": 300},
     ],
 )
 def test_assignment_rejects_malformed(assignment, bad):
