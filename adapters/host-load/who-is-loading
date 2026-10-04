@@ -4,6 +4,7 @@
   who-is-loading                 sample 3s, print top projects + flagged inefficiencies
   who-is-loading --json          same, machine-readable
   who-is-loading --record        sample and append to the bounded history (timer entry point)
+  who-is-loading --record --emit  timer entry point: also publish finding transitions to the bus
   who-is-loading --html out.html [--hours 6]   render PSI + stacked per-project graphs from history
 
 Read-only: never signals, renices or reweights anything (game-priority-watch owns that).
@@ -31,6 +32,9 @@ def main(argv=None):
     ap.add_argument("--agents", action="store_true",
                     help="per-agent-session load (claude/codex/orca worktrees); with --hours N, from history")
     ap.add_argument("--who", metavar="TEXT", help="processes whose agent/project/command contains TEXT")
+    ap.add_argument("--emit", action="store_true",
+                    help="publish finding transitions to the bus (bus.host.load.finding.v1; critical also notifies)")
+    ap.add_argument("--emit-dry-run", action="store_true", help="like --emit but print instead of publishing")
     ap.add_argument("--db", default=str(hl_store.DEFAULT_DB))
     ap.add_argument("--retention-days", type=int, default=7)
     args = ap.parse_args(argv)
@@ -54,6 +58,9 @@ def main(argv=None):
     s = hl_store.sample(interval=args.interval, prev=hist.load_snapshot() if hist else None)
     if hist:
         hist.record(s, args.retention_days)
+    if args.emit or args.emit_dry_run:
+        import hl_emit
+        hl_emit.Emitter(dry_run=args.emit_dry_run).process(s["findings"], s["ts"])
     if args.agents:
         print(json.dumps(s["agents"], indent=1, default=str) if args.json else hl_render.render_agents(s["agents"], 30))
         return 0

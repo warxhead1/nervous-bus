@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.host.load.finding.v1.json",
+  "title": "bus.host.load.finding v1",
+  "description": "A wasted-load finding from the host-load adapter (who-is-loading --emit): orphaned shell spin loops, stale-cwd processes, pure CPU loops, duplicate builds, memory pressure with its paging causes, CPU pressure. Attributed to a project and, where the process tree or cwd allows, to the agent session (claude/codex/orca worktree) that owns it. Emitted ONLY on level transitions (ok to warn to critical and recovery) after the finding has persisted for two consecutive samples, plus a bounded re-reminder for sustained findings; never per sample. Critical orphan/memory findings additionally fan out a bus.notify.v1. Motivating incident (2026-10-03): 128 `sh -c 'while :; do :; done'` orphans in one agent worktree burned the host for hours and nothing named the agent. Read-only: the adapter never signals, renices or reweights anything; game-priority-watch owns policy.",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "datacontenttype", "time", "data"],
+  "properties": {
+    "specversion": {"type": "string", "const": "1.0"},
+    "id": {"type": "string"},
+    "source": {"type": "string"},
+    "type": {"type": "string", "const": "bus.host.load.finding.v1"},
+    "datacontenttype": {"type": "string", "const": "application/json"},
+    "time": {"type": "string", "format": "date-time"},
+    "data": {
+      "type": "object",
+      "required": ["host", "kind", "key", "level", "prev_level", "project", "summary", "ts"],
+      "properties": {
+        "host": {"type": "string", "minLength": 1, "description": "Hostname the sample was taken on."},
+        "kind": {
+          "type": "string",
+          "enum": ["orphan_cpu", "stale_cwd", "cpu_loop", "duplicate_build", "memory_pressure", "cpu_pressure"],
+          "description": "Detector that produced the finding."
+        },
+        "key": {"type": "string", "minLength": 1, "description": "Stable identity of the condition across samples (kind:project:signature)."},
+        "level": {"type": "string", "enum": ["ok", "warn", "critical"], "description": "Level after this transition; ok is a recovery."},
+        "prev_level": {"type": "string", "enum": ["ok", "warn", "critical", "unknown"]},
+        "project": {"type": "string", "minLength": 1, "description": "Attributed project (docker compose label, repo/worktree owner, unit:<name>, kernel, unknown)."},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 200},
+        "ts": {"type": "string", "format": "date-time"},
+        "cpu_cores": {"type": "number", "minimum": 0, "description": "CPU the finding's processes are burning, in cores."},
+        "rss_bytes": {"type": "integer", "minimum": 0},
+        "count": {"type": "integer", "minimum": 0, "description": "Number of processes in the finding."},
+        "pids": {"type": "array", "items": {"type": "integer"}, "maxItems": 8, "description": "Largest members, capped."},
+        "agents": {
+          "type": "array",
+          "maxItems": 5,
+          "description": "Agent sessions that own the processes, most processes first. agent is `<project>/<worktree>` when a worktree is known, `<claude|codex>@<project>#<pid>` for an interactive session, or `orca:<id>`.",
+          "items": {
+            "type": "object",
+            "required": ["agent", "count"],
+            "properties": {"agent": {"type": "string"}, "count": {"type": "integer", "minimum": 0}}
+          }
+        },
+        "evidence": {"type": "object", "description": "Detector evidence (scrubbed command, cwd, paging causes). Shape varies by kind."}
+      }
+    }
+  }
+}

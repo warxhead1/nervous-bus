@@ -4,7 +4,7 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**372 channels** across 5 clusters.
+**373 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
@@ -12,7 +12,7 @@ Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster
 | [Autobench](#autobench) | 54 | autobench.* evolution loop (case/judge/improver/budget/...) |
 | [Hearth](#hearth) | 53 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 202 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 203 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -238,6 +238,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `bus.gamedev.progress.v2` | bus.gamedev.progress.v2 |
 | `bus.github.issue.v1` | bus.github.issue v1 |
 | `bus.hearth-loom.ac.verified.v1` | bus.hearth-loom.ac.verified v1 |
+| `bus.host.load.finding.v1` | bus.host.load.finding v1 |
 | `bus.intrinsic.marker.v1` | bus.intrinsic.marker v1 |
 | `bus.maintenance.pr.v1` | bus.maintenance.pr v1 |
 | `bus.notify.v1` | bus.notify v1 |
