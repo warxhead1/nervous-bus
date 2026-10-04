@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""who-is-loading — which project is burning this host's CPU/memory, and who is wasting it.
+
+  who-is-loading                 sample 3s, print top projects + flagged inefficiencies
+  who-is-loading --json          same, machine-readable
+  who-is-loading --record        sample and append to the bounded history (timer entry point)
+  who-is-loading --html out.html [--hours 6]   render PSI + stacked per-project graphs from history
+
+Read-only: never signals, renices or reweights anything (game-priority-watch owns that).
+"""
+import argparse
+import json
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+
+import hl_render  # noqa: E402
+import hl_store  # noqa: E402
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--interval", type=float, default=3.0, help="sample window seconds")
+    ap.add_argument("--top", type=int, default=8)
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--record", action="store_true", help="append this sample to history")
+    ap.add_argument("--html", metavar="PATH", help="write the graph page from history and exit")
+    ap.add_argument("--hours", type=float, default=6.0)
+    ap.add_argument("--db", default=str(hl_store.DEFAULT_DB))
+    ap.add_argument("--retention-days", type=int, default=7)
+    args = ap.parse_args(argv)
+
+    if args.html:
+        h = hl_store.History(args.db)
+        since = time.time() - args.hours * 3600
+        page = hl_render.render_html(h.psi_series(since), h.project_series(since),
+                                     h.recent_findings(since), args.hours)
+        with open(args.html, "w") as fh:
+            fh.write(page)
+        print(args.html)
+        return 0
+
+    s = hl_store.sample(interval=args.interval)
+    if args.record:
+        hl_store.History(args.db).record(s, args.retention_days)
+    if args.json:
+        json.dump(s, sys.stdout, indent=1, default=str)
+        print()
+    else:
+        print(hl_render.render_text(s, args.top))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
