@@ -259,7 +259,7 @@ class TestOtherDetectors(Base):
     def test_swap_pressure_attributes_held_swap_by_project(self):
         self.fp.add(10, "big", ppid=1145, cwd="/home/eric/projects/hog", swap_kb=8_000_000)
         self.fp.add(11, "kswapd0", ppid=2, argv=[], uid=0)
-        self.fp.set_psi(mem10=3)
+        self.fp.set_psi(mem10=12)
 
         def sleep(s):
             self.fp.set_vm(0, 5000)

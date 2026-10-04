@@ -6,6 +6,14 @@
   who-is-loading --record        sample and append to the bounded history (timer entry point)
   who-is-loading --record --emit  timer entry point: also publish finding transitions to the bus
   who-is-loading --html out.html [--hours 6]   render PSI + stacked per-project graphs from history
+  who-is-loading --agents [--hours N]   per agent session (claude/codex/orca worktree) load and orphans
+  who-is-loading --who TEXT      every process whose agent/project/command contains TEXT
+  who-is-loading --tune [--hours N]   history distributions and the fire rate of each pressure threshold
+
+CPU: NOW is the short sample window; AVG integrates every process (pid+starttime, children included)
+over the whole gap since the previous --record run, and `coverage` is the share of host busy CPU that
+the scan explained. Per-process read_bytes is disk reads, not swap; swap churn is attributed through
+major faults and cgroup workingset_refault_anon.
 
 Read-only: never signals, renices or reweights anything (game-priority-watch owns that).
 """
@@ -35,11 +43,18 @@ def main(argv=None):
     ap.add_argument("--emit", action="store_true",
                     help="publish finding transitions to the bus (bus.host.load.finding.v1; critical also notifies)")
     ap.add_argument("--emit-dry-run", action="store_true", help="like --emit but print instead of publishing")
+    ap.add_argument("--tune", action="store_true",
+                    help="print recorded-history distributions and each pressure threshold's fire rate")
     ap.add_argument("--db", default=str(hl_store.DEFAULT_DB))
     ap.add_argument("--retention-days", type=int, default=7)
     args = ap.parse_args(argv)
 
     hours = args.hours or 6.0
+    if args.tune:
+        import hl_tune
+        res = hl_tune.analyse(hl_tune.load(args.db, time.time() - args.hours * 3600 if args.hours else 0.0))
+        print(json.dumps(res, indent=1) if args.json else hl_tune.render(res))
+        return 0
     if args.html:
         h = hl_store.History(args.db)
         since = time.time() - hours * 3600

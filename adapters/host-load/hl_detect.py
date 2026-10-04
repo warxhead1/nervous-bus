@@ -15,10 +15,10 @@ DEFAULTS = {
     "loop_min_cores": 0.8,
     "loop_min_age_s": 600,
     "loop_max_io_bytes": 65536,    # rchar+wchar growth over the window
-    "swap_pages_per_s": 200,
-    "kswapd_cores": 0.05,
+    "swap_pages_per_s": 33000,
+    "kswapd_cores": 0.7,
     "mem_psi_some10": 10.0,
-    "cpu_psi_some60": 50.0,
+    "cpu_psi_some60": 67.0,
     "stale_rss_bytes": 256 * 1024 * 1024,
     "max_pids": 8,
 }
