@@ -27,25 +27,39 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--record", action="store_true", help="append this sample to history")
     ap.add_argument("--html", metavar="PATH", help="write the graph page from history and exit")
-    ap.add_argument("--hours", type=float, default=6.0)
+    ap.add_argument("--hours", type=float, default=None, help="history window for --html / --agents (default 6)")
+    ap.add_argument("--agents", action="store_true",
+                    help="per-agent-session load (claude/codex/orca worktrees); with --hours N, from history")
+    ap.add_argument("--who", metavar="TEXT", help="processes whose agent/project/command contains TEXT")
     ap.add_argument("--db", default=str(hl_store.DEFAULT_DB))
     ap.add_argument("--retention-days", type=int, default=7)
     args = ap.parse_args(argv)
 
+    hours = args.hours or 6.0
     if args.html:
         h = hl_store.History(args.db)
-        since = time.time() - args.hours * 3600
+        since = time.time() - hours * 3600
         page = hl_render.render_html(h.psi_series(since), h.project_series(since),
-                                     h.recent_findings(since), args.hours)
+                                     h.recent_findings(since), hours)
         with open(args.html, "w") as fh:
             fh.write(page)
         print(args.html)
         return 0
 
+    if args.agents and args.hours:
+        rows = hl_store.History(args.db).agent_totals(time.time() - hours * 3600)
+        print(hl_render.render_agent_history(rows))
+        return 0
     hist = hl_store.History(args.db) if args.record else None
     s = hl_store.sample(interval=args.interval, prev=hist.load_snapshot() if hist else None)
     if hist:
         hist.record(s, args.retention_days)
+    if args.agents:
+        print(json.dumps(s["agents"], indent=1, default=str) if args.json else hl_render.render_agents(s["agents"], 30))
+        return 0
+    if args.who:
+        print(hl_render.render_who(s, args.who))
+        return 0
     if args.json:
         json.dump(hl_store.public(s), sys.stdout, indent=1, default=str)
         print()

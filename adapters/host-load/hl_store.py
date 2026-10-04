@@ -7,6 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import hl_detect
+import hl_agents
 import hl_interval
 import hl_paging
 import hl_procs
@@ -27,7 +28,7 @@ def uptime(proc_root):
 
 def sample(proc_root="/proc", psi_root=None, interval=3.0, docker=None, sleep=time.sleep,
            cfg=None, exists=os.path.exists, prev=None, now=time.time, inspect=None, service_probe=None,
-           cg_root=None):
+           cg_root=None, env_reader=None):
     """Two scans `interval` apart. `cores` is the mean over that window ("instant"); `cores_int`
     is the mean over the whole gap since the `prev` snapshot (None without one). RSS/swap are the 2nd scan."""
     psi_root = psi_root or os.path.join(proc_root, "pressure")
@@ -47,6 +48,8 @@ def sample(proc_root="/proc", psi_root=None, interval=3.0, docker=None, sleep=ti
     elif inspect is None:
         inspect = _no_inspect          # a caller that supplied the container map gets no docker calls
     hl_procs.attribute(after, docker, inspect)
+    env_reader = env_reader or (lambda pid: hl_agents.read_env(pid, proc_root))
+    agent_info = hl_agents.assign(after, env_reader)
     cores = hl_procs.cpu_deltas(before, after, wall)
     majflt_s = {pid: max(0, p.majflt - before[pid].majflt) / wall for pid, p in after.items()
                 if pid in before and before[pid].key == p.key}
@@ -90,11 +93,18 @@ def sample(proc_root="/proc", psi_root=None, interval=3.0, docker=None, sleep=ti
     findings = hl_detect.detect(after, cores, io_delta, up, mem1, mem0, wall, psi,
                                 {k: v["cores"] for k, v in projects.items()}, cfg, exists,
                                 probe=service_probe, notes=notes, paging=paging)
+    flagged = {pid for f in findings for pid in f.get("pids", [])}
+    hl_agents.enrich(after, agent_info, flagged, env_reader)
+    for f in findings:
+        f["agents"] = f["evidence"].get("agents") or hl_agents.retally(f, after)
+    agents = hl_agents.summarize(
+        after, agent_info, cores, {pid: v["cores"] for pid, v in integ.items()} if integ is not None else None)
     return {"ts": ts, "wall_s": round(wall, 3), "psi": psi, "mem": mem1,
             "projects": dict(projects), "findings": findings, "nprocs": len(after),
             "unknown_share": _unknown_share(projects), "unknown": unknown_detail(after, cores), "interval": integ_info,
-            "excused_services": notes.get("excused", []), "paging": paging,
-            "_procs": after,
+            "excused_services": notes.get("excused", []), "paging": paging, "agents": agents[:25],
+            "_procs": after, "_cores": cores,
+            "_cores_int": {pid: v["cores"] for pid, v in integ.items()} if integ is not None else {},
             "_snapshot": {**hl_interval.snapshot(after, ts, up, boot, busy), "cg": cg1,
                           "vm": {k: mem1.get(k, 0) for k in ("pswpin", "pswpout", "pgmajfault")}}}
 
@@ -147,6 +157,9 @@ class History:
         CREATE TABLE IF NOT EXISTS proc_snapshot (pid INTEGER, start_ticks INTEGER, cpu_ticks INTEGER,
           majflt INTEGER, read_bytes INTEGER, project TEXT, agent TEXT, child_ticks INTEGER DEFAULT 0, ppid INTEGER DEFAULT 0,
           PRIMARY KEY(pid, start_ticks));
+        CREATE TABLE IF NOT EXISTS agent (ts REAL NOT NULL, agent TEXT NOT NULL, kinds TEXT, cores REAL,
+          cores_int REAL, rss INTEGER, nproc INTEGER, orphans INTEGER, PRIMARY KEY(ts, agent));
+        CREATE INDEX IF NOT EXISTS agent_ts ON agent(ts);
         CREATE TABLE IF NOT EXISTS cg_snapshot (path TEXT PRIMARY KEY, pgmajfault INTEGER, refault_anon INTEGER,
           refault_file INTEGER, high INTEGER, mem_current INTEGER, swap_current INTEGER);
         CREATE TABLE IF NOT EXISTS vm_snapshot (id INTEGER PRIMARY KEY CHECK (id=1), pswpin INTEGER,
@@ -189,6 +202,11 @@ class History:
                 self.db.execute("INSERT INTO finding VALUES (?,?,?,?,?,?,?,?)", (
                     ts, f["kind"], f["severity"], f["project"], f["summary"], f["cpu_cores"],
                     f["rss_bytes"], json.dumps(f["evidence"], default=str)))
+            for a in s.get("agents", []):
+                if a["cores"] >= MIN_CORES or a["orphans"] or (a["cores_int"] or 0) >= MIN_CORES:
+                    self.db.execute("INSERT OR REPLACE INTO agent VALUES (?,?,?,?,?,?,?,?)", (
+                        ts, a["agent"], ",".join(a["kinds"]), a["cores"], a["cores_int"], a["rss"],
+                        a["nproc"], a["orphans"]))
             iv = s.get("interval") or {}
             unk = s["projects"].get("unknown", {})
             self.db.execute("INSERT OR REPLACE INTO interval_stat VALUES (?,?,?,?,?,?,?,?,?,?)", (
@@ -198,7 +216,7 @@ class History:
             if s.get("_snapshot"):
                 self.save_snapshot(s["_snapshot"], s.get("_procs") or {})
             cut = time.time() - retention_days * 86400
-            for t in ("psi", "project", "finding", "interval_stat"):
+            for t in ("psi", "project", "finding", "interval_stat", "agent"):
                 self.db.execute(f"DELETE FROM {t} WHERE ts < ?", (cut,))
 
     def save_snapshot(self, snap, procs):
@@ -249,6 +267,15 @@ class History:
             use = ci if (prefer_interval and ci is not None) else cores
             out[name].append((ts, use or 0.0, rss or 0))
         return dict(out)
+
+    def agent_totals(self, since, limit=15):
+        """Agents ranked by core-seconds (sum of per-sample cores x 60s cadence) over the window."""
+        cur = self.db.execute(
+            "SELECT agent, GROUP_CONCAT(DISTINCT kinds), SUM(COALESCE(cores_int, cores)), MAX(COALESCE(cores_int, cores)),"
+            " MAX(rss), MAX(orphans), COUNT(*), MIN(ts), MAX(ts) FROM agent WHERE ts>=? GROUP BY agent"
+            " ORDER BY 3 DESC LIMIT ?", (since, limit))
+        keys = ("agent", "kinds", "core_samples", "peak_cores", "peak_rss", "peak_orphans", "samples", "first", "last")
+        return [dict(zip(keys, r)) for r in cur]
 
     def latest(self):
         """Newest recorded sample as {"ts", "projects": {name: row}} or None."""

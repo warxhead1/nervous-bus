@@ -41,7 +41,9 @@ def render_text(s, top=8):
         avg = f"{r['cores_int']:6.2f}" if r.get("cores_int") is not None else f"{'-':>6}"
         lines.append(f"  {name[:34]:34} {r['cores']:6.2f} {avg} {human(r['rss']):>8} "
                      f"{human(r.get('anon', 0)):>8} {human(r['swap']):>8} {r['nproc']:6d}  {tops}")
-    if s.get("unknown_share"):
+    if s.get("agents"):
+        lines += ["", "  agent sessions:", render_agents(s["agents"], 6)]
+    if s.get("unknown_share") or (s.get("unknown") or {}).get("nproc"):
         u = s.get("unknown") or {}
         lines.append(f"  unknown (no cwd/cmdline/cgroup match) = {s['unknown_share']*100:.0f}% of sampled cpu"
                      + (f", {u['nproc']} procs, {human(u['rss'])} rss: {', '.join(u['comms'])}" if u else ""))
@@ -55,8 +57,52 @@ def render_text(s, top=8):
     lines += ["", "  flagged:" if s["findings"] else "  flagged: nothing"]
     for f in s["findings"]:
         lines.append(f"  [{f['severity']:4}] {f['kind']:15} {f['project']}: {f['summary']}")
+        if f.get("agents"):
+            lines.append("         agent " + ", ".join(f"{a['agent']} ({a['count']})" for a in f["agents"][:3]))
         if f["pids"]:
             lines.append(f"         pids {f['pids']}")
+        causes = f["evidence"].get("causes") if f["kind"] == "memory_pressure" else None
+        if causes:
+            lines.append("         paging caused by: " + "; ".join(
+                f"{x['comm']}:{x['pid']} {x['majflt_s']:.0f} maj/s" for x in causes["faulting_processes"][:3])
+                + (" | thrashing units: " + ", ".join(
+                    f"{u['unit']} {u['refault_anon_s']:.0f}/s" for u in causes["thrashing_units"][:3])
+                   if causes["thrashing_units"] else ""))
+    return "\n".join(lines)
+
+
+def render_agents(agents, top=12):
+    lines = [f"  {'AGENT SESSION':70} {'NOW':>6} {'AVG':>6} {'RSS':>8} {'PROCS':>5} {'ORPH':>4}  KIND  BASIS"]
+    for a in agents[:top]:
+        avg = f"{a['cores_int']:6.2f}" if a.get("cores_int") is not None else f"{'-':>6}"
+        lines.append(f"  {a['agent'][:70]:70} {a['cores']:6.2f} {avg} {human(a['rss']):>8} {a['nproc']:5d} "
+                     f"{a['orphans']:4d}  {','.join(a['kinds']) or '-':6} {','.join(a['basis'])}")
+    return "\n".join(lines) if len(lines) > 1 else "  no agent sessions found"
+
+
+def render_agent_history(rows):
+    lines = [f"  {'AGENT SESSION':70} {'CORE-MIN':>9} {'PEAK':>6} {'PEAK RSS':>9} {'ORPH':>4}  LAST SEEN"]
+    for r in rows:
+        lines.append(f"  {r['agent'][:70]:70} {(r['core_samples'] or 0):9.1f} {(r['peak_cores'] or 0):6.2f} "
+                     f"{human(r['peak_rss'] or 0):>9} {r['peak_orphans'] or 0:4d}  "
+                     f"{time.strftime('%m-%d %H:%M', time.localtime(r['last']))}")
+    return "\n".join(lines) if len(lines) > 1 else "  no agent history in window"
+
+
+def render_who(s, needle, limit=40):
+    """Processes whose agent, project, comm or command contains `needle`, busiest first."""
+    from hl_detect import cmd_text
+    cores, cint = s.get("_cores", {}), s.get("_cores_int", {})
+    needle = needle.lower()
+    rows = []
+    for p in s["_procs"].values():
+        hay = " ".join([p.agent, p.project, p.comm, p.cwd] + p.cmdline[:8]).lower()
+        if needle in hay:
+            rows.append((cint.get(p.pid, cores.get(p.pid, 0.0)), p))
+    rows.sort(key=lambda r: (-r[0], -r[1].rss_bytes))
+    lines = [f"  {len(rows)} process(es) match {needle!r}", f"  {'PID':>8} {'PPID':>8} {'CORES':>6} {'RSS':>7}  AGENT / COMMAND"]
+    for c, p in rows[:limit]:
+        lines.append(f"  {p.pid:8d} {p.ppid:8d} {c:6.2f} {human(p.rss_bytes):>7}  [{p.agent or '-'}] {cmd_text(p)}")
     return "\n".join(lines)
 
 

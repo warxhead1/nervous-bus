@@ -47,6 +47,8 @@ class Proc:
     anon_bytes: int = -1      # RssAnon from status, -1 when absent
     cgroup_path: str = ""     # full cgroup v2 path
     child_ticks: int = 0      # cutime+cstime: CPU of already-reaped children, folded in on wait()
+    agent: str = ""           # agent session key (hl_agents), "" when none
+    agent_basis: str = ""
 
     @property
     def key(self):

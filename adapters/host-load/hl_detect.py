@@ -33,6 +33,13 @@ def _pids(ps, cfg):
 
 
 def _finding(kind, severity, project, summary, ps, cores, evidence, cfg):
+    tally = defaultdict(int)
+    for p in ps:
+        if getattr(p, "agent", ""):
+            tally[p.agent] += 1
+    if tally:
+        evidence = {**evidence, "agents": [{"agent": a, "count": n} for a, n in
+                                           sorted(tally.items(), key=lambda kv: -kv[1])[:5]]}
     return {"kind": kind, "severity": severity, "project": project, "summary": summary,
             "count": len(ps), "cpu_cores": round(sum(cores.get(p.pid, 0.0) for p in ps), 3),
             "rss_bytes": sum(p.rss_bytes for p in ps), "pids": _pids(ps, cfg), "evidence": evidence}
