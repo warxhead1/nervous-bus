@@ -8,6 +8,7 @@ from pathlib import Path
 
 import hl_detect
 import hl_agents
+import hl_gpw
 import hl_interval
 import hl_paging
 import hl_procs
@@ -28,7 +29,7 @@ def uptime(proc_root):
 
 def sample(proc_root="/proc", psi_root=None, interval=3.0, docker=None, sleep=time.sleep,
            cfg=None, exists=os.path.exists, prev=None, now=time.time, inspect=None, service_probe=None,
-           cg_root=None, env_reader=None):
+           cg_root=None, env_reader=None, priority=None):
     """Two scans `interval` apart. `cores` is the mean over that window ("instant"); `cores_int`
     is the mean over the whole gap since the `prev` snapshot (None without one). RSS/swap are the 2nd scan."""
     psi_root = psi_root or os.path.join(proc_root, "pressure")
@@ -99,10 +100,13 @@ def sample(proc_root="/proc", psi_root=None, interval=3.0, docker=None, sleep=ti
         f["agents"] = f["evidence"].get("agents") or hl_agents.retally(f, after)
     agents = hl_agents.summarize(
         after, agent_info, cores, {pid: v["cores"] for pid, v in integ.items()} if integ is not None else None)
+    top_projects = {k for k, v in sorted(projects.items(), key=lambda kv: (-kv[1]["cores"], -kv[1]["rss"]))[:25]}
+    if priority is None and proc_root == "/proc":
+        priority = lambda: hl_gpw.annotate(after, top_projects)  # noqa: E731
     return {"ts": ts, "wall_s": round(wall, 3), "psi": psi, "mem": mem1,
             "projects": dict(projects), "findings": findings, "nprocs": len(after),
             "unknown_share": _unknown_share(projects), "unknown": unknown_detail(after, cores), "interval": integ_info,
-            "excused_services": notes.get("excused", []), "paging": paging, "agents": agents[:25],
+            "excused_services": notes.get("excused", []), "paging": paging, "agents": agents[:25], "priority": priority() if priority else None,
             "_procs": after, "_cores": cores,
             "_cores_int": {pid: v["cores"] for pid, v in integ.items()} if integ is not None else {},
             "_snapshot": {**hl_interval.snapshot(after, ts, up, boot, busy), "cg": cg1,

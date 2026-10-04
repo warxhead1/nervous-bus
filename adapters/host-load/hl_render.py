@@ -1,5 +1,7 @@
 """Text, sparkline and self-contained HTML/SVG rendering of host-load results."""
 import html
+
+import hl_gpw
 import time
 from collections import defaultdict
 
@@ -34,13 +36,18 @@ def render_text(s, top=8):
                  psi.get("cpu_some_avg10", 0), psi.get("cpu_some_avg60", 0),
                  psi.get("memory_some_avg10", 0), psi.get("memory_some_avg60", 0),
                  psi.get("io_some_avg10", 0), psi.get("io_some_avg60", 0)),
-             "", f"  {'PROJECT':34} {'NOW':>6} {'AVG':>6} {'RSS':>8} {'ANON':>8} {'SWAP':>8} {'PROCS':>6}  TOP"]
+             "", f"  {'PROJECT':34} {'NOW':>6} {'AVG':>6} {'RSS':>8} {'ANON':>8} {'SWAP':>8} {'PROCS':>6}  {'POLICY':13} TOP"]
+    pol = (s.get("priority") or {})
+    if pol:
+        m = pol["mode"]
+        lines.insert(2, f"  game-priority-watch: {m['mode']} {m['detail'][:90]}  (read-only view; it owns CPUWeight)")
     rows = sorted(s["projects"].items(), key=lambda kv: (-kv[1]["cores"], -kv[1]["rss"]))[:top]
     for name, r in rows:
         tops = ", ".join(f"{t['comm']}:{t['pid']}" for t in r["top"] if t["cores"] > 0.01)
         avg = f"{r['cores_int']:6.2f}" if r.get("cores_int") is not None else f"{'-':>6}"
         lines.append(f"  {name[:34]:34} {r['cores']:6.2f} {avg} {human(r['rss']):>8} "
-                     f"{human(r.get('anon', 0)):>8} {human(r['swap']):>8} {r['nproc']:6d}  {tops}")
+                     f"{human(r.get('anon', 0)):>8} {human(r['swap']):>8} {r['nproc']:6d}  "
+                     f"{hl_gpw.label((pol.get('projects') or {}).get(name)):13} {tops}")
     if s.get("agents"):
         lines += ["", "  agent sessions:", render_agents(s["agents"], 6)]
     if s.get("unknown_share") or (s.get("unknown") or {}).get("nproc"):
