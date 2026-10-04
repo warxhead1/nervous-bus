@@ -1,0 +1,17 @@
+[Unit]
+Description=nervous-bus per-project host load attribution sample (read-only)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/projects/nervous-bus/adapters/host-load/who-is-loading --record --interval 5
+Environment=PYTHONDONTWRITEBYTECODE=1
+NoNewPrivileges=true
+ProtectHome=read-only
+ReadWritePaths=%h/.cache/nervous-bus
+CPUQuota=15%
+MemoryMax=192M
+IOWeight=20
+Nice=10
+TimeoutStartSec=45s
+UMask=0077
+SyslogIdentifier=nervous-host-load

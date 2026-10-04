@@ -6,6 +6,7 @@ Tabs (press key to switch):
   2  sysmap  — containers, runners, GPU, host vitals grouped by project
   3  agents  — active Claude Code / opencode sessions
   4  loomies — hearth-loom agent state
+  5  load    — host PSI + CPU/RSS by project + flagged inefficiencies (adapters/host-load)
 
 Source: tail-follow ~/.cache/nervous-bus/debug.jsonl with inode-rotation
 detect so log rotation doesn't strand the dashboard.
@@ -1028,7 +1029,7 @@ def panel_footer(state: State, tick_s: float, current_tab: int = 1) -> Panel:
     uptime = int(time.time() - state.started_at)
     up_str = f"{uptime//3600}h{(uptime%3600)//60:02d}m" if uptime >= 3600 else f"{uptime//60:02d}m{uptime%60:02d}s"
 
-    TABS = [(1, "bus"), (2, "sysmap"), (3, "agents"), (4, "loomies")]
+    TABS = [(1, "bus"), (2, "sysmap"), (3, "agents"), (4, "loomies"), (5, "load")]
     tab_text = Text()
     for num, name in TABS:
         if num == current_tab:
@@ -1164,6 +1165,16 @@ def build_layout(state: State, tick_s: float, current_tab: int = 1) -> Layout:
             pass
         return sm_layout
 
+    if current_tab == 5:
+        try:
+            import cc_hostload
+            ld = cc_hostload.build_load_layout()
+            ld["footer"].update(panel_footer(state, tick_s, current_tab))
+            return ld
+        except Exception as exc:  # history missing/corrupt must not kill the dashboard
+            err = Layout(Panel(f"load tab unavailable: {exc}", border_style="red"))
+            return err
+
     # Tabs 1 / 3 / 4 — bus view (agents+loomies not yet embedded, fall through to bus)
     layout = Layout()
     layout.split_column(
@@ -1209,8 +1220,8 @@ def main() -> int:
     p.add_argument("--schemas", type=Path, default=DEFAULT_SCHEMAS_DIR,
                    help=f"schemas/ dir for silent-channel detection "
                         f"(default: {DEFAULT_SCHEMAS_DIR}; pass empty/missing path to disable)")
-    p.add_argument("--tab", type=int, default=1, choices=[1, 2, 3, 4],
-                   help="start on tab N (1=bus 2=sysmap 3=agents 4=loomies)")
+    p.add_argument("--tab", type=int, default=1, choices=[1, 2, 3, 4, 5],
+                   help="start on tab N (1=bus 2=sysmap 3=agents 4=loomies 5=load)")
     args = p.parse_args()
 
     # Apply tunables to module globals so existing code paths pick them up.
@@ -1281,7 +1292,7 @@ def main() -> int:
                     if ch in ("q", "\x03"):       # q / Ctrl+C
                         quit_flag.set()
                         break
-                    if ch in ("1", "2", "3", "4"):
+                    if ch in ("1", "2", "3", "4", "5"):
                         with _key_lock:
                             current_tab = int(ch)
                     # m9d keybinds
