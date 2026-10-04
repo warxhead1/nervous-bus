@@ -215,7 +215,7 @@ class History:
             unk = s["projects"].get("unknown", {})
             self.db.execute("INSERT OR REPLACE INTO interval_stat VALUES (?,?,?,?,?,?,?,?,?,?)", (
                 ts, iv.get("interval_s"), iv.get("observed_cores"), iv.get("system_busy_cores"),
-                iv.get("coverage"), iv.get("unattributed_cores"), unk.get("cores"), unk.get("nproc"),
+                iv.get("coverage"), iv.get("unattributed_cores"), unk.get("cores", 0.0), unk.get("nproc", 0),
                 (s.get("paging") or {}).get("swap_in_pages_s"), (s.get("paging") or {}).get("swap_out_pages_s")))
             if s.get("_snapshot"):
                 self.save_snapshot(s["_snapshot"], s.get("_procs") or {})

@@ -1,0 +1,39 @@
+groups:
+  - name: nervous-bus-host-load
+    interval: 60s
+    rules:
+      - alert: HostLoadSamplerDown
+        expr: nbus_host_load_up == 0
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "host-load sampler has not recorded in 5+ minutes (systemctl --user status host-load.timer)"
+
+      - alert: HostLoadOrphanProcesses
+        expr: max by (agent) (nbus_host_load_agent_orphan_processes) > 8
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.agent }} has {{ $value }} processes reparented to systemd (leaked loop or build?)"
+          runbook: "who-is-loading --who '{{ $labels.agent }}'"
+
+      - alert: HostLoadCriticalFinding
+        expr: sum by (kind, project) (nbus_host_load_findings{severity="crit"}) > 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.kind }} critical finding in {{ $labels.project }} (who-is-loading for detail)"
+
+      - alert: HostLoadSwapThrash
+        expr: nbus_host_load_swap_in_pages_per_second > 2000 and nbus_host_load_psi_some_avg10_percent{resource="memory"} > 10
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "swap-in {{ $value }} pages/s with memory stalls; see nbus_host_load_project_major_faults_per_second for who is paging"
+
+      - alert: HostLoadAttributionBlind
+        expr: nbus_host_load_cpu_coverage_ratio < 0.6
+        for: 15m
+        labels: {severity: info}
+        annotations:
+          summary: "host-load explains under 60% of busy CPU; short-lived processes are escaping the scan"

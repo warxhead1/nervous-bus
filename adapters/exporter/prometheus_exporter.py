@@ -39,6 +39,11 @@ from typing import Deque, Dict, List, Optional, Tuple
 
 import redis
 
+try:
+    from . import hostload_metrics
+except ImportError:          # run as a script: sibling module
+    import hostload_metrics
+
 # ── Valkey defaults ───────────────────────────────────────────────────────────
 VALKEY_URL = "redis://localhost:6379"
 UNIVERSAL_STREAM = "nbus:all"
@@ -132,6 +137,7 @@ class MetricRegistry:
             self._backend = "prometheus_client"
         else:
             self._text_registry = _TextRegistry()
+            self._text_extras: list = []
             self._backend = "text"
 
     def _new_counter(self, name: str, help_text: str, labelnames: List[str]):
@@ -148,10 +154,18 @@ class MetricRegistry:
         self._text_registry.register(m)
         return _TextGaugeAdapter(m, labelnames)
 
+    def add_collector(self, collector, text_renderer) -> None:
+        """Scrape-time metrics: a prometheus_client collector, or a text renderer on the fallback backend."""
+        if _HAS_PROM:
+            self._prom_registry.register(collector)
+        else:
+            self._text_extras.append(text_renderer)
+
     def generate(self) -> str:
         if _HAS_PROM:
             return generate_latest(self._prom_registry).decode("utf-8")
-        return self._text_registry.render_all()
+        extra = "".join(r() for r in self._text_extras)
+        return self._text_registry.render_all() + extra
 
 
 class _TextCounterAdapter:
@@ -491,6 +505,7 @@ class Exporter:
         self.port = port
         self.path = path
         self._registry = MetricRegistry()
+        hostload_metrics.attach(self._registry)
         self.metrics = ExporterMetrics(self._registry, valkey_url=valkey_url)
         self._q: "queue.Queue[dict]" = queue.Queue(maxsize=QUEUE_MAXSIZE)
         self._stop = threading.Event()

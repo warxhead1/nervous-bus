@@ -1,0 +1,11 @@
+# Merge into /etc/prometheus/prometheus.yml (root-owned; operator step) and reload.
+#   scrape_configs:   add the job below
+#   rule_files:       add the absolute path of host-load.rules.yml
+# The exporter listens on :9418 (nervous-bus-exporter.service).
+scrape_configs:
+  - job_name: nervous-bus
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["localhost:9418"]
+        labels:
+          host: cacheman

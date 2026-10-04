@@ -38,6 +38,26 @@ Flags:
 - `--once` — read existing file, print metrics to stdout, exit. Good
   for smoke tests and scripted scrapes.
 
+## Host-load gauges (`hostload_metrics.py`)
+
+Evaluated at scrape time from the newest sample the host-load adapter recorded
+(`~/.cache/nervous-bus/host-load/history.sqlite3`, read-only; override with `NERVOUS_HOST_LOAD_DB`). A
+sample older than 5 minutes exposes only `nbus_host_load_up 0` and the age, never stale load. Every
+metric is a gauge:
+
+| Metric | Labels |
+|---|---|
+| `nbus_host_load_project_cpu_cores` (interval mean) / `_cpu_instant_cores` (3s window) | `project` |
+| `nbus_host_load_project_cpu_share_ratio`, `_rss_bytes`, `_anon_bytes`, `_swap_bytes`, `_processes`, `_major_faults_per_second` | `project` |
+| `nbus_host_load_findings` | `kind`, `severity`, `project` |
+| `nbus_host_load_agent_cpu_cores`, `_agent_rss_bytes`, `_agent_orphan_processes` | `agent` |
+| `nbus_host_load_psi_some_avg10_percent`, `_psi_full_avg10_percent` | `resource` |
+| `nbus_host_load_cpu_coverage_ratio`, `_unattributed_cpu_cores`, `_unknown_project_cpu_cores`, `_unknown_project_processes`, `_swap_in_pages_per_second`, `_swap_out_pages_per_second`, `_system_busy_cores`, `_swap_used_bytes`, `_memory_available_bytes`, `_psi_cpu_some_avg60_percent`, `_sample_age_seconds`, `_up` | (none) |
+
+Top 20 projects are exposed individually, the rest fold into `~other`. Grafana dashboard:
+`dashboards/nervous-bus-host-load.json`. Prometheus scrape job and alert rules (checked with
+`promtool check rules`): `prometheus/nervous-bus-scrape.yml`, `prometheus/host-load.rules.yml`.
+
 ## Prometheus scrape config
 
 Add to `prometheus.yml`:
