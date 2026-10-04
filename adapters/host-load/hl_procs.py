@@ -42,6 +42,11 @@ class Proc:
     io_bytes: int     # rchar+wchar, -1 when unreadable
     project: str = "unknown"
     basis: str = "none"
+    majflt: int = 0           # cumulative major faults (stat field 12)
+    read_bytes: int = -1      # /proc/pid/io read_bytes (block-layer reads), -1 when unreadable
+    anon_bytes: int = -1      # RssAnon from status, -1 when absent
+    cgroup_path: str = ""     # full cgroup v2 path
+    child_ticks: int = 0      # cutime+cstime: CPU of already-reaped children, folded in on wait()
 
     @property
     def key(self):
@@ -70,17 +75,20 @@ def parse_stat(raw):
     if len(f) < 22:
         return None
     return {"comm": raw[left + 1:right], "state": f[0], "ppid": int(f[1]),
-            "utime": int(f[11]), "stime": int(f[12]), "threads": int(f[17]),
+            "majflt": int(f[9]), "utime": int(f[11]), "stime": int(f[12]),
+            "child": int(f[13]) + int(f[14]), "threads": int(f[17]),
             "start": int(f[19]), "rss_pages": int(f[21])}
 
 
 def parse_status(raw):
-    out = {"uid": -1, "swap": 0}
+    out = {"uid": -1, "swap": 0, "anon": -1}
     for line in (raw or "").splitlines():
         if line.startswith("Uid:"):
             out["uid"] = int(line.split()[1])
         elif line.startswith("VmSwap:"):
             out["swap"] = int(line.split()[1]) * 1024
+        elif line.startswith("RssAnon:"):
+            out["anon"] = int(line.split()[1]) * 1024
     return out
 
 
@@ -93,6 +101,16 @@ def cgroup_leaf(raw):
             return units[-1]
         return path.rsplit("/", 1)[-1] if path not in ("", "/") else ""
     return ""
+
+
+def cgroup_path(raw):
+    for line in (raw or "").splitlines():
+        return line.split(":", 2)[-1].strip()
+    return ""
+
+
+def is_kernel_thread(p):
+    return p.pid == 2 or p.ppid == 2
 
 
 def read_proc(pid, proc_root="/proc"):
@@ -111,7 +129,7 @@ def read_proc(pid, proc_root="/proc"):
         cwd = os.readlink(base / "cwd")
     except OSError:
         cwd = ""
-    io_bytes = -1
+    io_bytes, read_bytes = -1, -1
     io = _read(base / "io")
     if io:
         vals = dict(l.split(": ", 1) for l in io.splitlines() if ": " in l)
@@ -119,10 +137,17 @@ def read_proc(pid, proc_root="/proc"):
             io_bytes = int(vals["rchar"]) + int(vals["wchar"])
         except (KeyError, ValueError):
             pass
+        try:
+            read_bytes = int(vals["read_bytes"])
+        except (KeyError, ValueError):
+            pass
+    cg_raw = _read(base / "cgroup")
     return Proc(pid=pid, ppid=st["ppid"], comm=st["comm"], state=st["state"], uid=status["uid"],
                 start_ticks=st["start"], cpu_ticks=st["utime"] + st["stime"],
                 rss_bytes=st["rss_pages"] * PAGE, swap_bytes=status["swap"], threads=st["threads"],
-                cwd=cwd, cmdline=argv, cgroup=cgroup_leaf(_read(base / "cgroup")), io_bytes=io_bytes)
+                cwd=cwd, cmdline=argv, cgroup=cgroup_leaf(cg_raw), io_bytes=io_bytes,
+                majflt=st["majflt"], read_bytes=read_bytes, anon_bytes=status["anon"],
+                cgroup_path=cgroup_path(cg_raw), child_ticks=st["child"])
 
 
 def scan(proc_root="/proc", limit=30000):
@@ -179,6 +204,9 @@ def attribute(procs, docker=None):
     """docker label > cwd > any cmdline path > cgroup unit > unknown. Never guessed."""
     docker = docker or {}
     for p in procs.values():
+        if is_kernel_thread(p):
+            p.project, p.basis = "kernel", "kernel"
+            continue
         m = DOCKER_ID.search(p.cgroup)
         if m and m.group(1) in docker:
             p.project, p.basis = docker[m.group(1)], "docker"

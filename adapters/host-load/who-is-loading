@@ -42,11 +42,12 @@ def main(argv=None):
         print(args.html)
         return 0
 
-    s = hl_store.sample(interval=args.interval)
-    if args.record:
-        hl_store.History(args.db).record(s, args.retention_days)
+    hist = hl_store.History(args.db) if args.record else None
+    s = hl_store.sample(interval=args.interval, prev=hist.load_snapshot() if hist else None)
+    if hist:
+        hist.record(s, args.retention_days)
     if args.json:
-        json.dump(s, sys.stdout, indent=1, default=str)
+        json.dump(hl_store.public(s), sys.stdout, indent=1, default=str)
         print()
     else:
         print(hl_render.render_text(s, args.top))

@@ -45,12 +45,15 @@ class FakeProc:
             "MemTotal: 1000 kB\nMemAvailable: 500 kB\nSwapTotal: 100 kB\nSwapFree: 50 kB\n")
 
     def add(self, pid, comm, ppid=1, argv=(), cwd=None, cgroup="0::/user.slice/user-1000.slice/session-1.scope",
-            uid=1000, ticks=0, start=1000, rss_pages=100, swap_kb=0, io=0):
+            uid=1000, ticks=0, start=1000, rss_pages=100, swap_kb=0, io=0, majflt=0, anon_kb=None,
+            read_bytes=0, child=0):
         d = self.root / str(pid)
         d.mkdir(parents=True, exist_ok=True)
-        self.procs[pid] = dict(comm=comm, ppid=ppid, ticks=ticks, start=start, rss=rss_pages, io=io)
+        self.procs[pid] = dict(comm=comm, ppid=ppid, ticks=ticks, start=start, rss=rss_pages, io=io, majflt=majflt,
+                          read_bytes=read_bytes, child=child)
         (d / "cmdline").write_bytes(b"\0".join(a.encode() for a in argv) + (b"\0" if argv else b""))
-        (d / "status").write_text(f"Uid:\t{uid}\t{uid}\t{uid}\t{uid}\nVmSwap:\t{swap_kb} kB\n")
+        (d / "status").write_text(f"Uid:\t{uid}\t{uid}\t{uid}\t{uid}\nVmSwap:\t{swap_kb} kB\n"
+                                   + (f"RssAnon:\t{anon_kb} kB\n" if anon_kb is not None else ""))
         (d / "cgroup").write_text(cgroup)
         if cwd is not None:
             link = d / "cwd"
@@ -62,14 +65,32 @@ class FakeProc:
     def write(self, pid):
         p = self.procs[pid]
         d = self.root / str(pid)
-        f = ["S", p["ppid"]] + [0] * 9 + [p["ticks"], 0, 0, 0, 20, 0, 1, 0, p["start"], 0, p["rss"]]
+        f = ["S", p["ppid"]] + [0] * 7 + [p["majflt"], 0] + [p["ticks"], 0, p["child"], 0, 20, 0, 1, 0, p["start"], 0, p["rss"]]
         (d / "stat").write_text(f"{pid} ({p['comm']}) " + " ".join(map(str, f)) + "\n")
-        (d / "io").write_text(f"rchar: {p['io']}\nwchar: 0\n")
+        (d / "io").write_text(f"rchar: {p['io']}\nwchar: 0\nread_bytes: {p['read_bytes']}\n")
 
     def burn(self, pids, seconds, cores=1.0):
         for pid in pids:
             self.procs[pid]["ticks"] += int(seconds * cores * TICK)
             self.write(pid)
+        self.busy = getattr(self, "busy", 0) + int(seconds * cores * len(pids) * TICK)
+        self.write_stat()
+
+    def write_stat(self, extra=0):
+        self.busy = getattr(self, "busy", 0) + extra
+        (self.root / "stat").write_text(f"cpu  {self.busy} 0 0 999999 0 0 0 0 0 0\n")
+
+    def remove(self, pid):
+        """The process exits: its /proc entry disappears."""
+        del self.procs[pid]
+        d = self.root / str(pid)
+        for f in list(d.iterdir()):
+            f.unlink()
+        d.rmdir()
+
+    def fault(self, pid, n):
+        self.procs[pid]["majflt"] += n
+        self.write(pid)
 
     def sample(self, burners=(), cores=1.0, interval=10.0, docker=None, **kw):
         return hl_store.sample(
