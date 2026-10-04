@@ -50,6 +50,20 @@ def panel_projects(h, since, rows=12):
     return Panel(t, title="[bold]cpu by project[/]", border_style="dim")
 
 
+def panel_agents(h, since, rows=8):
+    t = Text()
+    t.append(f"{'AGENT SESSION':62} {'CORE-MIN':>9} {'PEAK':>6} {'ORPH':>5}\n", style="bold")
+    data = h.agent_totals(since, rows)
+    for r in data:
+        style = "bold red" if (r["peak_orphans"] or 0) >= 8 else ""
+        t.append(f"{r['agent'][:62]:62} {(r['core_samples'] or 0):9.1f} {(r['peak_cores'] or 0):6.2f} "
+                 f"{r['peak_orphans'] or 0:5d}\n", style=style)
+    if not data:
+        t.append("no agent samples yet", style="dim")
+    return Panel(t, title="[bold]agent sessions[/] [dim](core-minutes over window; ORPH = reparented to systemd)[/]",
+                 border_style="dim")
+
+
 def panel_findings(h, since):
     t = Text()
     seen = set()
@@ -72,5 +86,6 @@ def build_load_layout(db_path=None, hours=1.0):
     layout.split_column(Layout(name="body", ratio=1), Layout(name="footer", size=3))
     layout["body"].split_column(Layout(panel_psi(h, since), size=7),
                                 Layout(panel_projects(h, since), ratio=2),
+                                Layout(panel_agents(h, since), ratio=2),
                                 Layout(panel_findings(h, since), ratio=1))
     return layout

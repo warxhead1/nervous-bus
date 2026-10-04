@@ -21,7 +21,9 @@ def sample(ts, cores):
                          "unknown": {"cores": 0.1, "rss": 10**6, "swap": 0, "nproc": 1, "top": []}},
             "findings": [{"kind": "orphan_cpu", "severity": "crit", "project": "hearth",
                           "summary": "5 orphan sh burning 5.00 cores", "cpu_cores": 5.0,
-                          "rss_bytes": 1, "evidence": {}, "pids": [1]}]}
+                          "rss_bytes": 1, "evidence": {}, "pids": [1]}],
+            "agents": [{"agent": "hearth/agent-aa11", "kinds": ["claude"], "cores": cores, "cores_int": None,
+                        "rss": 10**8, "nproc": 3, "orphans": 9}]}
 
 
 def render(layout):
@@ -42,6 +44,7 @@ class TestLoadTab(unittest.TestCase):
             self.assertIn("hearth", text)
             self.assertIn("orphan_cpu", text)
             self.assertIn("pressure", text)
+            self.assertIn("hearth/agent-aa11", text)
 
     def test_empty_history_shows_hint(self):
         with tempfile.TemporaryDirectory() as d:
