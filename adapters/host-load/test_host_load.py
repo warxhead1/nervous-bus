@@ -147,9 +147,25 @@ class TestAttribution(Base):
 
     def test_unit_bucket_and_honest_unknown(self):
         self.fp.add(10, "node", ppid=1145, cgroup="0::/user.slice/app-orca-7345123.scope")
-        self.fp.add(11, "mystery", ppid=1145, cwd="/home/eric")
+        self.fp.add(11, "mystery", ppid=1145, cwd="/home/eric", cgroup="0::/")
+        self.fp.add(12, "startplasma", ppid=1145, cwd="/home/eric")        # default fixture cgroup: session-1.scope
         self.assertEqual(self.project(10), ("unit:app-orca", "cgroup"))
         self.assertEqual(self.project(11), ("unknown", "none"))
+        self.assertEqual(self.project(12), ("user-session", "cgroup"))
+
+    def test_docker_scope_missing_from_ps_is_inspected(self):
+        cid = "b" * 64
+        self.fp.add(13, "mysqld", ppid=1, cgroup=f"0::/system.slice/docker-{cid}.scope", uid=999)
+        procs = hl_procs.attribute(hl_procs.scan(str(self.fp.root)), {},
+                                   inspect=lambda c: "/ac-database\tazerothcore\n")
+        self.assertEqual((procs[13].project, procs[13].basis), ("azerothcore", "docker"))
+        procs = hl_procs.attribute(hl_procs.scan(str(self.fp.root)), {},
+                                   inspect=lambda c: "/loose\t<no value>\n")
+        self.assertEqual(procs[13].project, "container:loose")
+        def boom(_):
+            raise OSError("docker down")
+        procs = hl_procs.attribute(hl_procs.scan(str(self.fp.root)), {}, inspect=boom)
+        self.assertEqual(procs[13].project, "unit:docker-container")     # falls back to the cgroup unit, never guessed
 
 
 class TestOrphanSpinLoop(Base):

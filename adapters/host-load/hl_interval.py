@@ -8,6 +8,9 @@ from pathlib import Path
 
 from hl_procs import CLK_TCK
 
+# Processes that adopt orphans: the lifetime CPU of reparented children lands in their cutime, so
+# it cannot be credited to them or to their project.
+REAPERS = frozenset({"systemd", "dockerd", "containerd", "containerd-shim", "tini", "init", "dumb-init"})
 MAX_GAP_S = 15 * 60          # an older snapshot is no longer "the previous interval"
 
 
@@ -61,21 +64,26 @@ def integrate(prev, procs, now_ts, uptime_s, boot, busy):
     for key, row in prev["rows"].items():
         if key in now_keys or len(row) < 5:
             continue
-        if by_pid_prev.get(row[4]) in now_keys:
-            gone_ticks[row[4]] = gone_ticks.get(row[4], 0) + row[0] + row[3]
+        pp, hops = row[4], 0
+        while pp and by_pid_prev.get(pp) not in now_keys and hops < 16:
+            nxt = prev["rows"].get(by_pid_prev.get(pp), (0, 0, 0, 0, 0))[4]   # parent died too: walk up
+            pp, hops = nxt, hops + 1
+        if pp and by_pid_prev.get(pp) in now_keys:
+            gone_ticks[pp] = gone_ticks.get(pp, 0) + row[0] + row[3]
     out, observed = {}, 0
     born_after = prev["uptime"] * CLK_TCK if prev.get("uptime") else float("inf")
     for pid, p in procs.items():
         before = prev["rows"].get(p.key)
+        reaper = p.pid == 1 or p.comm in REAPERS
         if before is not None:
-            dt = (p.cpu_ticks + p.child_ticks) - (before[0] + before[3])
+            dt = (p.cpu_ticks + (0 if reaper else p.child_ticks)) - (before[0] + (0 if reaper else before[3]))
             dm = p.majflt - before[1]
             dr = p.read_bytes - before[2] if p.read_bytes >= 0 and before[2] >= 0 else 0
         elif p.start_ticks > born_after:
-            dt, dm, dr = p.cpu_ticks + p.child_ticks, p.majflt, max(p.read_bytes, 0)
+            dt, dm, dr = p.cpu_ticks + (0 if reaper else p.child_ticks), p.majflt, max(p.read_bytes, 0)
         else:
             continue
-        dt = max(dt - gone_ticks.get(pid, 0), 0)
+        dt = max(dt - (0 if reaper else gone_ticks.get(pid, 0)), 0)
         observed += dt
         out[pid] = {"cores": dt / CLK_TCK / up_gap, "majflt_s": max(dm, 0) / up_gap,
                     "read_bytes_s": max(dr, 0) / up_gap}

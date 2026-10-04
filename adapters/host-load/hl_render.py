@@ -42,7 +42,9 @@ def render_text(s, top=8):
         lines.append(f"  {name[:34]:34} {r['cores']:6.2f} {avg} {human(r['rss']):>8} "
                      f"{human(r.get('anon', 0)):>8} {human(r['swap']):>8} {r['nproc']:6d}  {tops}")
     if s.get("unknown_share"):
-        lines.append(f"  unknown (no cwd/cmdline/cgroup match) = {s['unknown_share']*100:.0f}% of sampled cpu")
+        u = s.get("unknown") or {}
+        lines.append(f"  unknown (no cwd/cmdline/cgroup match) = {s['unknown_share']*100:.0f}% of sampled cpu"
+                     + (f", {u['nproc']} procs, {human(u['rss'])} rss: {', '.join(u['comms'])}" if u else ""))
     iv = s.get("interval") or {}
     if "interval_s" in iv:
         cov = f", {iv['coverage']*100:.0f}% of system busy time seen ({iv['unattributed_cores']:.2f} cores " \

@@ -8,6 +8,7 @@ import re
 from collections import defaultdict
 
 from hl_procs import scrub
+from hl_services import excused
 
 DEFAULTS = {
     "orphan_min_cores": 0.02,      # per process, cores
@@ -45,9 +46,11 @@ def user_systemd_pids(procs):
     return {p.pid for p in procs.values() if p.comm == "systemd" and p.pid != 1}
 
 
-def orphans(procs, cores, cfg):
+def orphans(procs, cores, cfg, probe=None, notes=None):
+    """probe(candidates) -> {pid: [service-evidence reasons]}; notes["excused"] receives what it cleared."""
     parents = user_systemd_pids(procs)
     groups = defaultdict(list)
+    cands = []
     for p in procs.values():
         if p.uid == 0 or p.pid == 1 or not (p.ppid == 1 or p.ppid in parents):
             continue
@@ -56,6 +59,16 @@ def orphans(procs, cores, cfg):
         if p.comm not in SHELLS and p.cgroup.endswith(".service"):
             continue  # a service main process under its own unit is not an orphan
         if p.comm not in SHELLS and not WORKTREES.match(p.cwd):
+            continue
+        cands.append(p)
+    ev = probe(cands) if (probe and cands) else {}
+    for p in cands:
+        spin = bool(SPIN.search(" ".join(p.cmdline)))
+        if excused(ev.get(p.pid), spin):
+            if notes is not None:
+                notes.setdefault("excused", []).append(
+                    {"pid": p.pid, "comm": p.comm, "project": p.project, "reasons": ev[p.pid],
+                     "cores": round(cores.get(p.pid, 0.0), 3), "cmd": cmd_text(p)[:60]})
             continue
         groups[(p.project, p.comm, cmd_text(p)[:80])].append(p)
     out, every = [], set()
@@ -165,7 +178,19 @@ def duplicate_builds(procs, cores, cfg):
     return out
 
 
-def swap_pressure(procs, cores, mem, mem_prev, wall_s, psi, cfg):
+def _causes(paging):
+    if not paging:
+        return {}
+    iv = paging.get("interval") or paging["window"]
+    cg = paging["cgroups"].get("interval") or paging["cgroups"]["window"]
+    return {"over": "interval" if paging.get("interval") else "window",
+            "faulting_projects": iv["projects"], "faulting_processes": iv["processes"],
+            "thrashing_units": cg.get("by_refault", []), "growing_units": cg.get("by_growth", []),
+            "throttled_units": cg.get("throttled", []),
+            "swap_in_pages_s": paging["swap_in_pages_s"], "swap_out_pages_s": paging["swap_out_pages_s"]}
+
+
+def swap_pressure(procs, cores, mem, mem_prev, wall_s, psi, cfg, paging=None):
     pages = 0
     if mem_prev and wall_s > 0:
         pages = ((mem.get("pswpin", 0) - mem_prev.get("pswpin", 0))
@@ -187,7 +212,9 @@ def swap_pressure(procs, cores, mem, mem_prev, wall_s, psi, cfg):
              "count": 0, "cpu_cores": round(k_cores, 3), "rss_bytes": 0, "pids": [],
              "evidence": {"swap_pages_per_s": round(pages, 1), "kswapd_cores": round(k_cores, 3),
                           "mem_psi_some10": some10, "top_swap_held": top(by_swap), "top_rss": top(by_rss),
-                          "basis": "VmSwap currently held and RSS per project; not who triggered paging"}}]
+                          "causes": _causes(paging),
+                          "basis": "top_swap_held/top_rss say who HOLDS memory; causes say who is paging "
+                                   "(major faults, cgroup refaults) and who is growing"}}]
 
 
 def cpu_pressure(project_cores, psi, cfg):
@@ -203,11 +230,11 @@ def cpu_pressure(project_cores, psi, cfg):
 
 
 def detect(procs, cores, io_delta, uptime_s, mem, mem_prev, wall_s, psi, project_cores,
-           cfg=None, exists=os.path.exists):
+           cfg=None, exists=os.path.exists, probe=None, notes=None, paging=None):
     cfg = {**DEFAULTS, **(cfg or {})}
-    orph, orphan_pids = orphans(procs, cores, cfg)
+    orph, orphan_pids = orphans(procs, cores, cfg, probe, notes)
     found = orph + stale_cwd(procs, cores, cfg, exists) + pure_loops(procs, cores, io_delta, uptime_s, cfg, orphan_pids)
-    found += duplicate_builds(procs, cores, cfg) + swap_pressure(procs, cores, mem, mem_prev, wall_s, psi, cfg)
+    found += duplicate_builds(procs, cores, cfg) + swap_pressure(procs, cores, mem, mem_prev, wall_s, psi, cfg, paging)
     found += cpu_pressure(project_cores, psi, cfg)
     rank = {"crit": 0, "warn": 1, "info": 2}
     return sorted(found, key=lambda f: (rank[f["severity"]], -f["cpu_cores"]))

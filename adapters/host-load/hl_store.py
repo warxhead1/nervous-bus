@@ -8,7 +8,9 @@ from pathlib import Path
 
 import hl_detect
 import hl_interval
+import hl_paging
 import hl_procs
+import hl_services
 
 DEFAULT_DB = Path(os.environ.get("NERVOUS_HOST_LOAD_DB",
                                  str(Path.home() / ".cache/nervous-bus/host-load/history.sqlite3")))
@@ -24,19 +26,27 @@ def uptime(proc_root):
 
 
 def sample(proc_root="/proc", psi_root=None, interval=3.0, docker=None, sleep=time.sleep,
-           cfg=None, exists=os.path.exists, prev=None, now=time.time):
+           cfg=None, exists=os.path.exists, prev=None, now=time.time, inspect=None, service_probe=None,
+           cg_root=None):
     """Two scans `interval` apart. `cores` is the mean over that window ("instant"); `cores_int`
     is the mean over the whole gap since the `prev` snapshot (None without one). RSS/swap are the 2nd scan."""
     psi_root = psi_root or os.path.join(proc_root, "pressure")
+    if cg_root is None and proc_root == "/proc":
+        cg_root = hl_paging.CG_ROOT
     before = hl_procs.scan(proc_root)
     mem0 = hl_procs.read_mem(proc_root)
+    cg0 = hl_paging.read_cgroups(cg_root) if cg_root else {}
     t0 = time.monotonic()
     sleep(interval)
     after = hl_procs.scan(proc_root)
     wall = max(time.monotonic() - t0, 1e-6) if sleep is time.sleep else interval
     mem1 = hl_procs.read_mem(proc_root)
-    docker = hl_procs.docker_projects() if docker is None else docker
-    hl_procs.attribute(after, docker)
+    cg1 = hl_paging.read_cgroups(cg_root) if cg_root else {}
+    if docker is None:
+        docker = hl_procs.docker_projects()
+    elif inspect is None:
+        inspect = _no_inspect          # a caller that supplied the container map gets no docker calls
+    hl_procs.attribute(after, docker, inspect)
     cores = hl_procs.cpu_deltas(before, after, wall)
     majflt_s = {pid: max(0, p.majflt - before[pid].majflt) / wall for pid, p in after.items()
                 if pid in before and before[pid].key == p.key}
@@ -46,6 +56,13 @@ def sample(proc_root="/proc", psi_root=None, interval=3.0, docker=None, sleep=ti
     ts, up = now(), uptime(proc_root)
     boot, busy = hl_interval.boot_id(proc_root), hl_interval.busy_ticks(proc_root)
     integ, integ_info = hl_interval.integrate(prev, after, ts, up, boot, busy)
+    gap = integ_info.get("interval_s")
+    vm_int = hl_paging.vm_rates((prev or {}).get("vm"), mem1, gap) if gap and integ is not None else None
+    cg_int = hl_paging.cgroup_deltas((prev or {}).get("cg"), cg1, gap) if gap and integ is not None else None
+    paging = hl_paging.report(after, majflt_s,
+                              {pid: v["majflt_s"] for pid, v in integ.items()} if integ is not None else None,
+                              hl_paging.vm_rates(mem0, mem1, wall), vm_int,
+                              hl_paging.cgroup_deltas(cg0, cg1, wall), cg_int)
     projects = defaultdict(lambda: {"cores": 0.0, "cores_int": None, "rss": 0, "anon": 0, "swap": 0,
                                     "nproc": 0, "majflt_s": 0.0, "majflt_int": None, "top": []})
     for p in after.values():
@@ -67,12 +84,38 @@ def sample(proc_root="/proc", psi_root=None, interval=3.0, docker=None, sleep=ti
             if row[k] is not None:
                 row[k] = round(row[k], 4)
     psi = hl_procs.read_psi(psi_root)
+    if service_probe is None and proc_root == "/proc":
+        service_probe = lambda cands: hl_services.probe(after, cands, now=ts, uptime_s=up)  # noqa: E731
+    notes = {}
     findings = hl_detect.detect(after, cores, io_delta, up, mem1, mem0, wall, psi,
-                                {k: v["cores"] for k, v in projects.items()}, cfg, exists)
+                                {k: v["cores"] for k, v in projects.items()}, cfg, exists,
+                                probe=service_probe, notes=notes, paging=paging)
     return {"ts": ts, "wall_s": round(wall, 3), "psi": psi, "mem": mem1,
             "projects": dict(projects), "findings": findings, "nprocs": len(after),
-            "unknown_share": _unknown_share(projects), "interval": integ_info,
-            "_procs": after, "_snapshot": hl_interval.snapshot(after, ts, up, boot, busy)}
+            "unknown_share": _unknown_share(projects), "unknown": unknown_detail(after, cores), "interval": integ_info,
+            "excused_services": notes.get("excused", []), "paging": paging,
+            "_procs": after,
+            "_snapshot": {**hl_interval.snapshot(after, ts, up, boot, busy), "cg": cg1,
+                          "vm": {k: mem1.get(k, 0) for k in ("pswpin", "pswpout", "pgmajfault")}}}
+
+
+def _no_inspect(_cid):
+    raise RuntimeError("inspect disabled")
+
+
+def unknown_detail(after, cores):
+    """What the residual 'unknown' bucket is made of, so its size is a measurement not a worry."""
+    rows = [p for p in after.values() if p.project == "unknown"]
+    reasons = defaultdict(lambda: {"nproc": 0, "cores": 0.0})
+    for p in rows:
+        why = ("no cgroup unit" if not p.cgroup else "cgroup without a project") + \
+              (", cwd unreadable" if not p.cwd else ", cwd outside known roots")
+        reasons[why]["nproc"] += 1
+        reasons[why]["cores"] += cores.get(p.pid, 0.0)
+    return {"nproc": len(rows), "cores": round(sum(cores.get(p.pid, 0.0) for p in rows), 3),
+            "rss": sum(p.rss_bytes for p in rows),
+            "by_reason": {k: {"nproc": v["nproc"], "cores": round(v["cores"], 3)} for k, v in reasons.items()},
+            "comms": sorted({p.comm for p in rows})[:8]}
 
 
 def _unknown_share(projects):
@@ -104,6 +147,10 @@ class History:
         CREATE TABLE IF NOT EXISTS proc_snapshot (pid INTEGER, start_ticks INTEGER, cpu_ticks INTEGER,
           majflt INTEGER, read_bytes INTEGER, project TEXT, agent TEXT, child_ticks INTEGER DEFAULT 0, ppid INTEGER DEFAULT 0,
           PRIMARY KEY(pid, start_ticks));
+        CREATE TABLE IF NOT EXISTS cg_snapshot (path TEXT PRIMARY KEY, pgmajfault INTEGER, refault_anon INTEGER,
+          refault_file INTEGER, high INTEGER, mem_current INTEGER, swap_current INTEGER);
+        CREATE TABLE IF NOT EXISTS vm_snapshot (id INTEGER PRIMARY KEY CHECK (id=1), pswpin INTEGER,
+          pswpout INTEGER, pgmajfault INTEGER);
         CREATE TABLE IF NOT EXISTS interval_stat (ts REAL PRIMARY KEY, interval_s REAL, observed_cores REAL,
           system_busy_cores REAL, coverage REAL, unattributed_cores REAL, unknown_cores REAL,
           unknown_nproc INTEGER, swap_in_s REAL, swap_out_s REAL);""")
@@ -157,6 +204,14 @@ class History:
     def save_snapshot(self, snap, procs):
         """Keep only the latest per-process counters; they exist to be diffed by the next run."""
         self.db.execute("DELETE FROM proc_snapshot")
+        self.db.execute("DELETE FROM cg_snapshot")
+        vm = snap.get("vm") or {}
+        self.db.execute("INSERT OR REPLACE INTO vm_snapshot VALUES (1,?,?,?)",
+                        (vm.get("pswpin"), vm.get("pswpout"), vm.get("pgmajfault")))
+        self.db.executemany(
+            "INSERT OR REPLACE INTO cg_snapshot VALUES (?,?,?,?,?,?,?)",
+            [(path, c["pgmajfault"], c["refault_anon"], c["refault_file"], c["high"], c["mem_current"],
+              c["swap_current"]) for path, c in (snap.get("cg") or {}).items()])
         self.db.execute("INSERT OR REPLACE INTO snapshot_meta VALUES (1,?,?,?,?)",
                         (snap["ts"], snap["uptime"], snap["boot"], snap["busy"]))
         self.db.executemany(
@@ -173,7 +228,12 @@ class History:
         rows = {(pid, start): (t, mf, rb, ct or 0, pp or 0)
                 for pid, start, t, mf, rb, ct, pp in self.db.execute(
                     "SELECT pid,start_ticks,cpu_ticks,majflt,read_bytes,child_ticks,ppid FROM proc_snapshot")}
-        return {"ts": meta[0], "uptime": meta[1], "boot": meta[2], "busy": meta[3], "rows": rows}
+        vmr = self.db.execute("SELECT pswpin,pswpout,pgmajfault FROM vm_snapshot WHERE id=1").fetchone()
+        cg = {path: dict(zip(("pgmajfault", "refault_anon", "refault_file", "high", "mem_current",
+                              "swap_current"), vals)) for path, *vals in self.db.execute(
+            "SELECT path,pgmajfault,refault_anon,refault_file,high,mem_current,swap_current FROM cg_snapshot")}
+        return {"ts": meta[0], "uptime": meta[1], "boot": meta[2], "busy": meta[3], "rows": rows,
+                "vm": dict(zip(("pswpin", "pswpout", "pgmajfault"), vmr)) if vmr else {}, "cg": cg}
 
     def psi_series(self, since):
         cur = self.db.execute("SELECT ts,cpu_some10,cpu_some60,mem_some10,mem_full10,io_some10,io_full10 "

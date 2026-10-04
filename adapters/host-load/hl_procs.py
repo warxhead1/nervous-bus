@@ -184,6 +184,24 @@ def docker_projects(runner=None):
     return mapping
 
 
+def _docker_inspect(cid):
+    return subprocess.run(
+        ["docker", "inspect", "--format",
+         "{{.Name}}\t{{index .Config.Labels \"com.docker.compose.project\"}}", cid],
+        capture_output=True, text=True, timeout=5, check=True).stdout
+
+
+def inspect_container(cid, runner=None):
+    """project label for a container `docker ps` did not list (started or restarted since). None on failure."""
+    try:
+        out = (runner or _docker_inspect)(cid).strip().split("\t")
+    except Exception:
+        return None
+    name = out[0].lstrip("/")
+    label = out[1] if len(out) > 1 and out[1] not in ("", "<no value>") else ""
+    return label or ("container:" + name if name else None)
+
+
 def project_from_path(path):
     for rule in PATH_RULES:
         m = rule.match(path or "")
@@ -194,15 +212,27 @@ def project_from_path(path):
 
 def unit_bucket(unit):
     """Strip pids/instance ids so app-orca-123.scope and app-orca-456.scope share a bucket."""
-    if not unit or unit.endswith(".slice") or unit.startswith("session-"):
+    if unit and unit.startswith("session-"):
+        return "user-session"
+    if not unit or unit.endswith(".slice"):
         return None
+    if DOCKER_ID.search(unit):
+        return "unit:docker-container"
     name = unit.rsplit(".", 1)[0].replace("\\x2d", "-").split("@", 1)[0]
     return "unit:" + re.sub(r"[-_.]?\d{3,}", "", name)
 
 
-def attribute(procs, docker=None):
-    """docker label > cwd > any cmdline path > cgroup unit > unknown. Never guessed."""
-    docker = docker or {}
+def attribute(procs, docker=None, inspect=None, max_inspect=12):
+    """docker label > cwd > any cmdline path > cgroup unit > unknown. Never guessed.
+
+    A docker scope whose id `docker ps` did not list is resolved once via `docker inspect`
+    (bounded); only if that fails does it fall to the unit bucket."""
+    docker = dict(docker or {})
+    for cid in sorted({m.group(1) for p in procs.values() for m in [DOCKER_ID.search(p.cgroup)]
+                       if m and m.group(1) not in docker})[:max_inspect]:
+        found = inspect_container(cid, inspect)
+        if found:
+            docker[cid] = found
     for p in procs.values():
         if is_kernel_thread(p):
             p.project, p.basis = "kernel", "kernel"
@@ -263,7 +293,7 @@ def read_mem(proc_root="/proc"):
     vm = {}
     for line in (_read(Path(proc_root) / "vmstat") or "").splitlines():
         f = line.split()
-        if len(f) == 2 and f[0] in ("pswpin", "pswpout"):
+        if len(f) == 2 and f[0] in ("pswpin", "pswpout", "pgmajfault"):
             vm[f[0]] = int(f[1])
     return {"swap_total": mi.get("SwapTotal", 0), "swap_free": mi.get("SwapFree", 0),
             "mem_total": mi.get("MemTotal", 0), "mem_available": mi.get("MemAvailable", 0), **vm}
