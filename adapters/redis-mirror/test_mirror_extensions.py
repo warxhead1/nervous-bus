@@ -132,3 +132,47 @@ class TestUnknownChannelMetric(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRotationKeepsUnreadTail(unittest.TestCase):
+    """Lines appended to the old file after the last read, then renamed away,
+    must still be delivered before the reader moves to the new file."""
+
+    def _reader(self, log, tmp):
+        s = mirror.State.__new__(mirror.State)
+        s.log_path = log
+        s.offset_file = Path(tmp) / "offset.json"
+        s.fp = None
+        s.inode = None
+        s.offset = 0
+        return mirror.TailReader(s)
+
+    def test_rename_then_recreate_delivers_old_tail_first(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "debug.jsonl"
+            log.write_text('{"n":1}\n')
+            r = self._reader(log, tmp)
+            r.read_new_lines()
+            self.assertEqual(r.read_new_lines(), ['{"n":1}'])
+            with log.open("a") as fh:
+                fh.write('{"n":2}\n')
+            log.rename(log.with_suffix(".jsonl.1"))
+            log.write_text('{"n":3}\n')
+            self.assertEqual(r.read_new_lines(), ['{"n":2}', '{"n":3}'])
+            self.assertEqual(r.read_new_lines(), [])
+
+    def test_rename_before_recreate_delivers_old_tail(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "debug.jsonl"
+            log.write_text("")
+            r = self._reader(log, tmp)
+            r.read_new_lines()
+            with log.open("a") as fh:
+                fh.write('{"n":1}\n')
+            log.rename(log.with_suffix(".jsonl.1"))
+            self.assertEqual(r.read_new_lines(), ['{"n":1}'])
+            log.write_text('{"n":2}\n')
+            r.read_new_lines()
+            self.assertEqual(r.read_new_lines(), ['{"n":2}'])

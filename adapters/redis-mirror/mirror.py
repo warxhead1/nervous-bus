@@ -402,37 +402,7 @@ class TailReader:
         self.state.fp.seek(seek_target)
         self.state.inode = self.state.log_path.stat().st_ino
 
-    def check_rotation(self) -> None:
-        if not self.state.log_path.exists():
-            if self.state.fp is not None:
-                self.state.fp.close()
-                self.state.fp = None
-            return
-
-        st = self.state.log_path.stat()
-        if self.state.fp is None or st.st_ino != self.state.inode:
-            if self.state.fp is not None:
-                try:
-                    self.state.fp.close()
-                except Exception:
-                    pass
-            self.state.fp = self.state.log_path.open("r", encoding="utf-8", errors="replace")
-            self.state.inode = st.st_ino
-            self.state.offset = 0
-            return
-
-        if self.state.fp.tell() > st.st_size:
-            self.state.fp.seek(0)
-
-    def read_new_lines(self) -> List[str]:
-        if self.state.fp is None:
-            self.open_log()
-            return []
-
-        self.check_rotation()
-        if self.state.fp is None:
-            return []
-
+    def _drain(self) -> List[str]:
         out: List[str] = []
         while True:
             line = self.state.fp.readline()
@@ -441,8 +411,50 @@ class TailReader:
             line = line.strip()
             if line:
                 out.append(line)
+        return out
 
-        if out:
+    def check_rotation(self) -> List[str]:
+        """Switch to a replaced or removed log, returning the old handle's unread tail.
+        A writer may append between our last read and the rename; dropping that tail loses events."""
+        if not self.state.log_path.exists():
+            tail: List[str] = []
+            if self.state.fp is not None:
+                tail = self._drain()
+                self.state.fp.close()
+                self.state.fp = None
+            return tail
+
+        st = self.state.log_path.stat()
+        if self.state.fp is None or st.st_ino != self.state.inode:
+            tail = []
+            if self.state.fp is not None:
+                try:
+                    tail = self._drain()
+                    self.state.fp.close()
+                except Exception:
+                    pass
+            self.state.fp = self.state.log_path.open("r", encoding="utf-8", errors="replace")
+            self.state.inode = st.st_ino
+            self.state.offset = 0
+            return tail
+
+        if self.state.fp.tell() > st.st_size:
+            self.state.fp.seek(0)
+        return []
+
+    def read_new_lines(self) -> List[str]:
+        if self.state.fp is None:
+            self.open_log()
+            return []
+
+        tail = self.check_rotation()
+        if self.state.fp is None:
+            return tail
+
+        new = self._drain()
+        out = tail + new
+
+        if new or tail:
             self.state.offset = self.state.fp.tell()
             save_offset(
                 self.state.offset_file,
