@@ -110,6 +110,27 @@ def build(conn: sqlite3.Connection, days: int = 7) -> dict:
         FROM requests r JOIN sessions s ON s.key = r.session_key
         WHERE r.ts >= ? GROUP BY 1, 2 ORDER BY all_writes DESC""", p)
 
+    # A per-agent `experimental.cacheTtl` frontmatter key exists, so the TTL
+    # trade-off is decided per agent type: net_if_1h > 0 only where idle
+    # rewrites outweigh the dearer 1h write on everything else that type writes.
+    ttl_by_agent = _rows(conn, f"""
+        WITH g AS (
+            SELECT r.*, (julianday(r.ts) - julianday(LAG(r.ts) OVER w)) * 1440 gap_min,
+                   LAG(r.input + r.cache_read + r.cache_create) OVER w prev_ctx
+            FROM requests r WHERE r.ts >= ?
+            WINDOW w AS (PARTITION BY r.session_key ORDER BY r.seq))
+        SELECT COALESCE(s.agent_type, 'subagent?') agent_type, s.source,
+               SUM(g.cache_5m) ttl5m_tokens, SUM(g.cache_1h) ttl1h_tokens,
+               SUM(CASE WHEN g.seq > 1 AND g.cache_create > 20000 AND g.gap_min >= 5
+                         AND g.gap_min < 60 AND g.input + g.cache_read + g.cache_create >= 0.7 * g.prev_ctx
+                        THEN g.cache_5m ELSE 0 END) idle_rewrite_5m_tokens
+        FROM g JOIN sessions s ON s.key = g.session_key
+        WHERE s.is_subagent GROUP BY 1, 2 HAVING SUM(g.cache_create) > 0""", p)
+    for row in ttl_by_agent:
+        rw, base = row["idle_rewrite_5m_tokens"] or 0, row["ttl5m_tokens"] or 0
+        row["net_if_1h_iet"] = int(rw * (W_5M - W_READ) - (base - rw) * (W_1H - W_5M))
+    ttl_by_agent.sort(key=lambda r: -r["net_if_1h_iet"])
+
     # 2. Uncached input: providers/paths where the prompt is not cached at all.
     uncached = _rows(conn, """
         SELECT s.source, r.model, COUNT(*) requests, SUM(r.input) input,
@@ -217,7 +238,7 @@ def build(conn: sqlite3.Connection, days: int = 7) -> dict:
          "what": ("Mid-session cache writes >20k tokens instead of reads. Gap > TTL with same-or-grew"
                   " context = cache expired while idle; compacted = auto-compaction rewrite"),
          "detail": {"by_idle_gap": rewrite_gaps, "all_cache_writes": write_base,
-                    "by_project": rewrites[:10]}},
+                    "ttl_by_agent_type": ttl_by_agent[:12], "by_project": rewrites[:10]}},
         {"id": "startup_context", "iet": sum(r["iet"] or 0 for r in startup),
          "what": "First-request context every main session and subagent pays before acting",
          "detail": {"by_agent": startup[:12], "instruction_files": instr}},

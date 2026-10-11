@@ -47,12 +47,26 @@ measured waste per unit of effort. Not a list. One.
    change that enforces it with zero agent cognition) > INFORM (a rule an agent
    must remember). An INFORM proposal needs an explicit reason why no
    mechanical fix exists. Before settling for INFORM, check these surfaces for
-   a lever (mark each "verify exists" if you cannot confirm it): Claude Code
-   environment variables and settings.json keys that govern auto-compaction,
-   the context window, or cache TTL; agent definitions (`tools:`, `model:`,
-   turn caps) under ~/.claude/agents; PreToolUse/PostToolUse hooks (a hook can
-   truncate or redirect large tool output, or block a known-wasteful command);
-   and wrappers around build/test commands.
+   a lever (mark any lever not listed below "verify exists"): PreToolUse/
+   PostToolUse hooks (a hook can truncate or redirect large tool output, or
+   block a known-wasteful command), wrappers around build/test commands, and
+   these Claude Code levers, verified in the installed 2.1.296 binary on
+   2026-10-11:
+   - Agent definition frontmatter (`~/.claude/agents/<type>.md`):
+     `experimental: {cacheTtl: 1h}` (per-type TTL; ignored during
+     subscription overage), `omitClaudeMd: true` (no CLAUDE.md files when
+     spawned as a subagent), `autoCompactWindow: <tokens>` (per-agent
+     compaction threshold), `maxTurns`, `model`, `tools`.
+   - settings.json `subagentPromptCacheTtl` / env
+     `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` ("5m"|"1h"): EVERY subagent type,
+     and also during overage. Prefer the per-type frontmatter key.
+   - settings.json `promptCacheTtl` / env `CLAUDE_CODE_PROMPT_CACHE_TTL`: the
+     main conversation (already 1h on a subscription).
+   Already applied (do not re-propose): `sonnet-worker` has `cacheTtl: 1h`
+   since 2026-10-11 (claude-hook-fast#38).
+   For a TTL proposal, use `ttl_by_agent_type`: it nets the trade-off per
+   agent type (`net_if_1h_iet`). Propose 1h only for types where it is
+   positive.
 2. Name the concrete mechanism: which setting, hook, agent definition, wrapper,
    or tool flag; where it would live; and what it changes. If you are not sure
    a setting exists, say "verify that X exists" instead of asserting it.
