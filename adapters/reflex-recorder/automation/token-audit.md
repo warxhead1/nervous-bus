@@ -24,6 +24,10 @@ measured waste per unit of effort. Not a list. One.
   TTL, with context that stayed the same or grew, means the cache EXPIRED while
   the agent waited (look at `ttl5m_tokens` vs `ttl1h_tokens` and the gap). A
   `compacted` row is auto-compaction rewriting the summary, which is expected.
+  Read the TTL from the row, never assume it: a row whose writes are all
+  `ttl5m_tokens` is on the 5-minute TTL. Before proposing a longer TTL, do the
+  trade-off: a 1h write costs 2.0 vs 1.25, and it applies to EVERY write that
+  agent kind makes, not only to the rewrites.
 - `big_tool_results`: tool outputs over 20k chars. Each one is written once and
   then re-read by every later request in that session.
 - `startup_context`: what each agent type pays before its first action, plus
@@ -40,7 +44,13 @@ measured waste per unit of effort. Not a list. One.
    impossible) > AUTOMATE (a hook, guard, wrapper, setting, or agent-definition
    change that enforces it with zero agent cognition) > INFORM (a rule an agent
    must remember). An INFORM proposal needs an explicit reason why no
-   mechanical fix exists.
+   mechanical fix exists. Before settling for INFORM, check these surfaces for
+   a lever (mark each "verify exists" if you cannot confirm it): Claude Code
+   environment variables and settings.json keys that govern auto-compaction,
+   the context window, or cache TTL; agent definitions (`tools:`, `model:`,
+   turn caps) under ~/.claude/agents; PreToolUse/PostToolUse hooks (a hook can
+   truncate or redirect large tool output, or block a known-wasteful command);
+   and wrappers around build/test commands.
 2. Name the concrete mechanism: which setting, hook, agent definition, wrapper,
    or tool flag; where it would live; and what it changes. If you are not sure
    a setting exists, say "verify that X exists" instead of asserting it.

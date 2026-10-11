@@ -75,3 +75,9 @@ bus.test.approval.requested.v1  # smoke-test fixture, internal only, never cross
 # internals. Confirmed already schema-backed there
 # (~/.config/nervous-bus/schemas/tengine.render.quality.v1.json).
 tengine.render.quality.v1
+# deer-flow thesis ledger (backend/packages/harness/deerflow/thesis/ledger.py:50-51)
+# emits trading-research contracts. Schema-backed in the private overlay
+# (~/.config/nervous-bus/schemas/research.*.json), never this public repo.
+# Red on main since 2026-10-04 without these entries.
+research.recommendation.v2
+research.thesis_call.v1
