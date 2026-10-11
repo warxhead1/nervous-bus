@@ -1,0 +1,15 @@
+# .mmx-automations.yaml — per-repo twists for the shared mmx-automation runner
+# (~/.local/bin/mmx-automation). Flat schema, single-line values (awk reader).
+#
+# token-audit: the daily token-efficiency auditor. The precmd injects ONLY the
+# sanitized token digest (adapters/reflex-recorder/token_report.py) into the
+# prompt; transcripts, prompts, and tool output never reach MiniMax. The
+# report's JSON proposal is validated and filed host-side by
+# adapters/reflex-recorder/automation/token_audit_publish.py (ExecStartPost).
+
+recipes:
+  token-audit:
+    enabled: true
+    precmd: "cat $HOME/.cache/nervous-bus/reflex/token-digest/latest.md"
+    scope: "the token digest in the precmd block; nervous-bus source only to explain how a number is computed"
+    twist: "This repo is the measuring instrument, not the patient. Do not audit nervous-bus code quality. Spend your effort on the digest."

@@ -115,6 +115,7 @@ _NERVOUS_BIN = _NBUS_ROOT / "sdk" / "shell" / "nervous"
 sys.path.insert(0, str(_ADAPTER_DIR))
 from segment import Segmenter
 from store import SQLiteStore, DEFAULT_DB_PATH
+from agent_kinds import NON_AGENT_KINDS
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 CONSUMER_GROUP = "reflex-recorder"
@@ -637,6 +638,8 @@ class Recorder:
             return None
         data = envelope.get("data") or {}
         if not isinstance(data, dict):
+            return None
+        if data.get("agent_kind") in NON_AGENT_KINDS:
             return None
         ts = data.get("ts") or data.get("time") or _now_utc()
         return data, event_type, ts

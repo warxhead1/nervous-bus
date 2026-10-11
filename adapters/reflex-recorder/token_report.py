@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""token_report.py — rank the biggest token waste over a window of tokens.db.
+
+Reads the ledger built by token_ledger.py and emits a digest of WASTE
+CANDIDATES, each with an estimated cost in input-equivalent tokens (IET:
+input 1, cache read 0.1, cache write 5m 1.25, cache write 1h 2, output 5 —
+API price ratios, a proxy for subscription-limit burn, not a bill).
+
+The digest is sanitized BY CONSTRUCTION so it may leave the box (the mmx
+daily auditor reads it): it carries counts, token sums, model ids, project
+names, agent types, tool names, the first word pair of test commands
+("cargo test", "pytest"), and home-relative paths of instruction files
+(CLAUDE.md / memory). Never prompt text, tool output, full commands, or the
+paths of files agents read.
+
+    token_report.py [--db PATH] [--days 7] [--json | --md] [--out FILE]
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sqlite3
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from token_ledger import DEFAULT_DB  # noqa: E402
+
+W_IN, W_READ, W_5M, W_1H, W_OUT = 1.0, 0.1, 1.25, 2.0, 5.0
+IET = (f"(input*{W_IN} + cache_read*{W_READ} + cache_5m*{W_5M} + cache_1h*{W_1H}"
+       f" + (cache_create-cache_5m-cache_1h)*{W_5M} + output*{W_OUT})")
+CHARS_PER_TOKEN = 4
+BIG_RESULT_CHARS = 20_000
+LONG_CTX = 100_000
+PROPOSALS = DEFAULT_DB.parent / "token-digest" / "proposals.jsonl"
+
+
+def _since(days: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _rows(conn, sql, params=()) -> list[dict]:
+    cur = conn.execute(sql, params)
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def _cmd_head(cmd: str) -> str:
+    """'cd x && cargo test -p y' -> 'cargo test' (sanitized command family)."""
+    seg = re.split(r"&&|\|\||[;|()]", cmd)
+    for s in seg:
+        words = [w for w in s.split() if re.fullmatch(r"[A-Za-z][\w.:+-]*", w)]
+        while words and words[0] in ("timeout", "nice", "env", "time", "sudo", "exec"):
+            words = words[1:]
+        if words and words[0] not in ("cd", "export", "set", "echo"):
+            return " ".join(words[:2])[:40]
+    return "?"
+
+
+def build(conn: sqlite3.Connection, days: int = 7) -> dict:
+    since = _since(days)
+    p = (since,)
+    out: dict = {"window_days": days, "since": since,
+                 "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                 "weights": "IET = " + IET}
+
+    out["totals"] = _rows(conn, f"""
+        SELECT s.source, r.model, COUNT(*) requests, SUM(r.input) input,
+               SUM(r.cache_read) cache_read, SUM(r.cache_create) cache_create,
+               SUM(r.output) output, CAST(SUM({IET}) AS INTEGER) iet,
+               ROUND(1.0*SUM(r.cache_read)/MAX(1, SUM(r.input+r.cache_read+r.cache_create)), 3) hit_ratio
+        FROM requests r JOIN sessions s ON s.key = r.session_key
+        WHERE r.ts >= ? GROUP BY 1, 2 ORDER BY iet DESC""", p)
+    total_iet = sum(t["iet"] or 0 for t in out["totals"]) or 1
+
+    # 1. Cache rewrites after the first request: context re-written instead of read.
+    rewrites = _rows(conn, f"""
+        SELECT s.project, s.source, COUNT(*) requests,
+               SUM(r.cache_create) tokens,
+               CAST(SUM((r.cache_5m*{W_5M} + r.cache_1h*{W_1H}
+                   + (r.cache_create-r.cache_5m-r.cache_1h)*{W_5M}) - r.cache_create*{W_READ}) AS INTEGER) excess_iet
+        FROM requests r JOIN sessions s ON s.key = r.session_key
+        WHERE r.ts >= ? AND r.seq > 1 AND r.cache_create > 20000
+        GROUP BY 1, 2 ORDER BY excess_iet DESC""", p)
+
+    rewrite_gaps = _rows(conn, f"""
+        WITH g AS (
+            SELECT r.*, (julianday(r.ts) - julianday(LAG(r.ts) OVER w)) * 1440 gap_min,
+                   LAG(r.input + r.cache_read + r.cache_create) OVER w prev_ctx
+            FROM requests r WHERE r.ts >= ?
+            WINDOW w AS (PARTITION BY r.session_key ORDER BY r.seq))
+        SELECT CASE WHEN s.is_subagent THEN 'subagent' ELSE 'main' END kind,
+               CASE WHEN gap_min < 5 THEN 'a <5m' WHEN gap_min < 60 THEN 'b 5-60m'
+                    ELSE 'c >=60m' END idle_gap,
+               CASE WHEN g.input + g.cache_read + g.cache_create < 0.7 * g.prev_ctx
+                    THEN 'compacted' ELSE 'same-or-grew' END ctx_change,
+               COUNT(*) requests, SUM(g.cache_5m) ttl5m_tokens, SUM(g.cache_1h) ttl1h_tokens,
+               CAST(AVG(gap_min) AS INTEGER) avg_gap_min
+        FROM g JOIN sessions s ON s.key = g.session_key
+        WHERE g.seq > 1 AND g.cache_create > 20000 GROUP BY 1, 2, 3 ORDER BY 1, 2, 3""", p)
+
+    # 2. Uncached input: providers/paths where the prompt is not cached at all.
+    uncached = _rows(conn, """
+        SELECT s.source, r.model, COUNT(*) requests, SUM(r.input) input,
+               SUM(r.cache_read) cache_read
+        FROM requests r JOIN sessions s ON s.key = r.session_key
+        WHERE r.ts >= ? GROUP BY 1, 2
+        HAVING SUM(r.input) > 4 * SUM(r.cache_read) AND SUM(r.input) > 1000000
+        ORDER BY input DESC""", p)
+
+    # 3. Startup context: what every agent pays before its first action.
+    startup = _rows(conn, f"""
+        SELECT CASE WHEN s.is_subagent THEN COALESCE(s.agent_type, 'subagent?') ELSE 'main:' || s.source END agent,
+               COUNT(*) starts,
+               CAST(AVG(r.input + r.cache_read + r.cache_create) AS INTEGER) avg_ctx_tokens,
+               ROUND(AVG(CASE WHEN r.cache_read = 0 THEN 1.0 ELSE 0 END), 2) cold_share,
+               CAST(SUM({IET}) AS INTEGER) iet
+        FROM requests r JOIN sessions s ON s.key = r.session_key
+        WHERE r.ts >= ? AND r.seq = 1
+        GROUP BY 1 ORDER BY iet DESC""", p)
+    instr = _rows(conn, """
+        SELECT REPLACE(i.path, ?, '~') path, COUNT(*) loads,
+               CAST(AVG(i.chars) / ? AS INTEGER) avg_tokens,
+               CAST(SUM(i.chars) / ? AS INTEGER) total_tokens
+        FROM instructions i JOIN sessions s ON s.key = i.session_key
+        WHERE s.started >= ? GROUP BY 1 ORDER BY total_tokens DESC LIMIT 25""",
+                  (str(Path.home()), CHARS_PER_TOKEN, CHARS_PER_TOKEN, since))
+
+    # 4. Big tool results: each is written once and re-read by every later request.
+    big = _rows(conn, f"""
+        SELECT t.tool, s.project, COUNT(*) n,
+               CAST(SUM(t.result_chars) / {CHARS_PER_TOKEN} AS INTEGER) tokens,
+               CAST(SUM(t.result_chars / {CHARS_PER_TOKEN} *
+                   ({W_5M} + {W_READ} * (SELECT COUNT(*) FROM requests r2
+                        WHERE r2.session_key = t.session_key AND r2.ts > t.ts))) AS INTEGER) iet
+        FROM tool_calls t JOIN sessions s ON s.key = t.session_key
+        WHERE t.ts >= ? AND t.result_chars > {BIG_RESULT_CHARS}
+        GROUP BY 1, 2 ORDER BY iet DESC LIMIT 15""", p)
+
+    # 5. Re-running the same test/build command with no edit in between.
+    calls = _rows(conn, """
+        SELECT t.session_key, t.ts, t.tool, t.cmd_class, t.cmd, t.cmd_hash, t.result_chars, s.project
+        FROM tool_calls t JOIN sessions s ON s.key = t.session_key
+        WHERE t.ts >= ? AND (t.cmd_class IN ('test', 'build')
+              OR t.tool IN ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'))
+        ORDER BY t.session_key, t.ts""", p)
+    reruns: dict[tuple, dict] = {}
+    runs_by_class = {"test": 0, "build": 0}
+    seen: set = set()
+    cur_session = None
+    for c in calls:
+        if c["session_key"] != cur_session:
+            cur_session, seen = c["session_key"], set()
+        if c["cmd_class"] is None:
+            seen = set()  # an edit invalidates every prior result
+            continue
+        runs_by_class[c["cmd_class"]] += 1
+        if c["cmd_hash"] in seen:
+            k = (c["project"], c["cmd_class"], _cmd_head(c["cmd"] or ""))
+            e = reruns.setdefault(k, {"project": k[0], "class": k[1], "command": k[2],
+                                      "reruns": 0, "result_tokens": 0})
+            e["reruns"] += 1
+            e["result_tokens"] += (c["result_chars"] or 0) // CHARS_PER_TOKEN
+        seen.add(c["cmd_hash"])
+    rerun_rows = sorted(reruns.values(), key=lambda e: -e["reruns"])[:15]
+
+    # 6. Output per commit, per project.
+    per_commit = _rows(conn, f"""
+        SELECT s.project, CAST(SUM({IET}) AS INTEGER) iet,
+               (SELECT COUNT(*) FROM tool_calls t JOIN sessions s2 ON s2.key = t.session_key
+                 WHERE s2.project = s.project AND t.cmd_class = 'commit' AND t.ts >= ?) commits
+        FROM requests r JOIN sessions s ON s.key = r.session_key
+        WHERE r.ts >= ? GROUP BY 1 ORDER BY iet DESC LIMIT 15""", (since, since))
+    for row in per_commit:
+        row["iet_per_commit"] = row["iet"] // row["commits"] if row["commits"] else None
+
+    # 7. Context size: every request re-reads the whole prefix, so long sessions
+    #    pay O(n^2). Excess = cache reads above LONG_CTX per request.
+    ctx = "(r.input + r.cache_read + r.cache_create)"
+    buckets = _rows(conn, f"""
+        SELECT CASE WHEN {ctx} < 50000 THEN 'a <50k' WHEN {ctx} < 100000 THEN 'b 50-100k'
+                    WHEN {ctx} < 200000 THEN 'c 100-200k' WHEN {ctx} < 400000 THEN 'd 200-400k'
+                    ELSE 'e >=400k' END bucket,
+               COUNT(*) requests, CAST(SUM({IET}) AS INTEGER) iet
+        FROM requests r WHERE r.ts >= ? GROUP BY 1 ORDER BY 1""", p)
+    long_ctx = _rows(conn, f"""
+        SELECT CASE WHEN s.is_subagent THEN 'subagent' ELSE 'main' END kind, s.source, r.model,
+               COUNT(*) requests, CAST(AVG({ctx}) AS INTEGER) avg_ctx,
+               CAST(SUM(({ctx} - {LONG_CTX}) * {W_READ}) AS INTEGER) excess_iet
+        FROM requests r JOIN sessions s ON s.key = r.session_key
+        WHERE r.ts >= ? AND {ctx} > {LONG_CTX}
+        GROUP BY 1, 2, 3 ORDER BY excess_iet DESC""", p)
+    long_sessions = _rows(conn, f"""
+        SELECT s.project, CASE WHEN s.is_subagent THEN COALESCE(s.agent_type, 'subagent') ELSE 'main' END agent,
+               COUNT(*) requests, MAX({ctx}) peak_ctx,
+               CAST(SUM(MAX(0, {ctx} - {LONG_CTX}) * {W_READ}) AS INTEGER) excess_iet
+        FROM requests r JOIN sessions s ON s.key = r.session_key
+        WHERE r.ts >= ? GROUP BY r.session_key HAVING excess_iet > 0
+        ORDER BY excess_iet DESC LIMIT 10""", p)
+
+    candidates = [
+        {"id": "long_context", "iet": sum(r["excess_iet"] or 0 for r in long_ctx),
+         "what": f"Cache reads above {LONG_CTX:,} tokens/request: long sessions re-read the whole prefix every turn",
+         "detail": {"ctx_buckets": buckets, "by_kind_model": long_ctx, "top_sessions": long_sessions}},
+        {"id": "cache_rewrites", "iet": sum(r["excess_iet"] or 0 for r in rewrites),
+         "what": ("Mid-session cache writes >20k tokens instead of reads. Gap > TTL with same-or-grew"
+                  " context = cache expired while idle; compacted = auto-compaction rewrite"),
+         "detail": {"by_idle_gap": rewrite_gaps, "by_project": rewrites[:10]}},
+        {"id": "startup_context", "iet": sum(r["iet"] or 0 for r in startup),
+         "what": "First-request context every main session and subagent pays before acting",
+         "detail": {"by_agent": startup[:12], "instruction_files": instr}},
+        {"id": "big_tool_results", "iet": sum(r["iet"] or 0 for r in big),
+         "what": f"Tool results >{BIG_RESULT_CHARS} chars, written once then re-read by every later request",
+         "detail": big},
+        {"id": "redundant_reruns", "iet": sum(r["result_tokens"] for r in rerun_rows),
+         "what": "Same test/build command re-run with no edit in between (IET counts result tokens only)",
+         "detail": {"runs": runs_by_class, "top": rerun_rows}},
+        {"id": "uncached_input", "iet": int(sum((r["input"] or 0) * (1 - W_READ) for r in uncached)),
+         "what": "Providers/models whose prompts are mostly sent uncached (excess vs cache-read price)",
+         "detail": uncached},
+    ]
+    for c in candidates:
+        c["share_of_total"] = round(c["iet"] / total_iet, 3)
+    candidates.sort(key=lambda c: -c["iet"])
+    out["total_iet"] = total_iet
+    out["candidates"] = candidates
+    out["iet_per_commit"] = per_commit
+    return out
+
+
+def _detail_lines(detail, label: str = "") -> list[str]:
+    """One compact JSON object per row so the digest stays short in lines."""
+    if isinstance(detail, dict):
+        out = []
+        for k, v in detail.items():
+            out += _detail_lines(v, k)
+        return out
+    head = [f"{label}:"] if label else []
+    if isinstance(detail, list):
+        return head + ["    " + json.dumps(r, separators=(",", ":")) for r in detail]
+    return head + ["    " + json.dumps(detail, separators=(",", ":"))]
+
+
+def attach_prior_proposals(rep: dict, proposals: Path) -> None:
+    """Close the loop: for each filed proposal, its candidate's IET then vs now."""
+    if not proposals.exists():
+        return
+    now = {c["id"]: c["iet"] for c in rep["candidates"]}
+    rows = []
+    for line in proposals.read_text().splitlines():
+        try:
+            pp = json.loads(line)
+        except ValueError:
+            continue
+        rows.append({"filed": pp.get("filed", "?"), "candidate_id": pp.get("candidate_id"),
+                     "title": pp.get("title", "")[:80], "iet_then": int(pp.get("candidate_iet") or 0),
+                     "iet_now": int(now.get(pp.get("candidate_id"), 0))})
+    rep["prior_proposals"] = rows[-20:]
+
+
+def to_markdown(rep: dict) -> str:
+    lines = [f"# Token waste digest — last {rep['window_days']}d (since {rep['since']}Z)", "",
+             f"Total {rep['total_iet']:,} input-equivalent tokens. {rep['weights']}", "",
+             "## Totals by source/model", "",
+             "| source | model | requests | input | cache_read | cache_create | output | hit | IET |",
+             "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
+    for t in rep["totals"]:
+        lines.append(f"| {t['source']} | {t['model']} | {t['requests']:,} | {t['input']:,} | "
+                     f"{t['cache_read']:,} | {t['cache_create']:,} | {t['output']:,} | "
+                     f"{t['hit_ratio']} | {t['iet']:,} |")
+    lines += ["", "## Waste candidates (ranked)", ""]
+    for i, c in enumerate(rep["candidates"], 1):
+        lines += [f"### {i}. {c['id']} — {c['iet']:,} IET ({c['share_of_total']:.1%})", "", c["what"], ""]
+        lines += _detail_lines(c["detail"]) + [""]
+    if rep.get("prior_proposals"):
+        lines += ["## Prior proposals: candidate IET at filing vs now", "",
+                  "| filed | candidate | title | IET then | IET now |", "|---|---|---|---:|---:|"]
+        for pp in rep["prior_proposals"]:
+            lines.append(f"| {pp['filed']} | {pp['candidate_id']} | {pp['title']} | "
+                         f"{pp['iet_then']:,} | {pp['iet_now']:,} |")
+        lines.append("")
+    lines += ["## IET per commit", "", "| project | IET | commits | IET/commit |", "|---|---:|---:|---:|"]
+    for r in rep["iet_per_commit"]:
+        lines.append(f"| {r['project']} | {r['iet']:,} | {r['commits']} | "
+                     f"{'' if r['iet_per_commit'] is None else format(r['iet_per_commit'], ',')} |")
+    return "\n".join(lines) + "\n"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--db", type=Path, default=DEFAULT_DB)
+    ap.add_argument("--days", type=int, default=7)
+    ap.add_argument("--md", action="store_true", help="markdown (default JSON)")
+    ap.add_argument("--out", type=Path)
+    ap.add_argument("--proposals", type=Path, default=PROPOSALS)
+    a = ap.parse_args()
+    conn = sqlite3.connect(f"file:{a.db}?mode=ro", uri=True)
+    rep = build(conn, a.days)
+    attach_prior_proposals(rep, a.proposals)
+    text = to_markdown(rep) if a.md else json.dumps(rep, indent=1)
+    if a.out:
+        a.out.parent.mkdir(parents=True, exist_ok=True)
+        a.out.write_text(text)
+    else:
+        print(text)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -25,6 +25,11 @@ it, and a bad night never wedges the timer.
      to detector_hits/issues. Dry-run means "no nervous publish calls" — the
      local persistence (what prevalence/issues queries read) happens either
      way, so this is the right invocation for an unattended nightly pass.
+  2b. token_ledger.py, then token_report.py --md and --json
+     Incremental per-request usage ingest from session transcripts into
+     tokens.db, then the ranked token-waste digest under TOKEN_DIGEST_DIR
+     (latest.md / latest.json + a dated copy). The digest is sanitized by
+     construction; it is the ONLY input the daily mmx auditor reads.
   3. struggle_ledger.py --days STRUGGLE_WINDOW_DAYS --json
      Longitudinal friction ledger over the durable transcript archive.
      Captured here (not persisted — it has no store of its own) purely to
@@ -54,6 +59,7 @@ from typing import Optional
 HERE = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = Path.home() / ".cache" / "nervous-bus" / "reflex" / "runs.db"
 DIGEST_PATH = Path.home() / "knowledge" / "indexed" / "shared" / "reflex-digest.md"
+TOKEN_DIGEST_DIR = Path.home() / ".cache" / "nervous-bus" / "reflex" / "token-digest"
 
 # Fixed once — do NOT regenerate. Keeping this constant is what makes each
 # nightly run update the SAME kb-vault entry in place instead of forking a
@@ -482,6 +488,24 @@ def write_digest(text: str, digest_path: Path = DIGEST_PATH) -> None:
     digest_path.write_text(text)
 
 
+def run_token_digest(out_dir: Path, days: int, timeout: int) -> bool:
+    """Ingest new transcript usage, then write latest + dated token digests.
+    Non-fatal like label.py: the ledger resumes from per-file offsets."""
+    ingest = run_step("token_ledger.py", [sys.executable, "token_ledger.py"], timeout * 3)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    ok = ingest.ok
+    for fmt, ext in (("--md", "md"), (None, "json")):
+        dated = out_dir / f"{stamp}.{ext}"
+        cmd = [sys.executable, "token_report.py", "--days", str(days), "--out", str(dated)]
+        if fmt:
+            cmd.append(fmt)
+        res = run_step(f"token_report.py ({ext})", cmd, timeout)
+        if res.ok and dated.exists():
+            (out_dir / f"latest.{ext}").write_text(dated.read_text())
+        ok = ok and res.ok
+    return ok
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
@@ -507,6 +531,7 @@ def main() -> int:
             "never clobbers the real digest that the nightly timer maintains."
         ),
     )
+    ap.add_argument("--token-digest-dir", type=Path, default=TOKEN_DIGEST_DIR)
     args = ap.parse_args()
 
     if not args.db.exists():
@@ -529,6 +554,8 @@ def main() -> int:
          "--window-days", str(args.synthesis_window_days)],
         args.step_timeout,
     )
+
+    run_token_digest(args.token_digest_dir, args.window_days, args.step_timeout)
 
     digest = build_digest(
         args.db, label_result, detector_result,
