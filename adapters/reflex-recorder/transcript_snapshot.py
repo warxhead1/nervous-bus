@@ -97,12 +97,21 @@ def _list_src_dirs(src_root: str) -> Tuple[List[str], List[str]]:
 
 
 def _iter_jsonl(src_dir: str) -> List[str]:
-    """Sorted list of ``*.jsonl`` paths directly under src_dir."""
+    """Sorted ``*.jsonl`` paths directly under src_dir, plus subagent
+    transcripts at ``<session>/subagents/*.jsonl`` (where Claude Code writes
+    every Agent-tool child; they hold the subagents' per-request usage)."""
     try:
         names = os.listdir(src_dir)
     except OSError:
         return []
-    return sorted(os.path.join(src_dir, n) for n in names if n.endswith(".jsonl"))
+    paths = [os.path.join(src_dir, n) for n in names if n.endswith(".jsonl")]
+    for n in names:
+        sub = os.path.join(src_dir, n, "subagents")
+        try:
+            paths.extend(os.path.join(sub, m) for m in os.listdir(sub) if m.endswith(".jsonl"))
+        except OSError:
+            continue
+    return sorted(paths)
 
 
 # ── file-level mirror ─────────────────────────────────────────────────────────

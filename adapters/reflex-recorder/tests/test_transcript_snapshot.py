@@ -294,3 +294,21 @@ class TestStatsCLI(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSubagentTranscripts(unittest.TestCase):
+    """Agent-tool children live at <session>/subagents/*.jsonl and are mirrored."""
+
+    def test_subagent_files_mirrored(self):
+        with tempfile.TemporaryDirectory() as src_root, tempfile.TemporaryDirectory() as dst_root:
+            d = Path(src_root) / "-home-eric-data2-worktrees-p-x"
+            _write_jsonl(d / "sess-1.jsonl", 1)
+            _write_jsonl(d / "sess-1" / "subagents" / "agent-a1.jsonl", 3)
+            (d / "sess-1" / "tool-results").mkdir()
+
+            stats = ts.sync_once(src_root=src_root, dst_root=dst_root)
+
+            self.assertEqual(stats["files_new"], 2)
+            rel = "-home-eric-data2-worktrees-p-x/sess-1/subagents/agent-a1.jsonl"
+            self.assertEqual((Path(dst_root) / rel).read_bytes(),
+                             (Path(src_root) / rel).read_bytes())

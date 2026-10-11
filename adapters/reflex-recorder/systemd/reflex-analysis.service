@@ -14,7 +14,7 @@ WorkingDirectory=%h/projects/nervous-bus/adapters/reflex-recorder
 # per-step timeouts (default 300s) and never blocks past them, but give the
 # whole batch (3 steps + digest queries) headroom before systemd itself
 # would kill it.
-TimeoutStartSec=30min
+TimeoutStartSec=45min
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=reflex-analysis

@@ -339,3 +339,47 @@ systemctl --user enable --now reflex-analysis.timer
 systemctl --user list-timers reflex-analysis.timer
 journalctl --user -u reflex-analysis.service -n 100
 ```
+
+## Token ledger and the daily token audit
+
+The bus carries tool activity, not model requests. Per-request usage (input,
+cache read, cache write 5m/1h, output) lives in the session transcripts, so it
+gets its own ledger:
+
+- `token_ledger.py` ingests transcripts incrementally into
+  `~/.cache/nervous-bus/reflex/tokens.db` (tables `sessions`, `requests`,
+  `tool_calls`, `instructions`). Sources: the transcript mirror, live
+  `~/.claude/projects` (incl. `<session>/subagents/`), and `~/.mmx/projects`.
+  Per-file byte offsets; a full backfill of ~420k requests takes about 2 min.
+- `token_report.py [--days 7] [--md]` ranks waste candidates in
+  input-equivalent tokens (IET, API price ratios): `long_context`,
+  `cache_rewrites` (split by idle gap, TTL, compaction), `big_tool_results`,
+  `startup_context` (incl. instruction-file sizes), `redundant_reruns`,
+  `uncached_input`, plus IET per commit and the effect of prior proposals. The
+  digest is sanitized by construction: counts, model ids, project names, agent
+  types, command families, instruction-file paths. Never prompts, tool output,
+  full commands, or paths of files agents read.
+- The nightly batch runs both and writes `token-digest/latest.{md,json}`.
+- `automation/token-audit.md` is the `mmx-automation` recipe: a read-only
+  MiniMax run (`mmx-automation@nervous-bus--token-audit`, 06:30) reads ONLY the
+  digest and proposes ONE action. `automation/token_audit_publish.py` is the
+  host-side gate (ExecStartPost): it validates the proposal against the digest
+  (known candidate, saving <= measured IET, evidence rows verbatim, no duplicate
+  title), files a bead plus an issue on the private `claude-hook-fast` repo, and
+  appends to `proposals.jsonl`, which the next digest reads back to show whether
+  the fix moved its number.
+
+Install (after merge, from the shared checkout):
+
+```bash
+ln -sfn ~/projects/nervous-bus/adapters/reflex-recorder/automation/token-audit.md \
+  ~/.config/mmx-automations/recipes/token-audit.md
+for d in ~/projects/nervous-bus/adapters/reflex-recorder/automation/systemd/*.d; do
+  ln -sfn "$d" ~/.config/systemd/user/; done
+systemctl --user daemon-reload
+systemctl --user enable --now mmx-automation@nervous-bus--token-audit.timer
+```
+
+Non-LLM producers (`agent_kinds.NON_AGENT_KINDS`: tachyonac `cron`/`ingestor`
+job ticks) are dropped by the recorder; `retire_non_agent_runs.py` moves any
+backlog into `runs_non_agent.db`.
