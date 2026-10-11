@@ -26,6 +26,8 @@ lived cost of the work, longitudinally and across agents.
 from __future__ import annotations
 
 import argparse
+import glob
+import hashlib
 import json
 import os
 import re
@@ -40,6 +42,15 @@ from adapter_api import StruggleClass, struggle_classes_for, load_adapters  # no
 
 DEFAULT_SRC = os.path.expanduser("~/.cache/nervous-bus/reflex/transcripts")
 FALLBACK_SRC = os.path.expanduser("~/.claude/projects")
+MMX_MIRROR = os.path.join(DEFAULT_SRC, "mmx")
+MMX_LIVE = os.path.expanduser("~/.mmx/projects")
+CODEX_ROOTS = (
+    os.path.expanduser("~/.codex/sessions"),
+    os.path.expanduser("~/.config/orca/codex-accounts/*/home/sessions"),
+)
+GEMINI_TMP = os.path.expanduser("~/.gemini/tmp")
+GEMINI_PROJECTS = os.path.expanduser("~/.gemini/projects.json")
+ALL_SOURCES = ("claude", "mmx", "codex", "gemini")
 
 # Cheap line pre-filter: only JSON-parse records that look like friction OR a
 # remediation marker. Struggles are by definition error/contention text, so this
@@ -68,6 +79,7 @@ class StruggleEvent:
     session: str
     project: str
     snippet: str
+    source: str = "claude"
 
 
 @dataclass
@@ -82,6 +94,7 @@ class Remediation:
 class StruggleRecord:
     name: str
     project: str
+    source: str = "claude"
     total: int = 0
     sessions: set = field(default_factory=set)
     daily: Counter = field(default_factory=Counter)
@@ -123,6 +136,85 @@ def _blobs(rec: dict):
                 yield ("result", s)
         elif t == "text":
             yield ("text", c.get("text", "") or "")
+
+
+def _text_of(x) -> str:
+    """Flatten a str / list-of-{text} / dict payload to text (no image payloads)."""
+    if isinstance(x, str):
+        return x
+    if isinstance(x, list):
+        return "\n".join(str(i.get("text", "")) for i in x
+                         if isinstance(i, dict) and isinstance(i.get("text"), str))
+    if isinstance(x, dict):
+        return json.dumps(x)
+    return ""
+
+
+def _arg_strings(args) -> str:
+    """Command text from a tool-call argument blob: raw string values, so regexes
+    see unescaped quotes (same contract as the Claude tool_use branch)."""
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except Exception:
+            return args
+    if isinstance(args, dict):
+        parts = []
+        for v in args.values():
+            if isinstance(v, str):
+                parts.append(v)
+            elif isinstance(v, list) and all(isinstance(i, str) for i in v):
+                parts.append(" ".join(v))
+        return "\n".join(parts)
+    return ""
+
+
+def _blobs_codex(rec: dict):
+    """Blobs from a Codex rollout record ``{timestamp,type,payload}``.
+
+    Only ``response_item`` payloads carry content: function_call / custom_tool_call
+    (the command), their *_output (the result), and message (user/assistant text;
+    developer/system messages are injected instructions, not work, so skipped).
+    """
+    if rec.get("type") != "response_item":
+        return
+    p = rec.get("payload")
+    if not isinstance(p, dict):
+        return
+    t = p.get("type")
+    if t == "function_call":
+        yield ("command", _arg_strings(p.get("arguments")))
+    elif t == "custom_tool_call":
+        inp = p.get("input")
+        yield ("command", inp if isinstance(inp, str) else _arg_strings(inp))
+    elif t in ("function_call_output", "custom_tool_call_output"):
+        yield ("result", _text_of(p.get("output")))
+    elif t == "message" and p.get("role") in ("user", "assistant"):
+        yield ("text", _text_of(p.get("content")))
+
+
+def _blobs_gemini(msg: dict):
+    """Blobs from one Gemini CLI chat message (``content`` + ``toolCalls[]``)."""
+    if not isinstance(msg, dict):
+        return
+    txt = _text_of(msg.get("content"))
+    if txt:
+        yield ("text", txt)
+    for tc in msg.get("toolCalls") or []:
+        if not isinstance(tc, dict):
+            continue
+        yield ("command", _arg_strings(tc.get("args")))
+        for r in tc.get("result") or []:
+            fr = r.get("functionResponse") if isinstance(r, dict) else None
+            if not isinstance(fr, dict):
+                continue
+            resp = fr.get("response")
+            if isinstance(resp, dict):
+                for k in ("output", "error"):
+                    if isinstance(resp.get(k), str):
+                        yield ("result", resp[k])
+            elif isinstance(resp, str):
+                yield ("result", resp)
 
 
 def _extract_remediation(command: str, day: str, project: str) -> list[Remediation]:
@@ -173,12 +265,127 @@ def _candidate_files(files: list[str], days_limit: Optional[int]) -> list[str]:
     return [f for f, m in mtimes if m >= cutoff_ts]
 
 
-def scan(src: str, adapters=None,
-         days_limit: Optional[int] = None) -> tuple[list[StruggleEvent], list[Remediation], str]:
-    """Walk every *.jsonl under src; return (struggle_events, remediation_events, horizon).
+_ROLLOUT_SID_RE = re.compile(
+    r"rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-"
+    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$")
+
+
+def _default_roots(src: str) -> dict:
+    return {"claude": [src], "mmx": [MMX_LIVE, MMX_MIRROR],
+            "codex": list(CODEX_ROOTS), "gemini": [GEMINI_TMP]}
+
+
+def _gemini_project_names(projects_file: Optional[str] = None) -> dict:
+    """sha256(project root path) -> project name, from ~/.gemini/projects.json."""
+    try:
+        with open(projects_file or GEMINI_PROJECTS) as fh:
+            projects = (json.load(fh) or {}).get("projects", {})
+    except Exception:
+        return {}
+    return {hashlib.sha256(p.encode()).hexdigest(): n for p, n in projects.items()}
+
+
+def _gather_files(sources, roots: dict) -> list[tuple[str, str]]:
+    """(path, source) for every transcript file of the requested sources.
+
+    claude: <root>/*/*.jsonl and <root>/*.jsonl.  mmx: same layout over the live dir,
+    then the durable mirror for sessions mmx has since cleaned up (live wins on a
+    relpath collision).  codex: rollout-*.jsonl, deduped by session id across the
+    primary runtime and every Orca account root (they are hardlinked copies).
+    gemini: <tmp>/*/chats/*.json[l].
+    """
+    out: list[tuple[str, str]] = []
+    if "claude" in sources:
+        for r in roots["claude"]:
+            out += [(f, "claude") for f in glob.glob(os.path.join(r, "*", "*.jsonl"))
+                    + glob.glob(os.path.join(r, "*.jsonl"))]
+    if "mmx" in sources:
+        seen: set = set()
+        for r in roots["mmx"]:
+            for f in glob.glob(os.path.join(r, "*", "*.jsonl")) + glob.glob(os.path.join(r, "*.jsonl")):
+                rel = os.path.relpath(f, r)
+                if rel not in seen:
+                    seen.add(rel)
+                    out.append((f, "mmx"))
+    if "codex" in sources:
+        seen = set()
+        for pat in roots["codex"]:
+            for r in sorted(glob.glob(pat)):
+                for f in glob.glob(os.path.join(r, "*", "*", "*", "rollout-*.jsonl")):
+                    m = _ROLLOUT_SID_RE.search(f)
+                    sid = m.group(1) if m else f
+                    if sid not in seen:
+                        seen.add(sid)
+                        out.append((f, "codex"))
+    if "gemini" in sources:
+        for r in roots["gemini"]:
+            for ext in ("json", "jsonl"):
+                out += [(f, "gemini") for f in glob.glob(os.path.join(r, "*", "chats", f"*.{ext}"))]
+    return out
+
+
+def _units(path: str, source: str, gem_names: dict):
+    """Yield (raw, rec_or_None, ctx_or_None, blob_fn) per record of one file.
+
+    ctx = (project, session) when the file (not each record) carries them.
+    """
+    if source in ("claude", "mmx"):
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                yield line, None, None, _blobs
+        return
+    if source == "codex":
+        m = _ROLLOUT_SID_RE.search(path)
+        session = (m.group(1) if m else os.path.basename(path))[:12]
+        project = None
+        with open(path, errors="replace") as fh:
+            for i, line in enumerate(fh):
+                if project is None and i < 8 and '"cwd"' in line:
+                    # cwd lives in the first records (session_meta / turn_context)
+                    try:
+                        cwd = (json.loads(line).get("payload") or {}).get("cwd", "")
+                        project = _project_of(cwd) if cwd else None
+                    except Exception:
+                        pass
+                yield line, None, (project or "(unknown)", session), _blobs_codex
+        return
+    # gemini
+    proj_dir = os.path.basename(os.path.dirname(os.path.dirname(path)))
+    project = gem_names.get(proj_dir) or (
+        "(unknown)" if re.fullmatch(r"[0-9a-f]{64}", proj_dir) else proj_dir)
+    if path.endswith(".json"):
+        try:
+            with open(path, errors="replace") as fh:
+                doc = json.load(fh)
+        except Exception:
+            return
+        session = str(doc.get("sessionId", "") or os.path.basename(path))[:12]
+        for msg in doc.get("messages") or []:
+            if isinstance(msg, dict):
+                yield json.dumps(msg), msg, (project, session), _blobs_gemini
+        return
+    session = os.path.basename(path)[:12]
+    with open(path, errors="replace") as fh:
+        for i, line in enumerate(fh):
+            if i == 0:
+                try:
+                    session = str(json.loads(line).get("sessionId", "") or session)[:12]
+                except Exception:
+                    pass
+            yield line, None, (project, session), _blobs_gemini
+
+
+def scan(src: str, adapters=None, days_limit: Optional[int] = None,
+         sources=("claude",), roots: Optional[dict] = None
+         ) -> tuple[list[StruggleEvent], list[Remediation], str]:
+    """Walk the transcripts; return (struggle_events, remediation_events, horizon).
 
     horizon = most recent record date across ALL records (the data-window end), used
     to decide open-vs-resolved relative to *now*, not relative to the last struggle.
+
+    src is the Claude transcript root; ``sources`` picks which agents are read
+    (default Claude only, so existing callers are unchanged) and ``roots`` overrides
+    the per-source locations (tests). Every event carries its ``source``.
 
     days_limit, when given, is used ONLY to shrink the candidate file set via
     _candidate_files() (a stat-only mtime prefilter) before any file is opened —
@@ -188,39 +395,45 @@ def scan(src: str, adapters=None,
     scanning everything and filtering afterward. See _candidate_files() for why
     the prefilter cannot drop an in-window record.
     """
-    import glob
     adapters = adapters if adapters is not None else load_adapters()
     classes_cache: dict[str, list[StruggleClass]] = {}
     events: list[StruggleEvent] = []
     remed: list[Remediation] = []
     horizon = ""
+    roots = roots or _default_roots(src)
 
-    all_files = glob.glob(os.path.join(src, "*", "*.jsonl")) + glob.glob(os.path.join(src, "*.jsonl"))
-    for f in _candidate_files(all_files, days_limit):
-        with open(f, errors="replace") as fh:
-            for line in fh:
-                m = _TS_RE.search(line)
+    tagged = dict(_gather_files(sources, roots))
+    gem_names = _gemini_project_names() if "gemini" in sources else {}
+    for f in _candidate_files(list(tagged), days_limit):
+        source = tagged[f]
+        try:
+            for raw, rec, ctx, blob_fn in _units(f, source, gem_names):
+                m = _TS_RE.search(raw)
                 if m and m.group(1) > horizon:
                     horizon = m.group(1)
-                low = line.lower()
+                low = raw.lower()
                 has_fr = any(t in low for t in _FRICTION_TRIGGERS)
                 has_fix = any(t in low for t in _FIX_TRIGGERS)
                 if not (has_fr or has_fix):
                     continue
-                try:
-                    rec = json.loads(line)
-                except Exception:
-                    continue
+                if rec is None:
+                    try:
+                        rec = json.loads(raw)
+                    except Exception:
+                        continue
                 day = (rec.get("timestamp", "") or "")[:10]
                 if not day:
                     continue
-                project = _project_of(rec.get("cwd", ""))
-                session = (rec.get("sessionId", "") or "")[:12]
+                if ctx is None:
+                    project = _project_of(rec.get("cwd", ""))
+                    session = (rec.get("sessionId", "") or "")[:12]
+                else:
+                    project, session = ctx
                 classes = classes_cache.get(project)
                 if classes is None:
                     classes = struggle_classes_for(project, adapters)
                     classes_cache[project] = classes
-                for kind, blob in _blobs(rec):
+                for kind, blob in blob_fn(rec):
                     if not blob:
                         continue
                     if has_fix and kind == "command":
@@ -234,7 +447,9 @@ def scan(src: str, adapters=None,
                         if sc.pattern.search(blob):
                             events.append(StruggleEvent(
                                 sc.name, day, session, project,
-                                re.sub(r"\s+", " ", blob)[:140]))
+                                re.sub(r"\s+", " ", blob)[:140], source))
+        except OSError:
+            continue  # file reaped between glob and open
     return events, remed, horizon
 
 
@@ -248,10 +463,12 @@ def _parse(d: str) -> date:
 def build_ledger(events: list[StruggleEvent]) -> dict[tuple[str, str], StruggleRecord]:
     recs: dict[tuple, StruggleRecord] = {}
     for e in events:
-        key = (e.project, e.name)
+        # Claude keeps the legacy (project, name) key; other agents get their own row
+        # per source so the digest can split per agent.
+        key = (e.project, e.name) if e.source == "claude" else (e.project, e.name, e.source)
         r = recs.get(key)
         if r is None:
-            r = recs[key] = StruggleRecord(e.name, e.project)
+            r = recs[key] = StruggleRecord(e.name, e.project, e.source)
         r.total += 1
         r.sessions.add(e.session)
         r.daily[e.day] += 1
@@ -333,19 +550,20 @@ def render(recs: dict, remed: list[Remediation], maxday: str, days: list[str],
     rows.sort(key=lambda r: (-len(r.sessions), -r.total))
     out = [f"Struggle Ledger — window {days[0] if days else '?'}..{maxday} "
            f"({len(days)} active days)\n"]
-    out.append(f"{'project':<16}{'struggle':<18}{'evt':>5}{'sess':>5}  "
+    out.append(f"{'project':<16}{'src':<7}{'struggle':<18}{'evt':>5}{'sess':>5}  "
                f"{'last':>10} {'status':<9}{'fix verdict':<16} trend")
     for r in rows:
-        out.append(f"{r.project[:15]:<16}{r.name[:17]:<18}{r.total:>5}{len(r.sessions):>5}  "
+        out.append(f"{r.project[:15]:<16}{r.source[:6]:<7}{r.name[:17]:<18}{r.total:>5}{len(r.sessions):>5}  "
                    f"{r.last:>10} {r.status:<9}{r.fix_verdict:<16} {_sparkline(r.daily, days)}")
     return "\n".join(out)
 
 
 # ── orchestration ────────────────────────────────────────────────────────────
 
-def run(src: str, project: Optional[str] = None, days_limit: Optional[int] = None):
+def run(src: str, project: Optional[str] = None, days_limit: Optional[int] = None,
+        sources=("claude",), roots: Optional[dict] = None):
     adapters = load_adapters()
-    events, remed, horizon = scan(src, adapters, days_limit)
+    events, remed, horizon = scan(src, adapters, days_limit, sources, roots)
     if not events:
         return {}, [], "", []
     maxday = horizon or max(e.day for e in events)
@@ -357,7 +575,8 @@ def run(src: str, project: Optional[str] = None, days_limit: Optional[int] = Non
     days = sorted({e.day for e in events})
     # resolve per-project classes once for fix keyword lookup
     cls_by_proj = {}
-    for (proj, name), r in recs.items():
+    for r in recs.values():
+        proj, name = r.project, r.name
         r.status = _status(r.last, maxday)
         sc = cls_by_proj.setdefault(proj, {sc.name: sc for sc in struggle_classes_for(proj, adapters)}).get(name)
         correlate_fixes(r, remed, maxday, sc)
@@ -372,16 +591,26 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--days", type=int, default=None, help="limit to last N days")
     ap.add_argument("--struggle", default=None, help="drill into one struggle (timeline + examples)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--sources", default=None,
+                    help="comma list of agents to read (claude,mmx,codex,gemini); default: all, "
+                         "or claude only when --src is given")
     args = ap.parse_args(argv)
+    if args.sources:
+        sources = tuple(x.strip() for x in args.sources.split(",") if x.strip())
+        bad = [x for x in sources if x not in ALL_SOURCES]
+        if bad:
+            ap.error(f"unknown source(s) {bad}; choose from {ALL_SOURCES}")
+    else:
+        sources = ("claude",) if args.src else ALL_SOURCES
 
     src = args.src or (DEFAULT_SRC if os.path.isdir(DEFAULT_SRC) else FALLBACK_SRC)
-    recs, remed, maxday, days = run(src, args.project, args.days)
+    recs, remed, maxday, days = run(src, args.project, args.days, sources)
     if not recs:
         print("no struggles found", file=sys.stderr)
         return 0
 
     if args.json:
-        out = [{"project": r.project, "struggle": r.name, "events": r.total,
+        out = [{"project": r.project, "struggle": r.name, "source": r.source, "events": r.total,
                 "sessions": len(r.sessions), "first": r.first, "last": r.last,
                 "status": r.status, "fix_verdict": r.fix_verdict,
                 "fix_evidence": r.fix_evidence}
@@ -393,7 +622,7 @@ def main(argv: list[str]) -> int:
         hits = [r for r in recs.values() if r.name == args.struggle
                 and (not args.project or r.project == args.project)]
         for r in hits:
-            print(f"\n## {r.project} / {r.name}  ({r.total} events, {len(r.sessions)} sessions, "
+            print(f"\n## {r.project} / {r.name} [{r.source}]  ({r.total} events, {len(r.sessions)} sessions, "
                   f"{r.first}..{r.last}, {r.status})")
             print(f"   fix: {r.fix_verdict} — {r.fix_evidence}")
             print(f"   trend: {_sparkline(r.daily, days)}")

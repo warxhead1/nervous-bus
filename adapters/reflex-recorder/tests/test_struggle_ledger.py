@@ -245,5 +245,153 @@ class TestMtimePrefilter(unittest.TestCase):
             self.assertTrue(full_windowed, "fixture must actually produce events")
 
 
+# ── multi-agent formats (synthetic; no real transcript content) ──────────────
+
+SID_A = "019aaaaa-1111-2222-3333-444455556666"
+SID_B = "019bbbbb-1111-2222-3333-444455556666"
+BUSY = "error: Device or resource busy"
+
+
+def _codex_line(day, ptype, **payload):
+    return json.dumps({"timestamp": f"{day}T10:00:00.000Z", "type": "response_item",
+                       "payload": {"type": ptype, **payload}})
+
+
+def _codex_rollout(root, sid, day, cwd, lines):
+    d = os.path.join(root, *day.split("-"))
+    meta = json.dumps({"timestamp": f"{day}T09:00:00.000Z", "type": "session_meta",
+                       "payload": {"id": sid, "cwd": cwd}})
+    _write(d, f"rollout-{day}T09-00-00-{sid}.jsonl", [meta] + lines)
+
+
+class TestMultiFormat(unittest.TestCase):
+    def _roots(self, tmp):
+        return {"claude": [os.path.join(tmp, "claude")],
+                "mmx": [os.path.join(tmp, "mmx-live"), os.path.join(tmp, "mmx-mirror")],
+                "codex": [os.path.join(tmp, "codex"), os.path.join(tmp, "acct-*", "sessions")],
+                "gemini": [os.path.join(tmp, "gemini")]}
+
+    def test_blobs_codex_shapes(self):
+        recs = [json.loads(_codex_line("2026-08-01", "function_call", name="exec_command",
+                                       arguments=json.dumps({"cmd": "make -j8", "workdir": "/x"}))),
+                json.loads(_codex_line("2026-08-01", "custom_tool_call", name="apply_patch",
+                                       input="*** Begin Patch")),
+                json.loads(_codex_line("2026-08-01", "function_call_output", output=BUSY)),
+                json.loads(_codex_line("2026-08-01", "custom_tool_call_output",
+                                       output=[{"type": "text", "text": BUSY}])),
+                json.loads(_codex_line("2026-08-01", "message", role="assistant",
+                                       content=[{"type": "output_text", "text": "hello"}])),
+                json.loads(_codex_line("2026-08-01", "message", role="developer",
+                                       content=[{"type": "input_text", "text": "injected"}])),
+                {"type": "event_msg", "payload": {"type": "token_count"}}]
+        out = [b for r in recs for b in SL._blobs_codex(r)]
+        self.assertEqual(out, [("command", "make -j8\n/x"), ("command", "*** Begin Patch"),
+                               ("result", BUSY), ("result", BUSY), ("text", "hello")])
+
+    def test_blobs_gemini_shapes(self):
+        msg = {"type": "gemini", "content": "ok", "toolCalls": [
+            {"name": "run_shell_command", "args": {"command": "ls"},
+             "result": [{"functionResponse": {"name": "x", "response": {"output": BUSY}}}]}]}
+        self.assertEqual(list(SL._blobs_gemini(msg)),
+                         [("text", "ok"), ("command", "ls"), ("result", BUSY)])
+        self.assertEqual(list(SL._blobs_gemini({"content": [{"text": "listy"}]})), [("text", "listy")])
+
+    def test_scan_all_sources_tagged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            roots = self._roots(tmp)
+            _write(os.path.join(roots["claude"][0], "p"), "s.jsonl",
+                   [_rec("2026-08-01", "claude-sess", CWD, result=BUSY)])
+            _write(os.path.join(roots["mmx"][0], "p"), "m.jsonl",
+                   [_rec("2026-08-02", "mmx-sess", CWD, result=BUSY)])
+            _codex_rollout(roots["codex"][0], SID_A, "2026-08-03", CWD, [
+                _codex_line("2026-08-03", "function_call_output", output=BUSY)])
+            gdir = os.path.join(roots["gemini"][0], "myproj", "chats")
+            os.makedirs(gdir)
+            with open(os.path.join(gdir, "session-1.json"), "w") as f:
+                json.dump({"sessionId": "gem-session-1", "messages": [
+                    {"type": "gemini", "timestamp": "2026-08-04T10:00:00Z", "content": "",
+                     "toolCalls": [{"args": {"command": "x"}, "result": [
+                         {"functionResponse": {"response": {"output": BUSY}}}]}]}]}, f)
+            events, _, horizon = SL.scan("", adapters=[], sources=SL.ALL_SOURCES, roots=roots)
+            got = {e.source: (e.project, e.day) for e in events}
+            self.assertEqual(got, {"claude": ("myproj", "2026-08-01"), "mmx": ("myproj", "2026-08-02"),
+                                   "codex": ("myproj", "2026-08-03"),
+                                   "gemini": ("myproj", "2026-08-04")})
+            self.assertEqual(horizon, "2026-08-04")
+            # default sources stay claude-only
+            only, _, _ = SL.scan(roots["claude"][0], adapters=[], roots=roots)
+            self.assertEqual({e.source for e in only}, {"claude"})
+
+    def test_codex_dedupes_account_roots_by_session_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            roots = self._roots(tmp)
+            line = [_codex_line("2026-08-03", "function_call_output", output=BUSY)]
+            _codex_rollout(roots["codex"][0], SID_A, "2026-08-03", CWD, line)
+            _codex_rollout(os.path.join(tmp, "acct-1", "sessions"), SID_A, "2026-08-03", CWD, line)
+            _codex_rollout(os.path.join(tmp, "acct-2", "sessions"), SID_B, "2026-08-03", CWD, line)
+            files = SL._gather_files(("codex",), roots)
+            self.assertEqual(len(files), 2)
+            events, _, _ = SL.scan("", adapters=[], sources=("codex",), roots=roots)
+            self.assertEqual(len(events), 2)
+            self.assertEqual({e.session for e in events}, {SID_A[:12], SID_B[:12]})
+
+    def test_mmx_live_wins_over_mirror_and_mirror_covers_reaped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            roots = self._roots(tmp)
+            _write(os.path.join(roots["mmx"][0], "p"), "same.jsonl", ["{}"])
+            _write(os.path.join(roots["mmx"][1], "p"), "same.jsonl", ["{}"])
+            _write(os.path.join(roots["mmx"][1], "p"), "reaped.jsonl", ["{}"])
+            files = sorted(f for f, _ in SL._gather_files(("mmx",), roots))
+            self.assertEqual(files, sorted([os.path.join(roots["mmx"][1], "p", "reaped.jsonl"),
+                                            os.path.join(roots["mmx"][0], "p", "same.jsonl")]))
+
+    def test_gemini_project_from_hash_and_jsonl_format(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            roots = self._roots(tmp)
+            root_path = "/home/eric/projects/hashed"
+            h = hashlib.sha256(root_path.encode()).hexdigest()
+            names = os.path.join(tmp, "projects.json")
+            with open(names, "w") as f:
+                json.dump({"projects": {root_path: "hashed"}}, f)
+            self.assertEqual(SL._gemini_project_names(names), {h: "hashed"})
+            gdir = os.path.join(roots["gemini"][0], h, "chats")
+            _write(gdir, "session-2.jsonl", [
+                json.dumps({"sessionId": "jsonl-sess-9", "projectHash": h}),
+                json.dumps({"id": "1", "timestamp": "2026-08-05T10:00:00Z", "type": "gemini",
+                            "content": BUSY}),
+                json.dumps({"$set": {"lastUpdated": "x"}})])
+            orig = SL.GEMINI_PROJECTS
+            SL.GEMINI_PROJECTS = names
+            try:
+                events, _, _ = SL.scan("", adapters=[], sources=("gemini",), roots=roots)
+            finally:
+                SL.GEMINI_PROJECTS = orig
+            self.assertEqual([(e.project, e.session, e.source) for e in events],
+                             [("hashed", "jsonl-sess-9", "gemini")])
+
+    def test_ledger_rows_split_by_source_and_claude_key_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            roots = self._roots(tmp)
+            _write(os.path.join(roots["claude"][0], "p"), "s.jsonl",
+                   [_rec("2026-08-01", "cs", CWD, result=BUSY)])
+            _codex_rollout(roots["codex"][0], SID_A, "2026-08-01", CWD, [
+                _codex_line("2026-08-01", "function_call_output", output=BUSY)])
+            recs, _, _, _ = SL.run(roots["claude"][0], sources=("claude", "codex"), roots=roots)
+            self.assertEqual(recs[("myproj", "resource_busy")].source, "claude")
+            self.assertEqual(recs[("myproj", "resource_busy", "codex")].source, "codex")
+            out = main_json(["--src", roots["claude"][0]])
+            self.assertEqual([r["source"] for r in out], ["claude"])
+
+
+def main_json(argv):
+    import io
+    from contextlib import redirect_stdout
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        SL.main(argv + ["--json"])
+    return json.loads(buf.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

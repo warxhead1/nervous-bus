@@ -26,10 +26,25 @@ import shutil
 import sys
 import tempfile
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 DEFAULT_SRC: str = os.path.expanduser("~/.claude/projects")
 DEFAULT_DST: str = os.path.expanduser("~/.cache/nervous-bus/reflex/transcripts")
+MMX_SRC: str = os.path.expanduser("~/.mmx/projects")
+
+
+def default_sources(dst_root: str = DEFAULT_DST) -> List[Tuple[str, str, str]]:
+    """``(name, src_root, dst_root)`` for every agent whose transcripts get mirrored.
+
+    claude keeps the legacy layout (dst_root itself, so existing mirror paths do
+    not move); every other source gets its own ``<dst_root>/<name>/`` subdir with
+    its own manifest.  Codex rollouts are deliberately NOT mirrored: nothing reaps
+    them (see struggle_ledger, which reads them in place).
+    """
+    return [
+        ("claude", DEFAULT_SRC, dst_root),
+        ("mmx", MMX_SRC, os.path.join(dst_root, "mmx")),
+    ]
 
 MANIFEST_NAME = ".manifest.json"
 
@@ -232,6 +247,36 @@ def sync_once(src_root: str = DEFAULT_SRC, dst_root: str = DEFAULT_DST) -> Dict[
     return stats
 
 
+def sync_all(sources: List[Tuple[str, str, str]] = None,
+             dst_root: str = DEFAULT_DST) -> Dict[str, Any]:
+    """Run :func:`sync_once` for each ``(name, src, dst)``; one source failing never
+    stops the others.  Top-level keys are totals across sources (so the journal
+    line keeps its shape); ``sources`` carries the per-source breakdown.
+    """
+    sources = sources if sources is not None else default_sources(dst_root)
+    total: Dict[str, Any] = {
+        "files_seen": 0, "files_new": 0, "files_appended": 0,
+        "files_recopied": 0, "bytes_copied": 0, "errors": [], "sources": {},
+    }
+    order: List[str] = []
+    for name, src, dst in sources:
+        if name != "claude" and not os.path.isdir(src):
+            total["sources"][name] = {"skipped": "src missing"}
+            continue
+        try:
+            st = sync_once(src, dst)
+        except Exception as e:  # never let one source starve the rest
+            total["errors"].append(f"{name}: {type(e).__name__}: {e}")
+            continue
+        order.extend(f"{name}:{r}" for r in st.pop("process_order", []))
+        for k in ("files_seen", "files_new", "files_appended", "files_recopied", "bytes_copied"):
+            total[k] += st[k]
+        total["errors"].extend(f"{name}: {e}" for e in st["errors"])
+        total["sources"][name] = {k: v for k, v in st.items() if k != "errors"}
+    total["process_order"] = order
+    return total
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def print_stats(dst_root: str = DEFAULT_DST) -> Dict[str, Any]:
@@ -242,17 +287,28 @@ def print_stats(dst_root: str = DEFAULT_DST) -> Dict[str, Any]:
         "files": len(manifest),
         "bytes": sum(int(v.get("size", 0)) for v in manifest.values()),
     }
+    sub = os.path.join(dst_root, "mmx")
+    if os.path.isdir(sub):
+        m = _load_manifest(sub)
+        out["mmx"] = {"files": len(m), "bytes": sum(int(v.get("size", 0)) for v in m.values())}
     print(json.dumps(out, sort_keys=True))
     return out
 
 
-def _watch(src_root: str, dst_root: str, seconds: float) -> None:
+def _sync(src_root: Optional[str], dst_root: str) -> Dict[str, Any]:
+    """An explicit --src is the legacy single-root mode; otherwise mirror every source."""
+    if src_root is not None:
+        return sync_once(src_root, dst_root)
+    return sync_all(None, dst_root)
+
+
+def _watch(src_root: Optional[str], dst_root: str, seconds: float) -> None:
     """Poll loop: sync_once every ``seconds``, flushing stdout each cycle."""
     if seconds <= 0:
         seconds = 1.0
     while True:
         try:
-            stats = sync_once(src_root, dst_root)
+            stats = _sync(src_root, dst_root)
         except Exception as e:
             # sync_once already catches per-file errors; reaching this branch
             # means a top-level fault. Log and keep looping for self-healing.
@@ -269,7 +325,8 @@ def main(argv: List[str]) -> int:
         prog="transcript_snapshot.py",
         description="Durable incremental mirror of Claude Code session JSONL transcripts.",
     )
-    ap.add_argument("--src", default=DEFAULT_SRC, help="source root")
+    ap.add_argument("--src", default=None,
+                    help="single source root (legacy mode); omit to mirror all agent sources")
     ap.add_argument("--dst", default=DEFAULT_DST, help="destination root")
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--once", action="store_true", help="single sync pass and exit")
@@ -279,7 +336,7 @@ def main(argv: List[str]) -> int:
 
     try:
         if args.once:
-            stats = sync_once(args.src, args.dst)
+            stats = _sync(args.src, args.dst)
             stats.pop("process_order", None)  # tests use the return value; keep journals lean
             print(json.dumps(stats, sort_keys=True))
             return 0
