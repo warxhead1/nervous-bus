@@ -9,7 +9,8 @@ is the one deterministic gate between that report and the work queue:
      must exist, rung must be eliminate|automate|inform, the claimed saving must
      not exceed the candidate's measured IET, and every quoted evidence row must
      appear verbatim in the digest markdown;
-  3. refuse duplicates (same title already in proposals.jsonl);
+  3. refuse duplicates: same title ever, or same candidate_id within
+     CANDIDATE_COOLDOWN_DAYS (its effect is not readable yet);
   4. file a bead (nervous-bus .beads, label token-efficiency) and, with
      --gh-repo, a GitHub issue (default: the PRIVATE claude-hook-fast repo,
      never the public nervous-bus repo);
@@ -27,13 +28,16 @@ import json
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 DIGEST_DIR = Path.home() / ".cache" / "nervous-bus" / "reflex" / "token-digest"
 BEADS_REPO = Path.home() / "projects" / "nervous-bus"
 DEFAULT_GH_REPO = "warxhead1/claude-hook-fast"
 RUNGS = {"eliminate", "automate", "inform"}
+# A filed candidate needs a week of data before its effect is readable, and
+# MiniMax rephrases titles freely: refuse the same candidate within this window.
+CANDIDATE_COOLDOWN_DAYS = 7
 _FENCE = re.compile(r"```json\s*\n(.*?)\n```", re.S)
 
 
@@ -58,11 +62,18 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", "", s)
 
 
-def validate(prop: dict, digest: dict, digest_md: str, prior_titles: set[str]) -> dict:
+def validate(prop: dict, digest: dict, digest_md: str, prior: list[dict],
+             today: date | None = None) -> dict:
     cands = {c["id"]: c for c in digest.get("candidates", [])}
     cid = prop.get("candidate_id")
     if cid not in cands:
         raise Rejected(f"candidate_id {cid!r} not in digest ({sorted(cands)})")
+    cutoff = (today or date.today()) - timedelta(days=CANDIDATE_COOLDOWN_DAYS)
+    for pp in prior:
+        if pp.get("candidate_id") == cid and str(pp.get("filed", "")) > cutoff.isoformat():
+            raise Rejected(f"candidate {cid!r} already filed on {pp['filed']} (cooldown "
+                           f"{CANDIDATE_COOLDOWN_DAYS}d): {pp.get('title', '')!r}")
+    prior_titles = {str(pp.get("title", "")).strip().lower() for pp in prior}
     title = str(prop.get("title") or "").strip()
     if not title or len(title) > 90:
         raise Rejected("title missing or longer than 90 chars")
@@ -103,12 +114,12 @@ def publish(report_path: Path, digest_dir: Path, gh_repo: str | None, dry_run: b
     digest = json.loads((digest_dir / "latest.json").read_text())
     digest_md = (digest_dir / "latest.md").read_text()
     ledger = digest_dir / "proposals.jsonl"
-    prior = set()
+    prior: list[dict] = []
     if ledger.exists():
         for line in ledger.read_text().splitlines():
             try:
-                prior.add(json.loads(line)["title"].strip().lower())
-            except (ValueError, KeyError):
+                prior.append(json.loads(line))
+            except ValueError:
                 continue
     prop = extract(report)
     cand = validate(prop, digest, digest_md, prior)

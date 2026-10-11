@@ -39,6 +39,7 @@ import subprocess
 import sys
 import time
 import uuid
+import dataclasses
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -610,20 +611,23 @@ def _rebuild_cache_miss_replay(
     if not hit_run_ids:
         # Fallback: if no hits for this signature, check all rebuild_cache_miss hits
         # in the window (handles case where signature is empty or not yet recorded)
-        hit_run_ids = [
-            row[0]
-            for row in conn.execute(
+        fb_key = (id(conn), window_days)
+        if fb_key not in _CARGO_FALLBACK_CACHE:
+            _CARGO_FALLBACK_CACHE[fb_key] = [
+                row[0]
+                for row in conn.execute(
                 """
-                SELECT DISTINCT re.run_id
-                FROM run_events re
-                JOIN runs r ON r.run_id = re.run_id
-                WHERE re.raw_json LIKE '%cargo%'
-                  AND r.close_reason IS NOT NULL
-                  AND re.event_ts >= ?
-                """,
-                (window_cutoff,),
-            ).fetchall()
-        ]
+                    SELECT DISTINCT re.run_id
+                    FROM run_events re
+                    JOIN runs r ON r.run_id = re.run_id
+                    WHERE re.raw_json LIKE '%cargo%'
+                      AND r.close_reason IS NOT NULL
+                      AND re.event_ts >= ?
+                    """,
+                    (window_cutoff,),
+                ).fetchall()
+            ]
+        hit_run_ids = _CARGO_FALLBACK_CACHE[fb_key]
 
     if not hit_run_ids:
         return ReplayResult(
@@ -632,6 +636,42 @@ def _rebuild_cache_miss_replay(
             method="No rebuild_cache_miss hits found for this signature in window.",
             measurability_note=f"Need >= {MIN_REPLAY_RUNS} hits. window_days={window_days}.",
         )
+
+    # Everything below depends only on (hit_run_ids, window, logical_runs), not on
+    # the signature. Signatures with no hits of their own all fall back to the same
+    # cargo-run set, so one synthesis pass computed the same replay ~40 times
+    # (344s of 501s, 2026-10-11 profile).
+    memo_key = (id(conn), window_days, id(logical_runs), frozenset(hit_run_ids))
+    if memo_key in _CARGO_REPLAY_CACHE:
+        return dataclasses.replace(_CARGO_REPLAY_CACHE[memo_key])
+    result = _rebuild_cache_miss_replay_core(
+        conn, logical_runs, hit_run_ids, window_cutoff, window_days)
+    _CARGO_REPLAY_CACHE[memo_key] = result
+    return dataclasses.replace(result)
+
+
+_CARGO_FALLBACK_CACHE: dict[tuple, list[str]] = {}
+_CARGO_REPLAY_CACHE: dict[tuple, "ReplayResult"] = {}
+
+
+def _rebuild_cache_miss_replay_core(
+    conn: sqlite3.Connection,
+    logical_runs: dict[str, list[str]],
+    hit_run_ids: list[str],
+    window_cutoff: str,
+    window_days: int,
+) -> ReplayResult:
+    from detectors.rebuild_cache_miss import (
+        _extract_command,
+        _extract_cwd,
+        _is_cargo_build_command,
+        _is_worktree_cwd,
+        _extract_crate_target,
+        _parse_event_ts,
+        SLOW_BUILD_MULTIPLIER,
+        ABSOLUTE_SLOW_BUILD_FLOOR_S,
+    )
+    import statistics
 
     placeholders = ",".join("?" * len(hit_run_ids))
     rows = conn.execute(
@@ -1353,6 +1393,8 @@ def run_synthesis(
 
     Returns a SynthesisResult with the eval payloads.
     """
+    _CARGO_FALLBACK_CACHE.clear()
+    _CARGO_REPLAY_CACHE.clear()
     result = SynthesisResult()
     synthesis_pass_at = _now_utc()
     ensure_eval_schema(conn)

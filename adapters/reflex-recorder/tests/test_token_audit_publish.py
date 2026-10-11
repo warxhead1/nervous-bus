@@ -55,6 +55,17 @@ class TestPublish(unittest.TestCase):
                 self._run(text)
             self.assertIn(needle, str(ctx.exception))
 
+    def test_candidate_cooldown(self):
+        recent = pub.date.today().isoformat()
+        (self.dir / "proposals.jsonl").write_text(json.dumps(
+            {"title": "something else", "candidate_id": "cache_rewrites", "filed": recent}) + "\n")
+        with self.assertRaises(pub.Rejected) as ctx:
+            self._run(_report())
+        self.assertIn("cooldown", str(ctx.exception))
+        (self.dir / "proposals.jsonl").write_text(json.dumps(
+            {"title": "something else", "candidate_id": "cache_rewrites", "filed": "2026-01-01"}) + "\n")
+        self.assertTrue(self._run(_report())["dry_run"])
+
     def test_duplicate_title_rejected(self):
         (self.dir / "proposals.jsonl").write_text(
             json.dumps({"title": "Give subagents the 1h cache TTL"}) + "\n")
