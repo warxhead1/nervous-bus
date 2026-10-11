@@ -54,6 +54,10 @@ class TestReport(unittest.TestCase):
                          [("subagent", "b 5-60m", 151_000)])
         wb = cands["cache_rewrites"]["detail"]["all_cache_writes"]
         self.assertEqual([(w["kind"], w["ttl5m_tokens"]) for w in wb], [("subagent", 202_000)])
+        # 151k idle rewrite * (1.25-0.1) - the other 51k writes * (2.0-1.25)
+        ta = cands["cache_rewrites"]["detail"]["ttl_by_agent_type"]
+        self.assertEqual([(t["agent_type"], t["idle_rewrite_5m_tokens"], t["net_if_1h_iet"]) for t in ta],
+                         [("subagent?", 151_000, 135_400)])
         self.assertGreater(cands["long_context"]["iet"], 0)
         top = cands["redundant_reruns"]["detail"]["top"]
         self.assertEqual(top[0]["command"], "cargo test")
