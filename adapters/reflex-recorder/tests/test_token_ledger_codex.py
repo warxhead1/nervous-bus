@@ -105,6 +105,32 @@ class TestCodexLedger(unittest.TestCase):
             f.write(_tc("2026-10-01T00:00:08.000Z", (3500, 2900, 99, 31), (500, 400, 9, 1)) + "\n")
         self.assertEqual(self._run(a, b)["requests_added"], 3)
 
+    def test_model_backfilled_when_turn_context_arrives_late(self):
+        a = self.root / "a"
+        p = a / "2026" / "10" / "01" / NAME
+        p.parent.mkdir(parents=True)
+        meta = json.dumps({"timestamp": "2026-10-01T00:00:00Z", "type": "session_meta",
+                           "payload": {"id": UUID, "cwd": "/home/eric/projects/demo"}})
+        ctx = json.dumps({"timestamp": "2026-10-01T00:00:02Z", "type": "turn_context",
+                          "payload": {"model": "gpt-late"}})
+        p.write_text("\n".join([meta, _tc("2026-10-01T00:00:01Z", (10, 0, 1, 0), (10, 0, 1, 0)), ctx,
+                                _tc("2026-10-01T00:00:03Z", (30, 0, 3, 0), (20, 0, 2, 0))]) + "\n")
+        self._run(a)
+        c = tl.connect(self.db)
+        self.assertEqual([r[0] for r in c.execute("SELECT model FROM requests ORDER BY seq")],
+                         ["gpt-late", "gpt-late"])
+
+    def test_cache_write_tokens_are_kept_when_reported(self):
+        a = self.root / "a"
+        p = _place(a)
+        line = json.loads(_tc("2026-10-01T00:00:08.000Z", (3500, 2900, 99, 31), (500, 400, 9, 1)))
+        line["payload"]["info"]["last_token_usage"]["cache_write_input_tokens"] = 77
+        with open(p, "a") as f:
+            f.write(json.dumps(line) + "\n")
+        self._run(a)
+        c = tl.connect(self.db)
+        self.assertEqual(c.execute("SELECT cache_create FROM requests ORDER BY seq DESC").fetchone()[0], 77)
+
     def test_subagent_flag(self):
         a = self.root / "a"
         p = _place(a)

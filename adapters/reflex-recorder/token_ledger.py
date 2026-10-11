@@ -462,13 +462,17 @@ def ingest_codex(conn: sqlite3.Connection, key: str, path: Path) -> int:
                 cur = conn.execute(
                     "INSERT OR IGNORE INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (f"{key}#{line_pos}", key, seq, ts, model, max(0, inp - cached), cached,
-                     0, 0, 0, int(u.get("output_tokens") or 0),
+                     int(u.get("cache_write_input_tokens") or 0), 0, 0,
+                     int(u.get("output_tokens") or 0),
                      int(u.get("reasoning_output_tokens") or 0), pending_tools))
                 pending_tools = 0
                 if cur.rowcount:
                     added += 1
                 else:
                     seq -= 1
+    if model and added:
+        # the first turn_context can land after the first token_count events
+        conn.execute("UPDATE requests SET model=? WHERE session_key=? AND model IS NULL", (model, key))
     _upsert_session(conn, key, "codex", sess, is_sub)
     conn.execute("INSERT INTO ledger_state VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET"
                  " model=excluded.model, last_total=excluded.last_total", (key, model, last_total))
@@ -582,9 +586,10 @@ def ingest_gemini(conn: sqlite3.Connection, key: str, path: Path) -> int:
              max(0, int(tok.get("input") or 0) - cached) + int(tok.get("tool") or 0), cached,
              0, 0, 0, int(tok.get("output") or 0) + thoughts, thoughts, len(tcs)))
         added += cur.rowcount
-    _upsert_session(conn, key, "gemini",
-                    {"session_id": sid, "cwd": cwd, "first": d.get("startTime") or first,
-                     "last": d.get("lastUpdated") or last}, d.get("kind") == "subagent")
+    if seq:  # chats with no model turn get no session row
+        _upsert_session(conn, key, "gemini",
+                        {"session_id": sid, "cwd": cwd, "first": d.get("startTime") or first,
+                         "last": d.get("lastUpdated") or last}, d.get("kind") == "subagent")
     conn.execute("INSERT INTO file_sig VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET"
                  " mtime_ns=excluded.mtime_ns, size=excluded.size",
                  (key, stt.st_mtime_ns, stt.st_size))
