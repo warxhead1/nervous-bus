@@ -67,6 +67,10 @@ TOKEN_DIGEST_DIR = Path.home() / ".cache" / "nervous-bus" / "reflex" / "token-di
 DIGEST_ID = "019f347a-a087-7f3b-abe3-7319d626d8ce"
 
 DEFAULT_STEP_TIMEOUT = 300          # seconds; "suggest 300s/step"
+# synthesis.py is the one step whose failure fails the unit. It measured 221s
+# on 2026-10-11 (after the cron retire + replay memo), so 300s left no margin
+# for a growing window.
+DEFAULT_SYNTHESIS_TIMEOUT = 600
 DEFAULT_LABEL_SINCE_DAYS = 30       # bound label.py's pass against a growing history
 DEFAULT_DIGEST_WINDOW_DAYS = 7      # per-project stats + detector prevalence window
 DEFAULT_STRUGGLE_WINDOW_DAYS = 14   # struggle-ledger scan window
@@ -491,7 +495,7 @@ def write_digest(text: str, digest_path: Path = DIGEST_PATH) -> None:
 def run_token_digest(out_dir: Path, days: int, timeout: int) -> bool:
     """Ingest new transcript usage, then write latest + dated token digests.
     Non-fatal like label.py: the ledger resumes from per-file offsets."""
-    ingest = run_step("token_ledger.py", [sys.executable, "token_ledger.py"], timeout * 3)
+    ingest = run_step("token_ledger.py", [sys.executable, "token_ledger.py"], timeout)
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     ok = ingest.ok
     for fmt, ext in (("--md", "md"), (None, "json")):
@@ -532,6 +536,7 @@ def main() -> int:
         ),
     )
     ap.add_argument("--token-digest-dir", type=Path, default=TOKEN_DIGEST_DIR)
+    ap.add_argument("--synthesis-timeout", type=int, default=DEFAULT_SYNTHESIS_TIMEOUT)
     args = ap.parse_args()
 
     if not args.db.exists():
@@ -552,7 +557,7 @@ def main() -> int:
         "synthesis.py",
         [sys.executable, "synthesis.py", "--db", str(args.db),
          "--window-days", str(args.synthesis_window_days)],
-        args.step_timeout,
+        args.synthesis_timeout,
     )
 
     run_token_digest(args.token_digest_dir, args.window_days, args.step_timeout)
