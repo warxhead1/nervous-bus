@@ -13,6 +13,11 @@ Sources (relpath-keyed, so the same transcript seen in two roots is one row):
           ~/.claude/projects                        (live; read only where the
                                                      mirror has no copy yet)
   mmx     ~/.mmx/projects                           (claude-minimax-sandboxed)
+  codex   ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl and the Orca account
+          homes ~/.config/orca/codex-accounts/*/home/sessions (one row per
+          session uuid across roots; jsonl, byte-offset incremental)
+  gemini  ~/.gemini/tmp/<hash>/chats/*.json (whole-file JSON, re-read when
+          (mtime, size) changes; messages are keyed so a re-read adds only new)
 
 Each file is read from its last committed byte offset, complete lines only.
 A file shorter than its recorded offset (mirror lagging live) is skipped until
@@ -41,7 +46,23 @@ ROOTS = (
     ("mmx", HOME / ".mmx" / "projects"),
 )
 
+CODEX_ROOTS = (
+    HOME / ".codex" / "sessions",
+    *sorted((HOME / ".config" / "orca" / "codex-accounts").glob("*/home/sessions")),
+)
+GEMINI_ROOTS = (HOME / ".gemini" / "tmp",)
+
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS ledger_state (
+    key         TEXT PRIMARY KEY,      -- files.key; per-file parser carry-over
+    model       TEXT,
+    last_total  TEXT                   -- codex: last total_token_usage seen
+);
+CREATE TABLE IF NOT EXISTS file_sig (
+    key         TEXT PRIMARY KEY,      -- whole-file formats (gemini)
+    mtime_ns    INTEGER NOT NULL,
+    size        INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS files (
     key         TEXT PRIMARY KEY,      -- source:relpath
     offset      INTEGER NOT NULL,
@@ -49,7 +70,7 @@ CREATE TABLE IF NOT EXISTS files (
 );
 CREATE TABLE IF NOT EXISTS sessions (
     key           TEXT PRIMARY KEY,    -- same as files.key
-    source        TEXT NOT NULL,       -- claude | mmx
+    source        TEXT NOT NULL,       -- claude | mmx | codex | gemini
     project       TEXT,
     session_id    TEXT,
     agent_id      TEXT,                -- set for subagent transcripts
@@ -321,6 +342,260 @@ def ingest_file(conn: sqlite3.Connection, key: str, source: str, path: Path) -> 
     return added
 
 
+_CODEX_SHELL = {"exec_command", "shell", "local_shell", "container.exec", "exec"}
+
+
+def _upsert_session(conn, key, source, sess: dict, is_sub: bool = False) -> None:
+    conn.execute(
+        "INSERT INTO sessions (key, source, project, session_id, agent_id, agent_type, agent_model,"
+        " description, is_subagent, cwd, started, ended) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+        " ON CONFLICT(key) DO UPDATE SET"
+        "  ended=COALESCE(excluded.ended, ended),"
+        "  started=COALESCE(started, excluded.started),"
+        "  session_id=COALESCE(session_id, excluded.session_id),"
+        "  cwd=COALESCE(cwd, excluded.cwd),"
+        "  project=COALESCE(project, excluded.project)",
+        (key, source, project_of(sess.get("cwd")), sess.get("session_id"), None, None, None,
+         None, int(is_sub), sess.get("cwd"), sess.get("first"), sess.get("last")))
+
+
+def _tool_row(conn, key, ts, call_id, name, raw_cmd, file_path) -> None:
+    cmd = cmd_class = cmd_hash = None
+    if raw_cmd is not None:
+        cmd, cmd_class = raw_cmd[:300], classify_command(raw_cmd)
+        cmd_hash = hashlib.sha1(raw_cmd.encode()).hexdigest()[:16]
+    conn.execute(
+        "INSERT OR IGNORE INTO tool_calls (id, session_key, ts, tool, cmd_class, cmd, cmd_hash,"
+        " file_path) VALUES (?,?,?,?,?,?,?,?)",
+        (call_id or f"{key}:{ts}:{name}", key, ts, name, cmd_class, cmd, cmd_hash,
+         file_path if isinstance(file_path, str) else None))
+
+
+def ingest_codex(conn: sqlite3.Connection, key: str, path: Path) -> int:
+    """Stream new complete lines of one Codex rollout. Returns requests added.
+
+    One request per token_count event whose total_token_usage differs from the
+    previous one (Codex re-emits identical totals); info:null events are skipped.
+    input = input_tokens - cached_input_tokens (OpenAI counts cached inside input);
+    output_tokens already includes reasoning, so thinking is a subset of output.
+    """
+    row = conn.execute("SELECT offset FROM files WHERE key=?", (key,)).fetchone()
+    offset = row[0] if row else 0
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return 0
+    if size <= offset:
+        return 0
+    st = conn.execute("SELECT model, last_total FROM ledger_state WHERE key=?", (key,)).fetchone()
+    model, last_total = (st[0], st[1]) if st else (None, None)
+    seq = conn.execute("SELECT COALESCE(MAX(seq),0) FROM requests WHERE session_key=?",
+                       (key,)).fetchone()[0]
+    sess = {"session_id": None, "cwd": None, "first": None, "last": None}
+    is_sub = False
+    pending_tools = 0
+    added = 0
+    pos = offset
+    with open(path, "rb") as f:
+        f.seek(offset)
+        for line in f:
+            if not line.endswith(b"\n"):
+                break
+            line_pos, pos = pos, pos + len(line)
+            is_tc = b'"token_count"' in line
+            is_call = b'"function_call' in line or b'"custom_tool_call' in line
+            if not (is_tc or is_call or b'"turn_context"' in line or b'"session_meta"' in line):
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            ts = d.get("timestamp") or ""
+            if ts:
+                sess["first"] = sess["first"] or ts
+                sess["last"] = ts
+            typ, p = d.get("type"), d.get("payload")
+            if not isinstance(p, dict):
+                continue
+            if typ == "session_meta":
+                sess["session_id"] = sess["session_id"] or p.get("id") or p.get("session_id")
+                sess["cwd"] = sess["cwd"] or p.get("cwd")
+                is_sub = p.get("thread_source") == "subagent" or isinstance(p.get("source"), dict)
+            elif typ == "turn_context":
+                model = p.get("model") or model
+            elif typ == "response_item":
+                pt = p.get("type")
+                if pt in ("function_call", "custom_tool_call"):
+                    name = p.get("name") or "?"
+                    raw = p.get("arguments") if pt == "function_call" else p.get("input")
+                    cmd = fp = None
+                    if pt == "function_call":
+                        try:
+                            a = json.loads(raw) if isinstance(raw, str) else {}
+                        except ValueError:
+                            a = {}
+                        a = a if isinstance(a, dict) else {}
+                        if name in _CODEX_SHELL:
+                            c = a.get("cmd") or a.get("command")
+                            cmd = c if isinstance(c, str) else (
+                                " ".join(map(str, c)) if isinstance(c, list) else None)
+                        fp = a.get("path") or a.get("file_path")
+                    elif name in _CODEX_SHELL and isinstance(raw, str):
+                        cmd = raw
+                    _tool_row(conn, key, ts, p.get("call_id"), name, cmd, fp)
+                    pending_tools += 1
+                elif pt in ("function_call_output", "custom_tool_call_output"):
+                    conn.execute("UPDATE tool_calls SET result_chars=? WHERE id=?",
+                                 (_content_len(p.get("output")), p.get("call_id")))
+            elif typ == "event_msg" and p.get("type") == "token_count":
+                info = p.get("info")
+                if not isinstance(info, dict):
+                    continue
+                total = json.dumps(info.get("total_token_usage"), sort_keys=True)
+                if total == last_total:
+                    continue
+                last_total = total
+                u = info.get("last_token_usage") or {}
+                cached = int(u.get("cached_input_tokens") or 0)
+                inp = int(u.get("input_tokens") or 0)
+                seq += 1
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (f"{key}#{line_pos}", key, seq, ts, model, max(0, inp - cached), cached,
+                     int(u.get("cache_write_input_tokens") or 0), 0, 0,
+                     int(u.get("output_tokens") or 0),
+                     int(u.get("reasoning_output_tokens") or 0), pending_tools))
+                pending_tools = 0
+                if cur.rowcount:
+                    added += 1
+                else:
+                    seq -= 1
+    if model and added:
+        # the first turn_context can land after the first token_count events
+        conn.execute("UPDATE requests SET model=? WHERE session_key=? AND model IS NULL", (model, key))
+    _upsert_session(conn, key, "codex", sess, is_sub)
+    conn.execute("INSERT INTO ledger_state VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET"
+                 " model=excluded.model, last_total=excluded.last_total", (key, model, last_total))
+    conn.execute(
+        "INSERT INTO files VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET"
+        " offset=excluded.offset, updated_at=excluded.updated_at", (key, pos, time.time()))
+    return added
+
+
+def discover_codex(roots=CODEX_ROOTS, stats: Optional[dict] = None) -> dict[str, tuple[str, Path]]:
+    """`codex:<session uuid>` -> (codex, path). The same session under several
+    roots (~/.codex plus Orca account homes) is one key; the largest copy wins.
+    stats gets files_seen / duplicate_files (files whose uuid was already listed)."""
+    best: dict[str, tuple[int, Path]] = {}
+    seen = dup = 0
+    for root in roots:
+        for dirpath, _dirs, names in os.walk(root):
+            for n in names:
+                if not (n.startswith("rollout-") and n.endswith(".jsonl")):
+                    continue
+                p = Path(dirpath) / n
+                try:
+                    sz = p.stat().st_size
+                except OSError:
+                    continue
+                seen += 1
+                k = f"codex:{n[:-len('.jsonl')][-36:]}"
+                if k in best:
+                    dup += 1
+                    if sz <= best[k][0]:
+                        continue
+                best[k] = (sz, p)
+    if stats is not None:
+        stats.update(files_seen=seen, duplicate_files=dup)
+    return {k: ("codex", v[1]) for k, v in best.items()}
+
+
+def discover_gemini(roots=GEMINI_ROOTS) -> dict[str, tuple[str, Path]]:
+    found: dict[str, tuple[str, Path]] = {}
+    for root in roots:
+        try:
+            hashes = sorted(os.scandir(root), key=lambda e: e.name)
+        except OSError:
+            continue
+        for h in hashes:
+            chats = os.path.join(h.path, "chats")
+            try:
+                names = sorted(os.listdir(chats))
+            except OSError:
+                continue
+            for n in names:
+                if n.endswith(".json"):
+                    found.setdefault(f"gemini:{h.name}/{n}", ("gemini", Path(chats) / n))
+    return found
+
+
+def ingest_gemini(conn: sqlite3.Connection, key: str, path: Path) -> int:
+    """Re-read one whole-file chat JSON when (mtime, size) changed. Requests are
+    keyed by session id + message id so a rewrite (or the same session split over
+    two files) only ever adds messages not yet in the ledger."""
+    try:
+        stt = path.stat()
+    except OSError:
+        return 0
+    sig = conn.execute("SELECT mtime_ns, size FROM file_sig WHERE key=?", (key,)).fetchone()
+    if sig and tuple(sig) == (stt.st_mtime_ns, stt.st_size):
+        return 0
+    try:
+        d = json.loads(path.read_bytes())
+    except (OSError, ValueError):
+        return 0  # mid-rewrite; signature left unrecorded so the next pass retries
+    if not isinstance(d, dict):
+        return 0
+    sid = d.get("sessionId") or key
+    cwd = None
+    try:
+        cwd = (path.parent.parent / ".project_root").read_text().strip() or None
+    except OSError:
+        pass
+    seq = 0
+    added = 0
+    first = last = None
+    for m in d.get("messages") or []:
+        if not isinstance(m, dict):
+            continue
+        ts = m.get("timestamp") or ""
+        if ts:
+            first, last = first or ts, ts
+        tcs = [t for t in m.get("toolCalls") or [] if isinstance(t, dict)]
+        for t in tcs:
+            args = t.get("args") if isinstance(t.get("args"), dict) else {}
+            name = t.get("name") or "?"
+            c = args.get("command") if name == "run_shell_command" else None
+            fp = args.get("file_path") or args.get("absolute_path") or args.get("path")
+            tid = t.get("id") or f"{key}:{ts}:{name}"
+            _tool_row(conn, key, t.get("timestamp") or ts, tid, name,
+                      c if isinstance(c, str) else None, fp)
+            if t.get("result") is not None:
+                conn.execute("UPDATE tool_calls SET result_chars=? WHERE id=?",
+                             (len(json.dumps(t["result"])), tid))
+        tok = m.get("tokens")
+        if m.get("type") != "gemini" or not isinstance(tok, dict):
+            continue
+        seq += 1
+        cached = int(tok.get("cached") or 0)
+        thoughts = int(tok.get("thoughts") or 0)
+        mid = m.get("id") or f"{seq}"
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (f"gemini:{sid}#{mid}", key, seq, ts, m.get("model"),
+             max(0, int(tok.get("input") or 0) - cached) + int(tok.get("tool") or 0), cached,
+             0, 0, 0, int(tok.get("output") or 0) + thoughts, thoughts, len(tcs)))
+        added += cur.rowcount
+    if seq:  # chats with no model turn get no session row
+        _upsert_session(conn, key, "gemini",
+                        {"session_id": sid, "cwd": cwd, "first": d.get("startTime") or first,
+                         "last": d.get("lastUpdated") or last}, d.get("kind") == "subagent")
+    conn.execute("INSERT INTO file_sig VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET"
+                 " mtime_ns=excluded.mtime_ns, size=excluded.size",
+                 (key, stt.st_mtime_ns, stt.st_size))
+    return added
+
+
 def inherit_parent_project(conn: sqlite3.Connection) -> None:
     """A subagent's worktree is named after the lane (data2/worktrees/<lane>/
     agent-x), not the repo, so subagents take the project of the main session
@@ -344,16 +619,35 @@ def connect(db: Path) -> sqlite3.Connection:
     return conn
 
 
-def run(db: Path = DEFAULT_DB, roots=ROOTS, max_files: Optional[int] = None) -> dict:
+def run(db: Path = DEFAULT_DB, roots=None, max_files: Optional[int] = None,
+        codex_roots=None, gemini_roots=None) -> dict:
+    """Default (roots=None) ingests every agent. Passing `roots` explicitly
+    restricts the pass to those claude/mmx roots unless codex/gemini roots are
+    also passed."""
+    default = roots is None
+    roots = ROOTS if default else roots
+    codex_roots = CODEX_ROOTS if (default and codex_roots is None) else (codex_roots or ())
+    gemini_roots = GEMINI_ROOTS if (default and gemini_roots is None) else (gemini_roots or ())
     conn = connect(db)
     files = discover(roots)
-    stats = {"files_seen": len(files), "files_read": 0, "requests_added": 0, "errors": 0}
+    codex_stats: dict = {}
+    files.update(discover_codex(codex_roots, codex_stats))
+    files.update(discover_gemini(gemini_roots))
+    stats = {"files_seen": len(files), "files_read": 0, "requests_added": 0, "errors": 0,
+             "codex_files_seen": codex_stats.get("files_seen", 0),
+             "codex_duplicate_files": codex_stats.get("duplicate_files", 0),
+             "requests_added_by_source": {}}
     t0 = time.time()
     for i, (key, (source, path)) in enumerate(sorted(files.items())):
         if max_files is not None and stats["files_read"] >= max_files:
             break
         try:
-            n = ingest_file(conn, key, source, path)
+            if source == "codex":
+                n = ingest_codex(conn, key, path)
+            elif source == "gemini":
+                n = ingest_gemini(conn, key, path)
+            else:
+                n = ingest_file(conn, key, source, path)
         except Exception as e:  # one bad file never aborts the pass
             conn.rollback()
             stats["errors"] += 1
@@ -363,6 +657,8 @@ def run(db: Path = DEFAULT_DB, roots=ROOTS, max_files: Optional[int] = None) -> 
         if n:
             stats["files_read"] += 1
             stats["requests_added"] += n
+            by = stats["requests_added_by_source"]
+            by[source] = by.get(source, 0) + n
     inherit_parent_project(conn)
     stats["elapsed_s"] = round(time.time() - t0, 1)
     conn.close()
