@@ -31,6 +31,8 @@ from token_ledger import DEFAULT_DB  # noqa: E402
 W_IN, W_READ, W_5M, W_1H, W_OUT = 1.0, 0.1, 1.25, 2.0, 5.0
 IET = (f"(input*{W_IN} + cache_read*{W_READ} + cache_5m*{W_5M} + cache_1h*{W_1H}"
        f" + (cache_create-cache_5m-cache_1h)*{W_5M} + output*{W_OUT})")
+PARITY_SOURCES = ("codex", "gemini")
+EDIT_TOOLS_SQL = ("'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch', 'replace', 'write_file'")
 CHARS_PER_TOKEN = 4
 BIG_RESULT_CHARS = 20_000
 LONG_CTX = 100_000
@@ -174,7 +176,7 @@ def build(conn: sqlite3.Connection, days: int = 7) -> dict:
         SELECT t.session_key, t.ts, t.tool, t.cmd_class, t.cmd, t.cmd_hash, t.result_chars, s.project
         FROM tool_calls t JOIN sessions s ON s.key = t.session_key
         WHERE t.ts >= ? AND (t.cmd_class IN ('test', 'build')
-              OR t.tool IN ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'))
+              OR t.tool IN (""" + EDIT_TOOLS_SQL + """))
         ORDER BY t.session_key, t.ts""", p)
     reruns: dict[tuple, dict] = {}
     runs_by_class = {"test": 0, "build": 0}
@@ -258,6 +260,35 @@ def build(conn: sqlite3.Connection, days: int = 7) -> dict:
     out["total_iet"] = total_iet
     out["candidates"] = candidates
     out["iet_per_commit"] = per_commit
+
+    # Agent parity: only when a non-Claude-format source is in the window, so a
+    # claude/mmx-only ledger renders exactly as before.
+    by_source = _rows(conn, f"""
+        SELECT s.source, COUNT(DISTINCT r.session_key) sessions, COUNT(*) requests,
+               SUM(r.input) input, SUM(r.cache_read) cache_read, SUM(r.cache_create) cache_create,
+               SUM(r.output) output, SUM(r.thinking) thinking, SUM(r.n_tool_uses) tool_uses,
+               CAST(SUM({IET}) AS INTEGER) iet,
+               ROUND(1.0*SUM(r.cache_read)/MAX(1, SUM(r.input+r.cache_read+r.cache_create)), 3) hit_ratio
+        FROM requests r JOIN sessions s ON s.key = r.session_key
+        WHERE r.ts >= ? GROUP BY 1 ORDER BY iet DESC""", p)
+    if any(r["source"] in PARITY_SOURCES for r in by_source):
+        net_by_source: dict[str, int] = {}
+        for row in ttl_by_agent:
+            net_by_source[row["source"]] = net_by_source.get(row["source"], 0) + row["net_if_1h_iet"]
+        for r in by_source:
+            r["top_tools"] = _rows(conn, """
+                SELECT t.tool, COUNT(*) n FROM tool_calls t JOIN sessions s ON s.key = t.session_key
+                WHERE t.ts >= ? AND s.source = ? GROUP BY 1 ORDER BY n DESC LIMIT 8""",
+                                   (since, r["source"]))
+            # A source that reports no cache writes has no 5m->1h trade-off to net:
+            # null, never zero (zero would read as "measured, no saving").
+            if (r["cache_create"] or 0) == 0:
+                r["ttl_net_if_1h_iet"] = None
+                r["ttl_note"] = "n/a: source reports no cache-write tokens"
+            else:
+                r["ttl_net_if_1h_iet"] = net_by_source.get(r["source"], 0)
+                r["ttl_note"] = "sum of ttl_by_agent_type rows (subagents)"
+        out["by_source"] = by_source
     return out
 
 
@@ -316,6 +347,19 @@ def to_markdown(rep: dict) -> str:
     for r in rep["iet_per_commit"]:
         lines.append(f"| {r['project']} | {r['iet']:,} | {r['commits']} | "
                      f"{'' if r['iet_per_commit'] is None else format(r['iet_per_commit'], ',')} |")
+    if rep.get("by_source"):
+        lines += ["", "## Agent parity: digest by source", "",
+                  "| source | sessions | requests | input | cache_read | cache_create | output | "
+                  "thinking | hit | IET | TTL 1h net |",
+                  "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|"]
+        for r in rep["by_source"]:
+            net = "n/a (no cache writes)" if r["ttl_net_if_1h_iet"] is None else f"{r['ttl_net_if_1h_iet']:,}"
+            lines.append(f"| {r['source']} | {r['sessions']:,} | {r['requests']:,} | {r['input']:,} | "
+                         f"{r['cache_read']:,} | {r['cache_create']:,} | {r['output']:,} | "
+                         f"{r['thinking']:,} | {r['hit_ratio']} | {r['iet']:,} | {net} |")
+        for r in rep["by_source"]:
+            lines += ["", f"{r['source']} top tools:"] + [
+                "    " + json.dumps(t, separators=(",", ":")) for t in r["top_tools"]]
     return "\n".join(lines) + "\n"
 
 
