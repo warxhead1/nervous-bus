@@ -52,6 +52,8 @@ class TestReport(unittest.TestCase):
         gaps = cands["cache_rewrites"]["detail"]["by_idle_gap"]
         self.assertEqual([(g["kind"], g["idle_gap"], g["ttl5m_tokens"]) for g in gaps],
                          [("subagent", "b 5-60m", 151_000)])
+        wb = cands["cache_rewrites"]["detail"]["all_cache_writes"]
+        self.assertEqual([(w["kind"], w["ttl5m_tokens"]) for w in wb], [("subagent", 202_000)])
         self.assertGreater(cands["long_context"]["iet"], 0)
         top = cands["redundant_reruns"]["detail"]["top"]
         self.assertEqual(top[0]["command"], "cargo test")

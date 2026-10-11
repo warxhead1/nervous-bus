@@ -27,7 +27,9 @@ measured waste per unit of effort. Not a list. One.
   Read the TTL from the row, never assume it: a row whose writes are all
   `ttl5m_tokens` is on the 5-minute TTL. Before proposing a longer TTL, do the
   trade-off: a 1h write costs 2.0 vs 1.25, and it applies to EVERY write that
-  agent kind makes, not only to the rewrites.
+  agent kind makes, not only to the rewrites. `all_cache_writes` gives that
+  write base per agent kind: net = rewrites*(1.25-0.1) - (all writes -
+  rewrites)*0.75. Never estimate a number the digest already measures.
 - `big_tool_results`: tool outputs over 20k chars. Each one is written once and
   then re-read by every later request in that session.
 - `startup_context`: what each agent type pays before its first action, plus
