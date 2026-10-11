@@ -101,6 +101,15 @@ def build(conn: sqlite3.Connection, days: int = 7) -> dict:
         FROM g JOIN sessions s ON s.key = g.session_key
         WHERE g.seq > 1 AND g.cache_create > 20000 GROUP BY 1, 2, 3 ORDER BY 1, 2, 3""", p)
 
+    # The write base a TTL change applies to: every cache write per agent kind,
+    # not only the rewrites. Without it a 5m->1h proposal cannot net its offset.
+    write_base = _rows(conn, """
+        SELECT CASE WHEN s.is_subagent THEN 'subagent' ELSE 'main' END kind, s.source,
+               SUM(r.cache_5m) ttl5m_tokens, SUM(r.cache_1h) ttl1h_tokens,
+               SUM(r.cache_create) all_writes, COUNT(*) requests
+        FROM requests r JOIN sessions s ON s.key = r.session_key
+        WHERE r.ts >= ? GROUP BY 1, 2 ORDER BY all_writes DESC""", p)
+
     # 2. Uncached input: providers/paths where the prompt is not cached at all.
     uncached = _rows(conn, """
         SELECT s.source, r.model, COUNT(*) requests, SUM(r.input) input,
@@ -207,7 +216,8 @@ def build(conn: sqlite3.Connection, days: int = 7) -> dict:
         {"id": "cache_rewrites", "iet": sum(r["excess_iet"] or 0 for r in rewrites),
          "what": ("Mid-session cache writes >20k tokens instead of reads. Gap > TTL with same-or-grew"
                   " context = cache expired while idle; compacted = auto-compaction rewrite"),
-         "detail": {"by_idle_gap": rewrite_gaps, "by_project": rewrites[:10]}},
+         "detail": {"by_idle_gap": rewrite_gaps, "all_cache_writes": write_base,
+                    "by_project": rewrites[:10]}},
         {"id": "startup_context", "iet": sum(r["iet"] or 0 for r in startup),
          "what": "First-request context every main session and subagent pays before acting",
          "detail": {"by_agent": startup[:12], "instruction_files": instr}},
