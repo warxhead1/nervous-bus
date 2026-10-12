@@ -74,6 +74,8 @@ def _make_runs_db(path: Path, runs: list[dict], hits: list[tuple] = ()):
         worktree TEXT, worktree_slug TEXT, git_branch TEXT, outcome TEXT, label_history TEXT, started TEXT);
     CREATE TABLE detector_hits (id INTEGER PRIMARY KEY, run_id TEXT, detector TEXT, signature TEXT,
         project TEXT, ts TEXT);
+    CREATE TABLE run_events (id INTEGER PRIMARY KEY, run_id TEXT, seq INTEGER, event_ts TEXT,
+        event_type TEXT, raw_json TEXT);
     """)
     for r in runs:
         hist = json.dumps([{"source": r["source"]}]) if r.get("source") else "[]"
@@ -433,9 +435,68 @@ def test_cli_help_and_lift_roundtrip(tmp_path, capsys):
     briefs = tmp_path / "b.jsonl"
     briefs.write_text("\n".join(json.dumps(r) for r in _cells("has_acceptance_cmd", ["p1", "p2"], 20, 25, 10, 25)))
     md = tmp_path / "r.md"
-    assert champion.main(["lift", "--briefs", str(briefs), "--md", str(md), "--compact"]) == 0
+    assert champion.main(["lift", "--briefs", str(briefs), "--md", str(md), "--compact", "--window", "0"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["verdict"] == "load-bearing" and "cells" not in out
     assert "VERDICT: load-bearing" in md.read_text()
     with pytest.raises(SystemExit):
         champion.main(["--help"])
+
+
+# ── bus-dispatch source and window-mode lift ────────────────────────────────
+
+def _dispatch_event(session, agent_id, prompt, model="sonnet", isolation="worktree"):
+    summary = json.dumps({"description": "d", "isolation": isolation, "model": model, "name": "n",
+                          "prompt": prompt, "subagent_type": "sonnet-worker"})
+    resp = json.dumps({"agentId": agent_id, "description": "d"})
+    return json.dumps({"time": "2026-08-01T00:00:00Z", "data": {
+        "tool_name": "Agent", "session_id": session, "project": "projx", "ts": "2026-08-01T00:00:00Z",
+        "tool_summary": summary, "tool_response_summary": resp}}, separators=(",", ":"))
+
+
+def test_bus_dispatch_recovers_old_briefs_and_dedupes_against_transcripts(tmp_path):
+    _write_subagent(tmp_path / "transcripts", "-p", "S", "full1", "FULL TEXT brief", "2026-10-01T00:00:00Z")
+    _make_runs_db(tmp_path / "runs.db", [
+        {"run_id": "R_old", "run_key": "S#agent-old1", "outcome": "abandoned", "source": "git_empty_branch"},
+        {"run_id": "R_full", "run_key": "S#agent-full1", "outcome": "landed", "source": "pr_merge"}])
+    conn = sqlite3.connect(tmp_path / "runs.db")
+    for i, (aid, prompt) in enumerate([("old1", "OLD brief gate `pytest -q`"), ("full1", "dup bounded")]):
+        conn.execute("INSERT INTO run_events (run_id,seq,event_ts,event_type,raw_json) VALUES (?,?,?,?,?)",
+                     ("P", i, "t", "tool_call", _dispatch_event("S", aid, prompt)))
+    conn.commit()
+    conn.close()
+    extract(_ns(tmp_path))
+    rows = {r["source_id"]: r for r in _rows(tmp_path / "out" / "briefs.jsonl")}
+    assert set(rows) == {"old1", "full1"}
+    old = rows["old1"]
+    assert old["source"] == "bus_dispatch" and old["text_source"] == "bounded"
+    assert old["explicit"] and old["positive"] is False and old["label_source"] == "git_empty_branch"
+    assert old["project"] == "projx" and old["agent_type"] == "sonnet-worker"
+    assert old["features"]["model_explicit"] and old["features"]["isolation_worktree"]
+    assert rows["full1"]["source"] == "claude_subagent" and rows["full1"]["text_source"] == "full"
+
+
+def _wrow(i, project, text, pos):
+    return {"brief_id": f"w{i}", "source": "claude_subagent", "project": project, "agent_kind": "host_subagent",
+            "explicit": True, "label_source": "pr_merge", "positive": pos, "brief_text": text, "cwd": "",
+            "meta": {}, "outcome": "landed" if pos else "abandoned", "features": {}}
+
+
+def test_lift_window_measures_all_rows_on_same_prefix():
+    late = "x" * 900 + " receipts go in the report"
+    rows = []
+    for p in ("p1", "p2"):
+        for i in range(25):
+            rows.append(_wrow(f"{p}a{i}", p, late, True))
+            rows.append(_wrow(f"{p}b{i}", p, "plain", i % 2 == 0))
+    res = lift(rows, window=800)
+    assert "length_chars" not in res["features"]
+    assert res["prevalence"]["has_receipts_clause"]["lift_population"] == 0.0  # clause is past the window
+    assert lift(rows, window=2000)["prevalence"]["has_receipts_clause"]["lift_population"] == 0.5
+
+
+def test_lift_all_positive_cell_is_not_valid_evidence():
+    rows = _cells("has_acceptance_cmd", ["p1", "p2"], 25, 25, 25, 25)  # every outcome positive
+    res = lift(rows)
+    assert res["features"]["has_acceptance_cmd"]["verdict"] == "untestable"
+    assert res["verdict"] == "corpus too homogeneous"

@@ -293,6 +293,54 @@ def iter_claude_briefs(transcripts_root: Path, projects_root: Path) -> Iterator[
                     break
 
 
+def iter_event_dispatches(runs_db: Path, skip_ids: set) -> Iterator[dict]:
+    """(d) Bounded dispatch prompts from the parent runs' Agent/Task tool_call
+    events (run_events.raw_json; tool_summary bounds the prompt, see
+    dispatch_lineage.py). Recovers briefs whose subagent transcript is no longer
+    on disk -- the transcript mirror only reaches back to 2026-08-31 while
+    explicit abandoned labels date from 2026-07. Skips agent ids already
+    extracted from a full transcript."""
+    from detectors.dispatch_lineage import parse_dispatches
+    if not runs_db.exists():
+        return
+    conn = _ro(runs_db)
+    try:
+        try:
+            events = conn.execute(
+                "SELECT raw_json FROM run_events WHERE raw_json LIKE '%\"tool_name\":\"Agent\"%' "
+                "OR raw_json LIKE '%\"tool_name\":\"Task\"%'").fetchall()
+        except sqlite3.OperationalError:
+            return
+        for (raw_json,) in events:
+            try:
+                data = (json.loads(raw_json) or {}).get("data", {})
+            except ValueError:
+                continue
+            ev = {"seq": 0, "tool_name": data.get("tool_name", ""), "ts": data.get("ts", ""),
+                  "tool_summary": data.get("tool_summary", ""),
+                  "tool_response_summary": data.get("tool_response_summary", "")}
+            for d in parse_dispatches([ev]):
+                sid = data.get("session_id") or ""
+                if not d.prompt or not d.child_agent_id or d.child_agent_id in skip_ids or not sid:
+                    continue
+                skip_ids.add(d.child_agent_id)
+                yield {
+                    "source": "bus_dispatch", "source_id": d.child_agent_id, "text": d.prompt,
+                    "ts": d.ts, "cwd": "", "project": data.get("project") or "unknown",
+                    "git_branch": "", "session_id": sid, "transcript": "",
+                    "agent_type": _summary_type(data.get("tool_summary", "")), "model": d.model,
+                    "meta": {"model": d.model, "isolation": d.isolation},
+                    "join": [("key", f"{sid}#agent-{d.child_agent_id}"), ("slug", f"agent-{d.child_agent_id}")],
+                }
+    finally:
+        conn.close()
+
+
+def _summary_type(raw: str) -> str:
+    m = re.search(r'"subagent_type"\s*:\s*"([^"]*)"', raw or "")
+    return m.group(1) if m else ""
+
+
 # ── source (b): Orca tasks ───────────────────────────────────────────────────
 
 def orca_attempts(orca_db: Path) -> dict:
@@ -384,12 +432,21 @@ def _orca_label(attempts: list[dict]) -> dict:
     return base
 
 
+def _tracked(it: Iterator[dict], seen: set) -> Iterator[dict]:
+    for b in it:
+        if b["source"] in ("claude_subagent", "mmx_subagent"):
+            seen.add(b["source_id"])
+        yield b
+
+
 def extract(args_ns: argparse.Namespace) -> dict:
     roots = {k: Path(getattr(args_ns, k)) for k in ("transcripts_root", "projects_root", "runs_db",
                                                     "orca_db", "mmx_root")}
     since = _cutoff(args_ns.since_days)
     runs = load_runs(roots["runs_db"])
-    sources = [iter_claude_briefs(roots["transcripts_root"], roots["projects_root"]),
+    seen_agents: set = set()
+    sources = [_tracked(iter_claude_briefs(roots["transcripts_root"], roots["projects_root"]), seen_agents),
+               iter_event_dispatches(roots["runs_db"], seen_agents),
                iter_orca_briefs(roots["orca_db"]),
                iter_mmx_recipe_briefs(roots["mmx_root"])]
     out_path = Path(args_ns.out)
@@ -401,7 +458,7 @@ def extract(args_ns: argparse.Namespace) -> dict:
             for b in src:
                 if since and b["ts"] and b["ts"][:19] < since:
                     continue
-                project = project_from_cwd(b["cwd"]) if b["cwd"] else "unknown"
+                project = b.get("project") or (project_from_cwd(b["cwd"]) if b["cwd"] else "unknown")
                 run = None
                 for kind, key in b["join"]:
                     if key and (run := runs["idx"][kind].get(key)):
@@ -423,6 +480,8 @@ def extract(args_ns: argparse.Namespace) -> dict:
                     "project": project, "cwd": b["cwd"], "git_branch": b["git_branch"],
                     "ts": b["ts"], "session_id": b["session_id"], "transcript": b["transcript"],
                     "features": extract_features(b["text"], b["meta"], b["cwd"]),
+                    "meta": b["meta"],
+                    "text_source": "bounded" if b["source"] == "bus_dispatch" else "full",
                     **lab,
                 }
                 row["agent_kind"] = lab["agent_kind"] or {
@@ -531,7 +590,7 @@ def pairs_cohort(rows: list[dict], window_s: float = DEFAULT_COHORT_WINDOW_S,
     parent session, same-template (shingle Jaccard >= thr), opposite explicit labels."""
     by_parent: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
-        if r["source"] in ("claude_subagent", "mmx_subagent") and r["session_id"] and r["explicit"]:
+        if r["source"] in ("claude_subagent", "mmx_subagent", "bus_dispatch") and r["session_id"] and r["explicit"]:
             by_parent[r["session_id"]].append(r)
     out = []
     for sid, rs in by_parent.items():
@@ -625,6 +684,68 @@ def build_pairs(rows: list[dict], population: str, thr: float = 0.8) -> tuple[di
     return res, diag
 
 
+def _side_class(r: dict) -> str:
+    if r["explicit"]:
+        return "explicit_pos" if r["positive"] else "explicit_neg"
+    return "inferred" if r["label_tier"] == 1 else "unlabeled"
+
+
+def near_miss(rows: list[dict], window_s: float = DEFAULT_COHORT_WINDOW_S, thr: float = 0.8) -> dict:
+    """Structurally valid same-task candidate pairs (window / family / project+kind
+    plus similarity >= thr) tallied by the label class of each side. Shows which
+    population is blocked by label coverage rather than by task structure."""
+    from collections import Counter
+    out: dict[str, Counter] = {"cohort": Counter(), "recipe": Counter(), "similar": Counter()}
+
+    def tally(pop, a, b):
+        out[pop]["+".join(sorted((_side_class(a), _side_class(b))))] += 1
+
+    by_parent: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        if r["source"] in ("claude_subagent", "mmx_subagent", "bus_dispatch") and r["session_id"]:
+            by_parent[r["session_id"]].append(r)
+    for rs in by_parent.values():
+        rs.sort(key=lambda r: r["ts"])
+        cohorts, cur, prev = [], [], None
+        for r in rs:
+            e = _epoch(r["ts"])
+            if cur and e is not None and prev is not None and (e - prev) > window_s:
+                cohorts.append(cur)
+                cur = []
+            cur.append(r)
+            prev = e if e is not None else prev
+        if cur:
+            cohorts.append(cur)
+        for c in cohorts:
+            sh = [shingles(r["brief_text"]) for r in c]
+            for i in range(len(c)):
+                for j in range(i + 1, len(c)):
+                    if jaccard(sh[i], sh[j]) >= thr:
+                        tally("cohort", c[i], c[j])
+    fam: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        if r["source"] in ("mmx_recipe", "mmx_session"):
+            fam[_recipe_family(r)].append(r)
+    for rs in fam.values():
+        sh = [shingles(r["brief_text"]) for r in rs]
+        for i in range(len(rs)):
+            for j in range(i + 1, len(rs)):
+                if rs[i]["brief_sha256"] == rs[j]["brief_sha256"] or jaccard(sh[i], sh[j]) >= thr:
+                    tally("recipe", rs[i], rs[j])
+    grp: dict[tuple, list[dict]] = defaultdict(list)
+    for r in rows:
+        if r["source"] != "orca_task":
+            grp[(r["project"], r["agent_kind"], r["agent_type"])].append(r)
+    for rs in grp.values():
+        sh = [shingles(r["brief_text"]) for r in rs]
+        for i in range(len(rs)):
+            for j in range(i + 1, len(rs)):
+                la, lb = len(sh[i]), len(sh[j])
+                if la and lb and min(la, lb) / max(la, lb) >= thr and jaccard(sh[i], sh[j]) >= thr:
+                    tally("similar", rs[i], rs[j])
+    return {k: dict(sorted(v.items(), key=lambda kv: -kv[1])) for k, v in out.items()}
+
+
 def pairs_cmd(ns: argparse.Namespace) -> dict:
     rows = load_briefs(Path(ns.briefs))
     res, diag = build_pairs(rows, ns.population, ns.threshold)
@@ -639,6 +760,8 @@ def pairs_cmd(ns: argparse.Namespace) -> dict:
                 fh.write(json.dumps(pair) + "\n")
         summary["populations"][pop] = {"usable_pairs": len(res[pop]), "path": str(p),
                                        "by_project": _count_by(res[pop], "project")}
+    if ns.near_miss:
+        summary["near_miss_by_label_class"] = near_miss(rows, thr=ns.threshold)
     summary["usable_total"] = sum(v["usable_pairs"] for v in summary["populations"].values())
     summary["phase_0d_needs"] = 80
     return summary
@@ -779,7 +902,7 @@ MIN_TESTABLE_ENFORCED = 3
 
 
 def _binarize(rows: list[dict]) -> dict[str, float]:
-    return {f: statistics.median(r["features"][f] for r in rows) for f in NUMERIC} if rows else {}
+    return {f: statistics.median(r["features"][f] for r in rows) for f in NUMERIC if f in rows[0]["features"]} if rows else {}
 
 
 def _flag(r: dict, feat: str, cuts: dict) -> bool:
@@ -787,14 +910,28 @@ def _flag(r: dict, feat: str, cuts: dict) -> bool:
     return v > cuts[feat] if feat in NUMERIC else bool(v)
 
 
-def lift(rows: list[dict]) -> dict:
+def _refeature(r: dict, window: int) -> dict:
+    """Recompute features on the first ``window`` chars (+ structured meta) so a
+    full transcript brief and a bounded bus-dispatch brief are measured through
+    the same lens. length_chars is dropped: it is unknowable for bounded text."""
+    f = extract_features(r["brief_text"][:window], r.get("meta"), r.get("cwd", ""))
+    f.pop("length_chars", None)
+    return dict(r, features=f)
+
+
+def lift(rows: list[dict], window: int = 0) -> dict:
     """Experiment B. Population = explicit-label rows from sources that can carry a
     negative (positive-only orca_worker_done rows are excluded: they would
-    manufacture lift for contract-shaped briefs)."""
+    manufacture lift for contract-shaped briefs). ``window`` > 0 re-measures every
+    brief on its first ``window`` chars. A cell is valid only with both arms >= 20
+    AND both outcomes present in the cell (an all-positive cell is no evidence)."""
+    prose = [f for f in PROSE if not (window and f == "length_chars")]
+    if window:
+        rows = [_refeature(r, window) for r in rows]
     pop = [r for r in rows if r["explicit"] and r["label_source"] not in POSITIVE_ONLY_SOURCES]
     cuts = _binarize(pop)
     prevalence = {}
-    for f in ENFORCED + PROSE:
+    for f in ENFORCED + prose:
         prevalence[f] = {
             "all_briefs": round(sum(_flag(r, f, cuts) for r in rows) / len(rows), 4) if rows else None,
             "lift_population": round(sum(_flag(r, f, cuts) for r in pop) / len(pop), 4) if pop else None,
@@ -805,7 +942,7 @@ def lift(rows: list[dict]) -> dict:
     strata: dict[tuple, list[dict]] = defaultdict(list)
     for r in pop:
         strata[(r["project"], r["agent_kind"])].append(r)
-    for f in ENFORCED + PROSE:
+    for f in ENFORCED + prose:
         cells = []
         for (proj, kind), rs in sorted(strata.items()):
             w = [r for r in rs if _flag(r, f, cuts)]
@@ -816,7 +953,8 @@ def lift(rows: list[dict]) -> dict:
                 cell["rate_with"] = round(sum(r["positive"] for r in w) / len(w), 4)
             if wo:
                 cell["rate_without"] = round(sum(r["positive"] for r in wo) / len(wo), 4)
-            if len(w) >= MIN_ARM and len(wo) >= MIN_ARM:
+            both_outcomes = len({r["positive"] for r in rs}) == 2
+            if len(w) >= MIN_ARM and len(wo) >= MIN_ARM and both_outcomes:
                 cell["valid"] = True
                 cell["delta"] = round(cell["rate_with"] - cell["rate_without"], 4)
             cells.append(cell)
@@ -840,7 +978,7 @@ def lift(rows: list[dict]) -> dict:
                        "project_weighted_delta": {p: round(d, 4) for p, d in sorted(proj_delta.items())}}
     enforced_testable = [f for f in ENFORCED if verdicts[f]["verdict"] != "untestable"]
     enforced_lb = [f for f in ENFORCED if verdicts[f]["verdict"] == "load-bearing"]
-    prose_lb = [f for f in PROSE if verdicts[f]["verdict"] == "load-bearing"]
+    prose_lb = [f for f in prose if verdicts[f]["verdict"] == "load-bearing"]
     if enforced_lb:
         overall = "load-bearing"
     elif len(enforced_testable) >= MIN_TESTABLE_ENFORCED:
@@ -853,7 +991,9 @@ def lift(rows: list[dict]) -> dict:
                        "excluded_positive_only": sum(1 for r in rows if r["explicit"]
                                                      and r["label_source"] in POSITIVE_ONLY_SOURCES),
                        "by_source": _count_by(pop, "source"), "by_label_source": _count_by(pop, "label_source"),
-                       "by_project": _count_by(pop, "project"), "by_agent_kind": _count_by(pop, "agent_kind")},
+                       "by_project": _count_by(pop, "project"), "by_agent_kind": _count_by(pop, "agent_kind"),
+                       "by_text_source": _count_by(pop, "text_source") if pop and "text_source" in pop[0] else {},
+                       "by_outcome": _count_by(pop, "outcome"), "window_chars": window},
         "thresholds": {"min_arm_n": MIN_ARM, "min_lift": MIN_LIFT, "min_projects": MIN_PROJECTS,
                        "min_testable_enforced": MIN_TESTABLE_ENFORCED},
         "prevalence": prevalence, "features": verdicts, "cells": cells_by_feat,
@@ -869,7 +1009,7 @@ def lift_markdown(res: dict) -> str:
     pop = res["population"]
     L.append(f"briefs={pop['briefs']} lift_population={pop['lift_population']} positive={pop['positive']} "
              f"excluded_positive_only={pop['excluded_positive_only']}")
-    for k in ("by_source", "by_label_source", "by_project", "by_agent_kind"):
+    for k in ("by_source", "by_label_source", "by_text_source", "by_outcome", "by_project", "by_agent_kind"):
         L.append(f"\n{k}: " + ", ".join(f"{a}={b}" for a, b in pop[k].items()))
     L += ["", "## Feature prevalence and verdict", "",
           "| feature | group | prevalence (all) | prevalence (lift pop) | testable projects | holding >=10pt | verdict |",
@@ -895,7 +1035,10 @@ def lift_markdown(res: dict) -> str:
 
 
 def lift_cmd(ns: argparse.Namespace) -> dict:
-    res = lift(load_briefs(Path(ns.briefs)))
+    rows = load_briefs(Path(ns.briefs))
+    if ns.window == 0:
+        rows = [r for r in rows if r.get("text_source", "full") == "full"]
+    res = lift(rows, ns.window)
     if ns.md:
         Path(ns.md).write_text(lift_markdown(res))
     if ns.compact:
@@ -924,6 +1067,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--briefs", default=str(briefs_default))
     p.add_argument("--out-dir", default=str(DEFAULTS["phase0_dir"]))
     p.add_argument("--threshold", type=float, default=0.8)
+    p.add_argument("--near-miss", action="store_true",
+                   help="also tally structural candidate pairs by label class of each side")
     p.set_defaults(fn=pairs_cmd)
 
     b = sub.add_parser("bundle", help="bounded workspace bundle for a run_id or brief sha")
@@ -936,6 +1081,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     l = sub.add_parser("lift", help="Experiment B: brief-feature lift, prevalence, verdict")
     l.add_argument("--briefs", default=str(briefs_default))
+    l.add_argument("--window", type=int, default=800,
+                   help="measure features on the first N chars of every brief (bounded bus dispatches "
+                        "carry <=~800); 0 = full text, full-transcript briefs only")
     l.add_argument("--md", default=None, help="also write a markdown rendering here")
     l.add_argument("--compact", action="store_true", help="omit per-cell tables from stdout")
     l.set_defaults(fn=lift_cmd)
