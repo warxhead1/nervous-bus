@@ -476,6 +476,13 @@ def test_bus_dispatch_recovers_old_briefs_and_dedupes_against_transcripts(tmp_pa
     assert rows["full1"]["source"] == "claude_subagent" and rows["full1"]["text_source"] == "full"
 
 
+def test_truncated_prompt_recovered_without_closing_quote():
+    cut = '{"description":"d","model":"sonnet","name":"n","prompt":"Line one\\nSay \\"hi\\" then run `pytes'
+    assert champion._truncated_prompt(cut) == 'Line one\nSay "hi" then run `pytes'
+    assert champion._truncated_prompt('{"prompt":"ends on a backslash\\') == "ends on a backslash"
+    assert champion._truncated_prompt('{"no":"prompt"}') == ""
+
+
 def _wrow(i, project, text, pos):
     return {"brief_id": f"w{i}", "source": "claude_subagent", "project": project, "agent_kind": "host_subagent",
             "explicit": True, "label_source": "pr_merge", "positive": pos, "brief_text": text, "cwd": "",

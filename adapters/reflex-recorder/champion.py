@@ -214,6 +214,7 @@ def load_runs(runs_db: Path) -> dict:
 def label_fields(run: Optional[dict], hits: dict) -> dict:
     if not run:
         return {"run_id": None, "run_project": None, "agent_kind": None, "outcome": None,
+                "run_branch": None, "run_worktree": None,
                 "label_source": None, "label_tier": 0, "explicit": False, "positive": None,
                 "detectors": [], "failure_taxonomy": []}
     outcome = run.get("outcome")
@@ -223,6 +224,7 @@ def label_fields(run: Optional[dict], hits: dict) -> dict:
     hs = hits.get(run["run_id"], [])
     return {
         "run_id": run["run_id"], "run_project": run["project"], "agent_kind": run["agent_kind"],
+        "run_branch": run.get("git_branch"), "run_worktree": run.get("worktree"),
         "outcome": outcome, "label_source": src, "label_tier": tier, "explicit": explicit,
         "positive": (outcome in POSITIVE) if outcome else None,
         "detectors": sorted({d for d, _ in hs if d != "failure_taxonomy"}),
@@ -321,6 +323,7 @@ def iter_event_dispatches(runs_db: Path, skip_ids: set) -> Iterator[dict]:
                   "tool_response_summary": data.get("tool_response_summary", "")}
             for d in parse_dispatches([ev]):
                 sid = data.get("session_id") or ""
+                d.prompt = d.prompt or _truncated_prompt(ev["tool_summary"])
                 if not d.prompt or not d.child_agent_id or d.child_agent_id in skip_ids or not sid:
                     continue
                 skip_ids.add(d.child_agent_id)
@@ -334,6 +337,22 @@ def iter_event_dispatches(runs_db: Path, skip_ids: set) -> Iterator[dict]:
                 }
     finally:
         conn.close()
+
+
+def _truncated_prompt(raw: str) -> str:
+    """Prompt text from a tool_summary cut mid-string (no closing quote), which
+    dispatch_lineage._summary_field cannot recover."""
+    m = re.search(r'"prompt"\s*:\s*"((?:[^"\\]|\\.)*)', raw or "")
+    if not m:
+        return ""
+    body = m.group(1)
+    if body.endswith("\\") and not body.endswith("\\\\"):
+        body = body[:-1]
+    body = re.sub(r"\\u[0-9a-fA-F]{0,3}$", "", body)
+    try:
+        return json.loads('"' + body + '"')
+    except ValueError:
+        return body.replace("\\n", "\n").replace('\\"', '"')
 
 
 def _summary_type(raw: str) -> str:
@@ -795,21 +814,30 @@ def _git(args: list[str], cwd: str) -> Optional[str]:
 
 
 def diff_stat(row: dict, repo_hint: Optional[str] = None) -> Optional[str]:
-    cwd = row.get("cwd") or ""
-    if cwd and Path(cwd).is_dir() and (Path(cwd) / ".git").exists():
-        for base in ("origin/main", "main", "origin/master", "master"):
-            if _git(["rev-parse", "--verify", base], cwd):
-                out = _git(["diff", "--stat", f"{base}...HEAD"], cwd)
-                if out is not None:
-                    return out
-    branch = row.get("git_branch")
-    repo = repo_hint or (str(HOME / "projects" / row["project"]) if row.get("project") else "")
-    if branch and repo and Path(repo).is_dir() and _git(["rev-parse", "--verify", branch], repo):
-        for base in ("origin/main", "main"):
-            if _git(["rev-parse", "--verify", base], repo):
-                out = _git(["diff", "--stat", f"{base}...{branch}"], repo)
-                if out is not None:
-                    return out
+    """Final ``git diff --stat`` against main from a surviving worktree, else from
+    a surviving branch in the project repo. None when neither is recoverable."""
+    for cwd in (row.get("run_worktree"), row.get("cwd")):
+        if cwd and Path(cwd).is_dir() and (Path(cwd) / ".git").exists():
+            for base in ("origin/main", "main", "origin/master", "master"):
+                if _git(["rev-parse", "--verify", base], cwd):
+                    out = _git(["diff", "--stat", f"{base}...HEAD"], cwd)
+                    if out is not None:
+                        return out
+    repos = [repo_hint] if repo_hint else []
+    for cand in (row.get("project"), row.get("run_project")):
+        if cand:
+            repos.append(str(HOME / "projects" / cand))
+    wt = row.get("run_worktree") or row.get("cwd") or ""
+    if "/worktrees/" in wt:
+        repos.append(str(HOME / "projects" / project_from_cwd(wt)))
+    for branch in (row.get("run_branch"), row.get("git_branch")):
+        for repo in dict.fromkeys(repos):
+            if branch and Path(repo).is_dir() and _git(["rev-parse", "--verify", branch], repo):
+                for base in ("origin/main", "main"):
+                    if _git(["rev-parse", "--verify", base], repo):
+                        out = _git(["diff", "--stat", f"{base}...{branch}"], repo)
+                        if out is not None:
+                            return out
     return None
 
 
@@ -973,7 +1001,15 @@ def lift(rows: list[dict], window: int = 0) -> dict:
             v = "load-bearing"
         else:
             v = "no-lift"
-        verdicts[f] = {"group": "enforced" if f in ENFORCED else "prose", "verdict": v,
+        pw = [r for r in pop if _flag(r, f, cuts)]
+        pwo = [r for r in pop if not _flag(r, f, cuts)]
+        pooled = {"n_with": len(pw), "n_without": len(pwo),
+                  "rate_with": round(sum(r["positive"] for r in pw) / len(pw), 4) if pw else None,
+                  "rate_without": round(sum(r["positive"] for r in pwo) / len(pwo), 4) if pwo else None,
+                  "note": "descriptive only; unstratified, never feeds the verdict"}
+        verdicts[f] = {"group": "enforced" if f in ENFORCED else "prose", "verdict": v, "pooled": pooled,
+                       "valid_cells": len(valid),
+                       "best_cell_min_arm": max((min(c["n_with"], c["n_without"]) for c in cells), default=0),
                        "testable_projects": sorted(by_proj), "projects_holding_10pt": holding,
                        "project_weighted_delta": {p: round(d, 4) for p, d in sorted(proj_delta.items())}}
     enforced_testable = [f for f in ENFORCED if verdicts[f]["verdict"] != "untestable"]
@@ -1018,6 +1054,13 @@ def lift_markdown(res: dict) -> str:
         pv = res["prevalence"][f]
         L.append(f"| {f} | {v['group']} | {pv['all_briefs']} | {pv['lift_population']} | "
                  f"{len(v['testable_projects'])} | {len(v['projects_holding_10pt'])} | {v['verdict']} |")
+    L += ["", "## Pooled (descriptive, unstratified; not the verdict)", "",
+          "| feature | n_with | n_without | rate_with | rate_without | valid cells | best cell min-arm n |",
+          "|---|---|---|---|---|---|---|"]
+    for f, v in res["features"].items():
+        p = v["pooled"]
+        L.append(f"| {f} | {p['n_with']} | {p['n_without']} | {p['rate_with']} | {p['rate_without']} | "
+                 f"{v['valid_cells']} | {v['best_cell_min_arm']} |")
     L += ["", "## Lift cells (n>=20 each arm marked valid)", "",
           "| feature | project | agent_kind | n_with | n_without | rate_with | rate_without | delta | valid |",
           "|---|---|---|---|---|---|---|---|---|"]

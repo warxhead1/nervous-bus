@@ -383,3 +383,37 @@ systemctl --user enable --now mmx-automation@nervous-bus--token-audit.timer
 Non-LLM producers (`agent_kinds.NON_AGENT_KINDS`: tachyonac `cron`/`ingestor`
 job ticks) are dropped by the recorder; `retire_non_agent_runs.py` moves any
 backlog into `runs_non_agent.db`.
+
+## champion
+
+`champion.py` is the deterministic half of the MASS champion-brief theory test
+(design: `MASS-integration-design.md` §3.1-3.3). Zero LLM calls; every database
+opens `mode=ro`; JSON on stdout, `--help` is the reference.
+
+```
+champion.py extract [--since-days N] [--project P] [--out PATH]   # briefs.jsonl, counts on stdout
+champion.py pairs   --population retry|cohort|recipe|similar|all [--near-miss]
+champion.py bundle  <run_id|brief_sha|brief_id>                    # <=50k tokens, diff stat <=10k
+champion.py lift    [--window 800|0] [--md PATH]                   # Experiment B + verdict
+```
+
+Brief sources: Claude subagent transcripts (line 0, `.meta.json` read from the
+mirror or `~/.claude/projects`), mmx sessions, bounded bus dispatches recovered
+from parent `run_events` (the mirror only reaches back to 2026-08-31, explicit
+abandoned labels start in July), Orca `tasks.spec`, and `~/.mmx/runs` recipes.
+`briefs.jsonl` holds private brief text and lives ONLY under
+`~/.cache/nervous-bus/reflex/phase0/`, never in the repo.
+
+Labels: explicit means `label._source_tier(label_history[-1].source) >= 2`;
+positive is `landed|clean`. Orca `worker_done` follows `orca_outcome`
+(succeeded is a positive, failed abstains), so Orca rows are excluded from
+`lift` and can never form a usable pair. `lift` applies the §3.3 rule: cells
+are project x agent_kind, valid with both arms >= 20 and both outcomes
+present; testable means valid cells in >= 2 projects; load-bearing means a
+project-weighted delta >= 10 points in >= 2 projects; "kill" needs >= 3
+testable enforced features with none clearing. Features run on the first
+`--window` chars of every brief so full and bounded text share one lens
+(`length_chars` is dropped there). `model_explicit`, `isolation_worktree`,
+`has_acceptance_cmd`, `has_file_scope` and `has_base_branch` OR the prose regex
+with structured fields (dispatch args, mmx meta, cwd under a worktree); the
+`_fired` map in each row records which arm fired.
