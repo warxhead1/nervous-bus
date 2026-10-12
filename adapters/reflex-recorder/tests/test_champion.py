@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import sys
 from argparse import Namespace
 from pathlib import Path
@@ -12,7 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import champion
-from champion import (ENFORCED, PROSE, build_bundle, build_pairs, extract, extract_features, lift,
+from champion import (ENFORCED, PROSE, revise_cmd, build_bundle, build_pairs, extract, extract_features, lift,
                       pairs_cohort, pairs_recipe, pairs_retry, project_from_cwd)
 
 FIX = Path(__file__).parent / "fixtures" / "champion"
@@ -507,3 +508,208 @@ def test_lift_all_positive_cell_is_not_valid_evidence():
     res = lift(rows)
     assert res["features"]["has_acceptance_cmd"]["verdict"] == "untestable"
     assert res["verdict"] == "corpus too homogeneous"
+
+
+# ── Experiment C: revise / score-revisions (no model is ever called) ─────────
+
+def _crow(i, dets, outcome="abandoned", text=None):
+    r = _row(f"c{i}", outcome=outcome, label_src="git_branch_gone" if outcome == "abandoned" else "pr_merge",
+             text=text or f"Synthetic task number {i}: update the widget module and report back. Keep going.")
+    r.update(detectors=dets, transcript="", cwd="", git_branch="", run_worktree=None)
+    return r
+
+
+class _FakeRun:
+    """Stands in for subprocess.run; records stdin so the blind guarantee can be asserted."""
+    def __init__(self, reply):
+        self.reply, self.inputs, self.lock = reply, [], threading.Lock()
+
+    def __call__(self, cmd, input=None, **kw):
+        with self.lock:
+            self.inputs.append(input)
+        body = self.reply(input) if callable(self.reply) else self.reply
+        return type("R", (), {"stdout": json.dumps({"result": body, "is_error": False,
+                                                    "total_cost_usd": 0.0, "modelUsage": {"m": {}}})})()
+
+
+REV = {"role": {"agent_type": "w", "model": "sonnet", "isolation": "worktree"},
+       "instruction": "Update the widget module and report back.",
+       "contract": {"fileScope": ["widget/"], "acceptanceGates": ["pytest -q tests"], "receipts": [], "outOfScope": []},
+       "hop": {"dependsOn": [], "relay_to": None, "merge_train": False, "scratch_dir": None}, "context": []}
+
+
+def _cns(tmp_path, briefs, **kw):
+    d = dict(briefs=str(briefs), out_dir=str(tmp_path / "rev"), brief=None, sample=100, seed=7, model="sonnet",
+             parallel=2, cap=100, batch=0, bundle_only=False, config_dir=str(tmp_path / "cfg"))
+    d.update(kw)
+    return Namespace(**d)
+
+
+def _write_briefs(tmp_path, rows):
+    p = tmp_path / "briefs.jsonl"
+    p.write_text("\n".join(map(json.dumps, rows)))
+    return p
+
+
+def test_blind_optimizer_input_never_contains_detector_terms(tmp_path):
+    leaky = _crow(1, ["worktree_leak"], text="Fix the thing; a past run flagged worktree_leak and red baseline dispatch "
+                  "and unverified-completion, plus rebuild cache miss noise. " + "x" * 50)
+    briefs = _write_briefs(tmp_path, [leaky] + [_crow(i, ["reread_same_file"]) for i in range(2, 6)])
+    fake = _FakeRun(json.dumps(REV))
+    st = revise_cmd(_cns(tmp_path, briefs), run=fake)
+    assert st["called"] == 5 and fake.inputs
+    for prompt in fake.inputs:
+        assert champion.blind_scan(prompt) == []
+        for t in champion.BLIND_TERMS:
+            assert t not in prompt and t.replace("_", " ") not in prompt.lower()
+    assert any("[term]" in p for p in fake.inputs)  # the leaky brief was redacted, not dropped
+
+
+def test_optimizer_prompt_ignores_row_detector_fields():
+    row = _crow(9, ["unverified_completion"])
+    row["failure_taxonomy"] = ["unverified_completion"]
+    p = champion.optimizer_prompt(row, {"outcome": "abandoned", "label_source": "x"})
+    assert "unverified" not in p and "abandoned" in p
+
+
+def test_blind_violation_raised_if_not_redactable(monkeypatch):
+    monkeypatch.setattr(champion, "redact_blind", lambda t: (t, 0))
+    row = _crow(1, [], text="mentions kb_recall_gap explicitly in the brief " * 2)
+    with pytest.raises(champion.BlindViolation):
+        champion.optimizer_prompt(row, {})
+
+
+def test_revise_cap_enforced_across_batches(tmp_path):
+    briefs = _write_briefs(tmp_path, [_crow(i, ["reread_same_file"]) for i in range(6)])
+    fake = _FakeRun(json.dumps(REV))
+    a = revise_cmd(_cns(tmp_path, briefs, cap=4, batch=3), run=fake)
+    b = revise_cmd(_cns(tmp_path, briefs, cap=4, batch=3), run=fake)
+    assert a["called"] == 3 and b["called"] == 1 and b["cap_blocked"] == 2
+    assert len(fake.inputs) == 4 and b["revise_calls_spent_total"] == 4
+    c = revise_cmd(_cns(tmp_path, briefs, cap=4), run=fake)  # rerun: capped, nothing new
+    assert c["called"] == 0 and len(fake.inputs) == 4
+
+
+def test_revise_is_resumable_and_counts_parse_failures(tmp_path):
+    briefs = _write_briefs(tmp_path, [_crow(i, ["reread_same_file"]) for i in range(2)])
+    bad = _FakeRun("not json at all")
+    st = revise_cmd(_cns(tmp_path, briefs), run=bad)
+    assert st["parse_failures"] == 2 and st["revise_calls_spent_total"] == 2
+    again = revise_cmd(_cns(tmp_path, briefs), run=bad)
+    assert again["already_done"] == 2 and again["called"] == 0
+
+
+def test_parse_and_normalize_fenced_json():
+    v = champion.parse_json_obj("sure!\n```json\n" + json.dumps(REV) + "\n```\nthanks")
+    assert champion.normalize_revision(v)["contract"]["acceptanceGates"] == ["pytest -q tests"]
+    assert champion.normalize_revision({"no": "instruction"}) is None
+    assert champion.parse_json_obj("{broken") is None
+
+
+def _rev(**kw):
+    r = json.loads(json.dumps(REV))
+    r["contract"]["acceptanceGates"] = []
+    r["contract"]["fileScope"] = []
+    for k, v in kw.items():
+        if k in r["contract"]:
+            r["contract"][k] = v
+        else:
+            r[k] = v
+    return r
+
+
+ORIG = "Update the widget module and report back."
+
+
+@pytest.mark.parametrize("det,hit,miss", [
+    ("unverified_completion", _rev(acceptanceGates=["pytest -q tests/widget"]), _rev(instruction=ORIG + " Verify it carefully.")),
+    ("red_baseline_dispatch", _rev(instruction=ORIG + " First run the suite and record the baseline failures before you edit anything."),
+     _rev(instruction=ORIG + " Keep a good baseline of quality.")),
+    ("inherited_rationalization", _rev(instruction=ORIG + " Do not assume the failure is pre-existing; reproduce it on a clean main first."),
+     _rev(instruction=ORIG + " The failure is pre-existing.")),
+    ("reread_same_file", _rev(context=["widget/core.py", "kb brief widget"]), _rev(instruction=ORIG + " Read carefully.")),
+    ("rebuild_cache_miss", _rev(instruction=ORIG + " Set CARGO_TARGET_DIR to the shared build pool."), _rev(instruction=ORIG + " Build it.")),
+    ("worktree_leak", _rev(instruction=ORIG + " When merged, run git worktree remove on your checkout."), _rev(instruction=ORIG + " Use a worktree.")),
+    ("skill_opportunity", _rev(instruction=ORIG + " Load the beads skill before running bd."), _rev(instruction=ORIG + " Be skillful.")),
+])
+def test_scoring_rules_demand_mechanism_not_vocabulary(det, hit, miss):
+    sh = champion.score_rule(det, hit, champion.revision_delta(ORIG, hit))
+    sm = champion.score_rule(det, miss, champion.revision_delta(ORIG, miss))
+    assert sh["strong"] is True
+    assert sm["strong"] is False
+
+
+def test_rules_only_see_new_content_not_the_original():
+    orig = "Run pytest -q before reporting. " + ORIG
+    rev = _rev(instruction=orig)  # unchanged restatement adds nothing
+    d = champion.revision_delta(orig, rev)
+    assert d["enforced"] == [] and d["prose"] == []
+    assert champion.score_rule("unverified_completion", rev, d) == {"strong": False, "weak": False}
+
+
+def test_enforced_share_counts_contract_hop_vs_prose():
+    rev = _rev(acceptanceGates=["pytest -q"], fileScope=["a.py", "b.py"], instruction=ORIG + " A wholly new sentence appears here.")
+    d = champion.revision_delta(ORIG, rev)
+    assert len(d["enforced"]) == 3 and len(d["prose"]) == 1
+    agg = champion.aggregate([{"detector": "x", "outcome": "abandoned", "targeted": True, "t_src": "regex", "t_strong": True,
+                               "placebo_hit": False, "p_src": "regex", "p_strong": False,
+                               "n_enforced": 3, "n_prose": 1}], {})
+    assert agg["enforced_share_pooled"] == 0.75 and agg["verdict"] == "proceed"
+
+
+def test_verdict_thresholds():
+    def rows(k, n):
+        return [{"detector": "x", "outcome": "abandoned", "targeted": i < k, "t_src": "regex", "t_strong": i < k,
+                 "placebo_hit": False, "p_src": "regex", "p_strong": False, "n_enforced": 0, "n_prose": 1} for i in range(n)]
+    assert champion.aggregate(rows(5, 10), {})["verdict"] == "proceed"
+    assert champion.aggregate(rows(4, 10), {})["verdict"] == "inconclusive"
+    assert champion.aggregate(rows(2, 10), {})["verdict"] == "kill"
+
+
+def test_placebo_never_picks_own_detectors_and_is_deterministic():
+    own = ["reread_same_file", "worktree_leak"]
+    picks = {champion.placebo_detector(f"sha{i}", own, 1) for i in range(200)}
+    assert picks and not picks & set(own) and picks <= set(champion.SCORABLE)
+    assert champion.placebo_detector("s", own, 1) == champion.placebo_detector("s", own, 1)
+
+
+def test_generic_boilerplate_scores_the_same_against_placebo(tmp_path):
+    boiler = _rev(instruction=ORIG + " Run pytest -q, record the baseline failures first, load the beads skill, "
+                  "do not assume anything is pre-existing, set CARGO_TARGET_DIR to the shared pool, "
+                  "git worktree remove when done.")
+    boiler["context"] = ["kb brief"]
+    briefs = _write_briefs(tmp_path, [_crow(i, ["reread_same_file"]) for i in range(8)])
+    ns = _cns(tmp_path, briefs)
+    revise_cmd(ns, run=_FakeRun(json.dumps(boiler)))
+    res = champion.score_revisions(ns, run=_FakeRun(json.dumps({"addresses": True, "why": "x"})))
+    assert res["targeted_rate"] == 1.0 and res["placebo_rate"] == 1.0 and res["placebo_gap"] == 0.0
+    assert res["rule_base_rate_strong"]["reread_same_file"] == 1.0
+    assert "reread_same_file" in res["boilerplate_rules"] and res["n_excl_boilerplate"] == 0
+
+
+def test_score_judge_blind_cap_and_cache(tmp_path):
+    vague = _rev(instruction=ORIG + " Please check the tests and the build more carefully.")
+    briefs = _write_briefs(tmp_path, [_crow(i, ["unverified_completion"]) for i in range(6)])
+    revise_cmd(_cns(tmp_path, briefs), run=_FakeRun(json.dumps(vague)))
+    judge = _FakeRun(json.dumps({"addresses": False, "why": "vague"}))
+    res = champion.score_revisions(_cns(tmp_path, briefs, cap=3), run=judge)
+    assert res["score_calls_spent"] <= 3 and 0 < len(judge.inputs) <= 3
+    for p in judge.inputs:
+        assert champion.blind_scan(p) == []
+        assert "without ever running any build" in p  # mechanism description, not the name
+    n = len(judge.inputs)
+    res2 = champion.score_revisions(_cns(tmp_path, briefs, cap=3), run=judge)
+    assert res2["score_calls_spent"] <= 3 and len(judge.inputs) == n  # cache + on-disk ledger
+
+
+def test_sample_is_seeded_stratified_abandoned_first():
+    rows = [_crow(i, ["unverified_completion"], outcome="abandoned" if i % 3 else "landed") for i in range(60)]
+    rows += [_crow(100 + i, ["worktree_leak"], outcome="landed") for i in range(30)]
+    a, comp = champion.select_sample(rows, 100, 5)
+    b, _ = champion.select_sample(rows, 100, 5)
+    assert a == b and comp["seed"] == 5
+    first = [m for m in a if m["detector"] == "unverified_completion"][:25]
+    assert len(first) == 25 and all(m["outcome"] == "abandoned" for m in first)  # abandoned fill first
+    assert comp["strata"]["worktree_leak"]["eligible"] == 30
+    assert "user_correction" in comp["absent_strata"]
+    assert len({m["brief_sha256"] for m in a}) == len(a)
