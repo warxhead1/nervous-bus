@@ -1,0 +1,8 @@
+Hearth repo. Base branch: main. FIRST: `git fetch origin && git merge --ff-only origin/main`.
+Assert isolation: `git rev-parse --show-toplevel` must be under /home/eric/data2/worktrees/.
+FILE SCOPE (write): src/foo.py and tests/test_foo.py. DO NOT modify bar.py.
+Acceptance gate: `python3 -m pytest -q tests` must be green.
+Scratch goes in /home/eric/data2/orca/x/scratch/, never in the repo.
+Write the report to /home/eric/data2/orca/x/report.md. Receipts go in the report.
+Exhaustion clause: before reporting anything missing, enumerate every surface you searched.
+If you stop, write a handoff file for the next lane. model: sonnet
