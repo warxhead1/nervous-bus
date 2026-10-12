@@ -807,7 +807,7 @@ def test_project_cap_is_thirty_percent():
                          for s in "xy")
             cands.append({"rows": rows, "project": proj, "agent_type": "t", "same_sha": False, "similarity": 0.9,
                           "inf": {"outcome_differs": False, "detector_gap": 0, "diff_size_gap": False}})
-    got = champion.select_pairs(cands, 30, 9, rng, set(), {}, {})
+    got = champion.select_pairs(cands, 30, 9, rng, {}, {}, {})
     assert len(got) == 30
     assert max(champion._tally(c["project"] for c in got).values()) <= 9
 
@@ -964,3 +964,32 @@ def test_section32_verdict_bands():
     assert v(0.75, 0.15) == "proceed" and v(0.90, 0.0) == "proceed"
     assert v(0.70, 0.20).startswith("inconclusive") and v(0.80, 0.16).startswith("inconclusive")
     assert v(None, 0.1) == "insufficient data"
+
+
+def test_edit_activity_counts_as_evidence_and_written_report_is_excerpted(tmp_path):
+    out = tmp_path / "findings.md"
+    out.write_text("# Findings\nthe parser handles nesting\n")
+    tr = tmp_path / "t.jsonl"
+    tr.write_text(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Write", "input": {"file_path": str(out)}},
+        {"type": "tool_use", "name": "Edit", "input": {"file_path": "/x/a.py"}},
+        {"type": "tool_use", "name": "Edit", "input": {"file_path": "/x/a.py"}}]}}) + "\n")
+    row = {"transcript": str(tr)}
+    b = champion.enrich_bundle(row, {"diff_stat": None, "report_paths": [], "last_assistant_message": None,
+                                     "gate_exit_codes": []})
+    assert b["edited_files"] == {str(out): 1, "/x/a.py": 2}
+    k = champion.evidence_kinds(b)
+    assert k["edits"] and k["report"] and not k["diff"] and not k["message"]
+    text = champion.render_evidence(b)
+    assert "/x/a.py (x2)" in text and "the parser handles nesting" in text
+
+
+def test_single_project_corpus_falls_back_through_flagged_tiers(tmp_path):
+    rows = [_drow(tmp_path, i, "solo", sha_i=0) for i in range(4)]  # 6 candidate pairs, one project
+    _write_drows(tmp_path, rows)
+    st = champion.calibrate_sample(_dns(tmp_path, n=3, flip_extra=0))
+    sel = json.loads((tmp_path / "cal" / "sealed" / "selection.json").read_text())
+    tiers = champion._tally(v["tier"] for v in sel.values())
+    assert len(sel) == 3 and "within_project_cap" in tiers  # first pick is within the cap
+    assert tiers.get("over_project_cap", 0) >= 1 and st["selected"]["selection_tiers"] == tiers
+    assert st["selected"]["runs_in_two_pairs"] >= 1  # 4 runs cannot make 3 disjoint pairs

@@ -1664,10 +1664,12 @@ MMX_BIN = "/home/eric/.local/bin/mmx"
 JUDGE_CAP = 400
 RECENT_FROM = "2026-08-31"
 MIN_BRIEF_CHARS = 400
-RICH_FLOOR = 2          # of: non-empty diff stat, existing report file, substantive last message
+RICH_FLOOR = 1          # of: non-empty diff stat, existing report file, files edited, substantive last message
 MSG_FLOOR_CHARS = 300
+EDIT_FLOOR = 1
+EDIT_LIST_CAP = 25
 PROJECT_CAP_FRAC = 0.30
-PER_SHA_CAP = 2
+PER_SHA_CAP = 6
 TASK_CAP = 5000
 DIFF_LINES = 60
 MSG_CAP = 3000
@@ -1694,6 +1696,36 @@ def _diff_lines(stat: Optional[str]) -> int:
     return sum(int(x) for x in m)
 
 
+def transcript_actions(path: str) -> dict:
+    """Files the run wrote or edited (from its own tool calls). Survives worktree reaping, unlike a git diff."""
+    p = Path(path) if path else None
+    counts: dict[str, int] = {}
+    if p and p.is_file():
+        for d in _read_lines(p, 10**9):
+            content = (d.get("message") or {}).get("content")
+            if d.get("type") == "assistant" and isinstance(content, list):
+                for c in content:
+                    if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") in (
+                            "Write", "Edit", "MultiEdit", "NotebookEdit"):
+                        inp = c.get("input") or {}
+                        fp = inp.get("file_path") or inp.get("notebook_path")
+                        if fp:
+                            counts[fp] = counts.get(fp, 0) + 1
+    return counts
+
+
+def enrich_bundle(row: dict, bundle: dict) -> dict:
+    """Add edited files, and written .md/.json files that still exist as report evidence."""
+    acts = transcript_actions(row.get("transcript", ""))
+    bundle["edited_files"] = acts
+    have = {r["path"] for r in bundle.get("report_paths") or []}
+    for fp in acts:
+        if fp.endswith((".md", ".json")) and fp not in have and Path(fp).is_file():
+            bundle.setdefault("report_paths", []).append({"path": fp, "exists": True})
+            have.add(fp)
+    return bundle
+
+
 def render_evidence(bundle: dict) -> str:
     """The ONE blind rendering shared by packet.md and both judges. Outcome, label source and detector
     data are never read from the bundle; blind terms are redacted from what remains."""
@@ -1718,6 +1750,12 @@ def render_evidence(bundle: dict) -> str:
             reps.append(f"- {r['path']} (named in the task, not found)")
     if reps:
         parts.append("Report files:\n" + "\n".join(reps[:3]))
+    edited = bundle.get("edited_files") or {}
+    if edited:
+        items = sorted(edited.items(), key=lambda kv: -kv[1])[:EDIT_LIST_CAP]
+        parts.append(f"Files written or edited by the agent ({len(edited)}):\n" +
+                     "\n".join(f"- {f} (x{n})" for f, n in items) +
+                     (f"\n- ... {len(edited) - EDIT_LIST_CAP} more" if len(edited) > EDIT_LIST_CAP else ""))
     gates = bundle.get("gate_exit_codes") or []
     if gates:
         parts.append("Build/test commands run (exit code):\n" + "\n".join(f"- {g['cmd']} -> {g['exit']}" for g in gates))
@@ -1730,6 +1768,7 @@ def render_evidence(bundle: dict) -> str:
 def evidence_kinds(bundle: dict) -> dict:
     return {"diff": bool((bundle.get("diff_stat") or "").strip()),
             "report": any(r.get("exists") for r in bundle.get("report_paths") or []),
+            "edits": len(bundle.get("edited_files") or {}) >= EDIT_FLOOR,
             "message": len((bundle.get("last_assistant_message") or "").strip()) >= MSG_FLOOR_CHARS}
 
 
@@ -1782,7 +1821,7 @@ def _info_score(inf: dict) -> int:
 
 
 def select_pairs(cands: list[dict], n: int, project_cap: int, rng: random.Random,
-                 used_runs: set, sha_count: dict, proj_count: dict) -> list[dict]:
+                 used_runs: dict, sha_count: dict, proj_count: dict, run_cap: int = 1) -> list[dict]:
     """Round-robin over projects, then over that project's agent_type strata; best-ranked unused pair first."""
     by_proj: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
     for c in cands:
@@ -1790,7 +1829,7 @@ def select_pairs(cands: list[dict], n: int, project_cap: int, rng: random.Random
     for strata in by_proj.values():
         for lst in strata.values():
             rng.shuffle(lst)
-            lst.sort(key=lambda c: (-int(c["same_sha"]), -_info_score(c["inf"]), -c["similarity"]))
+            lst.sort(key=lambda c: (-int(c["same_sha"]), -_info_score(c["inf"]), -c.get("rich", 0), -c["similarity"]))
     projs = sorted(by_proj)
     rng.shuffle(projs)
     turn = {p: 0 for p in projs}
@@ -1807,14 +1846,14 @@ def select_pairs(cands: list[dict], n: int, project_cap: int, rng: random.Random
             for k in range(len(strata)):
                 st = strata[(turn[p] + k) % len(strata)]
                 hit = next((c for c in by_proj[p][st]
-                            if not ({rid(c["rows"][0]), rid(c["rows"][1])} & used_runs)
+                            if all(used_runs.get(rid(r), 0) < run_cap for r in c["rows"])
                             and all(sha_count.get(r["brief_sha256"], 0) < PER_SHA_CAP for r in c["rows"])), None)
                 if hit:
                     turn[p] = (turn[p] + k + 1) % len(strata)
                     by_proj[p][st].remove(hit)
                     picked.append(hit)
-                    used_runs.update(rid(r) for r in hit["rows"])
                     for r in hit["rows"]:
+                        used_runs[rid(r)] = used_runs.get(rid(r), 0) + 1
                         sha_count[r["brief_sha256"]] = sha_count.get(r["brief_sha256"], 0) + 1
                     proj_count[p] = proj_count.get(p, 0) + 1
                     progress = True
@@ -1870,10 +1909,10 @@ def calibrate_sample(ns: argparse.Namespace) -> dict:
                                                 - stats["candidate_pairs_after_exclusion"])
     bundles: dict[str, dict] = {}
     rich = []
-    kinds_n = {"diff": 0, "report": 0, "message": 0}
+    kinds_n = {"diff": 0, "report": 0, "edits": 0, "message": 0}
     leaked = 0
     for r in kept:
-        b = build_bundle(r, None)
+        b = enrich_bundle(r, build_bundle(r, None))
         k = evidence_kinds(b)
         for kk, v in k.items():
             kinds_n[kk] += int(v)
@@ -1894,12 +1933,26 @@ def calibrate_sample(ns: argparse.Namespace) -> dict:
     for c in cands:
         a, b = c["rows"]
         c["inf"] = informativeness(a, b, bundles[rid(a)]["bundle"], bundles[rid(b)]["bundle"])
-    used: set = set()
+        c["rich"] = min(sum(bundles[rid(x)]["kinds"].values()) for x in (a, b))
+    used: dict = {}
     shac: dict = {}
     pc: dict = {}
     total = ns.n + ns.flip_extra
-    cal = select_pairs(cands, ns.n, max(1, int(PROJECT_CAP_FRAC * ns.n)), rng, used, shac, pc)
-    flip = select_pairs(cands, total - len(cal), max(1, int(PROJECT_CAP_FRAC * total)), rng, used, shac, pc)
+    def draw(want: int, cap: int) -> list[dict]:
+        # Tiers, each flagged per pair: the corpus has few public same-task pairs, so when the first tier
+        # cannot fill the quota, relax the 30% project cap, then allow a run to appear in two pairs.
+        got: list[dict] = []
+        for tier, pcap, rcap in (("within_project_cap", cap, 1), ("over_project_cap", 10**9, 1),
+                                 ("run_reused_once", 10**9, 2)):
+            if len(got) >= want:
+                break
+            extra = select_pairs(cands, want - len(got), pcap, rng, used, shac, pc, run_cap=rcap)
+            for e in extra:
+                e["tier"] = tier
+            got += extra
+        return got
+    cal = draw(ns.n, max(1, int(PROJECT_CAP_FRAC * ns.n)))
+    flip = draw(total - len(cal), max(1, int(PROJECT_CAP_FRAC * total)))
     chosen = [(c, "calibration") for c in cal] + [(c, "flip") for c in flip]
     bdir = out / "bundles"
     bdir.mkdir(parents=True, exist_ok=True)
@@ -1926,7 +1979,7 @@ def calibrate_sample(ns: argparse.Namespace) -> dict:
         sel[pid] = {"project": c["project"], "agent_type": c["agent_type"], "similarity": c["similarity"],
                     "same_sha": c["same_sha"], "outcomes": {s: sides[s].get("outcome") for s in "AB"},
                     "detector_counts": {s: len(sides[s].get("detectors") or []) for s in "AB"},
-                    "informativeness": c["inf"],
+                    "informativeness": c["inf"], "tier": c.get("tier", "within_project_cap"),
                     "evidence_kinds": {s: bundles[rid(sides[s])]["kinds"] for s in "AB"}}
     cal_pairs = [p for p in pairs if p["set"] == "calibration"]
     out.mkdir(parents=True, exist_ok=True)
@@ -1948,6 +2001,8 @@ def calibrate_sample(ns: argparse.Namespace) -> dict:
         "identical_brief_pairs": sum(1 for p in pairs if sel[p["pair_id"]]["same_sha"]),
         "informative_pairs": sum(1 for p in pairs if _info_score(sel[p["pair_id"]]["informativeness"]) >= 1),
         "evidence_kinds_per_side": _tally(sum(sel[p["pair_id"]]["evidence_kinds"][s].values()) for p in pairs for s in "AB"),
+        "selection_tiers": _tally(sel[p["pair_id"]]["tier"] for p in pairs),
+        "runs_in_two_pairs": sum(1 for v in _tally(p[s]["run_id"] or p[s]["brief_id"] for p in pairs for s in "ab").values() if v > 1),
         "max_project_share": round(max(_tally(sel[p["pair_id"]]["project"] for p in pairs).values(), default=0)
                                    / max(1, len(pairs)), 3),
     }
