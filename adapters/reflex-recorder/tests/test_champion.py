@@ -713,3 +713,283 @@ def test_sample_is_seeded_stratified_abandoned_first():
     assert comp["strata"]["worktree_leak"]["eligible"] == 30
     assert "user_correction" in comp["absent_strata"]
     assert len({m["brief_sha256"] for m in a}) == len(a)
+
+
+# ── Phase 0d pilot: calibrate-sample / judge / calibrate-score ───────────────────────────────────────
+LEAK_WORDS = ["abandoned", "git_ff_landed", "unverified_completion", "reread_same_file", "label_source",
+              "failure_taxonomy", "outcome"]
+
+
+def _drow(tmp, i, project, sha_i=0, agent="sonnet-worker", outcome="landed", cwd=None, msg=None):
+    rep = tmp / f"report-{sha_i}.md"
+    rep.write_text("report body for the shared task\n")
+    brief = (f"Task {sha_i}: implement the widget parser. Write the findings to {rep} when finished. " * 8)
+    tr = tmp / f"tr-{project}-{i}.jsonl"
+    text = msg or ("Finished the widget parser; all checks were run and the findings report is written. " * 6)
+    tr.write_text(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}) + "\n")
+    return {"brief_id": f"b{project}{i}", "source": "claude_subagent", "brief_text": brief,
+            "brief_sha256": f"sha{project}{sha_i}", "agent_type": agent, "project": project,
+            "cwd": cwd or f"/home/eric/projects/{project}", "ts": "2026-09-20T10:00:00Z",
+            "text_source": "full", "transcript": str(tr), "run_id": f"r{project}{i}", "run_project": project,
+            "run_branch": None, "run_worktree": None, "git_branch": "main", "outcome": outcome,
+            "label_source": "git_ff_landed", "detectors": ["unverified_completion", "reread_same_file"],
+            "failure_taxonomy": ["verification_failure"]}
+
+
+def _dns(tmp, **kw):
+    d = dict(briefs=str(tmp / "briefs.jsonl"), out_dir=str(tmp / "cal"), n=4, flip_extra=4, seed=7, threshold=0.8)
+    d.update(kw)
+    return Namespace(**d)
+
+
+def _write_drows(tmp, rows):
+    (tmp / "briefs.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+
+
+def _sample_rows(tmp):
+    rows = []
+    for proj in ("alpha", "beta", "gamma", "delta"):
+        for i in range(4):
+            rows.append(_drow(tmp, i, proj, sha_i=i // 2, outcome="landed" if i % 2 else "abandoned"))
+    return rows
+
+
+def test_private_hits_cover_every_path_field():
+    base = {"project": "ok", "brief_text": "x"}
+    for field, val in [("project", "tachyonac-engine"), ("run_project", "tachyonos-bridge"),
+                       ("cwd", "/home/eric/data2/orca/tachyonac-x/lane"), ("project", "market-ops"),
+                       ("brief_text", "see hearth.market.state docs"), ("run_worktree", "/w/tachyonac_a")]:
+        assert field in champion.private_hits({**base, field: val}), (field, val)
+    assert champion.private_hits({**base, "project": "hearth", "cwd": "/home/eric/projects/hearth"}) == []
+
+
+def test_calibrate_sample_excludes_private_and_reports_count(tmp_path):
+    rows = _sample_rows(tmp_path)
+    for i in range(4):
+        rows.append(_drow(tmp_path, i, "tachyonac-engine", sha_i=0))
+    rows.append(_drow(tmp_path, 9, "alpha", sha_i=0, cwd="/home/eric/data2/orca/tachyonac-lane/x"))
+    _write_drows(tmp_path, rows)
+    st = champion.calibrate_sample(_dns(tmp_path))
+    assert st["private_rows_dropped"] == 5
+    assert "tachyonac-engine" in st["private_projects_dropped"]
+    assert st["private_candidate_pairs_dropped"] >= 6
+    blob = (tmp_path / "cal" / "pairs.json").read_text() + (tmp_path / "cal" / "packet.md").read_text()
+    assert "tachyonac" not in blob.lower()
+    for b in (tmp_path / "cal" / "bundles").iterdir():
+        assert "tachyonac" not in b.read_text().lower()
+
+
+def test_calibrate_sample_floor_cap_and_determinism(tmp_path):
+    rows = _sample_rows(tmp_path)
+    poor = _drow(tmp_path, 7, "alpha", sha_i=0, msg="short")
+    poor["brief_text"] = poor["brief_text"].replace(str(tmp_path / "report-0.md"), "nothing")
+    rows.append(poor)
+    _write_drows(tmp_path, rows)
+    st = champion.calibrate_sample(_dns(tmp_path))
+    assert st["rows_below_evidence_floor"] >= 1
+    pj = json.loads((tmp_path / "cal" / "pairs.json").read_text())
+    used = [p[s]["run_id"] for p in pj["pairs"] for s in "ab"]
+    assert "ralpha7" not in used and len(used) == len(set(used))  # floor enforced, no run reused
+    assert len(pj["calibration_ids"]) == 4
+    again = tmp_path / "again"
+    champion.calibrate_sample(_dns(tmp_path, out_dir=str(again)))
+    a = json.loads((again / "pairs.json").read_text())
+    assert [(p["a"]["run_id"], p["b"]["run_id"]) for p in a["pairs"]] == \
+           [(p["a"]["run_id"], p["b"]["run_id"]) for p in pj["pairs"]]
+
+
+def test_project_cap_is_thirty_percent():
+    rng = champion.random.Random(1)
+    cands = []
+    for proj in ["a", "b", "c", "d", "e"]:
+        for k in range(40):
+            rows = tuple({"run_id": f"{proj}{k}{s}", "brief_id": f"{proj}{k}{s}", "brief_sha256": f"{proj}{k}{s}"}
+                         for s in "xy")
+            cands.append({"rows": rows, "project": proj, "agent_type": "t", "same_sha": False, "similarity": 0.9,
+                          "inf": {"outcome_differs": False, "detector_gap": 0, "diff_size_gap": False}})
+    got = champion.select_pairs(cands, 30, 9, rng, {}, {}, {})
+    assert len(got) == 30
+    assert max(champion._tally(c["project"] for c in got).values()) <= 9
+
+
+def test_packet_and_pairs_carry_no_label_detector_or_verdict_leak(tmp_path):
+    rows = _sample_rows(tmp_path)
+    rows[0] = _drow(tmp_path, 0, "alpha", sha_i=0, msg="Note unverified_completion and reread_same_file. " * 12)
+    _write_drows(tmp_path, rows)
+    champion.calibrate_sample(_dns(tmp_path))
+    cal = tmp_path / "cal"
+    texts = [(cal / "packet.md").read_text(), (cal / "pairs.json").read_text()] + \
+            [b.read_text() for b in (cal / "bundles").iterdir()]
+    for t in texts:
+        low = t.lower()
+        for w in LEAK_WORDS:
+            assert w not in low, w
+        assert "winner" not in low
+    pk = (cal / "packet.md").read_text()
+    assert pk.count("Verdict: A | B | tie") == 4 and "Workspace A" in pk and "Workspace B" in pk
+    assert "[term]" in "".join(texts)  # the planted detector names were redacted, not passed through
+    tpl = json.loads((cal / "truth.template.json").read_text())
+    assert len(tpl) == 4 and all(v["winner"] is None for v in tpl.values())
+    assert "outcomes" in (cal / "sealed" / "selection.json").read_text()  # labels live only under sealed/
+
+
+class _JRun:
+    """Fake subprocess.run for both judges; records stdin and cwd, answers a fixed shown winner."""
+    def __init__(self, winner="A", wrap="claude"):
+        self.inputs, self.cwds, self.winner, self.wrap = [], [], winner, wrap
+        self.lock = threading.Lock()
+
+    def __call__(self, cmd, input=None, cwd=None, **kw):
+        with self.lock:
+            self.inputs.append(input)
+            self.cwds.append((cwd, sorted(p.name for p in Path(cwd).iterdir())))
+        body = json.dumps({"winner": self.winner, "rationale": "cites a.py"})
+        out = json.dumps({"result": body, "is_error": False}) if self.wrap == "claude" else body + "\n"
+        return type("R", (), {"stdout": out, "stderr": "", "returncode": 0})()
+
+
+def _judge_setup(tmp, n_pairs=3):
+    _write_drows(tmp, _sample_rows(tmp))
+    champion.calibrate_sample(_dns(tmp, n=n_pairs, flip_extra=0))
+    return tmp / "cal"
+
+
+def _jns(tmp, judge, **kw):
+    d = dict(pairs=str(tmp / "cal" / "pairs.json"), judge=judge, both_orderings=True, cal_dir=str(tmp / "cal"),
+             model="sonnet", parallel=3, cap=400, limit=0, bundle_only=False, scratch=str(tmp / "scr"),
+             config_dir=str(tmp / "cfg"))
+    d.update(kw)
+    return Namespace(**d)
+
+
+def test_both_orderings_map_back_and_flip(tmp_path):
+    cal = _judge_setup(tmp_path)
+    run = _JRun("A", "mmx")
+    st = champion.judge_cmd(_jns(tmp_path, "mmx"), run=run)
+    assert st["calls_this_run"] == 6 and st["parse_failures"] == 0
+    vs = champion._read_jsonl(cal / "sealed" / "verdicts.jsonl")
+    for v in vs:  # judge always says "A": packet-frame A in ordering 1, packet-frame B in ordering 2
+        assert v["winner"] == ("A" if v["ordering"] == 1 else "B")
+    assert st["flip"]["flip_rate"] == 1.0
+    p = json.loads((cal / "pairs.json").read_text())["pairs"][0]
+    ev_a, ev_b = Path(p["a"]["bundle_path"]).read_text(), Path(p["b"]["bundle_path"]).read_text()
+    task = Path(p["task_path"]).read_text()
+    assert champion.judge_prompt_pair(task, ev_a, ev_b) in run.inputs
+    assert champion.judge_prompt_pair(task, ev_b, ev_a) in run.inputs
+    assert champion.to_canonical("A", 2) == "B" and champion.to_canonical("tie", 2) == "tie"
+    assert "rationale" not in json.dumps(st) and "cites a.py" not in json.dumps(st)  # sealed: nothing printed
+
+
+def test_mmx_runs_from_empty_dir_and_sonnet_uses_clean_config(tmp_path):
+    _judge_setup(tmp_path, 2)
+    run = _JRun("tie", "mmx")
+    champion.judge_cmd(_jns(tmp_path, "mmx", limit=1, both_orderings=False), run=run)
+    cwd, listing = run.cwds[0]
+    assert listing == [] and str(tmp_path / "scr") in cwd
+    seen = {}
+
+    def fake_claude(cmd, input=None, cwd=None, env=None, **kw):
+        seen["cmd"], seen["env"] = cmd, env
+        return type("R", (), {"stdout": json.dumps({"result": '{"winner":"B","rationale":"x"}', "is_error": False}),
+                              "stderr": "", "returncode": 0})()
+    champion.judge_cmd(_jns(tmp_path, "sonnet", limit=1, both_orderings=False), run=fake_claude)
+    assert seen["env"]["CLAUDE_CONFIG_DIR"] == str(tmp_path / "cfg") and "--tools" in seen["cmd"]
+    assert champion.JUDGE_SYSTEM in seen["cmd"] and champion.OPT_SYSTEM not in seen["cmd"]
+
+
+def test_judge_cap_is_hard_shared_and_resumable(tmp_path):
+    cal = _judge_setup(tmp_path)
+    run = _JRun("A", "mmx")
+    st = champion.judge_cmd(_jns(tmp_path, "mmx", cap=4), run=run)
+    assert st["calls_this_run"] == 4 and st["cap_blocked"] == 2 and len(run.inputs) == 4
+    st2 = champion.judge_cmd(_jns(tmp_path, "sonnet", cap=4), run=_JRun("A", "claude"))
+    assert st2["calls_this_run"] == 0 and st2["cap_blocked"] == 6  # cap spans judges, counted on disk
+    assert champion._calls_spent(cal / "sealed" / "judge_calls.jsonl") == 4
+    st3 = champion.judge_cmd(_jns(tmp_path, "mmx", cap=6), run=run)
+    assert st3["planned"] == 2 and st3["calls_this_run"] == 2  # resumes only the missing (pair, ordering)
+
+
+def test_parse_failures_are_counted_and_excluded_from_flip(tmp_path):
+    _judge_setup(tmp_path, 2)
+
+    def garbage(cmd, input=None, cwd=None, **kw):
+        return type("R", (), {"stdout": "no json here", "stderr": "", "returncode": 0})()
+    st = champion.judge_cmd(_jns(tmp_path, "mmx"), run=garbage)
+    assert st["parse_failures"] == 4 and st["flip"]["flip_rate"] is None
+    assert st["flip"]["pairs_excluded_parse_failure"] == 2
+    assert champion.parse_verdict('x {"winner": "b", "rationale": "r"} y')["winner"] == "B"
+    assert champion.parse_verdict('{"winner": "Tie"}')["winner"] == "tie"
+    assert champion.parse_verdict('{"winner": "C"}') is None
+
+
+def _v(pair, o, w, parsed=True):
+    return {"pair_id": pair, "judge": "j", "ordering": o, "parsed": parsed, "winner": w if parsed else None, "ok": True}
+
+
+def test_score_math_ties_inconsistent_and_missing(tmp_path):
+    cal = tmp_path / "cal"
+    (cal / "sealed").mkdir(parents=True)
+    ids = [f"p{i}" for i in range(1, 8)]
+    (cal / "pairs.json").write_text(json.dumps({"calibration_ids": ids[:6], "pairs": [{"pair_id": i} for i in ids]}))
+    truth = {"p1": {"winner": "A", "by": "eric"}, "p2": {"winner": "B", "by": "fable"},
+             "p3": {"winner": "A", "by": "eric+fable"}, "p4": {"winner": "tie", "by": "eric"},
+             "p5": {"winner": "B", "by": "eric"}, "p6": {"winner": None, "by": None}}
+    vs = []
+    for pid, w1, w2 in [("p1", "A", "A"),      # consistent, agrees
+                        ("p2", "A", "A"),      # consistent, disagrees (truth B)
+                        ("p3", "A", "B"),      # order-inconsistent -> not scored
+                        ("p4", "A", "A"),      # truth tie -> excluded
+                        ("p5", "B", "B"),      # consistent, agrees
+                        ("p7", "A", "B")]:     # flip-only pair: flip_rate only
+        vs += [_v(pid, 1, w1), _v(pid, 2, w2)]
+    vs += [_v("p6", 1, "A"), _v("p6", 2, None, parsed=False)]  # unparsed -> out of the flip denominator
+    (cal / "sealed" / "verdicts.jsonl").write_text("\n".join(json.dumps(v) for v in vs) + "\n")
+    tpath = tmp_path / "truth.json"
+    tpath.write_text(json.dumps(truth))
+    res = champion.calibrate_score(Namespace(truth=str(tpath), cal_dir=str(cal)))
+    j = res["judges"]["j"]
+    assert res["truth_decided"] == 4 and res["truth_tie_excluded"] == 1 and res["truth_missing_or_null"] == 1
+    assert (j["order_consistent_scored"], j["agree"], j["order_inconsistent"]) == (3, 2, 1)
+    assert j["agreement"] == round(2 / 3, 4)
+    assert j["flip_all_pairs"]["pairs_parsed_both"] == 6 and j["flip_all_pairs"]["flips"] == 2
+    assert j["flip_all_pairs"]["flip_rate"] == round(2 / 6, 4) and j["flip_all_pairs"]["pairs_excluded_parse_failure"] == 1
+    assert j["section32_verdict"] == "redesign bundle"  # agreement 0.667 >= 0.65 but flip 0.33 > 0.30
+    assert "below the 80-pair floor" in res["pilot_note"] and "proceed if agreement >= 0.75" in res["rule"]
+
+
+def test_section32_verdict_bands():
+    v = champion.section32_verdict
+    assert v(0.64, 0.0) == "kill" and v(0.64, 0.9) == "kill"
+    assert v(0.70, 0.31) == "redesign bundle" and v(0.80, 0.31) == "redesign bundle"
+    assert v(0.75, 0.15) == "proceed" and v(0.90, 0.0) == "proceed"
+    assert v(0.70, 0.20).startswith("inconclusive") and v(0.80, 0.16).startswith("inconclusive")
+    assert v(None, 0.1) == "insufficient data"
+
+
+def test_edit_activity_counts_as_evidence_and_written_report_is_excerpted(tmp_path):
+    out = tmp_path / "findings.md"
+    out.write_text("# Findings\nthe parser handles nesting\n")
+    tr = tmp_path / "t.jsonl"
+    tr.write_text(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Write", "input": {"file_path": str(out)}},
+        {"type": "tool_use", "name": "Edit", "input": {"file_path": "/x/a.py"}},
+        {"type": "tool_use", "name": "Edit", "input": {"file_path": "/x/a.py"}}]}}) + "\n")
+    row = {"transcript": str(tr)}
+    b = champion.enrich_bundle(row, {"diff_stat": None, "report_paths": [], "last_assistant_message": None,
+                                     "gate_exit_codes": []})
+    assert b["edited_files"] == {str(out): 1, "/x/a.py": 2}
+    k = champion.evidence_kinds(b)
+    assert k["edits"] and k["report"] and not k["diff"] and not k["message"]
+    text = champion.render_evidence(b)
+    assert "/x/a.py (x2)" in text and "the parser handles nesting" in text
+
+
+def test_single_project_corpus_falls_back_through_flagged_tiers(tmp_path):
+    rows = [_drow(tmp_path, i, "solo", sha_i=0) for i in range(4)]  # 6 candidate pairs, one project
+    _write_drows(tmp_path, rows)
+    st = champion.calibrate_sample(_dns(tmp_path, n=3, flip_extra=0))
+    sel = json.loads((tmp_path / "cal" / "sealed" / "selection.json").read_text())
+    tiers = champion._tally(v["tier"] for v in sel.values())
+    assert len(sel) == 3 and "within_project_cap" in tiers  # first pick is within the cap
+    assert tiers.get("over_project_cap", 0) >= 1 and st["selected"]["selection_tiers"] == tiers
+    assert st["selected"]["runs_in_two_pairs"] >= 1  # 4 runs cannot make 3 disjoint pairs

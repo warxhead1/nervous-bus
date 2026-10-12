@@ -417,3 +417,36 @@ testable enforced features with none clearing. Features run on the first
 `has_acceptance_cmd`, `has_file_scope` and `has_base_branch` OR the prose regex
 with structured fields (dispatch args, mmx meta, cwd under a worktree); the
 `_fired` map in each row records which arm fired.
+
+### Phase 0d pilot: calibration pairs and pairwise judges
+
+```
+champion.py calibrate-sample [--n 30] [--flip-extra 70] [--seed 20261012]
+champion.py judge --judge mmx|sonnet --both-orderings [--limit N] [--bundle-only]
+champion.py calibrate-score --truth truth.json
+```
+
+Labels are not required: `calibrate-sample` draws same project + agent_type pairs with brief
+similarity >= 0.8 from runs since 2026-08-31 (full brief text, transcript present), keeps rows with
+at least two kinds of workspace evidence (diff stat, an existing report file, files written or
+edited per the transcript, a last message of >= 300 chars), prefers pairs that differ in inferred
+outcome, detector count or diff size, round-robins across projects and agent types, and caps any
+project at 30%. Private projects never enter: any of `project`, `run_project`, `cwd`,
+`run_worktree`, `transcript`, branch names or brief text matching tachyonac, tachyonos, market-ops,
+hearth.market or tengine.diag drops the row (mmx ships content to MiniMax).
+
+Output under `~/.cache/nervous-bus/reflex/phase0/calibration/`: `pairs.json` (ids, run ids, bundle
+paths, random A/B), `packet.md` (30 pairs, blind: no labels, outcomes, detector names or judge
+verdicts), `truth.template.json`, and `sealed/` (selection features that carry labels, the judge
+call ledger, `verdicts.jsonl`). Packet and judges read the SAME rendered evidence files.
+
+`judge` runs the pair in both orderings (ordering 2 swaps the workspaces; winners are mapped back to
+the packet frame). One call ledger caps all judges at 400 calls on disk, failed calls included, and
+reruns skip finished (pair, judge, ordering) triples. sonnet uses a credentials-only
+`CLAUDE_CONFIG_DIR`; mmx runs read-only from a fresh empty directory. Only counts and flip_rate
+print; verdicts stay in `sealed/`.
+
+`calibrate-score` reads `{pair_id: {"winner": "A"|"B"|"tie", "by": ..., "note": ...}}`. Agreement
+is taken over order-consistent calibration pairs whose truth is A or B (truth ties and null truth
+are counted separately); flip_rate over all pairs with both orderings parsed. The verdict applies
+design section 3.2 verbatim and states that n=30 is a pilot below the 80-pair floor.
