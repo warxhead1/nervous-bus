@@ -1591,6 +1591,7 @@ def score_revisions(ns: argparse.Namespace, run=subprocess.run) -> dict:
         p, psrc = final("p", m["_p"])
         d = deltas[sha]
         rows_out.append({"detector": m["detector"], "outcome": m["outcome"], "placebo": m["_pdet"],
+                         "all_strong": {k: score_rule(k, rec["revision"], d)["strong"] for k in SCORABLE},
                          "targeted": t, "t_src": tsrc, "t_strong": m["_t"]["strong"],
                          "placebo_hit": p, "p_src": psrc, "p_strong": m["_p"]["strong"],
                          "n_enforced": len(d["enforced"]), "n_prose": len(d["prose"])})
@@ -1623,6 +1624,22 @@ def aggregate(rows: list[dict], extra: dict) -> dict:
            "by_outcome": {o: rate([r["targeted"] for r in rows if r["outcome"] == o])
                           for o in sorted({r["outcome"] for r in rows})},
            "per_detector": per, **extra}
+    if rows and "all_strong" in rows[0]:
+        # strong-rule hit rate of EVERY rule on revisions grouped by the recorded target: the diagonal is
+        # the targeted rate, the off-diagonal is how often that rule fires on any revision (boilerplate base rate)
+        res["rule_matrix_strong"] = {
+            t: {k: rate([r["all_strong"][k] for r in rows if r["detector"] == t]) for k in SCORABLE}
+            for t in sorted({r["detector"] for r in rows})}
+        res["rule_base_rate_strong"] = {k: rate([r["all_strong"][k] for r in rows]) for k in SCORABLE}
+        boiler = sorted(k for k, v in res["rule_base_rate_strong"].items() if v is not None and v >= 0.5)
+        res["boilerplate_rules"] = boiler
+        sub = [r for r in rows if r["detector"] not in boiler]
+        res["n_excl_boilerplate"] = len(sub)
+        res["targeted_rate_excl_boilerplate"] = rate([r["targeted"] for r in sub])
+        res["placebo_rate_excl_boilerplate"] = rate([r["placebo_hit"] for r in sub])
+        t2 = res["targeted_rate_excl_boilerplate"]
+        if t2 is not None:
+            res["verdict_excl_boilerplate"] = "proceed" if t2 >= 0.5 else ("kill" if t2 < 0.3 else "inconclusive")
     if tr is None:
         res["verdict"] = "no data"
     else:

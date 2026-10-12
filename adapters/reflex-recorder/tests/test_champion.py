@@ -683,6 +683,8 @@ def test_generic_boilerplate_scores_the_same_against_placebo(tmp_path):
     revise_cmd(ns, run=_FakeRun(json.dumps(boiler)))
     res = champion.score_revisions(ns, run=_FakeRun(json.dumps({"addresses": True, "why": "x"})))
     assert res["targeted_rate"] == 1.0 and res["placebo_rate"] == 1.0 and res["placebo_gap"] == 0.0
+    assert res["rule_base_rate_strong"]["reread_same_file"] == 1.0
+    assert "reread_same_file" in res["boilerplate_rules"] and res["n_excl_boilerplate"] == 0
 
 
 def test_score_judge_blind_cap_and_cache(tmp_path):
