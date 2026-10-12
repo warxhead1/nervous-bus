@@ -312,3 +312,46 @@ class TestSubagentTranscripts(unittest.TestCase):
             rel = "-home-eric-data2-worktrees-p-x/sess-1/subagents/agent-a1.jsonl"
             self.assertEqual((Path(dst_root) / rel).read_bytes(),
                              (Path(src_root) / rel).read_bytes())
+
+
+class TestSyncAll(unittest.TestCase):
+    """Multi-root: claude keeps the legacy layout, mmx lands under <dst>/mmx/."""
+
+    def test_claude_layout_unchanged_and_mmx_in_subdir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            claude, mmx, dst = (Path(tmp) / n for n in ("claude", "mmx", "dst"))
+            _write_jsonl(claude / "-proj" / "c1.jsonl", 2)
+            _write_jsonl(mmx / "-proj" / "m1.jsonl", 3)
+            stats = ts.sync_all([("claude", str(claude), str(dst)),
+                                 ("mmx", str(mmx), str(dst / "mmx"))], str(dst))
+            self.assertEqual(stats["files_new"], 2)
+            self.assertEqual(stats["errors"], [])
+            self.assertEqual((dst / "-proj" / "c1.jsonl").read_bytes(),
+                             (claude / "-proj" / "c1.jsonl").read_bytes())
+            self.assertEqual((dst / "mmx" / "-proj" / "m1.jsonl").read_bytes(),
+                             (mmx / "-proj" / "m1.jsonl").read_bytes())
+            # claude manifest does not absorb mmx entries; mmx has its own
+            self.assertEqual(set(ts._load_manifest(str(dst))), {"-proj/c1.jsonl"})
+            self.assertEqual(set(ts._load_manifest(str(dst / "mmx"))), {"-proj/m1.jsonl"})
+            self.assertEqual(stats["sources"]["mmx"]["files_new"], 1)
+
+    def test_missing_mmx_src_is_skipped_not_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            claude, dst = Path(tmp) / "claude", Path(tmp) / "dst"
+            _write_jsonl(claude / "-proj" / "c1.jsonl", 1)
+            stats = ts.sync_all([("claude", str(claude), str(dst)),
+                                 ("mmx", str(Path(tmp) / "nope"), str(dst / "mmx"))], str(dst))
+            self.assertEqual(stats["errors"], [])
+            self.assertEqual(stats["sources"]["mmx"], {"skipped": "src missing"})
+
+    def test_default_sources_names_and_dst_layout(self):
+        srcs = ts.default_sources("/d")
+        self.assertEqual([(n, d) for n, _, d in srcs], [("claude", "/d"), ("mmx", "/d/mmx")])
+
+    def test_explicit_src_is_legacy_single_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            claude, dst = Path(tmp) / "claude", Path(tmp) / "dst"
+            _write_jsonl(claude / "-proj" / "c1.jsonl", 1)
+            self.assertEqual(ts.main(["--src", str(claude), "--dst", str(dst), "--once"]), 0)
+            self.assertTrue((dst / "-proj" / "c1.jsonl").exists())
+            self.assertFalse((dst / "mmx").exists())
