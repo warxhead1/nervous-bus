@@ -11,6 +11,8 @@ Subcommands (JSON on stdout):
     pairs    --population retry|cohort|recipe|similar|all
     bundle   <run_id|brief_sha>
     lift     [--md PATH]
+    revise           Experiment C: blind optimizer (headless sonnet) over a seeded sample
+    score-revisions  targeted_rate / enforced_share / placebo / verdict
 
 Design contract: MASS-integration-design.md sections 3.1-3.3, 4.1, 4.4.
 """
@@ -1091,6 +1093,553 @@ def lift_cmd(ns: argparse.Namespace) -> dict:
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
+# ── revise / score-revisions (Experiment C, design section 3.4) ───────────────
+# A headless model revises a failed/landed brief WITHOUT seeing any detector name; a deterministic
+# rule per detector then asks whether the revision's NEW content addresses the recorded failure.
+import concurrent.futures as _cf
+import random
+import threading
+
+CLAUDE_BIN = "/home/eric/.local/bin/claude"
+REVISE_CAP = 100
+SCORE_CAP = 100
+BRIEF_CHAR_CAP = 8000
+
+# Detector names (and the taxonomy words the recorder uses) must never reach the optimizer.
+BLIND_TERMS = [
+    "reread_same_file", "worktree_leak", "inherited_rationalization", "skill_opportunity",
+    "unverified_completion", "rebuild_cache_miss", "red_baseline_dispatch",
+    "directive_ground_truth_mismatch", "kb_recall_gap", "user_correction", "harness_change_watch",
+    "build_amplification", "edit_build_fail_revert", "failure_taxonomy", "verification_theater",
+    "preexisting_confirmation_tax", "idle_dispatch", "model_tiering",
+]
+SCORABLE = ["red_baseline_dispatch", "unverified_completion", "inherited_rationalization",
+            "rebuild_cache_miss", "skill_opportunity", "reread_same_file", "worktree_leak"]
+# Stratum quotas (sum 100). Strata the contract names but the corpus has no explicit-labelled hits
+# for (directive_ground_truth_mismatch, kb_recall_gap, user_correction) are reported, not padded.
+QUOTAS = {"red_baseline_dispatch": 5, "unverified_completion": 25, "inherited_rationalization": 20,
+          "rebuild_cache_miss": 12, "skill_opportunity": 8, "reread_same_file": 20, "worktree_leak": 10}
+
+# Mechanism descriptions: what the recorder saw, in words that carry no detector name.
+MECHANISM = {
+    "unverified_completion": "The agent edited code files and then finished without ever running any "
+                             "build, test or check command.",
+    "red_baseline_dispatch": "Work (or a fan-out of sub-agents) started while the project's build or tests "
+                             "were already failing, or had never been confirmed passing, so pre-existing "
+                             "failures were confused with new ones.",
+    "inherited_rationalization": "Several sibling agents all reached the same conclusion (for example "
+                                 "'this failure was already there') because the dispatching brief handed "
+                                 "them that conclusion instead of making them verify it.",
+    "reread_same_file": "The agent opened the same file many times in one run because it had no pointer to "
+                        "the relevant context and kept no summary of it.",
+    "rebuild_cache_miss": "Compilation in a fresh working copy restarted from scratch because build "
+                          "artifacts were not shared with other copies, wasting wall-clock time.",
+    "worktree_leak": "After the work was merged, its isolated working directory was left on disk instead of "
+                     "being removed.",
+    "skill_opportunity": "The agent ran a command-line tool for which a reusable skill or playbook exists, "
+                         "but never loaded that skill.",
+}
+
+_CMD_PAT = (
+    r"\b(?:pytest|cargo\s+(?:test|check|build|clippy)|go\s+(?:test|build|vet)|"
+    r"(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:test|build|lint)|make\s+[\w-]+|vitest|jest|tsc\b|ruff|mypy|"
+    r"bash\s+\S+\.sh|\./\S+\.sh|python3?\s+\S+\.py|exit(?:s|\s+code|\s+status)?\s+0\b)")
+_CMD_GATE = re.compile(_CMD_PAT, re.I)
+_RUN_VERB = r"(?:run|execute|invoke|re-?run)"
+
+
+def _near(a: str, b: str, w: int = 120) -> re.Pattern:
+    return re.compile(rf"(?is)(?:{a}).{{0,{w}}}(?:{b})|(?:{b}).{{0,{w}}}(?:{a})")
+
+
+# strong = demands a mechanism; weak = vocabulary only (decides whether a judge call may be spent)
+STRONG = {
+    "unverified_completion": [re.compile(rf"(?is){_RUN_VERB}\b[^.\n]{{0,60}}{_CMD_PAT}")],
+    "red_baseline_dispatch": [_near(r"baseline|currently\s+(?:red|failing|green|passing)|green\s+(?:build|suite|tree)|"
+                                    r"pre-?existing\s+failures?|already\s+failing",
+                                    r"before\s+(?:you\s+)?(?:edit|change|start|touch|dispatch|fan|spawn|launch)|"
+                                    r"first\s+(?:run|check|confirm|record|capture)|prior\s+to\s+(?:edit|chang|start|dispatch)|"
+                                    r"precondition|prerequisite")],
+    "inherited_rationalization": [
+        _near(r"pre-?existing|already\s+(?:failing|broken)|known\s+(?:failure|issue)|inherited|assum\w+|"
+              r"premise|as\s+(?:stated|claimed)|told\s+(?:that|you)",
+              r"verif\w+\s+(?:it\s+)?(?:yourself|independently)|independent(?:ly)?\s+(?:verif|confirm|reproduc|check)|"
+              r"reproduc\w+|disprove|prove\b|do(?:\s+not|n't)\s+(?:assume|trust|take)|treat\w*\s+as\s+unverified|"
+              r"check\s+against\s+(?:main|a\s+clean|the\s+baseline)")],
+    "reread_same_file": [re.compile(
+        r"(?is)\bkb\s+(?:brief|query)|\bkey\s+files?\b|\brelevant\s+files?\b|\bfiles?\s+(?:to\s+(?:read|touch)|list)|"
+        r"read\s+(?:each|every|the)?\s*[\w./-]*\s*(?:file|doc)s?\s+(?:once|only\s+once)|"
+        r"(?:do\s+not|don't|avoid)\s+re-?read|summar(?:y|ise|ize)\s+(?:of\s+)?(?:the\s+)?(?:file|findings|key)|"
+        r"\bnotes?\s+file\b|\bscratch\s+(?:file|note)|record\s+[^.\n]{0,30}(?:findings|facts|paths)")],
+    "rebuild_cache_miss": [re.compile(
+        r"(?is)CARGO_TARGET_DIR|\bsccache\b|shared\s+(?:cargo\s+)?target|\btarget[- ]dir\b|build[- ]pool|"
+        r"incremental\s+(?:build|compil)|reuse\s+[^.\n]{0,30}(?:target|build\s+cache|artifacts)|"
+        r"(?:do\s+not|don't|avoid)[^.\n]{0,30}(?:full|cold|clean)\s+(?:rebuild|build)|"
+        r"cargo\s+(?:check|build|test)\s+(?:-p|--package)\b")],
+    "worktree_leak": [re.compile(
+        r"(?is)git\s+worktree\s+(?:remove|prune)|ExitWorktree|"
+        r"(?:remove|delete|clean\s*up|prune|tear\s*down)\b[^.\n]{0,40}\bworktree|"
+        r"worktree\b[^.\n]{0,40}\b(?:removed|cleaned\s+up|cleanup|pruned|torn\s+down|deleted)")],
+    "skill_opportunity": [re.compile(
+        r"(?is)\bskills?\b[^.\n]{0,40}\b(?:load|use|invoke|read|apply|consult|follow)|"
+        r"\b(?:load|use|invoke|read|consult|follow)\b[^.\n]{0,40}\bskills?\b|SKILL\.md")],
+}
+WEAK = {
+    "unverified_completion": re.compile(r"(?i)\b(?:verif\w+|tests?|testing|check|validate|confirm|gate|build)\b"),
+    "red_baseline_dispatch": re.compile(r"(?i)\b(?:baseline|green|passing|failing|pre-?existing|clean\s+state)\b"),
+    "inherited_rationalization": re.compile(r"(?i)\b(?:pre-?existing|assum\w+|verif\w+|independent\w*|premise|claim\w*)\b"),
+    "reread_same_file": re.compile(r"(?i)\b(?:context|read|summar\w+|notes?|kb)\b"),
+    "rebuild_cache_miss": re.compile(r"(?i)\b(?:build|cache|target|compil\w+|cargo|rebuild)\b"),
+    "worktree_leak": re.compile(r"(?i)\b(?:worktree|clean\s*up|remove|prune)\b"),
+    "skill_opportunity": re.compile(r"(?i)\b(?:skills?|playbook|tooling)\b"),
+}
+
+OPT_SYSTEM = "You are a meticulous editor of work-order briefs for autonomous coding agents."
+OPT_TEMPLATE = """\
+Below is a brief that was handed to an autonomous coding agent, how that agent's run ended, and a
+bounded evidence bundle from the run. Rewrite the brief so a future agent given the rewritten
+version has a better chance of finishing the work cleanly and correctly. Change only what you
+believe mattered; keep the task itself intact.
+
+Return ONLY one JSON object (no prose, no code fences) with exactly these keys:
+  "role":        {{"agent_type": str, "model": str, "isolation": str}}
+  "instruction": str   the prose objective
+  "contract":    {{"fileScope": [str], "acceptanceGates": [str], "receipts": [str], "outOfScope": [str]}}
+  "hop":         {{"dependsOn": [str], "relay_to": str|null, "merge_train": bool, "scratch_dir": str|null}}
+  "context":     [str]  pointers the agent should start from
+Anything enforceable (files it may touch, commands that must pass, ordering, hand-offs) belongs in
+"contract" or "hop"; "instruction" is for the objective itself.
+
+RECORDED OUTCOME OF THE RUN: {outcome}
+
+EVIDENCE BUNDLE (JSON):
+{bundle}
+
+ORIGINAL BRIEF:
+<<<
+{brief}
+>>>
+"""
+JUDGE_TEMPLATE = """\
+A coding agent once failed in this specific way:
+  {mechanism}
+
+Someone then revised the agent's brief. Below is ONLY the content they ADDED (content already in the
+original brief is omitted). Decide whether the added content gives a future agent a concrete step,
+check, pointer or constraint that would prevent or reduce the failure described above. Generic
+advice that would apply to any task does not count.
+
+ADDED CONTENT:
+<<<
+{added}
+>>>
+
+Return ONLY a JSON object: {{"addresses": true|false, "why": "<one short sentence>"}}
+"""
+
+
+class BlindViolation(Exception):
+    pass
+
+
+def blind_scan(text: str) -> list[str]:
+    low = text.lower()
+    out = []
+    for t in BLIND_TERMS:
+        for form in {t, t.replace("_", " "), t.replace("_", "-")}:
+            if form.lower() in low:
+                out.append(t)
+                break
+    return out
+
+
+def redact_blind(text: str) -> tuple[str, int]:
+    n = 0
+    for t in BLIND_TERMS:
+        for form in sorted({t, t.replace("_", " "), t.replace("_", "-")}, key=len, reverse=True):
+            text, k = re.subn(re.escape(form), "[term]", text, flags=re.I)
+            n += k
+    return text, n
+
+
+def optimizer_prompt(row: dict, bundle: dict) -> str:
+    """Build the optimizer input. Detector names, the row's detectors[] and failure_taxonomy never enter."""
+    safe = {k: bundle.get(k) for k in ("outcome", "label_source", "diff_stat", "report_paths",
+                                       "last_assistant_message", "gate_exit_codes")}
+    brief, _ = _cap(row.get("brief_text", ""), BRIEF_CHAR_CAP // CHARS_PER_TOKEN)
+    prompt = OPT_TEMPLATE.format(outcome=row.get("outcome") or "unknown",
+                                 bundle=json.dumps(safe, indent=1, default=str), brief=brief)
+    prompt, _ = redact_blind(prompt)
+    hits = blind_scan(prompt)
+    if hits:
+        raise BlindViolation(f"detector terms in optimizer input: {hits}")
+    return prompt
+
+
+def claude_call(prompt: str, model: str, config_dir: Path, cwd: Path, run=subprocess.run,
+                timeout: int = 420) -> dict:
+    """One headless call. CLAUDE_CONFIG_DIR points at a clean dir (credentials only) so no user memory
+    or CLAUDE.md reaches the process; no tools; no session persistence."""
+    env = dict(os.environ)
+    env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    cwd.mkdir(parents=True, exist_ok=True)
+    try:
+        r = run([CLAUDE_BIN, "-p", "--model", model, "--output-format", "json", "--tools", "",
+                 "--no-session-persistence", "--disable-slash-commands", "--system-prompt", OPT_SYSTEM],
+                input=prompt, capture_output=True, text=True, cwd=str(cwd), env=env, timeout=timeout)
+        d = json.loads(r.stdout)
+    except Exception as e:  # noqa: BLE001 - recorded, counted as a spent call
+        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}", "text": ""}
+    d = d[-1] if isinstance(d, list) else d
+    return {"ok": not d.get("is_error"), "text": d.get("result") or "", "cost_usd": d.get("total_cost_usd"),
+            "model": list((d.get("modelUsage") or {}).keys()), "error": None if not d.get("is_error") else d.get("result")}
+
+
+def parse_json_obj(text: str) -> Optional[dict]:
+    t = re.sub(r"```(?:json)?", "", text or "")
+    a, b = t.find("{"), t.rfind("}")
+    if a < 0 or b <= a:
+        return None
+    try:
+        v = json.loads(t[a:b + 1])
+    except ValueError:
+        return None
+    return v if isinstance(v, dict) else None
+
+
+def normalize_revision(v: dict) -> Optional[dict]:
+    if not isinstance(v.get("instruction"), str):
+        return None
+    c = v.get("contract") if isinstance(v.get("contract"), dict) else {}
+    h = v.get("hop") if isinstance(v.get("hop"), dict) else {}
+    lst = lambda x: [str(i) for i in x] if isinstance(x, list) else []  # noqa: E731
+    return {"role": v.get("role") if isinstance(v.get("role"), dict) else {},
+            "instruction": v["instruction"],
+            "contract": {k: lst(c.get(k)) for k in ("fileScope", "acceptanceGates", "receipts", "outOfScope")},
+            "hop": {"dependsOn": lst(h.get("dependsOn")), "relay_to": h.get("relay_to"),
+                    "merge_train": bool(h.get("merge_train")), "scratch_dir": h.get("scratch_dir")},
+            "context": lst(v.get("context"))}
+
+
+def _sentences(text: str) -> list[str]:
+    return [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", text or "") if len(s.strip()) > 3]
+
+
+def revision_delta(orig: str, rev: dict) -> dict:
+    """New content relative to the original prose brief. Enforced units = contract/hop/context items not
+    already present verbatim in the original; prose units = instruction sentences whose best 5-shingle
+    Jaccard against any original sentence is < 0.6."""
+    olow = (orig or "").lower()
+    osh = [shingles(s) for s in _sentences(orig)]
+    enforced = []
+    for k, vals in (rev.get("contract") or {}).items():
+        for v in vals:
+            if v.strip() and v.strip().lower() not in olow:
+                enforced.append(f"{k}: {v}")
+    hop = rev.get("hop") or {}
+    for k in ("dependsOn",):
+        for v in hop.get(k) or []:
+            if str(v).strip() and str(v).lower() not in olow:
+                enforced.append(f"hop.{k}: {v}")
+    for k in ("relay_to", "scratch_dir"):
+        v = hop.get(k)
+        if v and str(v).lower() not in olow:
+            enforced.append(f"hop.{k}: {v}")
+    if hop.get("merge_train") and "merge" not in olow:
+        enforced.append("hop.merge_train: true")
+    for v in rev.get("context") or []:
+        if v.strip() and v.strip().lower() not in olow:
+            enforced.append(f"context: {v}")
+    prose = []
+    for s in _sentences(rev.get("instruction", "")):
+        sh = shingles(s)
+        if not osh or max(jaccard(sh, o) for o in osh) < 0.6:
+            prose.append(s)
+    return {"enforced": enforced, "prose": prose}
+
+
+def delta_text(delta: dict) -> str:
+    return "\n".join(delta["enforced"] + delta["prose"])
+
+
+def score_rule(detector: str, rev: dict, delta: dict) -> dict:
+    """strong: a mechanism-bearing rule matches NEW content (for unverified_completion the gate may
+    also be a command-shaped contract.acceptanceGates entry that is new). weak: vocabulary only."""
+    text = delta_text(delta)
+    strong = any(p.search(text) for p in STRONG[detector])
+    if detector == "unverified_completion" and not strong:
+        strong = any(e.startswith("acceptanceGates:") and _CMD_GATE.search(e) for e in delta["enforced"])
+    if detector == "reread_same_file" and not strong:
+        strong = any(e.startswith("context:") and re.search(r"[\w.-]+/[\w./-]+|\.\w{1,5}\b|\bkb\b", e)
+                     for e in delta["enforced"])
+    weak = bool(WEAK[detector].search(text))
+    return {"strong": strong, "weak": weak and not strong}
+
+
+def judge_prompt(detector: str, delta: dict) -> str:
+    p = JUDGE_TEMPLATE.format(mechanism=MECHANISM[detector], added=delta_text(delta)[:6000])
+    hits = blind_scan(p)
+    if hits:
+        raise BlindViolation(f"detector terms in judge input: {hits}")
+    return p
+
+
+# ── sampling ──
+def select_sample(rows: list[dict], n: int, seed: int) -> tuple[list[dict], dict]:
+    elig, seen = [], set()
+    for r in rows:
+        ds = [d for d in dict.fromkeys(r.get("detectors") or []) if d in SCORABLE]
+        if not (r.get("explicit") and ds) or r["brief_sha256"] in seen or len(r.get("brief_text", "")) < 40:
+            continue
+        seen.add(r["brief_sha256"])
+        elig.append((r, ds))
+    freq = defaultdict(int)
+    for _, ds in elig:
+        for d in ds:
+            freq[d] += 1
+    rng = random.Random(seed)
+    pools = defaultdict(list)
+    for r, ds in elig:
+        pools[min(ds, key=lambda d: (freq[d], d))].append((r, ds))
+    picked, comp = [], {}
+    for det in sorted(QUOTAS, key=lambda d: freq[d]):
+        pool = pools[det]
+        rng.shuffle(pool)
+        pool.sort(key=lambda t: t[0].get("outcome") != "abandoned")  # stable: abandoned first
+        take = pool[:QUOTAS[det]]
+        picked += [(t, det) for t in take]
+        comp[det] = {"eligible": len(pool), "taken": len(take),
+                     "abandoned": sum(1 for t in take if t[0].get("outcome") == "abandoned")}
+        pools[det] = pool[len(take):]
+    if len(picked) < n:  # backfill from leftovers, abandoned first
+        left = [(t, d) for d, p in pools.items() for t in p]
+        rng.shuffle(left)
+        left.sort(key=lambda x: x[0][0].get("outcome") != "abandoned")
+        for t, d in left[:n - len(picked)]:
+            picked.append((t, d))
+            comp[d]["taken"] += 1
+            comp[d]["abandoned"] += t[0].get("outcome") == "abandoned"
+    out = [{"brief_sha256": r["brief_sha256"], "brief_id": r["brief_id"], "detector": det,
+            "detectors": ds, "outcome": r.get("outcome"), "project": r.get("project")}
+           for (r, ds), det in picked[:n]]
+    return out, {"seed": seed, "eligible_total": len(elig), "strata": comp,
+                 "absent_strata": ["directive_ground_truth_mismatch", "kb_recall_gap", "user_correction"],
+                 "freq": dict(freq)}
+
+
+def _calls_spent(log: Path) -> int:
+    return sum(1 for ln in log.read_text().splitlines() if ln.strip()) if log.exists() else 0
+
+
+class _Ledger:
+    """Append-only call log; the cap is enforced against lines on disk so it survives batches."""
+    def __init__(self, path: Path, cap: int):
+        self.path, self.cap, self.lock = path, cap, threading.Lock()
+
+    def reserve(self, rec: dict) -> bool:
+        with self.lock:
+            if _calls_spent(self.path) >= self.cap:
+                return False
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a") as fh:
+                fh.write(json.dumps(rec) + "\n")
+            return True
+
+
+def ensure_config_dir(cfg: Path) -> Path:
+    cfg.mkdir(parents=True, exist_ok=True)
+    link = cfg / ".credentials.json"
+    src = HOME / ".claude" / ".credentials.json"
+    if not link.exists() and src.exists():
+        link.symlink_to(src)
+    return cfg
+
+
+def revise_cmd(ns: argparse.Namespace, run=subprocess.run) -> dict:
+    out = Path(ns.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    rows = {r["brief_sha256"]: r for r in load_briefs(Path(ns.briefs))}
+    man_p = out / "manifest.json"
+    if man_p.exists():
+        manifest = json.loads(man_p.read_text())
+    else:
+        sample, comp = select_sample(list(rows.values()), ns.sample, ns.seed)
+        manifest = {"sample": sample, "composition": comp}
+        man_p.write_text(json.dumps(manifest, indent=1))
+    todo = manifest["sample"]
+    if ns.brief:
+        todo = [m for m in todo if m["brief_sha256"].startswith(ns.brief)] or \
+            [{"brief_sha256": s, "detector": None, "detectors": [], "outcome": rows[s].get("outcome")}
+             for s in rows if s.startswith(ns.brief)][:1]
+    pending = [m for m in todo if not (out / f"{m['brief_sha256']}.json").exists()]
+    ledger = _Ledger(out / "revise_calls.jsonl", ns.cap)
+    cfg = ensure_config_dir(Path(ns.config_dir)) if not ns.bundle_only else Path(ns.config_dir)
+    stats = {"sample": len(todo), "already_done": len(todo) - len(pending), "called": 0,
+             "parse_failures": 0, "call_errors": 0, "cap_blocked": 0, "blind_redactions": 0}
+    batch = pending[:ns.batch] if ns.batch else pending
+    stats["deferred_to_next_batch"] = len(pending) - len(batch)
+
+    def one(m: dict):
+        row = rows[m["brief_sha256"]]
+        bundle = build_bundle(row, None)
+        prompt = optimizer_prompt(row, bundle)
+        if ns.bundle_only:
+            (out / f"{m['brief_sha256']}.prompt.txt").write_text(prompt)
+            return "bundle"
+        if not ledger.reserve({"sha": m["brief_sha256"], "ts": datetime.now(timezone.utc).isoformat()}):
+            return "cap"
+        res = claude_call(prompt, ns.model, cfg, out / "cwd", run=run)
+        rec = {"brief_sha256": m["brief_sha256"], "detector": m.get("detector"), "ok": res["ok"],
+               "raw": res["text"], "error": res.get("error"), "cost_usd": res.get("cost_usd")}
+        v = parse_json_obj(res["text"]) if res["ok"] else None
+        rev = normalize_revision(v) if v else None
+        rec["revision"] = rev
+        rec["blind_hits_in_output"] = blind_scan(res["text"])
+        (out / f"{m['brief_sha256']}.json").write_text(json.dumps(rec, indent=1))
+        return "ok" if rev else ("parse" if res["ok"] else "error")
+
+    with _cf.ThreadPoolExecutor(max_workers=max(1, min(ns.parallel, 2))) as ex:
+        for r in ex.map(one, batch):
+            if r == "cap":
+                stats["cap_blocked"] += 1
+            elif r == "parse":
+                stats["parse_failures"] += 1
+                stats["called"] += 1
+            elif r == "error":
+                stats["call_errors"] += 1
+                stats["called"] += 1
+            elif r == "ok":
+                stats["called"] += 1
+    stats["revise_calls_spent_total"] = _calls_spent(out / "revise_calls.jsonl")
+    return stats
+
+
+def _judge_one(det: str, delta: dict, cfg: Path, cwd: Path, ledger: _Ledger, cache: Path, key: str, model: str, run):
+    if cache.exists():
+        return json.loads(cache.read_text())
+    if not ledger.reserve({"key": key}):
+        return None
+    res = claude_call(judge_prompt(det, delta), model, cfg, cwd, run=run)
+    v = parse_json_obj(res["text"]) if res["ok"] else None
+    rec = {"ok": bool(v and isinstance(v.get("addresses"), bool)),
+           "addresses": bool(v and v.get("addresses") is True), "why": (v or {}).get("why", "")[:200]}
+    cache.write_text(json.dumps(rec))
+    return rec
+
+
+def placebo_detector(sha: str, own: list[str], seed: int) -> str:
+    pool = [d for d in SCORABLE if d not in own]
+    return random.Random(f"{seed}:{sha}").choice(pool)
+
+
+def score_revisions(ns: argparse.Namespace, run=subprocess.run) -> dict:
+    out = Path(ns.out_dir)
+    man = json.loads((out / "manifest.json").read_text())
+    rows = {r["brief_sha256"]: r for r in load_briefs(Path(ns.briefs))}
+    (out / "judgments").mkdir(exist_ok=True)
+    ledger = _Ledger(out / "score_calls.jsonl", ns.cap)
+    cfg = ensure_config_dir(Path(ns.config_dir))
+    items, missing, unparsed = [], 0, 0
+    for m in man["sample"]:
+        p = out / f"{m['brief_sha256']}.json"
+        if not p.exists():
+            missing += 1
+            continue
+        rec = json.loads(p.read_text())
+        if not rec.get("revision"):
+            unparsed += 1
+            continue
+        delta = revision_delta(rows[m["brief_sha256"]]["brief_text"], rec["revision"])
+        items.append((m, rec, delta))
+    jobs = []
+    for m, rec, delta in items:
+        sha = m["brief_sha256"]
+        pdet = placebo_detector(sha, m["detectors"], man["composition"]["seed"])
+        m["_t"] = score_rule(m["detector"], rec["revision"], delta)
+        m["_p"] = score_rule(pdet, rec["revision"], delta)
+        m["_pdet"] = pdet
+        if m["_t"]["weak"]:
+            jobs.append((m, delta, m["detector"], "t"))
+    for m, rec, delta in items:  # placebo judge calls only after all targeted ones, so the cap starves placebo first
+        if m["_p"]["weak"]:
+            jobs.append((m, delta, m["_pdet"], "p"))
+    deltas = {m["brief_sha256"]: d for m, _, d in items}
+    verdicts: dict = {}
+    tmp_cwd = out / "cwd"
+
+    def go(j):
+        m, delta, det, arm = j
+        sha = m["brief_sha256"]
+        return j, _judge_one(det, delta, cfg, tmp_cwd, ledger, out / "judgments" / f"{sha}__{det}.json",
+                             f"{sha}:{det}:{arm}", ns.model, run)
+    with _cf.ThreadPoolExecutor(max_workers=max(1, min(ns.parallel, 2))) as ex:
+        for (m, _, det, arm), res in ex.map(go, jobs):
+            verdicts[(m["brief_sha256"], arm)] = res
+    rows_out = []
+    for m, rec, delta in items:
+        sha = m["brief_sha256"]
+        def final(arm, flag):
+            if flag["strong"]:
+                return True, "regex"
+            if flag["weak"]:
+                v = verdicts.get((sha, arm))
+                if v is None:
+                    return False, "unjudged"
+                return (v["addresses"] if v["ok"] else False), ("judge" if v["ok"] else "judge_unparsed")
+            return False, "regex"
+        t, tsrc = final("t", m["_t"])
+        p, psrc = final("p", m["_p"])
+        d = deltas[sha]
+        rows_out.append({"detector": m["detector"], "outcome": m["outcome"], "placebo": m["_pdet"],
+                         "targeted": t, "t_src": tsrc, "t_strong": m["_t"]["strong"],
+                         "placebo_hit": p, "p_src": psrc, "p_strong": m["_p"]["strong"],
+                         "n_enforced": len(d["enforced"]), "n_prose": len(d["prose"])})
+    return aggregate(rows_out, {"missing_revisions": missing, "unparsed_revisions": unparsed,
+                                "score_calls_spent": _calls_spent(out / "score_calls.jsonl")})
+
+
+def aggregate(rows: list[dict], extra: dict) -> dict:
+    n = len(rows)
+    rate = lambda xs: round(sum(xs) / len(xs), 3) if xs else None  # noqa: E731
+    enf = sum(r["n_enforced"] for r in rows)
+    pro = sum(r["n_prose"] for r in rows)
+    per = {}
+    for d in sorted({r["detector"] for r in rows}):
+        sub = [r for r in rows if r["detector"] == d]
+        per[d] = {"n": len(sub), "targeted": rate([r["targeted"] for r in sub]),
+                  "regex_only": rate([r["t_strong"] for r in sub]),
+                  "placebo": rate([r["placebo_hit"] for r in sub]),
+                  "placebo_regex_only": rate([r["p_strong"] for r in sub])}
+    tr = rate([r["targeted"] for r in rows])
+    res = {"n_scored": n, "targeted_rate": tr, "targeted_rate_regex_only": rate([r["t_strong"] for r in rows]),
+           "placebo_rate": rate([r["placebo_hit"] for r in rows]),
+           "placebo_rate_regex_only": rate([r["p_strong"] for r in rows]),
+           "unjudged_targeted": sum(r["t_src"] == "unjudged" for r in rows),
+           "unjudged_placebo": sum(r["p_src"] == "unjudged" for r in rows),
+           "enforced_share_pooled": round(enf / (enf + pro), 3) if enf + pro else None,
+           "enforced_share_mean_per_revision": rate([r["n_enforced"] / (r["n_enforced"] + r["n_prose"])
+                                                     for r in rows if r["n_enforced"] + r["n_prose"]]),
+           "revisions_with_any_enforced_delta": rate([r["n_enforced"] > 0 for r in rows]),
+           "by_outcome": {o: rate([r["targeted"] for r in rows if r["outcome"] == o])
+                          for o in sorted({r["outcome"] for r in rows})},
+           "per_detector": per, **extra}
+    if tr is None:
+        res["verdict"] = "no data"
+    else:
+        res["verdict"] = "proceed" if tr >= 0.5 else ("kill" if tr < 0.3 else "inconclusive")
+        pr = res["placebo_rate"] or 0
+        res["placebo_gap"] = round(tr - pr, 3)
+    return res
+
+
+def revise_main(ns: argparse.Namespace) -> dict:
+    return revise_cmd(ns)
+
+
+def score_main(ns: argparse.Namespace) -> dict:
+    return score_revisions(ns)
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="champion", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1130,6 +1679,28 @@ def build_parser() -> argparse.ArgumentParser:
     l.add_argument("--md", default=None, help="also write a markdown rendering here")
     l.add_argument("--compact", action="store_true", help="omit per-cell tables from stdout")
     l.set_defaults(fn=lift_cmd)
+    rv = sub.add_parser("revise", help="Experiment C: blind optimizer revision of sampled briefs (headless claude)")
+    rv.add_argument("--briefs", default=str(briefs_default))
+    rv.add_argument("--out-dir", default=str(DEFAULTS["phase0_dir"] / "revisions"))
+    rv.add_argument("--brief", default=None, help="only this brief sha (prefix)")
+    rv.add_argument("--sample", type=int, default=100)
+    rv.add_argument("--seed", type=int, default=20261011)
+    rv.add_argument("--model", default="sonnet")
+    rv.add_argument("--parallel", type=int, default=2, help="clamped to 2")
+    rv.add_argument("--cap", type=int, default=REVISE_CAP, help="hard cap on revision calls (counted on disk)")
+    rv.add_argument("--batch", type=int, default=0, help="max briefs this invocation (0 = all pending)")
+    rv.add_argument("--bundle-only", action="store_true", help="write optimizer prompts, call no model")
+    rv.add_argument("--config-dir", default=str(DEFAULTS["phase0_dir"] / "claude-clean-cfg"))
+    rv.set_defaults(fn=revise_main)
+
+    sr = sub.add_parser("score-revisions", help="Experiment C: targeted_rate, enforced_share, placebo, verdict")
+    sr.add_argument("--briefs", default=str(briefs_default))
+    sr.add_argument("--out-dir", default=str(DEFAULTS["phase0_dir"] / "revisions"))
+    sr.add_argument("--model", default="sonnet")
+    sr.add_argument("--parallel", type=int, default=2)
+    sr.add_argument("--cap", type=int, default=SCORE_CAP, help="hard cap on scoring (judge) calls")
+    sr.add_argument("--config-dir", default=str(DEFAULTS["phase0_dir"] / "claude-clean-cfg"))
+    sr.set_defaults(fn=score_main)
     return ap
 
 
