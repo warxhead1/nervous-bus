@@ -6,7 +6,7 @@ export const meta = {
     { title: 'Ground', detail: 'refetch guidance, rebuild the steering digest', model: 'haiku' },
     { title: 'Native audit', detail: '/doctor prompt-audit per loaded steering root', model: 'sonnet' },
     { title: 'Guidance', detail: 'extract practices from changed sources, map against our steering', model: 'sonnet' },
-    { title: 'Judge', detail: 'pick the few edits worth making' },
+    { title: 'Judge', detail: 'pick the few edits worth making', model: 'fable' },
     { title: 'Refute', detail: 'adversarial check per proposal', model: 'opus' },
     { title: 'Gate', detail: 'steering_audit_publish.py validates and files', model: 'haiku' },
   ],
@@ -14,14 +14,15 @@ export const meta = {
 
 // Model plan: haiku runs scripts (ground, gate); sonnet extracts and maps, where
 // the gate's verbatim-quote and file:line checks catch a wrong answer; opus runs
-// the native prompt-audit and the refuters; the judge inherits the session model
-// because no gate can tell a wise cut from a merely grounded one.
+// the native prompt-audit and the refuters; the judge is fable (override with
+// judge_model) because no gate can tell a wise cut from a merely grounded one.
 const A = args || {}
 const REPO = A.repo || '/home/eric/projects/nervous-bus'
 const RR = `${REPO}/adapters/reflex-recorder`
 const DIGEST_DIR = '/home/eric/.cache/nervous-bus/reflex/steering-digest'
 const GUIDANCE = '/home/eric/.cache/nervous-bus/reflex/guidance'
 const AUDIT_MODEL = A.audit_model || 'opus'
+const JUDGE_MODEL = A.judge_model || 'fable'
 const MAX_PROPOSALS = A.max_proposals || 3
 const CORE_SOURCES = ['cc-best-practices', 'cc-memory', 'cc-skills', 'cc-sub-agents',
   'claude-prompting-best-practices', 'agentskills-best-practices']
@@ -194,7 +195,7 @@ or claude-prompting-best-practices). edit = the replacement text or a unified di
 we will know it worked (a digest number that should move, a detector that should stay flat).
 measured = digest rows or counts you relied on, copied as they appear.
 passed_over = one line per notable candidate you rejected and why. Do not edit any file.`,
-  { label: 'judge', phase: 'Judge', schema: PROPOSALS })
+  { label: 'judge', phase: 'Judge', model: JUDGE_MODEL, schema: PROPOSALS })
 if (!judged) throw new Error('judge returned nothing')
 log(`judge: ${judged.proposals.length} proposals, ${judged.passed_over.length} passed over`)
 

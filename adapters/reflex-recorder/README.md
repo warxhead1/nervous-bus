@@ -415,8 +415,8 @@ gate, read back.
 - `automation/workflows/steering-audit.js` — the saved workflow (judgment half).
   Ground (haiku: refetch + digest) -> Claude Code's own `/doctor prompt-audit`
   per loaded root, headless (sonnet runner, opus auditor) in parallel with
-  practice extraction + mapping from changed sources (sonnet) -> judge (session
-  model, at most 3 proposals) -> two opus refuters per proposal -> gate (haiku).
+  practice extraction + mapping from changed sources (sonnet) -> judge (fable,
+  `judge_model` overrides; at most 3 proposals) -> two opus refuters per proposal -> gate (haiku).
   Dry run unless `{publish: true}`. `{full: true}` audits the core source set
   instead of only what changed.
 - `automation/steering_audit_publish.py` — the gate. A proposal files only if
