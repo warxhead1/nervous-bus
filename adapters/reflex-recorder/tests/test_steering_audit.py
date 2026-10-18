@@ -145,3 +145,26 @@ def test_markdown_renders(tmp_path):
     md = sa.to_markdown(rep)
     assert "claude_md_over_target" in md and "Doc failure patterns" in md
     json.dumps(rep)  # serializable
+
+
+def test_last_audit_is_the_last_gated_run_not_the_nightly(tmp_path):
+    import os
+    (tmp_path / "latest.json").write_text(json.dumps({"generated_at": "2026-10-18T05:30:00Z"}))
+    assert sa._last_audit(tmp_path) is None   # nightly digest alone is not an audit
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    for name, ts in (("a.json", 1_760_000_000), ("b.json", 1_760_500_000)):
+        (runs / name).write_text("{}")
+        os.utime(runs / name, (ts, ts))
+    assert sa._last_audit(tmp_path) == datetime.fromtimestamp(1_760_500_000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_changes_window_uses_last_audit(tmp_path):
+    w = _world(tmp_path, MEMORY_DOC)
+    (w["gdir"] / "changes.jsonl").write_text(
+        json.dumps({"ts": "2026-10-01T00:00:00Z", "id": "cc-memory"}) + "\n"
+        + json.dumps({"ts": "2026-10-17T00:00:00Z", "id": "cc-best-practices"}) + "\n")
+    rep = sa.build(**w, last_audit="2026-09-30T00:00:00Z")
+    assert [c["id"] for c in rep["guidance_changes"]] == ["cc-memory", "cc-best-practices"]
+    rep = sa.build(**w)  # no gated run yet: the window is the fallback
+    assert [c["id"] for c in rep["guidance_changes"]] == ["cc-best-practices"]

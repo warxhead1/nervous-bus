@@ -98,7 +98,7 @@ const MAPPED = {
 const [native, mapped] = await Promise.all([
   pipeline(targets, t => agent(
     `Run Claude Code's built-in instruction auditor on one target and return its findings.
-Command (one Bash call, timeout 900000 ms):
+Command (one Bash call, timeout 600000 ms):
   cd /home/eric/data2/claude-tmp && claude -p "/doctor prompt-audit ${t}" --model ${AUDIT_MODEL} --output-format json --no-session-persistence > pa-$$.json; python3 -c "import json,sys; d=json.load(open(sys.argv[1])); r=[x for x in d if x.get('type')=='result'][-1]; print(r.get('is_error')); print(r.get('result',''))" pa-$$.json
 Return target="${t}", ok=false if the command failed or is_error is True. Otherwise transcribe
 EVERY finding in the report into findings[] — path and line as the report gives them, the
@@ -169,7 +169,7 @@ const judged = await agent(
 
 1. The deterministic digest (${DIGEST_DIR}/latest.md; read it). Its findings are limits READ from
    the fetched docs, and its tables show what each steering file costs: lines, tokens, and loads
-   in the window. A file loaded 177 times a week costs 177x its tokens.
+   in the window (loads column). Cost = tokens x loads.
 2. Claude Code's own /doctor prompt-audit findings:
 ${JSON.stringify(nativeFindings, null, 1)}
 3. Practices from fetched guidance that our steering does not follow (gap/conflict/obsolete):

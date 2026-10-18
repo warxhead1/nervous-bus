@@ -512,11 +512,13 @@ def prior_proposals(out_dir: Path, limit: int = 20) -> list[dict]:
 
 
 def _last_audit(out_dir: Path) -> str | None:
-    p = out_dir / "latest.json"
-    try:
-        return json.loads(p.read_text()).get("generated_at")
-    except (OSError, ValueError):
+    """When the steering-audit workflow last reached its Gate step: the newest
+    runs/*.json it wrote. NOT latest.json, which the nightly rewrites every
+    morning and would hide every change older than a few hours."""
+    runs = sorted((out_dir / "runs").glob("*.json"), key=lambda f: f.stat().st_mtime)
+    if not runs:
         return None
+    return datetime.fromtimestamp(runs[-1].stat().st_mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def main() -> int:
