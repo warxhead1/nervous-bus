@@ -30,6 +30,11 @@ it, and a bad night never wedges the timer.
      tokens.db, then the ranked token-waste digest under TOKEN_DIGEST_DIR
      (latest.md / latest.json + a dated copy). The digest is sanitized by
      construction; it is the ONLY input the daily mmx auditor reads.
+  2c. guidance_watch.py, then steering_audit.py --days WINDOW_DAYS
+     Refetch the external guidance watchlist (guidance_sources.toml; a fetch
+     error keeps the old snapshot), then measure the steering surface against
+     the limits read from it into STEERING_DIGEST_DIR/latest.{md,json} — the
+     input the saved `steering-audit` workflow reads. Both non-fatal.
   3. struggle_ledger.py --days STRUGGLE_WINDOW_DAYS --json
      Longitudinal friction ledger over the durable transcript archive.
      Captured here (not persisted — it has no store of its own) purely to
@@ -561,6 +566,10 @@ def main() -> int:
     )
 
     run_token_digest(args.token_digest_dir, args.window_days, args.step_timeout)
+    run_step("guidance_watch.py", [sys.executable, "guidance_watch.py"], args.step_timeout)
+    run_step("steering_audit.py",
+             [sys.executable, "steering_audit.py", "--days", str(args.window_days)],
+             args.step_timeout)
 
     digest = build_digest(
         args.db, label_result, detector_result,

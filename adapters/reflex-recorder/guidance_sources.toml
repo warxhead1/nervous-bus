@@ -1,0 +1,147 @@
+# guidance_sources.toml — the external guidance the steering audit compares us against.
+#
+# Read by guidance_watch.py (fetch + sha256 + diff) and steering_audit.py
+# (thresholds, failure-pattern crosswalk). Only sources with a stable
+# machine-readable URL belong here: an `llms.txt`-indexed .md page or a raw
+# file. Blogs without a feed churn URLs and make freshness unmeasurable.
+#
+# kind = "doc"   a page; a content change writes a unified diff.
+# kind = "index" an llms.txt; a change also reports pages added/removed, which
+#                is how a NEW page (a feature we have never audited) surfaces.
+
+# --- Claude Code (code.claude.com) -----------------------------------------
+[[source]]
+id = "cc-index"
+kind = "index"
+url = "https://code.claude.com/docs/llms.txt"
+
+[[source]]
+id = "cc-best-practices"
+url = "https://code.claude.com/docs/en/best-practices.md"
+
+[[source]]
+id = "cc-memory"
+url = "https://code.claude.com/docs/en/memory.md"
+
+[[source]]
+id = "cc-features-overview"
+url = "https://code.claude.com/docs/en/features-overview.md"
+
+[[source]]
+id = "cc-claude-directory"
+url = "https://code.claude.com/docs/en/claude-directory.md"
+
+[[source]]
+id = "cc-context-window"
+url = "https://code.claude.com/docs/en/context-window.md"
+
+[[source]]
+id = "cc-prompt-caching"
+url = "https://code.claude.com/docs/en/prompt-caching.md"
+
+[[source]]
+id = "cc-costs"
+url = "https://code.claude.com/docs/en/costs.md"
+
+[[source]]
+id = "cc-skills"
+url = "https://code.claude.com/docs/en/skills.md"
+
+[[source]]
+id = "cc-sub-agents"
+url = "https://code.claude.com/docs/en/sub-agents.md"
+
+[[source]]
+id = "cc-agents"
+url = "https://code.claude.com/docs/en/agents.md"
+
+[[source]]
+id = "cc-workflows"
+url = "https://code.claude.com/docs/en/workflows.md"
+
+[[source]]
+id = "cc-hooks-guide"
+url = "https://code.claude.com/docs/en/hooks-guide.md"
+
+[[source]]
+id = "cc-worktrees"
+url = "https://code.claude.com/docs/en/worktrees.md"
+
+[[source]]
+id = "cc-large-codebases"
+url = "https://code.claude.com/docs/en/large-codebases.md"
+
+[[source]]
+id = "cc-debug-your-config"
+url = "https://code.claude.com/docs/en/debug-your-config.md"
+
+[[source]]
+id = "cc-headless"
+url = "https://code.claude.com/docs/en/headless.md"
+
+[[source]]
+id = "cc-changelog"
+url = "https://code.claude.com/docs/en/changelog.md"
+
+# --- Prompting (self-prompting: dispatch briefs, agent definitions) --------
+[[source]]
+id = "claude-prompting-best-practices"
+url = "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices.md"
+
+# --- Cross-vendor open formats ----------------------------------------------
+[[source]]
+id = "agentskills-index"
+kind = "index"
+url = "https://agentskills.io/llms.txt"
+
+[[source]]
+id = "agentskills-spec"
+url = "https://agentskills.io/specification.md"
+
+[[source]]
+id = "agentskills-best-practices"
+url = "https://agentskills.io/skill-creation/best-practices.md"
+
+[[source]]
+id = "agentskills-descriptions"
+url = "https://agentskills.io/skill-creation/optimizing-descriptions.md"
+
+[[source]]
+id = "agents-md"
+url = "https://raw.githubusercontent.com/agentsmd/agents.md/main/README.md"
+
+# --- Thresholds --------------------------------------------------------------
+# Every numeric limit the audit enforces is READ from a fetched source by
+# regex, never typed in here. When a pattern stops matching, the audit reports
+# `threshold_unresolved` — the doc's wording changed, which is itself a signal
+# to re-read that section.
+
+[[threshold]]
+id = "claude_md_target_lines"
+source = "cc-memory"
+pattern = 'target under (\d+) lines per CLAUDE\.md file'
+
+[[threshold]]
+id = "memory_index_lines"
+source = "cc-memory"
+pattern = 'The first (\d+) lines of `MEMORY\.md`'
+
+[[threshold]]
+id = "memory_index_kb"
+source = "cc-memory"
+pattern = 'The first \d+ lines of `MEMORY\.md`, or the first (\d+)KB'
+
+[[threshold]]
+id = "skill_md_lines"
+source = "cc-skills"
+pattern = 'Keep `SKILL\.md` under (\d+) lines'
+
+[[threshold]]
+id = "skill_listing_desc_chars"
+source = "cc-skills"
+pattern = 'truncated at ([\d,]+) characters in the skill listing'
+
+[[threshold]]
+id = "import_max_hops"
+source = "cc-memory"
+pattern = 'maximum depth of (\w+) hops'

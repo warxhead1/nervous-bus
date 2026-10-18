@@ -384,6 +384,59 @@ Non-LLM producers (`agent_kinds.NON_AGENT_KINDS`: tachyonac `cron`/`ingestor`
 job ticks) are dropped by the recorder; `retire_non_agent_runs.py` moves any
 backlog into `runs_non_agent.db`.
 
+## Steering audit: our guidance vs the published practice
+
+The steering surface (the `~/.claude/CLAUDE.md` import chain, project
+CLAUDE.md/AGENTS.md, auto-memory indexes, skills, agent definitions, dispatch
+briefs) is audited against external guidance that is fetched, hashed, and
+diffed every night. Same shape as the token audit: measure, digest, propose,
+gate, read back.
+
+- `guidance_sources.toml` — the watchlist (Claude Code docs pages + its
+  `llms.txt`, the changelog, Claude prompting best practices, the Agent Skills
+  spec, AGENTS.md) and the `[[threshold]]` regexes that READ every numeric limit
+  out of a fetched page. Nothing is typed in; a regex that stops matching is
+  reported as `threshold_unresolved`.
+- `guidance_watch.py` — fetches the watchlist into
+  `~/.cache/nervous-bus/reflex/guidance/sources/<id>.md`, sha256 per source in
+  `state.json`. A change writes `diffs/<date>/<id>.diff` and a line in
+  `changes.jsonl`; an `llms.txt` change also lists pages added/removed (a new
+  feature page nobody has audited against). A fetch error keeps the old snapshot.
+- `steering_audit.py` — zero-LLM measurement into
+  `~/.cache/nervous-bus/reflex/steering-digest/latest.{md,json}`: per-file
+  lines/tokens/loads (loads from tokens.db, worktree copies folded onto their
+  `~/projects` original), emphasis/dated/ENFORCED line counts, findings against
+  the fetched limits (CLAUDE.md chain over target, MEMORY.md past the load
+  cutoff, SKILL.md and listing-description limits, import depth), the doc's
+  "Avoid common failure patterns" crosswalked to detector hits
+  (`failure_crosswalk.toml`; a pattern the doc adds is `failure_pattern_unmapped`),
+  and prior proposals with the target's line count then vs now. Only roots that
+  loaded in the window are judged. Paths, counts, line numbers; never rule text.
+- `automation/workflows/steering-audit.js` — the saved workflow (judgment half).
+  Ground (haiku: refetch + digest) -> Claude Code's own `/doctor prompt-audit`
+  per loaded root, headless (sonnet runner, opus auditor) in parallel with
+  practice extraction + mapping from changed sources (sonnet) -> judge (session
+  model, at most 3 proposals) -> two opus refuters per proposal -> gate (haiku).
+  Dry run unless `{publish: true}`. `{full: true}` audits the core source set
+  instead of only what changed.
+- `automation/steering_audit_publish.py` — the gate. A proposal files only if
+  its target excerpt is in the cited lines of a real file under `~/.claude` or
+  `~/projects`, every guidance quote is verbatim in a fetched snapshot, and the
+  title/target is not a duplicate (7-day cooldown per target). Files an issue in
+  the repo that owns the target (`~/.claude` -> claude-memory-global, skills ->
+  agent-skills, projects -> their origin) plus a bead labelled
+  `<repo>,steering-audit`, and appends `proposals.jsonl`.
+
+The nightly batch runs `guidance_watch.py` and `steering_audit.py` (step 2c).
+Install the workflow (after merge, from the shared checkout):
+
+```bash
+mkdir -p ~/.claude/workflows
+ln -sfn ~/projects/nervous-bus/adapters/reflex-recorder/automation/workflows/steering-audit.js \
+  ~/.claude/workflows/steering-audit.js
+# then, in any session: run the steering-audit workflow with {full: true}
+```
+
 ## champion
 
 `champion.py` is the deterministic half of the MASS champion-brief theory test
