@@ -209,6 +209,11 @@ def main() -> int:
         except Rejected as e:
             rejected += 1
             print(json.dumps({"verdict": "rejected", "title": prop.get("title"), "reason": str(e)}))
+    if not a.dry_run:
+        # The audit clock: steering_audit.py reports guidance changes since this
+        # stamp. A dry run never advances it, so nothing it saw is marked judged.
+        (a.digest_dir / "last_audit").write_text(
+            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "\n")
     return 2 if rejected else 0
 
 

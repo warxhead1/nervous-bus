@@ -147,7 +147,7 @@ const PROPOSALS = {
   type: 'object',
   properties: {
     proposals: { type: 'array', items: { type: 'object', properties: {
-      title: { type: 'string' },
+      title: { type: 'string', maxLength: 90 },
       rung: { type: 'string', enum: ['eliminate', 'automate', 'inform'] },
       action: { type: 'string', enum: ['cut', 'move', 'convert-to-hook', 'convert-to-skill', 'rewrite', 'add', 'split'] },
       target: { type: 'object', properties: {
@@ -185,8 +185,9 @@ pointer. Dated incident narrative in an always-loaded file is a candidate to mov
 read-on-demand file or the commit history. Do NOT propose cutting a rule whose theme or detector
 still fires (crosswalk counts above zero) unless you move it, not delete it.
 
-For each proposal, READ the target file and give exact 1-based line_start/line_end and a VERBATIM
-excerpt from those lines; give at least one guidance quote copied VERBATIM from
+For each proposal, READ the target file and give exact 1-based line_start/line_end and an excerpt
+that is ONE contiguous block of 1-5 lines copied VERBATIM from inside that range (no '...' elisions,
+no stitched fragments; the gate searches for it as-is); give at least one guidance quote copied VERBATIM from
 ${GUIDANCE}/sources/<source>.md (read it; the gate rejects paraphrase). For a native-audit
 finding, the guidance quote is the doc passage that justifies it (cc-memory, cc-best-practices,
 or claude-prompting-best-practices). edit = the replacement text or a unified diff. verify = how

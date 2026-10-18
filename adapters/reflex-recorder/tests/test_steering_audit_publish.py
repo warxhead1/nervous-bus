@@ -79,3 +79,19 @@ def test_duplicate_title_and_target_cooldown(world):
     with pytest.raises(pub.Rejected, match="cooldown"):
         pub.validate(_prop(target), g, prior, roots, today=date(2026, 10, 18))
     assert pub.validate(_prop(target), g, prior, roots, today=date(2026, 11, 1))
+
+
+def test_main_stamps_audit_clock_only_when_not_dry_run(world, tmp_path, monkeypatch):
+    import json as _json
+    g, target, roots = world
+    monkeypatch.setattr(pub, "ALLOWED_ROOTS", roots)
+    props = tmp_path / "p.json"
+    props.write_text(_json.dumps({"run": "t", "proposals": [_prop(target, title="x" * 91)]}))
+    ddir = tmp_path / "digest"
+    argv = ["pub", "--proposals", str(props), "--digest-dir", str(ddir), "--guidance-dir", str(g), "--no-gh"]
+    monkeypatch.setattr(sys, "argv", argv + ["--dry-run"])
+    assert pub.main() == 2
+    assert not (ddir / "last_audit").exists()
+    monkeypatch.setattr(sys, "argv", argv)   # all rejected: no bd/gh call, but the audit happened
+    assert pub.main() == 2
+    assert (ddir / "last_audit").read_text().strip()

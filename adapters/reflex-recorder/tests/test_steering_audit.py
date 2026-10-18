@@ -147,16 +147,13 @@ def test_markdown_renders(tmp_path):
     json.dumps(rep)  # serializable
 
 
-def test_last_audit_is_the_last_gated_run_not_the_nightly(tmp_path):
-    import os
+def test_last_audit_is_the_gate_stamp_not_the_nightly(tmp_path):
     (tmp_path / "latest.json").write_text(json.dumps({"generated_at": "2026-10-18T05:30:00Z"}))
-    assert sa._last_audit(tmp_path) is None   # nightly digest alone is not an audit
-    runs = tmp_path / "runs"
-    runs.mkdir()
-    for name, ts in (("a.json", 1_760_000_000), ("b.json", 1_760_500_000)):
-        (runs / name).write_text("{}")
-        os.utime(runs / name, (ts, ts))
-    assert sa._last_audit(tmp_path) == datetime.fromtimestamp(1_760_500_000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    (tmp_path / "runs").mkdir()
+    (tmp_path / "runs" / "dry.json").write_text("{}")
+    assert sa._last_audit(tmp_path) is None   # nightly digest and dry runs are not audits
+    (tmp_path / "last_audit").write_text("2026-10-18T19:32:26Z\n")
+    assert sa._last_audit(tmp_path) == "2026-10-18T19:32:26Z"
 
 
 def test_changes_window_uses_last_audit(tmp_path):
