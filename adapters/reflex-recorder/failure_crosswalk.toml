@@ -1,0 +1,28 @@
+# failure_crosswalk.toml — the doc's "Avoid common failure patterns" -> what we measure.
+#
+# Keys are the bold pattern names in cc-best-practices § "Avoid common failure
+# patterns", matched case-insensitively with trailing punctuation dropped. A
+# pattern the doc adds that is not listed here is reported as
+# `failure_pattern_unmapped`; that is the prompt to extend this file.
+#
+# detectors      = reflex detector names (detector_hits.detector)
+# themes         = user_correction signatures (memory-global rules.toml themes)
+# token          = token_report.py candidate ids (startup/long-context waste)
+# steering_lint  = steering_audit.py finding rules that measure it directly
+
+[pattern."the kitchen sink session"]
+token = ["long_context"]
+
+[pattern."correcting over and over"]
+detectors = ["user_correction"]
+
+[pattern."the over-specified claude.md"]
+token = ["startup_context"]
+steering_lint = ["claude_md_over_target", "memory_index_truncated"]
+
+[pattern."the trust-then-verify gap"]
+detectors = ["unverified_completion", "edit_build_fail_revert"]
+themes = ["stale_claim"]
+
+[pattern."the infinite exploration"]
+detectors = ["reread_same_file", "file_reads_to_finding"]
