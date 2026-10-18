@@ -179,10 +179,9 @@ def publish_one(prop: dict, gdir: Path, ddir: Path, prior: list[dict], run: str,
                           "-d", desc, "--json"], cwd=bd_cwd, capture_output=True, text=True, timeout=60)
     if out.returncode != 0:
         raise RuntimeError(f"bd create failed: {out.stderr.strip()[:300]}")
-    try:
-        rec["bead"] = json.loads(out.stdout).get("id")
-    except ValueError:
-        rec["bead"] = out.stdout.strip()[:40]
+    # bd can print tips around the JSON; take the id wherever it appears.
+    m = re.search(r'"id":\s*"([^"]+)"', out.stdout)
+    rec["bead"] = m.group(1) if m else out.stdout.strip()[:40]
     with open(ddir / "proposals.jsonl", "a") as f:
         f.write(json.dumps(rec) + "\n")
     prior.append(rec)
