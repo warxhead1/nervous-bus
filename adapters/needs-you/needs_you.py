@@ -11,6 +11,9 @@ that reads the queue.
   needs_you.py [list]        Open items, grouped by project. --all includes acked.
   needs_you.py ack <n|all>   Mark entry n (from list) or every entry as handled.
   needs_you.py --json        Raw open entries.
+  needs_you.py bind          SessionStart hook (stdin = hook JSON): record which
+                             terminal this session runs in. The Stop hook does the
+                             same every turn.
   needs_you.py name [slug]   Name this session (CLAUDE_CODE_SESSION_ID) with a short
                              slug that phone, Slack and Orca show instead of a uuid.
                              No slug: print the current name.
@@ -36,6 +39,10 @@ from pathlib import Path
 HOME = Path(os.environ.get("NEEDS_YOU_HOME", Path.home() / ".local/state/needs-you"))
 SESSIONS = HOME / "sessions"
 NAMES = HOME / "names"
+# Session -> terminal bindings, read by hearth-api to route answers (it cannot read
+# /proc/<pid>/environ from its ProtectHome sandbox; the session can write its own).
+BINDINGS = Path(os.environ.get("HEARTH_BINDINGS_DIR",
+                               Path.home() / ".local/state/hearth/session-bindings"))
 SLUG_MAX = 32
 
 HEADER_RE = re.compile(
@@ -192,6 +199,36 @@ def name_of(session_id: str, cwd: str) -> str:
     return chosen or default_name(cwd)
 
 
+def bind(session_id: str, cwd: str) -> None:
+    """Write {session_id, orca_terminal, tmux_pane, cwd, pid} for this session."""
+    if not session_id:
+        return
+    rec = {
+        "session_id": session_id,
+        "orca_terminal": os.environ.get("ORCA_TERMINAL_HANDLE", ""),
+        "tmux_pane": os.environ.get("TMUX_PANE", ""),
+        "cwd": cwd,
+        "pid": int(os.environ.get("CLAUDE_PID") or os.getppid()),
+        "ts": time.time(),
+    }
+    if not (rec["orca_terminal"] or rec["tmux_pane"]):
+        return
+    path = BINDINGS / f"{session_id}.json"
+    try:
+        if json.loads(path.read_text())  | {"ts": rec["ts"]} == rec:
+            return  # unchanged: no write per turn
+    except (OSError, ValueError):
+        pass
+    try:
+        BINDINGS.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=BINDINGS, suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            json.dump(rec, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def write_entry(entry: dict) -> None:
     SESSIONS.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=SESSIONS, suffix=".tmp")
@@ -232,6 +269,7 @@ def hook(data: dict) -> dict | None:
     if not session_id:
         log("skip_no_session", data)
         return None
+    bind(session_id, data.get("cwd") or os.getcwd())
     reply, used_tools, turn_id = turn_from_transcript(data.get("transcript_path") or "")
     if data.get("last_assistant_message"):
         reply = data["last_assistant_message"]
@@ -357,6 +395,14 @@ def main(argv: list[str]) -> int:
             return 0
         if out:
             print(json.dumps(out))
+        return 0
+    if argv[:1] == ["bind"]:
+        try:
+            data = json.load(sys.stdin)
+            if not os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
+                bind(data.get("session_id") or "", data.get("cwd") or os.getcwd())
+        except Exception as exc:  # a hook must never wedge the session
+            print(f"needs-you bind: {exc}", file=sys.stderr)
         return 0
     if argv[:1] == ["ack"] and len(argv) == 2:
         return cmd_ack(argv[1])
