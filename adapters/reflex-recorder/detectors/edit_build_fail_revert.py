@@ -184,7 +184,7 @@ def _normalize_area(file_path: str, cwd: str, project: str) -> str:
 
     # Strip worktree prefixes: .../projects/<project>/.claude/worktrees/<slug>/... -> rest
     worktree_re = re.compile(
-        r".*/projects/[^/]+/(?:\.claude/worktrees|\.worktrees)/[^/]+/(.*)"
+        r".*/(?:projects/[^/]+/(?:\.claude/worktrees|\.worktrees)|data2/worktrees/[^/]+)/[^/]+/(.*)"
     )
     m = worktree_re.match(path)
     if m:

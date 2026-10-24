@@ -106,6 +106,7 @@ CARGO_BUILD_COMMANDS: tuple[str, ...] = (
 WORKTREE_CWD_MARKERS: tuple[str, ...] = (
     "/.claude/worktrees/",
     "/.worktrees/",
+    "/data2/worktrees/",
 )
 
 

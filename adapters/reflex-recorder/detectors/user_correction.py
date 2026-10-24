@@ -591,7 +591,7 @@ def _resolve_run(
     Falls back to the run with the latest started <= ts (a turn can land a
     hair after `ended` is recorded, since ended is stamped at close time and
     the turn timestamp precedes the close event that reads it). Returns
-    (None, None) if no run qualifies at all.
+    (None, None) only when the session has no runs.
     """
     for run_id, project, st, en in candidates:
         if st <= ts <= en:
@@ -599,5 +599,10 @@ def _resolve_run(
     before = [(run_id, project, st) for run_id, project, st, _en in candidates if st <= ts]
     if before:
         run_id, project, _st = max(before, key=lambda t: t[2])
+        return run_id, project
+    # A session's opening prompt precedes its first run (runs start on the
+    # first tool call), so it belongs to the session's earliest run.
+    if candidates:
+        run_id, project, _st, _en = min(candidates, key=lambda t: t[2])
         return run_id, project
     return None, None

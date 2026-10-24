@@ -442,13 +442,14 @@ def ran_build_or_test(events: list[dict], is_verify=default_verify) -> bool:
 #
 # Subagent work is NOT recorded as a separate run — the recorder attributes every
 # delegated agent's tool calls to the PARENT host session, discriminated only by
-# the worktree cwd (`.../.claude/worktrees/<slug>` or `.../.worktrees/<slug>`).
+# the worktree cwd (`.../.claude/worktrees/<slug>`, `.../.worktrees/<slug>`, or,
+# since the 2026-08-24 move, `~/data2/worktrees/<project>/<slug>`).
 # The slug is the child agent id (`agent-<hex>` matches a dispatch's
 # child_agent_id; `wf_<...>` is a workflow agent). So a delegated agent's
 # trajectory is the run's events filtered to its worktree cwd — the right unit for
 # "did this delegated agent verify its own work?" questions.
 
-_WORKTREE_RE = re.compile(r"(?:\.claude/worktrees|\.worktrees)/([^/]+)")
+_WORKTREE_RE = re.compile(r"(?:\.claude/worktrees|\.worktrees|/data2/worktrees/[^/]+)/([^/]+)")
 
 
 def worktree_slug_of(cwd: str) -> Optional[str]:
