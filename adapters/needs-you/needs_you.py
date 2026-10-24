@@ -15,6 +15,8 @@ that reads the queue.
 State: one file per session under $NEEDS_YOU_HOME (default
 ~/.local/state/needs-you/sessions/). Latest turn per session wins, so a later
 "Needs you: nothing" clears that session's earlier asks.
+Headless runs (CLAUDE_CODE_ENTRYPOINT=sdk-*, i.e. `claude -p` and the Agent SDK)
+are skipped: their output is parsed by scripts, and no human reads the turn.
 Kill switch: NEEDS_YOU_DISABLE=1.
 """
 from __future__ import annotations
@@ -136,7 +138,7 @@ def write_entry(entry: dict) -> None:
 
 
 def publish(entry: dict) -> None:
-    payload = {k: entry[k] for k in ("session_id", "project", "cwd", "items")}
+    payload = {k: entry[k] for k in ("session_id", "project", "cwd", "items", "summary", "orca_terminal")}
     try:
         subprocess.Popen(
             ["timeout", "2", "nervous", "publish", "agent.attention.v1", json.dumps(payload)],
@@ -148,7 +150,18 @@ def publish(entry: dict) -> None:
         pass
 
 
+def summary_of(reply: str) -> str:
+    """First non-empty prose line of the reply, for the phone's one-line 'done' text."""
+    for line in unstretch(reply).splitlines():
+        line = line.strip().lstrip("#").strip()
+        if line and not HEADER_RE.match(line) and not BULLET_RE.match(line):
+            return line[:300]
+    return ""
+
+
 def hook(data: dict) -> dict | None:
+    if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
+        return None
     session_id = data.get("session_id") or ""
     if not session_id:
         return None
@@ -166,6 +179,8 @@ def hook(data: dict) -> dict | None:
         "project": project_of(cwd),
         "cwd": cwd,
         "items": items[:20],
+        "summary": summary_of(reply),
+        "orca_terminal": os.environ.get("ORCA_TERMINAL_HANDLE", ""),
         "ts": time.time(),
         "acked": False,
     }

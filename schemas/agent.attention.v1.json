@@ -14,6 +14,8 @@
       "description": "Decisions or actions the operator must take, one line each. Empty = this session needs nothing.",
       "maxItems": 20,
       "items": { "type": "string", "maxLength": 500 }
-    }
+    },
+    "summary":       { "type": "string", "maxLength": 300, "description": "First prose line of the turn's reply; the phone's one-line 'done' text" },
+    "orca_terminal": { "type": "string", "description": "Orca terminal handle (ORCA_TERMINAL_HANDLE) when the session runs in Orca; empty otherwise. Lets hearth deep-link and route answers." }
   }
 }
