@@ -33,7 +33,7 @@ const GROUND = {
     findings: { type: 'array', items: { type: 'object' } },
     audit_targets: { type: 'array', items: { type: 'string' } },
     changed: { type: 'array', items: { type: 'object', properties: {
-      id: { type: 'string' }, diff: { type: 'string' } }, required: ['id'] } },
+      id: { type: 'string' }, diffs: { type: 'array', items: { type: 'string' } } }, required: ['id'] } },
     global_chain_lines: { type: 'integer' },
     global_chain_tokens: { type: 'integer' },
     crosswalk: { type: 'array', items: { type: 'object' } },
@@ -47,7 +47,7 @@ const g = await agent(
 1. python3 guidance_watch.py
 2. python3 steering_audit.py --json
 From the JSON of step 2 return: findings (verbatim), audit_targets (verbatim), changed = one
-{id, diff} per entry of guidance_changes (diff may be absent), global_chain_lines =
+{id, diffs} per entry of guidance_changes (diffs may be empty), global_chain_lines =
 global_chain.lines, global_chain_tokens = global_chain.est_tokens, crosswalk = failure_crosswalk
 (verbatim).`,
   { label: 'ground', phase: 'Ground', model: 'haiku', schema: GROUND })
@@ -110,7 +110,8 @@ report is ok=true with findings=[]. Do not judge or add findings of your own. Do
   pipeline(sources,
     sid => agent(
       `Read the guidance source ${GUIDANCE}/sources/${sid}.md` +
-      (g.changed.find(c => c.id === sid && c.diff) ? ` — focus on what changed, the diff is at ${g.changed.find(c => c.id === sid).diff}` : '') +
+      ((g.changed.find(c => c.id === sid) || {}).diffs || []).reduce((acc, d, i) =>
+        acc + (i ? `, ${d}` : ` — focus on what changed, the diffs are at ${d}`), '') +
       `. Extract the concrete, checkable practices it recommends for configuring or steering a
 coding agent: instruction files, memory, skills, hooks, subagents, how to write prompts and
 agent briefs, workflows, settings. For each, copy a quote VERBATIM from the file (one or two

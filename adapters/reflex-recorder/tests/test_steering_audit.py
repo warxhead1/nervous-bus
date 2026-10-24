@@ -165,3 +165,39 @@ def test_changes_window_uses_last_audit(tmp_path):
     assert [c["id"] for c in rep["guidance_changes"]] == ["cc-memory", "cc-best-practices"]
     rep = sa.build(**w)  # no gated run yet: the window is the fallback
     assert [c["id"] for c in rep["guidance_changes"]] == ["cc-best-practices"]
+
+
+def test_guidance_changes_collapse_per_source(tmp_path):
+    w = _world(tmp_path, MEMORY_DOC)
+    (w["gdir"] / "changes.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+        {"ts": "2026-10-20T09:00:00Z", "id": "cc-memory", "added_lines": 2, "removed_lines": 1, "diff": "d1"},
+        {"ts": "2026-10-20T09:00:01Z", "id": "cc-skills", "added_lines": 1, "removed_lines": 0},
+        {"ts": "2026-10-21T09:00:00Z", "id": "cc-memory", "added_lines": 5, "removed_lines": 3, "diff": "d2"},
+    ]))
+    rep = sa.build(**w, last_audit="2026-10-19T00:00:00Z")
+    ch = rep["guidance_changes"]
+    assert [c["id"] for c in ch] == ["cc-memory", "cc-skills"]
+    mem = ch[0]
+    assert (mem["events"], mem["added_lines"], mem["removed_lines"]) == (2, 7, 4)
+    assert mem["diffs"] == ["d1", "d2"] and mem["ts"] == "2026-10-21T09:00:00Z"
+    gc = [f for f in rep["findings"] if f["rule"] == "guidance_changed"]
+    assert [f["source"] for f in gc] == ["cc-memory", "cc-skills"]
+    assert "cc-memory (2 changes)" in sa.to_markdown(rep | {"sources": [], "prior_proposals": []})
+
+
+def test_uncommitted_steering_is_a_finding(tmp_path):
+    import subprocess
+    repo = tmp_path / "mg"
+    repo.mkdir()
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
+    git("init", "-q")
+    (repo / "rule.md").write_text("a\n")
+    git("add", "rule.md")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    now = datetime.now(timezone.utc)
+    assert sa.uncommitted_steering(repo, now) is None
+    (repo / "rule.md").write_text("a\nb\n")
+    (repo / "new.md").write_text("c\n")
+    d = sa.uncommitted_steering(repo, now)
+    assert d["files"] == ["new.md", "rule.md"] and d["oldest_days"] >= 0
+    assert sa.uncommitted_steering(tmp_path / "not-a-repo", now) is None
