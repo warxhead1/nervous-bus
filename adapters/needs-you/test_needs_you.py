@@ -107,6 +107,19 @@ class Hook(unittest.TestCase):
         self.assertEqual(ny.load(), [])
         self.assertEqual(len(ny.load(include_acked=True)), 1)
 
+    def test_headless_runs_are_ignored(self):
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}):
+            self.assertIsNone(self.run_hook(user("go"), tool_use(), tool_result(), text("x")))
+            self.run_hook(user("go"), tool_use(), tool_result(), text("**Needs you:**\n- y"))
+        self.assertEqual(ny.load(), [])
+
+    def test_summary_and_terminal_recorded(self):
+        with mock.patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "term_1", "CLAUDE_CODE_ENTRYPOINT": "cli"}):
+            self.run_hook(user("go"), tool_use(), tool_result(),
+                          text("## Merged PR #88.\n\n**Needs you:**\n- restart"))
+        e = ny.load()[0]
+        self.assertEqual((e["summary"], e["orca_terminal"]), ("Merged PR #88.", "term_1"))
+
     def test_kill_switch(self):
         with mock.patch.dict(os.environ, {"NEEDS_YOU_DISABLE": "1"}), \
                 mock.patch.object(sys, "stdin", io.StringIO("{bad json")):
@@ -118,7 +131,8 @@ class Schema(unittest.TestCase):
         jsonschema = __import__("jsonschema")
         schema = json.loads((Path(__file__).parents[2] / "schemas/agent.attention.v1.json").read_text())
         jsonschema.Draft202012Validator(schema).validate(
-            {"session_id": "s", "project": "p", "cwd": "/x", "items": ["a"]})
+            {"session_id": "s", "project": "p", "cwd": "/x", "items": ["a"],
+             "summary": "done", "orca_terminal": "term_1"})
 
 
 if __name__ == "__main__":
