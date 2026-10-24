@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/agent.attention.v1.json",
+  "title": "agent.attention v1",
+  "description": "What an agent session needs from the human operator, as of its latest turn. Published by the needs-you Stop hook (adapters/needs-you/) at the end of every Claude Code turn that carries a 'Needs you' block. Latest event per session_id wins: an event with empty items clears that session's earlier asks. Consumers (dashboards, deer-flow) render one cross-project queue from it so the operator does not have to read full turn output.",
+  "type": "object",
+  "required": ["session_id", "project", "items"],
+  "properties": {
+    "session_id": { "type": "string", "description": "Claude Code session id; the supersede key" },
+    "project":    { "type": "string", "description": "Project name (git common-dir parent; worktrees resolve to their parent repo)" },
+    "cwd":        { "type": "string", "description": "Session working directory at turn end" },
+    "items": {
+      "type": "array",
+      "description": "Decisions or actions the operator must take, one line each. Empty = this session needs nothing.",
+      "maxItems": 20,
+      "items": { "type": "string", "maxLength": 500 }
+    }
+  }
+}

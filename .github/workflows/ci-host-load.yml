@@ -6,12 +6,16 @@ on:
     paths:
       - 'adapters/host-load/**'
       - 'schemas/bus.system.resource.sample.*.json'
+      - 'adapters/needs-you/**'
+      - 'schemas/agent.attention.*.json'
       - '.github/workflows/ci-host-load.yml'
   pull_request:
     branches: [main]
     paths:
       - 'adapters/host-load/**'
       - 'schemas/bus.system.resource.sample.*.json'
+      - 'adapters/needs-you/**'
+      - 'schemas/agent.attention.*.json'
       - '.github/workflows/ci-host-load.yml'
   workflow_dispatch:
 
@@ -41,3 +45,5 @@ jobs:
           fi
       - name: Test collection, persistence and reports without GPU hardware
         run: python3 -m unittest discover -s adapters/host-load -p 'test_*.py'
+      - name: Test the needs-you Stop hook and queue
+        run: python3 -m unittest discover -s adapters/needs-you -p 'test_*.py'
