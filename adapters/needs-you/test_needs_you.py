@@ -69,12 +69,15 @@ class Hook(unittest.TestCase):
         self.home.start()
         self.logdir = mock.patch.object(ny, "HOME", self.tmp)
         self.logdir.start()
+        self.names = mock.patch.object(ny, "NAMES", self.tmp / "names")
+        self.names.start()
         self.pub = mock.patch.object(ny, "publish")
         self.published = self.pub.start()
 
     def tearDown(self):
         self.home.stop()
         self.logdir.stop()
+        self.names.stop()
         self.pub.stop()
 
     def run_hook(self, *entries, **extra):
@@ -143,6 +146,23 @@ class Hook(unittest.TestCase):
         e = ny.load()[0]
         self.assertEqual((e["summary"], e["orca_terminal"]), ("Merged PR #88.", "term_1"))
 
+    def test_name_defaults_from_worktree_dir(self):
+        self.assertEqual(ny.default_name("/home/e/data2/worktrees/hearth/Slack_Live"), "slack-live")
+        self.assertEqual(ny.default_name("/home/e/data2/worktrees/hearth/agent-a0915112f20f"), "")
+        self.assertEqual(ny.default_name("/home/e/projects/hearth"), "")
+
+    def test_chosen_name_wins_and_is_published(self):
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "s1"}), \
+                mock.patch.object(ny.subprocess, "run"), redirect_stdout(io.StringIO()):
+            self.assertEqual(ny.cmd_name("Slack Mentions!"), 0)
+        self.assertEqual(ny.name_of("s1", "/w/worktrees/x/other"), "slack-mentions")
+        self.assertEqual(ny.slugify("x" * 40), "x" * 32)
+
+    def test_name_needs_a_session(self):
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": ""}), \
+                redirect_stdout(io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(ny.cmd_name("x"), 1)
+
     def test_kill_switch(self):
         with mock.patch.dict(os.environ, {"NEEDS_YOU_DISABLE": "1"}), \
                 mock.patch.object(sys, "stdin", io.StringIO("{bad json")):
@@ -155,7 +175,7 @@ class Schema(unittest.TestCase):
         schema = json.loads((Path(__file__).parents[2] / "schemas/agent.attention.v1.json").read_text())
         jsonschema.Draft202012Validator(schema).validate(
             {"session_id": "s", "project": "p", "cwd": "/x", "items": ["a"],
-             "summary": "done", "orca_terminal": "term_1"})
+             "summary": "done", "orca_terminal": "term_1", "name": "slack-live"})
 
 
 if __name__ == "__main__":
