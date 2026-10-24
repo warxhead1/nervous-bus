@@ -6,7 +6,7 @@ The operator stops reading full turn output. Every Claude Code turn ends with a
 that reads the queue.
 
   needs_you.py hook          Stop hook (stdin = hook JSON). Records the block,
-                             publishes agent.attention, and blocks the stop ONCE
+                             publishes agent.attention.v1, and blocks the stop ONCE
                              if a turn that used tools ended without the block.
   needs_you.py [list]        Open items, grouped by project. --all includes acked.
   needs_you.py ack <n|all>   Mark entry n (from list) or every entry as handled.
@@ -139,7 +139,7 @@ def publish(entry: dict) -> None:
     payload = {k: entry[k] for k in ("session_id", "project", "cwd", "items")}
     try:
         subprocess.Popen(
-            ["timeout", "2", "nervous", "publish", "agent.attention", json.dumps(payload)],
+            ["timeout", "2", "nervous", "publish", "agent.attention.v1", json.dumps(payload)],
             cwd=str(Path.home()),  # no project nervous.toml allowlist applies
             env={**os.environ, "NERVOUS_SOURCE": "/claude-code/needs-you"},
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
