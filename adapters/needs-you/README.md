@@ -5,7 +5,7 @@ full turn output.
 
 Every Claude Code turn ends with a `**Needs you:**` block (rule in `~/.claude/CLAUDE.md`). The
 Stop hook `needs_you.py hook` reads it, stores the latest block per session under
-`~/.local/state/needs-you/sessions/`, and publishes `agent.attention` on the bus. A turn that
+`~/.local/state/needs-you/sessions/`, and publishes `agent.attention.v1` on the bus. A turn that
 used tools but ended without the block is sent back once to add it. A later
 `**Needs you:** nothing` clears that session's earlier asks.
 
