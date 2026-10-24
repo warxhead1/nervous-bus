@@ -71,6 +71,8 @@ class Hook(unittest.TestCase):
         self.logdir.start()
         self.names = mock.patch.object(ny, "NAMES", self.tmp / "names")
         self.names.start()
+        self.bindings = mock.patch.object(ny, "BINDINGS", self.tmp / "bindings")
+        self.bindings.start()
         self.pub = mock.patch.object(ny, "publish")
         self.published = self.pub.start()
 
@@ -78,6 +80,7 @@ class Hook(unittest.TestCase):
         self.home.stop()
         self.logdir.stop()
         self.names.stop()
+        self.bindings.stop()
         self.pub.stop()
 
     def run_hook(self, *entries, **extra):
@@ -162,6 +165,19 @@ class Hook(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": ""}), \
                 redirect_stdout(io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
             self.assertEqual(ny.cmd_name("x"), 1)
+
+    def test_stop_hook_records_the_terminal_binding(self):
+        env = {"ORCA_TERMINAL_HANDLE": "term_9", "TMUX_PANE": "", "CLAUDE_PID": "42",
+               "CLAUDE_CODE_ENTRYPOINT": "cli"}
+        with mock.patch.dict(os.environ, env):
+            self.run_hook(user("q"), text("An answer."))
+        rec = json.loads((self.tmp / "bindings" / "s1.json").read_text())
+        self.assertEqual((rec["orca_terminal"], rec["pid"]), ("term_9", 42))
+
+    def test_no_terminal_no_binding(self):
+        with mock.patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "", "TMUX_PANE": ""}):
+            ny.bind("s2", "/x")
+        self.assertFalse((self.tmp / "bindings" / "s2.json").exists())
 
     def test_kill_switch(self):
         with mock.patch.dict(os.environ, {"NEEDS_YOU_DISABLE": "1"}), \
