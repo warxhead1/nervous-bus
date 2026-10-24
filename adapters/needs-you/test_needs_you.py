@@ -18,8 +18,8 @@ def transcript(tmp: Path, *entries: dict) -> str:
     return str(p)
 
 
-def user(text):
-    return {"type": "user", "message": {"content": text}}
+def user(text, uuid="u1"):
+    return {"type": "user", "uuid": uuid, "message": {"content": text}}
 
 
 def tool_use():
@@ -46,6 +46,10 @@ class Extract(unittest.TestCase):
     def test_inline_item(self):
         self.assertEqual(ny.extract("**Needs you:** run `! gh auth login`"), ["run `! gh auth login`"])
 
+    def test_parenthetical_note_before_colon(self):
+        r = "**Needs you** (for Slack, whenever convenient):\n- create the workspace"
+        self.assertEqual(ny.extract(r), ["create the workspace"])
+
     def test_absent(self):
         self.assertIsNone(ny.extract("It needs you to look. Needs you to decide later."))
 
@@ -63,11 +67,14 @@ class Hook(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.home = mock.patch.object(ny, "SESSIONS", self.tmp / "sessions")
         self.home.start()
+        self.logdir = mock.patch.object(ny, "HOME", self.tmp)
+        self.logdir.start()
         self.pub = mock.patch.object(ny, "publish")
         self.published = self.pub.start()
 
     def tearDown(self):
         self.home.stop()
+        self.logdir.stop()
         self.pub.stop()
 
     def run_hook(self, *entries, **extra):
@@ -78,9 +85,25 @@ class Hook(unittest.TestCase):
     def test_tool_turn_without_block_is_blocked_once(self):
         out = self.run_hook(user("go"), tool_use(), tool_result(), text("Done."))
         self.assertEqual(out["decision"], "block")
-        again = self.run_hook(user("go"), tool_use(), tool_result(), text("Done."),
-                              stop_hook_active=True)
+        again = self.run_hook(user("go"), tool_use(), tool_result(), text("Done."))
         self.assertIsNone(again)
+
+    def test_another_hooks_block_does_not_exempt_the_turn(self):
+        # claim-gate blocked first, so Claude Code reports stop_hook_active=True;
+        # this hook has not blocked this turn yet and must still enforce.
+        out = self.run_hook(user("go"), tool_use(), tool_result(), text("Done."),
+                            stop_hook_active=True)
+        self.assertEqual(out["decision"], "block")
+
+    def test_new_turn_is_enforced_again(self):
+        self.run_hook(user("go", "u1"), tool_use(), tool_result(), text("Done."))
+        out = self.run_hook(user("next", "u2"), tool_use(), tool_result(), text("Done."))
+        self.assertEqual(out["decision"], "block")
+
+    def test_every_run_is_logged(self):
+        self.run_hook(user("q"), text("An answer."))
+        rec = json.loads((self.tmp / "hook.log").read_text().splitlines()[-1])
+        self.assertEqual(rec["decision"], "pass_chat_turn")
 
     def test_chat_turn_without_block_passes(self):
         self.assertIsNone(self.run_hook(user("q"), text("An answer.")))

@@ -33,7 +33,10 @@ from pathlib import Path
 HOME = Path(os.environ.get("NEEDS_YOU_HOME", Path.home() / ".local/state/needs-you"))
 SESSIONS = HOME / "sessions"
 
-HEADER_RE = re.compile(r"^\s*(?:#+\s*)?\**\s*needs\s+you\s*(?:\*\*\s*:|:\s*\*\*|:)\s*(.*)$", re.I)
+HEADER_RE = re.compile(
+    r"^\s*(?:#+\s*)?\**\s*needs\s+you\s*(?:\*\*)?\s*(?:\([^)]{0,120}\))?\s*(?:\*\*\s*:|:\s*\*\*|:)\s*(.*)$",
+    re.I,
+)
 BULLET_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.*)$")
 STRETCH_RE = re.compile(r"\{\{([^{}|]*)\|([^{}]*)\}\}")
 NOTHING_RE = re.compile(r"^(nothing|none|n/a|—)(\W|$)", re.I)
@@ -76,13 +79,14 @@ def extract(reply: str) -> list[str] | None:
     return [i for i in items if not NOTHING_RE.match(i)]
 
 
-def turn_from_transcript(path: str) -> tuple[str, bool]:
-    """(final reply text, whether the current turn used tools) from a transcript JSONL."""
+def turn_from_transcript(path: str) -> tuple[str, bool, str]:
+    """(final reply, whether this turn used tools, id of the prompt that opened it)."""
     try:
         raw = Path(path).read_text(errors="replace").splitlines()
     except OSError:
-        return "", False
+        return "", False, ""
     entries = []
+    turn_id = ""
     for line in reversed(raw):
         try:
             e = json.loads(line)
@@ -96,6 +100,7 @@ def turn_from_transcript(path: str) -> tuple[str, bool]:
             ):
                 entries.append(e)
                 continue
+            turn_id = e.get("uuid") or e.get("timestamp") or ""
             break  # a real prompt: start of this turn
         if kind == "assistant":
             entries.append(e)
@@ -112,7 +117,7 @@ def turn_from_transcript(path: str) -> tuple[str, bool]:
                 texts = []  # only text after the last tool call is the reply
             elif c.get("type") == "text":
                 texts.append(c.get("text", ""))
-    return "\n".join(texts), used_tools
+    return "\n".join(texts), used_tools, turn_id
 
 
 def project_of(cwd: str) -> str:
@@ -127,6 +132,35 @@ def project_of(cwd: str) -> str:
         p = Path(common)
         return (p.parent if p.name == ".git" else p).name
     return Path(cwd).name or "unknown"
+
+
+def log(decision: str, data: dict, **extra) -> None:
+    """One line per hook run, so a miss can be told apart from a hook that never ran."""
+    try:
+        HOME.mkdir(parents=True, exist_ok=True)
+        rec = {"ts": time.time(), "decision": decision,
+               "session_id": data.get("session_id", ""), "cwd": data.get("cwd", ""), **extra}
+        with open(HOME / "hook.log", "a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except OSError:
+        pass
+
+
+def already_blocked(session_id: str, turn_id: str) -> bool:
+    """Block at most once per turn, by our own record.
+
+    stop_hook_active is NOT used: Claude Code sets it when ANY Stop hook blocked
+    earlier (claim-gate, idle-stop-check), which let the final reply skip this check.
+    """
+    marker = SESSIONS / f"{session_id}.blocked"
+    try:
+        if marker.read_text() == turn_id:
+            return True
+    except OSError:
+        pass
+    SESSIONS.mkdir(parents=True, exist_ok=True)
+    marker.write_text(turn_id)
+    return False
 
 
 def write_entry(entry: dict) -> None:
@@ -161,18 +195,25 @@ def summary_of(reply: str) -> str:
 
 def hook(data: dict) -> dict | None:
     if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
+        log("skip_headless", data)
         return None
     session_id = data.get("session_id") or ""
     if not session_id:
+        log("skip_no_session", data)
         return None
-    reply, used_tools = turn_from_transcript(data.get("transcript_path") or "")
+    reply, used_tools, turn_id = turn_from_transcript(data.get("transcript_path") or "")
     if data.get("last_assistant_message"):
         reply = data["last_assistant_message"]
     items = extract(reply)
     if items is None:
-        if used_tools and not data.get("stop_hook_active"):
-            return {"decision": "block", "reason": BLOCK_REASON}
-        return None
+        if not used_tools:
+            log("pass_chat_turn", data)
+            return None
+        if already_blocked(session_id, turn_id or reply[-200:]):
+            log("pass_already_blocked", data, tail=reply[-160:])
+            return None
+        log("block_missing", data, tail=reply[-160:])
+        return {"decision": "block", "reason": BLOCK_REASON}
     cwd = data.get("cwd") or os.getcwd()
     entry = {
         "session_id": session_id,
@@ -186,6 +227,7 @@ def hook(data: dict) -> dict | None:
     }
     write_entry(entry)
     publish(entry)
+    log("recorded", data, items=len(entry["items"]))
     return None
 
 
