@@ -11,6 +11,9 @@ that reads the queue.
   needs_you.py [list]        Open items, grouped by project. --all includes acked.
   needs_you.py ack <n|all>   Mark entry n (from list) or every entry as handled.
   needs_you.py --json        Raw open entries.
+  needs_you.py name [slug]   Name this session (CLAUDE_CODE_SESSION_ID) with a short
+                             slug that phone, Slack and Orca show instead of a uuid.
+                             No slug: print the current name.
 
 State: one file per session under $NEEDS_YOU_HOME (default
 ~/.local/state/needs-you/sessions/). Latest turn per session wins, so a later
@@ -32,6 +35,8 @@ from pathlib import Path
 
 HOME = Path(os.environ.get("NEEDS_YOU_HOME", Path.home() / ".local/state/needs-you"))
 SESSIONS = HOME / "sessions"
+NAMES = HOME / "names"
+SLUG_MAX = 32
 
 HEADER_RE = re.compile(
     r"^\s*(?:#+\s*)?\**\s*needs\s+you\s*(?:\*\*)?\s*(?:\([^)]{0,120}\))?\s*(?:\*\*\s*:|:\s*\*\*|:)\s*(.*)$",
@@ -163,6 +168,30 @@ def already_blocked(session_id: str, turn_id: str) -> bool:
     return False
 
 
+def slugify(text: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return s[:SLUG_MAX].rstrip("-")
+
+
+def default_name(cwd: str) -> str:
+    """A worktree's directory name is already a chosen label; agent-<hex> ones are not."""
+    p = Path(cwd)
+    if "worktrees" not in p.parts[:-1]:
+        return ""
+    base = p.name
+    if re.fullmatch(r"agent-[0-9a-f]{6,}", base):
+        return ""
+    return slugify(base)
+
+
+def name_of(session_id: str, cwd: str) -> str:
+    try:
+        chosen = (NAMES / session_id).read_text().strip()
+    except OSError:
+        chosen = ""
+    return chosen or default_name(cwd)
+
+
 def write_entry(entry: dict) -> None:
     SESSIONS.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=SESSIONS, suffix=".tmp")
@@ -173,6 +202,8 @@ def write_entry(entry: dict) -> None:
 
 def publish(entry: dict) -> None:
     payload = {k: entry[k] for k in ("session_id", "project", "cwd", "items", "summary", "orca_terminal")}
+    if entry.get("name"):
+        payload["name"] = entry["name"]
     try:
         subprocess.Popen(
             ["timeout", "2", "nervous", "publish", "agent.attention.v1", json.dumps(payload)],
@@ -222,6 +253,7 @@ def hook(data: dict) -> dict | None:
         "items": items[:20],
         "summary": summary_of(reply),
         "orca_terminal": os.environ.get("ORCA_TERMINAL_HANDLE", ""),
+        "name": name_of(session_id, cwd),
         "ts": time.time(),
         "acked": False,
     }
@@ -258,7 +290,7 @@ def cmd_list(include_acked: bool) -> int:
         return 0
     for n, e in enumerate(entries, 1):
         mark = " (acked)" if e.get("acked") else ""
-        print(f"[{n}] {e['project']}  {ago(e['ts'])} ago  {e['session_id'][:8]}{mark}")
+        print(f"[{n}] {e['project']}  {ago(e['ts'])} ago  {e.get('name') or e['session_id'][:8]}{mark}")
         for item in e["items"]:
             print(f"    - {item}")
     return 0
@@ -280,6 +312,40 @@ def cmd_ack(which: str) -> int:
     return 0
 
 
+def cmd_name(slug: str | None) -> int:
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if not session_id:
+        print("needs-you name: CLAUDE_CODE_SESSION_ID is unset; run it from a Claude Code session",
+              file=sys.stderr)
+        return 1
+    cwd = os.getcwd()
+    if slug is None:
+        print(name_of(session_id, cwd) or "(unnamed)")
+        return 0
+    name = slugify(slug)
+    if len(name) < 2:
+        print(f"needs-you name: {slug!r} has no usable slug (a-z, 0-9, -)", file=sys.stderr)
+        return 1
+    NAMES.mkdir(parents=True, exist_ok=True)
+    (NAMES / session_id).write_text(name)
+    handle = os.environ.get("ORCA_TERMINAL_HANDLE", "")
+    if handle:
+        try:
+            subprocess.run(["timeout", "5", "orca", "terminal", "rename", "--terminal", handle,
+                            "--title", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
+    try:  # re-publish the current asks so phone and Slack relabel now, not next turn
+        entry = json.loads((SESSIONS / f"{session_id}.json").read_text())
+        entry["name"] = name
+        write_entry(entry)
+        publish(entry)
+    except (OSError, ValueError):
+        pass
+    print(name)
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if argv[:1] == ["hook"]:
         if os.environ.get("NEEDS_YOU_DISABLE") == "1":
@@ -294,6 +360,8 @@ def main(argv: list[str]) -> int:
         return 0
     if argv[:1] == ["ack"] and len(argv) == 2:
         return cmd_ack(argv[1])
+    if argv[:1] == ["name"] and len(argv) <= 2:
+        return cmd_name(argv[1] if len(argv) == 2 else None)
     if "--json" in argv:
         print(json.dumps(load("--all" in argv), indent=1))
         return 0
