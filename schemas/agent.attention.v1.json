@@ -4,19 +4,79 @@
   "title": "agent.attention v1",
   "description": "What an agent session needs from the human operator, as of its latest turn. Published by the needs-you Stop hook (adapters/needs-you/) at the end of every Claude Code turn that carries a 'Needs you' block. Latest event per session_id wins: an event with empty items clears that session's earlier asks. Consumers (dashboards, deer-flow) render one cross-project queue from it so the operator does not have to read full turn output.",
   "type": "object",
-  "required": ["session_id", "project", "items"],
+  "required": [
+    "session_id",
+    "project",
+    "items"
+  ],
   "properties": {
-    "session_id": { "type": "string", "description": "Claude Code session id; the supersede key" },
-    "project":    { "type": "string", "description": "Project name (git common-dir parent; worktrees resolve to their parent repo)" },
-    "cwd":        { "type": "string", "description": "Session working directory at turn end" },
+    "session_id": {
+      "type": "string",
+      "description": "Claude Code session id; the supersede key"
+    },
+    "project": {
+      "type": "string",
+      "description": "Project name (git common-dir parent; worktrees resolve to their parent repo)"
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Session working directory at turn end"
+    },
     "items": {
       "type": "array",
       "description": "Decisions or actions the operator must take, one line each. Empty = this session needs nothing.",
       "maxItems": 20,
-      "items": { "type": "string", "maxLength": 500 }
+      "items": {
+        "type": "string",
+        "maxLength": 500
+      }
     },
-    "summary":       { "type": "string", "maxLength": 300, "description": "First prose line of the turn's reply; the phone's one-line 'done' text" },
-    "name":          { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,31}$", "description": "Short session slug chosen by the agent (`needs-you name <slug>`) or defaulted from the worktree directory; shown instead of the session uuid" },
-    "orca_terminal": { "type": "string", "description": "Orca terminal handle (ORCA_TERMINAL_HANDLE) when the session runs in Orca; empty otherwise. Lets hearth deep-link and route answers." }
+    "summary": {
+      "type": "string",
+      "maxLength": 300,
+      "description": "First prose line of the turn's reply; the phone's one-line 'done' text"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
+      "description": "Short session slug chosen by the agent (`needs-you name <slug>`) or defaulted from the worktree directory; shown instead of the session uuid"
+    },
+    "orca_terminal": {
+      "type": "string",
+      "description": "Orca terminal handle (ORCA_TERMINAL_HANDLE) when the session runs in Orca; empty otherwise. Lets hearth deep-link and route answers."
+    },
+    "cache": {
+      "type": "object",
+      "description": "Prompt-cache state after the session's last model call (from its transcript usage). A reply after warm_until re-reads context_tokens uncached.",
+      "properties": {
+        "last_call_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ttl_s": {
+          "type": "integer",
+          "enum": [
+            300,
+            3600
+          ]
+        },
+        "warm_until": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "context_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "warm_until",
+        "ttl_s",
+        "context_tokens"
+      ]
+    }
   }
 }
