@@ -164,7 +164,7 @@ def _normalize_path(file_path: str) -> str:
     """
     norm = os.path.normpath(file_path)
     # 1. Worktree paths: strip .../.claude/worktrees/<slug>/ (or .worktrees/<slug>/).
-    m = re.search(r"(?:\.claude/worktrees|\.worktrees)/[^/]+/(.+)$", norm)
+    m = re.search(r"(?:\.claude/worktrees|\.worktrees|/data2/worktrees/[^/]+)/[^/]+/(.+)$", norm)
     if m:
         return m.group(1)
     # 2. Direct repo paths: strip the .../projects/<proj>/ prefix so a directly
