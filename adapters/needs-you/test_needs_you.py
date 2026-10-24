@@ -194,5 +194,39 @@ class Schema(unittest.TestCase):
              "summary": "done", "orca_terminal": "term_1", "name": "slack-live"})
 
 
+
+class CacheFromTranscript(unittest.TestCase):
+    def _write(self, rows):
+        f = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+        f.close()
+        self.addCleanup(os.unlink, f.name)
+        return f.name
+
+    @staticmethod
+    def _call(ts, w1h=0, w5m=0, read=0):
+        return {"type": "assistant", "timestamp": ts, "message": {"model": "m", "usage": {
+            "input_tokens": 2, "cache_read_input_tokens": read,
+            "cache_creation_input_tokens": w1h + w5m,
+            "cache_creation": {"ephemeral_1h_input_tokens": w1h, "ephemeral_5m_input_tokens": w5m}}}}
+
+    def test_one_hour_write_sets_warm_until_and_context(self):
+        p = self._write([self._call("2026-10-24T16:00:00.000Z", w1h=500, read=100000)])
+        c = ny.cache_from_transcript(p)
+        self.assertEqual(c["ttl_s"], 3600)
+        self.assertEqual(c["warm_until"], "2026-10-24T17:00:00Z")
+        self.assertEqual(c["context_tokens"], 100502)
+
+    def test_read_only_call_inherits_earlier_write_ttl(self):
+        p = self._write([self._call("2026-10-24T15:00:00Z", w5m=900),
+                         {"type": "user", "message": {"content": "hi"}},
+                         self._call("2026-10-24T15:02:00Z", read=5000)])
+        c = ny.cache_from_transcript(p)
+        self.assertEqual((c["ttl_s"], c["warm_until"]), (300, "2026-10-24T15:07:00Z"))
+
+    def test_missing_transcript_gives_none(self):
+        self.assertIsNone(ny.cache_from_transcript("/nonexistent.jsonl"))
+
 if __name__ == "__main__":
     unittest.main()

@@ -34,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 HOME = Path(os.environ.get("NEEDS_YOU_HOME", Path.home() / ".local/state/needs-you"))
@@ -89,6 +90,63 @@ def extract(reply: str) -> list[str] | None:
         elif line.strip():
             break
     return [i for i in items if not NOTHING_RE.match(i)]
+
+
+CACHE_TAIL_BYTES = 1 << 20
+
+
+def cache_from_transcript(path: str) -> dict | None:
+    """Prompt-cache state after the last model call: when it goes cold, and how much
+    context a reply after that point re-reads at full price.
+
+    TTL comes from the call's own cache writes (ephemeral_1h vs ephemeral_5m);
+    a call that only read the cache inherits the TTL of the nearest earlier write.
+    """
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - CACHE_TAIL_BYTES))
+            raw = f.read().decode(errors="replace").splitlines()
+    except OSError:
+        return None
+    last = None
+    ttl = 0
+    for line in reversed(raw):
+        if '"usage"' not in line:
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        usage = (e.get("message") or {}).get("usage")
+        if e.get("type") != "assistant" or not isinstance(usage, dict):
+            continue
+        if last is None:
+            last = (e, usage)
+        writes = usage.get("cache_creation") or {}
+        if writes.get("ephemeral_1h_input_tokens"):
+            ttl = 3600
+        elif writes.get("ephemeral_5m_input_tokens"):
+            ttl = 300
+        if ttl:
+            break
+    if last is None:
+        return None
+    e, usage = last
+    try:
+        at = datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")).timestamp()
+    except (KeyError, ValueError, AttributeError):
+        return None
+    ttl = ttl or 300
+    context = sum(int(usage.get(k) or 0) for k in
+                  ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+    return {
+        "last_call_at": datetime.fromtimestamp(at, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "ttl_s": ttl,
+        "warm_until": datetime.fromtimestamp(at + ttl, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "context_tokens": context,
+        "model": (e.get("message") or {}).get("model") or "",
+    }
 
 
 def turn_from_transcript(path: str) -> tuple[str, bool, str]:
@@ -241,6 +299,8 @@ def publish(entry: dict) -> None:
     payload = {k: entry[k] for k in ("session_id", "project", "cwd", "items", "summary", "orca_terminal")}
     if entry.get("name"):
         payload["name"] = entry["name"]
+    if entry.get("cache"):
+        payload["cache"] = entry["cache"]
     try:
         subprocess.Popen(
             ["timeout", "2", "nervous", "publish", "agent.attention.v1", json.dumps(payload)],
@@ -292,6 +352,7 @@ def hook(data: dict) -> dict | None:
         "summary": summary_of(reply),
         "orca_terminal": os.environ.get("ORCA_TERMINAL_HANDLE", ""),
         "name": name_of(session_id, cwd),
+        "cache": cache_from_transcript(data.get("transcript_path") or ""),
         "ts": time.time(),
         "acked": False,
     }
