@@ -33,6 +33,7 @@ import argparse
 import json
 import re
 import sqlite3
+import subprocess
 import sys
 import tomllib
 from datetime import datetime, timedelta, timezone
@@ -104,20 +105,53 @@ def failure_patterns(gdir: Path) -> list[dict]:
 
 
 def guidance_changes(gdir: Path, since: str) -> list[dict]:
+    """One entry per source that changed since `since`, in first-change order.
+
+    A source that changed on several nights is one finding with every diff, so a
+    busy docs week does not bury the judge in repeats of the same page."""
     p = gdir / "changes.jsonl"
     if not p.exists():
         return []
-    out = []
+    by_id: dict[str, dict] = {}
     for line in p.read_text().splitlines():
         try:
             rec = json.loads(line)
         except ValueError:
             continue
-        if rec.get("ts", "") >= since:
-            out.append({k: rec.get(k) for k in ("ts", "id", "added_lines", "removed_lines",
-                                                "diff", "pages_added", "pages_removed")
-                        if rec.get(k) is not None})
-    return out
+        if rec.get("ts", "") < since or not rec.get("id"):
+            continue
+        c = by_id.setdefault(rec["id"], {"id": rec["id"], "first_ts": rec["ts"], "ts": rec["ts"],
+                                         "events": 0, "added_lines": 0, "removed_lines": 0,
+                                         "diffs": [], "pages_added": [], "pages_removed": []})
+        c["ts"] = max(c["ts"], rec["ts"])
+        c["events"] += 1
+        c["added_lines"] += rec.get("added_lines") or 0
+        c["removed_lines"] += rec.get("removed_lines") or 0
+        if rec.get("diff"):
+            c["diffs"].append(rec["diff"])
+        c["pages_added"] += rec.get("pages_added") or []
+        c["pages_removed"] += rec.get("pages_removed") or []
+    return list(by_id.values())
+
+
+def uncommitted_steering(repo: Path, now: datetime) -> dict | None:
+    """Dirty files in a steering repo and how long the oldest has waited.
+
+    Uncommitted rulings load into every session but have no history, so a cut
+    that says "recoverable from git" is not, and the commit-time rule-change
+    event never fires."""
+    try:
+        out = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
+                             capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0 or not out.stdout.strip():
+        return None
+    files = [l[3:].strip() for l in out.stdout.splitlines() if len(l) > 3]
+    mtimes = [(repo / f).stat().st_mtime for f in files if (repo / f).exists()]
+    oldest = min(mtimes) if mtimes else now.timestamp()
+    return {"path": str(repo), "files": sorted(files),
+            "oldest_days": round((now.timestamp() - oldest) / 86400, 1)}
 
 
 def source_health(gdir: Path) -> list[dict]:
@@ -412,7 +446,12 @@ def build(days: int = 7, gdir: Path = GUIDANCE_DIR, claude_home: Path = CLAUDE_H
     changes = guidance_changes(gdir, last_audit or since)
     for c in changes:
         findings.append({"rule": "guidance_changed", "source": c["id"], "ts": c["ts"],
-                         "diff": c.get("diff"), "pages_added": len(c.get("pages_added", []))})
+                         "events": c["events"], "diffs": c["diffs"],
+                         "pages_added": len(c["pages_added"])})
+
+    dirty = uncommitted_steering(claude_home / "memory-global", now)
+    if dirty:
+        findings.append({"rule": "steering_uncommitted", **dirty})
 
     global_chain = chains[0] if roots else None
     # What the workflow hands to `/doctor prompt-audit`: the global chain, every
@@ -456,6 +495,10 @@ def to_markdown(rep: dict) -> str:
         where = _short(f.get("path", "")) or f.get("source", "") or f.get("pattern", "")
         lim = f" > {f['limit']} ({f['source']}:{f['source_line']})" if "limit" in f else ""
         val = f" = {f['value']}" if "value" in f else ""
+        if f["rule"] == "guidance_changed":
+            val = f" ({f['events']} change{'s' if f['events'] != 1 else ''})"
+        elif f["rule"] == "steering_uncommitted":
+            val = f" = {len(f['files'])} uncommitted files, oldest {f['oldest_days']}d"
         L.append(f"- `{f['rule']}` {where}{val}{lim}")
     g = rep.get("global_chain")
     if g:
