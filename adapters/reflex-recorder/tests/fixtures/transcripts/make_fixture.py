@@ -61,7 +61,7 @@ KEEP = {
 }
 KEEP_LOWER = {k.lower() for k in KEEP} | set(keyword.kwlist) | set(getattr(keyword, "softkwlist", []))
 
-_IDENT = re.compile(r"(?<![A-Za-z0-9_.\\])[A-Za-z_][A-Za-z0-9_]*")
+_IDENT = re.compile(r"(?<![A-Za-z0-9_\\])[A-Za-z_][A-Za-z0-9_]*")
 
 
 class Redactor:
@@ -81,7 +81,7 @@ class Redactor:
         tok = m.group(0)
         start = m.start()
         s = m.string
-        if start >= 1 and s[start - 1] == "-":          # a flag: --ignored, -p
+        if re.search(r"(?:^|[\s'\"])--?$", s[max(0, start - 3):start]):  # a flag: --ignored, -p
             return tok
         if tok.lower() in KEEP_LOWER:
             return tok
