@@ -174,6 +174,25 @@ class Hook(unittest.TestCase):
         rec = json.loads((self.tmp / "bindings" / "s1.json").read_text())
         self.assertEqual((rec["orca_terminal"], rec["pid"]), ("term_9", 42))
 
+    def test_turn_state_follows_the_hooks(self):
+        env = {"ORCA_TERMINAL_HANDLE": "term_9", "TMUX_PANE": "", "CLAUDE_PID": "42",
+               "CLAUDE_CODE_ENTRYPOINT": "cli"}
+        path = self.tmp / "bindings" / "s1.json"
+        stdin = json.dumps({"session_id": "s1", "cwd": "/w", "transcript_path": "/t.jsonl"})
+        with mock.patch.dict(os.environ, env), mock.patch.object(sys, "stdin", io.StringIO(stdin)):
+            ny.main(["turn", "busy"])
+        rec = json.loads(path.read_text())
+        self.assertEqual((rec["turn"], rec["transcript"]), ("busy", "/t.jsonl"))
+        with mock.patch.dict(os.environ, env):
+            # a Stop this hook blocks continues the turn: still busy
+            self.run_hook(user("go"), tool_use(), tool_result(), text("Done."))
+            self.assertEqual(json.loads(path.read_text())["turn"], "busy")
+            self.run_hook(user("q"), text("An answer."))
+        rec = json.loads(path.read_text())
+        self.assertEqual(rec["turn"], "idle")
+        self.assertTrue(rec["transcript"].endswith(".jsonl"))
+        self.assertGreater(rec["turn_ts"], 0)
+
     def test_no_terminal_no_binding(self):
         with mock.patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "", "TMUX_PANE": ""}):
             ny.bind("s2", "/x")
