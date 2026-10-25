@@ -66,9 +66,33 @@ reflex thrash      [--project P] [--since TS] [--days N] [--json]
 reflex prevalence  [--project P] [--days N] [--json]
 reflex issues      [--project P] [--since TS] [--days N] [--json]
 reflex stats       [--project P] [--since TS] [--days N] [--json]
+reflex time        [--project P] [--days N] [--top K] [--min-wall MIN] [--transcript PATH ...] [--json]
 reflex sql  "<SELECT ...>"  [--json]
 reflex schema      [--json]
 ```
+
+`reflex time` answers "what is taking each agent so long". For every run it
+reads the run's transcript, which the bus does not carry, and splits wall time
+into **tool** time (the union of tool-call intervals) and **model** time (wall
+minus tool: generation, thinking, API latency). It splits tool time by the
+project's command taxonomy and lists the slowest calls.
+`--transcript` analyses a file directly, with no run-store. Token and per-lane
+cost views live in `token_report.py` (`--lanes [--project P]` prints a local
+per-subagent table; the digest carries a sanitized one).
+
+### Transcript-reading detectors
+
+`transcript_steps.py` turns a transcript into ordered tool calls (input, bounded
+output, start/end) and resolves a run to its transcript (live root, then the
+mirror). Detectors built on it, all rung `inform`:
+
+| detector | fires when | lead's response |
+|---|---|---|
+| `param_sweep_thrash` | >= 15 reruns of one harness with only numeric edits/args between them over >= 45 min and no passing test/gate, OR >= 10 foreground calls > 60 s that run a harness serially (loop/chain) totalling >= 20 min | stop the lane, checkpoint, script the sweep (parallel/detached) and pin the value with a test |
+| `gate_bound_loosened` | a test/gate bound widened after a failure of that gate in the same run (quotes the edit and the failure) | ask for the bound's derivation; accuses nothing |
+| `foreground_wait` | >= 4 min in foreground sleep-poll loops / long sleeps | run the job in the foreground with a timeout, or in the background and do other work |
+
+Fixtures are real lanes, trimmed and redacted (`tests/fixtures/transcripts/make_fixture.py`).
 
 ### Copy-paste examples
 
