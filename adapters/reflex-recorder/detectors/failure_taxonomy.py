@@ -60,6 +60,8 @@ planning_failure (CONFIRMED tier):
     baseline — a planning precondition was skipped)
   - inherited_rationalization hit (sibling cohort converged on one seeded
     bad outcome — scope/plan drift propagated from the dispatch)
+  - param_sweep_thrash hit        (long stretch of hand reruns of one harness
+    with only numeric edits between them and no passing gate)
 
 planning_failure_unconfirmed_cadence (UNCONFIRMED tier — 2026-08-28 split,
 see "Confidence tiers" below):
@@ -166,7 +168,8 @@ _CONTEXT_DETECTORS = frozenset({
     "kb_recall_gap",
 })
 _VERIFICATION_DETECTORS = frozenset({"unverified_completion", "edit_build_fail_revert"})
-_PLANNING_DETECTORS = frozenset({"red_baseline_dispatch", "inherited_rationalization"})
+_PLANNING_DETECTORS = frozenset({"red_baseline_dispatch", "inherited_rationalization",
+                                 "param_sweep_thrash"})
 
 # Outcome vocabulary (label.py is the source of truth).
 _FAILURE_OUTCOMES_PLANNING = frozenset({"thrashed", "abandoned"})
