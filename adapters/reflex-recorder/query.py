@@ -901,6 +901,63 @@ def cmd_stats(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
     print(_fmt_table(display))
 
 
+# ── time (where each run's wall time went) ────────────────────────────────────
+
+def _fmt_min(seconds: float) -> str:
+    return f"{seconds / 60:.1f}"
+
+
+def cmd_time(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
+    """Per-run wall time split into model vs tool time, tool time by class, and
+    the slowest calls. Reads transcripts (the bus has no per-call durations)."""
+    import run_time
+    from adapter_api import load_adapters, taxonomy_for
+
+    if args.transcript:
+        adapters = load_adapters()
+        rows = []
+        for path in args.transcript:
+            r = run_time.transcript_time(path, taxonomy_for(args.project or "", adapters),
+                                         top_k=args.top)
+            r.update({"run_id": "-", "project": args.project or "-",
+                      "agent": Path(path).stem, "transcript": path})
+            rows.append(r)
+    else:
+        rows = run_time.run_times(conn, project=args.project,
+                                  since_ts=_cutoff(args.since, args.days), top_k=args.top)
+    rows = [r for r in rows if r["wall_s"] >= args.min_wall * 60]
+    rows.sort(key=lambda r: -r["wall_s"])
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return
+    if not rows:
+        print("No runs with a resolvable transcript in the window.")
+        return
+    tot_wall = sum(r["wall_s"] for r in rows)
+    tot_tool = sum(r["tool_s"] for r in rows)
+    missing = sum(1 for r in rows if not r.get("transcript"))
+    print(f"{len(rows)} run(s): wall {_fmt_min(tot_wall)} min, tool {_fmt_min(tot_tool)} min, "
+          f"model {_fmt_min(tot_wall - tot_tool)} min"
+          + (f"  ({missing} without a transcript: listed with zeros)" if missing else ""))
+    display = [{
+        "run_id": r["run_id"][:14],
+        "agent": r["agent"][:18],
+        "wall_min": _fmt_min(r["wall_s"]),
+        "model_min": _fmt_min(r["model_s"]),
+        "tool_min": _fmt_min(r["tool_s"]),
+        "calls": r["calls"],
+        "tool_by_class_min": " ".join(f"{k}={_fmt_min(v['seconds'])}"
+                                      for k, v in list(r["by_class"].items())[:4]),
+    } for r in rows]
+    print(_fmt_table(display))
+    for r in rows:
+        if not r["top"]:
+            continue
+        print(f"\n{r['run_id'][:14]} {r['agent'][:18]}: slowest calls")
+        for t in r["top"]:
+            print(f"  {t['seconds']:7.1f}s  {t['class']:<10} {t['what']}")
+
+
 # ── skills / dispatch (features folded by skill_usage.py) ─────────────────────
 
 GOOD_OUTCOMES = {"clean", "landed"}
@@ -1317,6 +1374,17 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(sp_stats)
 
     # sql — read-only SQL passthrough
+    sp_time = sub.add_parser(
+        "time",
+        help="Per-run wall time: model vs tool, tool time by command class, slowest calls",
+    )
+    _add_common(sp_time)
+    sp_time.add_argument("--top", "-k", type=int, default=3, help="Slowest calls per run (default 3)")
+    sp_time.add_argument("--min-wall", type=float, default=1.0,
+                         help="Hide runs shorter than this many minutes (default 1)")
+    sp_time.add_argument("--transcript", action="append", metavar="PATH",
+                         help="Analyse a transcript file directly (repeatable; no run-store needed)")
+
     sp_sql = sub.add_parser(
         "sql",
         help="Execute a read-only SELECT against the run-store (agent SQL passthrough)",
@@ -1379,6 +1447,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             "prevalence": cmd_prevalence,
             "issues": cmd_issues,
             "stats": cmd_stats,
+            "time": cmd_time,
             "sql": cmd_sql,
             "schema": cmd_schema,
             "skills": cmd_skills,

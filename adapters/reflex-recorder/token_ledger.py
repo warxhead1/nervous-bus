@@ -23,7 +23,14 @@ Each file is read from its last committed byte offset, complete lines only.
 A file shorter than its recorded offset (mirror lagging live) is skipped until
 it catches up. Lines are pre-filtered on raw bytes before json parsing.
 
+Tool calls also carry their result timestamp, duration and a TIME CLASS
+(wait | loop | gate | test | build | commit | git | read | other for shell
+commands, the tool name otherwise), so token_report can say where a lane's
+wall time went. Rows ingested before those columns existed are filled by
+`--backfill-tool-times` (re-reads only the transcripts that have such rows).
+
     token_ledger.py [--db PATH] [--max-files N] [--json]
+    token_ledger.py --backfill-tool-times [--project P]
 """
 from __future__ import annotations
 
@@ -148,6 +155,47 @@ def classify_command(cmd: str) -> str:
     return "other"
 
 
+# Columns added after the first release. Added by ALTER on connect(), never in
+# SCHEMA's CREATE, so an older reader of the same tokens.db keeps working.
+TOOL_CALL_COLUMNS = (("result_ts", "TEXT"), ("duration_s", "REAL"), ("time_class", "TEXT"))
+
+_GATE_RE = re.compile(
+    r"(?:^|[\s/;&|])(?:check|gate|ci|preflight)(?:[_-][\w-]+)?\.sh\b|\bmake\s+(?:check|gate|ci)\b")
+_READ_PROGS = {"cat", "head", "tail", "grep", "rg", "ls", "find", "wc", "sed", "awk", "jq",
+               "stat", "diff", "tree", "file", "du", "df", "less", "nl", "sort", "uniq", "cut"}
+
+
+def time_class(tool: str, raw_cmd: Optional[str] = None) -> str:
+    """Where a tool call's time goes. Shell commands: a sleep-polling `wait`, a
+    `loop` that runs a program serially, a `gate` script, then classify_command's
+    test / build / commit, then `git`, `read` (inspection commands), `other`.
+    Any other tool: its name."""
+    if raw_cmd is None:
+        return tool
+    from transcript_steps import is_poll_wait, strip_heredocs
+    from detectors.param_sweep_thrash import _LOOP_RE, _program_words, harness_runs, shell_segments
+    if is_poll_wait(raw_cmd):
+        return "wait"
+    if _LOOP_RE.search(strip_heredocs(raw_cmd)) and harness_runs(raw_cmd):
+        return "loop"
+    if _GATE_RE.search(raw_cmd):
+        return "gate"
+    c = classify_command(raw_cmd)
+    if c != "other":
+        return c
+    for seg in shell_segments(strip_heredocs(raw_cmd)):
+        words = _program_words(seg)
+        if not words or words[0] in ("cd", "export", "set", "echo", "printf", "true", "mkdir"):
+            continue
+        prog = os.path.basename(words[0])
+        if prog == "git":
+            return "git"
+        if prog in _READ_PROGS:
+            return "read"
+        return "other"
+    return "other"
+
+
 def project_of(cwd: Optional[str]) -> Optional[str]:
     if not cwd:
         return None
@@ -202,6 +250,14 @@ def _content_len(content) -> int:
     if isinstance(content, list):
         return sum(len(c.get("text", "")) if isinstance(c, dict) else len(str(c)) for c in content)
     return len(str(content or ""))
+
+
+# result size, result timestamp, and the call's duration (NULL if a stamp is bad)
+_RESULT_SQL = ("UPDATE tool_calls SET result_chars=?, result_ts=?,"
+               " duration_s=(julianday(?) - julianday(ts)) * 86400.0 WHERE id=?")
+_BACKFILL_RESULT_SQL = ("UPDATE tool_calls SET result_chars=COALESCE(result_chars, ?), result_ts=?,"
+                        " duration_s=(julianday(?) - julianday(ts)) * 86400.0"
+                        " WHERE id=? AND result_ts IS NULL")
 
 
 class _Session:
@@ -278,7 +334,7 @@ def ingest_file(conn: sqlite3.Connection, key: str, source: str, path: Path) -> 
             for tu in tool_uses:
                 name = tu.get("name") or "?"
                 inp = tu.get("input") or {}
-                cmd = cmd_class = cmd_hash = None
+                cmd = cmd_class = cmd_hash = raw = None
                 if name == "Bash":
                     raw = str(inp.get("command") or "")
                     cmd, cmd_class = raw[:300], classify_command(raw)
@@ -286,9 +342,9 @@ def ingest_file(conn: sqlite3.Connection, key: str, source: str, path: Path) -> 
                 fp = inp.get("file_path") or inp.get("notebook_path") or inp.get("path")
                 conn.execute(
                     "INSERT OR IGNORE INTO tool_calls (id, session_key, ts, tool, cmd_class, cmd,"
-                    " cmd_hash, file_path) VALUES (?,?,?,?,?,?,?,?)",
+                    " cmd_hash, file_path, time_class) VALUES (?,?,?,?,?,?,?,?,?)",
                     (tu.get("id") or f"{key}:{ts}:{name}", key, ts, name, cmd_class, cmd,
-                     cmd_hash, fp if isinstance(fp, str) else None))
+                     cmd_hash, fp if isinstance(fp, str) else None, time_class(name, raw)))
             if not usage or not mid:
                 continue
             rkey = f"{key}#{mid}"
@@ -316,11 +372,13 @@ def ingest_file(conn: sqlite3.Connection, key: str, source: str, path: Path) -> 
                 added += 1
             else:
                 st.seq -= 1
-        elif is_result and isinstance(content, list):
+        elif is_result and typ == "user" and isinstance(content, list):
+            # `api-request-blob` records replay tool results with no timestamp;
+            # only the real `user` record dates (and sizes) the result.
             for c in content:
                 if isinstance(c, dict) and c.get("type") == "tool_result":
-                    conn.execute("UPDATE tool_calls SET result_chars=? WHERE id=?",
-                                 (_content_len(c.get("content")), c.get("tool_use_id")))
+                    conn.execute(_RESULT_SQL, (_content_len(c.get("content")), ts or None,
+                                               ts or None, c.get("tool_use_id")))
 
     conn.execute(
         "INSERT INTO sessions (key, source, project, session_id, agent_id, agent_type, agent_model,"
@@ -366,9 +424,9 @@ def _tool_row(conn, key, ts, call_id, name, raw_cmd, file_path) -> None:
         cmd_hash = hashlib.sha1(raw_cmd.encode()).hexdigest()[:16]
     conn.execute(
         "INSERT OR IGNORE INTO tool_calls (id, session_key, ts, tool, cmd_class, cmd, cmd_hash,"
-        " file_path) VALUES (?,?,?,?,?,?,?,?)",
+        " file_path, time_class) VALUES (?,?,?,?,?,?,?,?,?)",
         (call_id or f"{key}:{ts}:{name}", key, ts, name, cmd_class, cmd, cmd_hash,
-         file_path if isinstance(file_path, str) else None))
+         file_path if isinstance(file_path, str) else None, time_class(name, raw_cmd)))
 
 
 def ingest_codex(conn: sqlite3.Connection, key: str, path: Path) -> int:
@@ -616,7 +674,62 @@ def connect(db: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db), timeout=60)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    have = {r[1] for r in conn.execute("PRAGMA table_info(tool_calls)")}
+    for col, typ in TOOL_CALL_COLUMNS:
+        if col not in have:
+            conn.execute(f"ALTER TABLE tool_calls ADD COLUMN {col} {typ}")
+    conn.commit()
     return conn
+
+
+def backfill_tool_times(conn: sqlite3.Connection, files: dict[str, tuple[str, Path]],
+                        project: Optional[str] = None) -> dict:
+    """Fill result_ts / duration_s / time_class on rows ingested before those
+    columns existed. Re-reads only claude/mmx transcripts that hold such rows;
+    never inserts, never moves a file offset."""
+    sql = ("SELECT DISTINCT t.session_key FROM tool_calls t JOIN sessions s ON s.key = t.session_key"
+           " WHERE s.source IN ('claude', 'mmx') AND (t.time_class IS NULL OR t.result_ts IS NULL)")
+    params: tuple = ()
+    if project:
+        sql += " AND s.project = ?"
+        params = (project,)
+    keys = [r[0] for r in conn.execute(sql, params)]
+    stats = {"sessions": len(keys), "files_read": 0, "missing": 0}
+    for key in keys:
+        hit = files.get(key)
+        if hit is None:
+            stats["missing"] += 1
+            continue
+        try:
+            fh = open(hit[1], "rb")
+        except OSError:
+            stats["missing"] += 1
+            continue
+        with fh:
+            for line in fh:
+                if not (b'"tool_use"' in line or b'"tool_result"' in line):
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                ts = d.get("timestamp") or None
+                content = (d.get("message") or {}).get("content")
+                for c in content if isinstance(content, list) else []:
+                    if not isinstance(c, dict):
+                        continue
+                    if c.get("type") == "tool_use":
+                        raw = (str((c.get("input") or {}).get("command") or "")
+                               if c.get("name") == "Bash" else None)
+                        conn.execute(
+                            "UPDATE tool_calls SET time_class=? WHERE id=? AND time_class IS NULL",
+                            (time_class(c.get("name") or "?", raw), c.get("id")))
+                    elif c.get("type") == "tool_result" and ts:
+                        conn.execute(_BACKFILL_RESULT_SQL, (_content_len(c.get("content")), ts, ts,
+                                                            c.get("tool_use_id")))
+        conn.commit()
+        stats["files_read"] += 1
+    return stats
 
 
 def run(db: Path = DEFAULT_DB, roots=None, max_files: Optional[int] = None,
@@ -670,7 +783,16 @@ def main() -> int:
     ap.add_argument("--db", type=Path, default=DEFAULT_DB)
     ap.add_argument("--max-files", type=int)
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--backfill-tool-times", action="store_true",
+                    help="fill result_ts/duration_s/time_class on rows ingested before them")
+    ap.add_argument("--project", help="limit --backfill-tool-times to one project")
     a = ap.parse_args()
+    if a.backfill_tool_times:
+        conn = connect(a.db)
+        stats = backfill_tool_times(conn, discover(ROOTS), a.project)
+        conn.close()
+        print(json.dumps(stats) if a.json else stats)
+        return 0
     stats = run(a.db, max_files=a.max_files)
     print(json.dumps(stats) if a.json else stats)
     return 1 if stats["errors"] else 0

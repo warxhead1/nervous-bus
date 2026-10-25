@@ -13,7 +13,16 @@ names, agent types, tool names, the first word pair of test commands
 (CLAUDE.md / memory). Never prompt text, tool output, full commands, or the
 paths of files agents read.
 
+Two time sections sit beside the token candidates. `lanes` gives one row per
+subagent: turns, wall, model vs tool time, turns before the first edit,
+context at the first and last request, and tool time by class. `tool_time`
+gives tool time by class (wait / loop / gate / test / build / ... from
+token_ledger.time_class). A lane is named by its agent id, type and model. Its
+dispatch DESCRIPTION is prompt text, so it is NOT in the digest; `--lanes`
+prints a local table that carries it.
+
     token_report.py [--db PATH] [--days 7] [--json | --md] [--out FILE]
+    token_report.py --lanes [--project P] [--days 7]      (local view, not sanitized)
 """
 from __future__ import annotations
 
@@ -24,9 +33,11 @@ import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
 from token_ledger import DEFAULT_DB  # noqa: E402
+from transcript_steps import parse_ts  # noqa: E402
 
 W_IN, W_READ, W_5M, W_1H, W_OUT = 1.0, 0.1, 1.25, 2.0, 5.0
 IET = (f"(input*{W_IN} + cache_read*{W_READ} + cache_5m*{W_5M} + cache_1h*{W_1H}"
@@ -36,6 +47,8 @@ EDIT_TOOLS_SQL = ("'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch', 
 CHARS_PER_TOKEN = 4
 BIG_RESULT_CHARS = 20_000
 LONG_CTX = 100_000
+LONG_CALL_S = 60.0
+EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch", "replace", "write_file"}
 PROPOSALS = DEFAULT_DB.parent / "token-digest" / "proposals.jsonl"
 
 
@@ -59,6 +72,117 @@ def _cmd_head(cmd: str) -> str:
         if words and words[0] not in ("cd", "export", "set", "echo"):
             return " ".join(words[:2])[:40]
     return "?"
+
+
+def _has_tool_times(conn) -> bool:
+    return "duration_s" in {r[1] for r in conn.execute("PRAGMA table_info(tool_calls)")}
+
+
+def _union_s(intervals: list[tuple[float, float]]) -> float:
+    total, lo, hi = 0.0, None, None
+    for a, b in sorted(intervals):
+        if hi is None or a > hi:
+            if hi is not None:
+                total += hi - lo
+            lo, hi = a, b
+        else:
+            hi = max(hi, b)
+    return total + (hi - lo if hi is not None else 0.0)
+
+
+def lanes(conn: sqlite3.Connection, since: str, project: Optional[str] = None,
+          with_description: bool = False) -> list[dict]:
+    """One row per subagent session started in the window: where its wall time
+    went. model_s = wall - union(tool intervals): generation, thinking and API
+    latency between calls. turns_to_first_edit counts requests before the first
+    edit-tool call (None when the lane never edited)."""
+    timed = _has_tool_times(conn)
+    sql = ("SELECT key, project, agent_id, agent_type, agent_model, description, started, ended"
+           " FROM sessions WHERE is_subagent = 1 AND started >= ?")
+    params: list = [since]
+    if project:
+        sql += " AND project = ?"
+        params.append(project)
+    sessions = _rows(conn, sql, params)
+    # two batched reads for the whole window (one query per session is ~40 s host-wide)
+    scope = sql.replace("SELECT key, project, agent_id, agent_type, agent_model, description,"
+                        " started, ended", "SELECT key")
+    reqs_by: dict[str, list] = {}
+    for key, *rest in conn.execute(
+            "SELECT session_key, ts, model, input + cache_read + cache_create FROM requests"
+            f" WHERE session_key IN ({scope}) ORDER BY session_key, seq", params):
+        reqs_by.setdefault(key, []).append(tuple(rest))
+    tcols = "ts, tool, time_class, duration_s" if timed else "ts, tool, NULL, NULL"
+    calls_by: dict[str, list] = {}
+    for key, *rest in conn.execute(
+            f"SELECT session_key, {tcols} FROM tool_calls"
+            f" WHERE session_key IN ({scope}) ORDER BY session_key, ts", params):
+        calls_by.setdefault(key, []).append(tuple(rest))
+    out = []
+    for s in sessions:
+        reqs = reqs_by.get(s["key"], [])
+        calls = calls_by.get(s["key"], [])
+        t0, t1 = parse_ts(s["started"]), parse_ts(s["ended"])
+        wall = max(0.0, t1 - t0) if t0 is not None and t1 is not None else 0.0
+        ivals, by_class, long_n, long_s, untimed = [], {}, 0, 0.0, 0
+        for ts, tool, cls, dur in calls:
+            start = parse_ts(ts)
+            if dur is None or start is None:
+                untimed += 1
+                continue
+            ivals.append((start, start + dur))
+            e = by_class.setdefault(cls or tool, [0, 0.0])
+            e[0] += 1
+            e[1] += dur
+            if dur > LONG_CALL_S:
+                long_n, long_s = long_n + 1, long_s + dur
+        tool_s = min(wall, _union_s(ivals)) if wall else _union_s(ivals)
+        first_edit = next((ts for ts, tool, _, _ in calls if tool in EDIT_TOOLS), None)
+        # no call has a duration yet (rows from before the columns, not backfilled):
+        # report the split as unknown, never as "all model time"
+        unknown = bool(calls) and untimed == len(calls)
+        models: dict[str, int] = {}
+        for _, m, _ in reqs:
+            models[m or "?"] = models.get(m or "?", 0) + 1
+        row = {
+            "lane": (s["agent_id"] or s["key"].rsplit("/", 1)[-1])[:17],
+            "project": s["project"], "agent_type": s["agent_type"],
+            "model": max(models, key=models.get) if models else s["agent_model"],
+            "turns": len(reqs),
+            "wall_min": round(wall / 60, 1),
+            "model_min": None if unknown else round(max(0.0, wall - tool_s) / 60, 1),
+            "tool_min": None if unknown else round(tool_s / 60, 1),
+            "turns_to_first_edit": (sum(1 for ts, _, _ in reqs if ts < first_edit)
+                                    if first_edit else None),
+            "ctx_first": reqs[0][2] if reqs else None,
+            "ctx_last": reqs[-1][2] if reqs else None,
+            "calls_over_60s": long_n, "min_in_calls_over_60s": round(long_s / 60, 1),
+            "tool_min_by_class": {k: round(v[1] / 60, 1) for k, v in
+                                  sorted(by_class.items(), key=lambda kv: -kv[1][1])[:5]},
+            "untimed_calls": untimed,
+        }
+        if with_description:
+            row["description"] = s["description"]
+        out.append(row)
+    out.sort(key=lambda r: -r["wall_min"])
+    return out
+
+
+def tool_time(conn: sqlite3.Connection, since: str, project: Optional[str] = None) -> list[dict]:
+    """Tool time by time class (shell commands) or tool name, over the window."""
+    if not _has_tool_times(conn):
+        return []
+    sql = f"""
+        SELECT COALESCE(t.time_class, t.tool) class, COUNT(*) calls,
+               ROUND(SUM(t.duration_s) / 60.0, 1) minutes,
+               SUM(CASE WHEN t.duration_s > {LONG_CALL_S} THEN 1 ELSE 0 END) calls_over_60s,
+               ROUND(SUM(CASE WHEN t.duration_s > {LONG_CALL_S} THEN t.duration_s ELSE 0 END)
+                     / 60.0, 1) min_in_calls_over_60s,
+               SUM(CASE WHEN t.duration_s IS NULL THEN 1 ELSE 0 END) untimed
+        FROM tool_calls t JOIN sessions s ON s.key = t.session_key
+        WHERE t.ts >= ?{" AND s.project = ?" if project else ""}
+        GROUP BY 1 ORDER BY minutes DESC"""
+    return _rows(conn, sql, (since, project) if project else (since,))
 
 
 def build(conn: sqlite3.Connection, days: int = 7) -> dict:
@@ -260,6 +384,8 @@ def build(conn: sqlite3.Connection, days: int = 7) -> dict:
     out["total_iet"] = total_iet
     out["candidates"] = candidates
     out["iet_per_commit"] = per_commit
+    out["tool_time"] = tool_time(conn, since)
+    out["lanes"] = lanes(conn, since)[:15]
 
     # Agent parity: only when a non-Claude-format source is in the window, so a
     # claude/mmx-only ledger renders exactly as before.
@@ -347,6 +473,16 @@ def to_markdown(rep: dict) -> str:
     for r in rep["iet_per_commit"]:
         lines.append(f"| {r['project']} | {r['iet']:,} | {r['commits']} | "
                      f"{'' if r['iet_per_commit'] is None else format(r['iet_per_commit'], ',')} |")
+    if rep.get("tool_time"):
+        lines += ["", "## Tool time by class", "",
+                  "| class | calls | min | calls >60s | min in them | untimed |",
+                  "|---|---:|---:|---:|---:|---:|"]
+        for r in rep["tool_time"]:
+            lines.append(f"| {r['class']} | {r['calls']:,} | {r['minutes'] or 0} | "
+                         f"{r['calls_over_60s'] or 0} | {r['min_in_calls_over_60s'] or 0} | "
+                         f"{r['untimed'] or 0} |")
+    if rep.get("lanes"):
+        lines += ["", "## Lanes (subagents) by wall time", ""] + lanes_table(rep["lanes"])
     if rep.get("by_source"):
         lines += ["", "## Agent parity: digest by source", "",
                   "| source | sessions | requests | input | cache_read | cache_create | output | "
@@ -363,6 +499,24 @@ def to_markdown(rep: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def lanes_table(rows: list[dict]) -> list[str]:
+    desc = any("description" in r for r in rows)
+    head = ("| lane | " + ("description | " if desc else "") + "project | agent | model | turns | "
+            "wall min | model min | tool min | turns to 1st edit | ctx first k | ctx last k | "
+            "top tool min by class |")
+    out = [head, "|" + "---|" * (head.count("|") - 1)]
+    for r in rows:
+        k = lambda v: "" if v is None else f"{v / 1000:.0f}"
+        cls = ", ".join(f"{c} {m}" for c, m in list(r["tool_min_by_class"].items())[:4])
+        out.append(f"| {r['lane']} | " + (f"{(r.get('description') or '')[:40]} | " if desc else "")
+                   + f"{r['project']} | {r['agent_type']} | {r['model']} | {r['turns']} | "
+                   f"{r['wall_min']} | {'?' if r['model_min'] is None else r['model_min']} | "
+                   f"{'?' if r['tool_min'] is None else r['tool_min']} | "
+                   f"{'' if r['turns_to_first_edit'] is None else r['turns_to_first_edit']} | "
+                   f"{k(r['ctx_first'])} | {k(r['ctx_last'])} | {cls} |")
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--db", type=Path, default=DEFAULT_DB)
@@ -370,8 +524,24 @@ def main() -> int:
     ap.add_argument("--md", action="store_true", help="markdown (default JSON)")
     ap.add_argument("--out", type=Path)
     ap.add_argument("--proposals", type=Path, default=PROPOSALS)
+    ap.add_argument("--lanes", action="store_true",
+                    help="local per-lane time table WITH dispatch descriptions (not sanitized)")
+    ap.add_argument("--project")
     a = ap.parse_args()
     conn = sqlite3.connect(f"file:{a.db}?mode=ro", uri=True)
+    if a.lanes:
+        since = _since(a.days)
+        rows = lanes(conn, since, a.project, with_description=True)
+        tt = tool_time(conn, since, a.project)
+        if not a.md:
+            print(json.dumps({"lanes": rows, "tool_time": tt}, indent=1))
+            return 0
+        print("LOCAL VIEW: carries lane descriptions; not for the digest.\n")
+        print("\n".join(lanes_table(rows)))
+        print("\n".join(["", "| class | calls | min | calls >60s | min in them |", "|---|---:|---:|---:|---:|"]
+                        + [f"| {r['class']} | {r['calls']} | {r['minutes'] or 0} | "
+                           f"{r['calls_over_60s'] or 0} | {r['min_in_calls_over_60s'] or 0} |" for r in tt]))
+        return 0
     rep = build(conn, a.days)
     attach_prior_proposals(rep, a.proposals)
     text = to_markdown(rep) if a.md else json.dumps(rep, indent=1)
