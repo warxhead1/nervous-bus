@@ -6,9 +6,10 @@
 TRIM keeps only what transcript_steps reads: `assistant` tool_use blocks
 (name, id, input) and `user` tool_result blocks (tool_use_id, is_error), each
 with its record timestamp. Thinking, prose, attachments and api-request records
-are dropped. A tool result keeps only its verdict lines (pass / fail markers and
-the line after a panic), capped, so test output does not ride along. A Write
-body keeps only the lines holding a number.
+are dropped; an assistant record keeps its message id, model and integer
+token-usage fields (turn and cost accounting). A tool result keeps only its
+verdict lines (pass / fail markers and the line after a panic), capped, so test
+output does not ride along. A Write body keeps only the lines holding a number.
 
 REDACT makes a fixture safe for this PUBLIC repo when the source project is
 private: every identifier segment (split on `_`) longer than two characters is
@@ -81,7 +82,9 @@ class Redactor:
         tok = m.group(0)
         start = m.start()
         s = m.string
-        if re.search(r"(?:^|[\s'\"])--?$", s[max(0, start - 3):start]):  # a flag: --ignored, -p
+        # a long flag (--ignored); short flags (-p) are <= 2 chars and kept anyway,
+        # while `-NAME` is as often a negated identifier as a flag
+        if re.search(r"(?:^|[\s'\"])--$", s[max(0, start - 3):start]):
             return tok
         if tok.lower() in KEEP_LOWER:
             return tok
@@ -156,9 +159,16 @@ def trim(src: Path, redact: bool, since: str = "", until: str = "") -> list[dict
                 blocks.append({"type": "tool_result", "tool_use_id": b.get("tool_use_id"),
                                "is_error": bool(b.get("is_error")),
                                "content": red.text(text) if red else text})
-        if blocks:
-            out.append({"type": rec["type"], "timestamp": ts,
-                        "message": {"role": rec["type"], "content": blocks}})
+        msg = {"role": rec["type"], "content": blocks}
+        m = rec.get("message") or {}
+        if rec["type"] == "assistant" and m.get("id"):
+            # turn identity and token usage (integers only) for run_cost
+            msg["id"] = m["id"]  # random, like tool ids
+            msg["model"] = m.get("model")
+            msg["usage"] = {k: v for k, v in (m.get("usage") or {}).items()
+                            if isinstance(v, int) and not isinstance(v, bool)}
+        if blocks or "usage" in msg:
+            out.append({"type": rec["type"], "timestamp": ts, "message": msg})
     return out
 
 
