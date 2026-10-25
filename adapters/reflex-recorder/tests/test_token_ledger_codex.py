@@ -145,7 +145,7 @@ class TestReportParity(unittest.TestCase):
     """token_report groups by source; the cache-TTL net is null for no-cache-write sources."""
 
     BASE_KEYS = {"window_days", "since", "generated_at", "weights", "totals", "total_iet",
-                 "candidates", "iet_per_commit"}
+                 "candidates", "iet_per_commit", "tool_time", "lanes"}
 
     def setUp(self):
         from datetime import datetime, timedelta, timezone
