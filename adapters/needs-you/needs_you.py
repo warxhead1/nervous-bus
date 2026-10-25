@@ -257,8 +257,14 @@ def name_of(session_id: str, cwd: str) -> str:
     return chosen or default_name(cwd)
 
 
-def bind(session_id: str, cwd: str) -> None:
-    """Write {session_id, orca_terminal, tmux_pane, cwd, pid} for this session."""
+def bind(session_id: str, cwd: str, turn: str = "", transcript: str = "") -> None:
+    """Write {session_id, orca_terminal, tmux_pane, cwd, pid} for this session.
+
+    `turn` is "busy" (UserPromptSubmit) or "idle" (SessionStart, a Stop that
+    lets the turn end), stamped `turn_ts`, so hearth knows a session can take
+    a message now instead of guessing from transcript mtime. "" keeps the
+    recorded turn state.
+    """
     if not session_id:
         return
     rec = {
@@ -273,10 +279,19 @@ def bind(session_id: str, cwd: str) -> None:
         return
     path = BINDINGS / f"{session_id}.json"
     try:
-        if json.loads(path.read_text())  | {"ts": rec["ts"]} == rec:
-            return  # unchanged: no write per turn
+        old = json.loads(path.read_text())
     except (OSError, ValueError):
-        pass
+        old = {}
+    for k in ("turn", "turn_ts", "transcript"):
+        if k in old:
+            rec[k] = old[k]
+    if transcript:
+        rec["transcript"] = transcript
+    if turn:
+        rec["turn"] = turn
+        rec["turn_ts"] = rec["ts"]
+    if old and old | {"ts": rec["ts"]} == rec:
+        return  # unchanged: no write
     try:
         BINDINGS.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=BINDINGS, suffix=".tmp")
@@ -329,8 +344,15 @@ def hook(data: dict) -> dict | None:
     if not session_id:
         log("skip_no_session", data)
         return None
-    bind(session_id, data.get("cwd") or os.getcwd())
-    reply, used_tools, turn_id = turn_from_transcript(data.get("transcript_path") or "")
+    transcript = data.get("transcript_path") or ""
+    out = turn_end(data, session_id, transcript)
+    # Only a Stop that ends the turn makes the session idle; a block continues it.
+    bind(session_id, data.get("cwd") or os.getcwd(), "busy" if out else "idle", transcript)
+    return out
+
+
+def turn_end(data: dict, session_id: str, transcript: str) -> dict | None:
+    reply, used_tools, turn_id = turn_from_transcript(transcript)
     if data.get("last_assistant_message"):
         reply = data["last_assistant_message"]
     items = extract(reply)
@@ -457,11 +479,16 @@ def main(argv: list[str]) -> int:
         if out:
             print(json.dumps(out))
         return 0
-    if argv[:1] == ["bind"]:
+    if argv[:1] == ["bind"] or argv[:2] == ["turn", "busy"]:
         try:
             data = json.load(sys.stdin)
             if not os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
-                bind(data.get("session_id") or "", data.get("cwd") or os.getcwd())
+                bind(
+                    data.get("session_id") or "",
+                    data.get("cwd") or os.getcwd(),
+                    "busy" if argv[0] == "turn" else "idle",
+                    data.get("transcript_path") or "",
+                )
         except Exception as exc:  # a hook must never wedge the session
             print(f"needs-you bind: {exc}", file=sys.stderr)
         return 0
