@@ -471,3 +471,46 @@ class EditTracker:
         for e in out:
             e.step = step
         return out
+
+
+# ── shell shape helpers (shared by detectors and run_cost) ───────────────────
+
+def strip_heredocs(cmd: str) -> str:
+    """The command with heredoc bodies removed (their text is data, not shell)."""
+    out, lines, i = [], cmd.split("\n"), 0
+    while i < len(lines):
+        ln = lines[i]
+        out.append(ln)
+        m = re.search(r"<<-?\s*['\"]?(\w+)['\"]?", ln)
+        if m:
+            tag = m.group(1)
+            i += 1
+            while i < len(lines) and lines[i].strip() != tag:
+                i += 1
+        i += 1
+    return "\n".join(out)
+
+
+# A loop whose body sleeps (`until grep -q DONE log; do sleep 10; done`,
+# `for i in $(seq 1 55); do ...; sleep 10; done`), or a standalone long sleep.
+_POLL_LOOP_RE = re.compile(r"\b(?:until|while|for)\b[\s\S]*?\bdo\b[\s\S]*?\bsleep\s+\d")
+_SLEEP_RE = re.compile(
+    r"(?:^|[;&|(]|\bthen\b|\bdo\b)\s*sleep\s+(\d+(?:\.\d+)?)([smh]?)(?![\w.])", re.M)
+STANDALONE_SLEEP_MIN_S = 30.0
+
+
+def is_poll_wait(cmd: str) -> bool:
+    """True when a shell command is a hand-rolled wait: a sleep-polling loop, or
+    a standalone `sleep` of at least STANDALONE_SLEEP_MIN_S seconds."""
+    body = strip_heredocs(cmd)
+    if _POLL_LOOP_RE.search(body):
+        return True
+    for m in _SLEEP_RE.finditer(body):
+        secs = float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)]
+        if secs >= STANDALONE_SLEEP_MIN_S:
+            return True
+    return False
+
+
+def is_foreground_bash(step: Step) -> bool:
+    return step.tool == "Bash" and not step.input.get("run_in_background")

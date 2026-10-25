@@ -13,6 +13,14 @@ command that is not limited to `--ignored` probes, or a gate script's pass
 marker). The detector fires when one stretch without progress holds at least
 MIN_PARAM_RERUNS param reruns spread over at least MIN_SPAN_MIN minutes.
 
+A second trigger reads the same habit at the call level: SERIAL CALLS, i.e.
+foreground Bash calls over SERIAL_CALL_MIN_S that run a harness more than once
+in sequence (`for sd in 1 2 3 4; do S0=$sd ./explore ...; done`, or
+`sweep.sh 22 0.8; sweep.sh 17 0.8`). The run fires when it holds at least
+MIN_SERIAL_CALLS of them totalling MIN_SERIAL_MIN minutes. The model sits idle
+for the whole call, and the points are independent, so they could run in
+parallel or as one detached sweep.
+
 That is hand-tuning by trial: each point costs a harness run (minutes, for a
 simulation), nothing is checkpointed as a measured result, and nothing proves
 the tuned behaviour is better than where it started. The response is to stop
@@ -20,10 +28,11 @@ the lane, checkpoint what it learned, and turn the sweep into ONE scripted,
 gated measurement (a sweep script that writes a table, then a test that pins
 the chosen value's acceptance criterion).
 
-Thresholds (derived 2026-10-24 from four podracing lanes; receipts in the PR):
-the stopped sonnet podbot lane is the positive; a playability lane that swept
-too but gated and committed every ~20 min, a yaw-settle lane and a rocks lane
-are negatives.
+Thresholds were derived 2026-10-24 from podracing lanes (receipts in the PR).
+The stopped sonnet podbot lane is the positive. The negatives are a playability
+lane that also swept but gated and committed every ~20 min, a yaw-settle lane,
+and a rocks lane. The serial-call thresholds were set from all 29 lanes of that
+session.
 
 Reads transcripts (transcript_steps): the bus summary keeps only command verbs.
 Remediation rung: AUTOMATE candidate (a lane-side counter that interrupts after
@@ -41,11 +50,16 @@ from typing import Optional
 
 from detectors.base import BaseDetector, PatternCandidate
 from transcript_steps import (
-    EditTracker, Step, StepCache, is_numeric_only, mask_numbers, run_refs,
+    EditTracker, Step, StepCache, is_foreground_bash, is_numeric_only, is_poll_wait,
+    mask_numbers, run_refs, strip_heredocs,
 )
 
 MIN_PARAM_RERUNS = 15
 MIN_SPAN_MIN = 45.0
+# Second trigger: serial harness calls (a seed / param loop inside ONE foreground call).
+SERIAL_CALL_MIN_S = 60.0
+MIN_SERIAL_CALLS = 10
+MIN_SERIAL_MIN = 20.0
 
 # ── progress (test / gate passes) ────────────────────────────────────────────
 
@@ -177,19 +191,7 @@ def _expand_vars(cmd: str) -> str:
     return re.sub(r"\$\{(\w+)\}|\$(\w+)", sub, cmd) if env else cmd
 
 
-def _strip_heredocs(cmd: str) -> str:
-    out, lines, i = [], cmd.split("\n"), 0
-    while i < len(lines):
-        ln = lines[i]
-        out.append(ln)
-        m = re.search(r"<<-?\s*['\"]?(\w+)['\"]?", ln)
-        if m:
-            tag = m.group(1)
-            i += 1
-            while i < len(lines) and lines[i].strip() != tag:
-                i += 1
-        i += 1
-    return "\n".join(out)
+_strip_heredocs = strip_heredocs
 
 
 def harness_runs(cmd: str) -> list[HarnessRun]:
@@ -326,6 +328,30 @@ def fires(st: Optional[Stretch], n: int = MIN_PARAM_RERUNS, t: float = MIN_SPAN_
     return st is not None and len(st.reruns) >= n and st.span_min >= t
 
 
+# ── serial harness calls (one foreground call running the harness N times) ───
+
+_LOOP_RE = re.compile(r"\b(?:for|while)\b[^\n]*?(?:;|\n)\s*do\b")
+
+
+def serial_calls(steps: list[Step], min_s: float = SERIAL_CALL_MIN_S) -> list[Step]:
+    """Foreground Bash calls longer than `min_s` that run a harness more than once,
+    one after another: a `for`/`while` loop around it, or a `a; b; c` chain. A
+    sleep-polling wait is not a serial call (that is foreground_wait's signal)."""
+    out = []
+    for s in steps:
+        if not is_foreground_bash(s) or s.duration <= min_s or is_poll_wait(s.command):
+            continue
+        runs = harness_runs(s.command)
+        if len(runs) >= 2 or (runs and _LOOP_RE.search(strip_heredocs(s.command))):
+            out.append(s)
+    return out
+
+
+def serial_fires(calls: list[Step], n: int = MIN_SERIAL_CALLS,
+                 t: float = MIN_SERIAL_MIN) -> bool:
+    return len(calls) >= n and sum(s.duration for s in calls) >= t * 60
+
+
 def _short(s: Optional[str], n: int = 70) -> str:
     one = " ".join((s or "").split())
     return one if len(one) <= n else one[: n - 3] + "..."
@@ -352,6 +378,15 @@ def describe(st: Stretch) -> list[str]:
     return ev
 
 
+def describe_serial(calls: list[Step]) -> list[str]:
+    ev = [f"{len(calls)} foreground calls over {SERIAL_CALL_MIN_S:.0f} s ran a harness "
+          f"serially (loop or chain): {sum(s.duration for s in calls) / 60:.0f} min with "
+          f"the model idle"]
+    for s in sorted(calls, key=lambda s: -s.duration)[:2]:
+        ev.append(f"  {_iso(s.t0)} {s.duration / 60:.1f} min: {_short(s.command, 120)}")
+    return ev
+
+
 class ParamSweepThrashDetector(BaseDetector):
     """Flag runs that hand-sweep parameters through a harness without gating."""
 
@@ -366,30 +401,50 @@ class ParamSweepThrashDetector(BaseDetector):
         for ref in run_refs(conn, since_ts=since_ts, roots=self.transcript_roots,
                             min_events=MIN_PARAM_RERUNS):
             steps = cache.steps_for(ref)
-            st = worst(analyze(steps)) if steps else None
-            if not fires(st):
+            if not steps:
                 continue
-            top_key = max({r.key for r in st.reruns},
-                          key=lambda k: sum(1 for r in st.reruns if r.key == k))
+            st = worst(analyze(steps))
+            ser = serial_calls(steps)
+            by_stretch, by_serial = fires(st), serial_fires(ser)
+            if not (by_stretch or by_serial):
+                continue
+            keys: dict[str, int] = {}
+            for k in ([r.key for r in st.reruns] if by_stretch else
+                      [h.key for s in ser for h in harness_runs(s.command)]):
+                keys[k] = keys.get(k, 0) + 1
+            top_key = max(keys, key=keys.get) if keys else "harness"
+            ev = [f"run_id={ref.run_id}", f"agent={ref.agent_label}"]
+            if st is not None and st.reruns:
+                ev += describe(st)
+            if ser:
+                ev += describe_serial(ser)
             out.append(PatternCandidate(
                 project=ref.project,
                 pattern_name="param_sweep_thrash",
                 signature=f"{ref.project}:{self.DETECTOR_NAME}:{top_key}",
                 detector=self.DETECTOR_NAME,
-                occurrences=len(st.reruns),
-                evidence=[f"run_id={ref.run_id}", f"agent={ref.agent_label}"] + describe(st),
+                occurrences=max(len(st.reruns) if st else 0, len(ser)),
+                evidence=ev,
                 run_ids=[ref.run_id],
                 proposed_remediation=(
                     "Stop the lane and checkpoint what it measured. Replace the hand sweep "
-                    "with one scripted sweep that writes a table, then pin the chosen value "
-                    "with a test of its acceptance criterion."),
+                    "with one scripted sweep that runs its points in parallel (or detached) "
+                    "and writes a table, then pin the chosen value with a test of its "
+                    "acceptance criterion."),
                 extra={
                     "remediation_rung": "inform",
-                    "param_reruns": len(st.reruns),
-                    "span_min": round(st.span_min, 1),
-                    "harness_min": round(st.harness_seconds / 60, 1),
+                    "triggers": [t for t, on in (("param_reruns", by_stretch),
+                                                 ("serial_calls", by_serial)) if on],
+                    "param_reruns": len(st.reruns) if st else 0,
+                    "span_min": round(st.span_min, 1) if st else 0.0,
+                    "harness_min": round(st.harness_seconds / 60, 1) if st else 0.0,
+                    "serial_calls": len(ser),
+                    "serial_min": round(sum(s.duration for s in ser) / 60, 1),
                     "thresholds": {"min_param_reruns": MIN_PARAM_RERUNS,
-                                   "min_span_min": MIN_SPAN_MIN},
+                                   "min_span_min": MIN_SPAN_MIN,
+                                   "serial_call_min_s": SERIAL_CALL_MIN_S,
+                                   "min_serial_calls": MIN_SERIAL_CALLS,
+                                   "min_serial_min": MIN_SERIAL_MIN},
                 },
             ))
         return out

@@ -1112,7 +1112,7 @@ BLIND_TERMS = [
     "directive_ground_truth_mismatch", "kb_recall_gap", "user_correction", "harness_change_watch",
     "build_amplification", "edit_build_fail_revert", "failure_taxonomy", "verification_theater",
     "preexisting_confirmation_tax", "idle_dispatch", "model_tiering",
-    "param_sweep_thrash", "gate_bound_loosened",
+    "param_sweep_thrash", "gate_bound_loosened", "foreground_wait",
 ]
 SCORABLE = ["red_baseline_dispatch", "unverified_completion", "inherited_rationalization",
             "rebuild_cache_miss", "skill_opportunity", "reread_same_file", "worktree_leak"]

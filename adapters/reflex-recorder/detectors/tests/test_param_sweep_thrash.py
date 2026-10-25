@@ -17,8 +17,8 @@ sys.path.insert(0, str(_ENGINE))
 
 from detectors.base import ensure_detector_schema  # noqa: E402
 from detectors.param_sweep_thrash import (  # noqa: E402
-    MIN_PARAM_RERUNS, MIN_SPAN_MIN, ParamSweepThrashDetector, analyze, fires,
-    harness_runs, is_progress, shell_segments, worst,
+    MIN_PARAM_RERUNS, MIN_SERIAL_CALLS, MIN_SPAN_MIN, ParamSweepThrashDetector, analyze,
+    fires, harness_runs, is_progress, serial_calls, serial_fires, shell_segments, worst,
 )
 from transcript_steps import Step, parse_transcript  # noqa: E402
 
@@ -62,6 +62,43 @@ def test_thresholds_separate_the_reference_lanes():
         assert neg.span_min < MIN_SPAN_MIN <= pos.span_min
 
 
+# ── serial-call trigger (>60 s foreground calls looping a harness) ───────────
+
+def _serial(name):
+    return serial_calls(parse_transcript(FIX / f"{name}.jsonl"))
+
+
+def test_serial_trigger_fires_on_the_podbot_lane():
+    ser = _serial("podbot_sweep")
+    assert serial_fires(ser)
+    assert len(ser) == 35 and round(sum(s.duration for s in ser) / 60, 1) == 88.8
+
+
+def test_serial_trigger_silent_on_gate_waits_and_ordinary_lanes():
+    # start_grid_waits holds 8 foreground waits (23.9 min): those are not serial calls
+    for name in ("start_grid_waits", "playable", "rocks_off_line", "yaw_settle"):
+        ser = _serial(name)
+        assert not serial_fires(ser), name
+        assert len(ser) < MIN_SERIAL_CALLS / 2
+
+
+def test_serial_call_shapes():
+    loop = _step("for sd in 1 2 3 4; do S0=$sd ./target/release/examples/explore c 3 1; done",
+                 t=0)
+    loop.t1 = 200
+    chain = _step("S=/x/sweep5.sh; $S 22 0.8 expert 16; $S 17 0.8 expert 16", t=300)
+    chain.t1 = 420
+    short = _step("for sd in 1 2; do ./bench $sd; done", t=500)
+    short.t1 = 530
+    single = _step("./bench 3", t=600)
+    single.t1 = 900
+    wait = _step("until grep -q DONE log; do sleep 10; done", t=1000)
+    wait.t1 = 1500
+    bg = Step(id="bg", tool="Bash", t0=2000, t1=2600, input={
+        "command": "for s in 1 2 3; do ./bench $s; done", "run_in_background": True})
+    assert serial_calls([loop, chain, short, single, wait, bg]) == [loop, chain]
+
+
 # ── through the store (run -> transcript resolution) ─────────────────────────
 
 def _store_with_run(transcript: Path, project="demo") -> sqlite3.Connection:
@@ -92,6 +129,8 @@ def test_detector_records_a_hit_through_the_store():
     assert len(cands) == 1
     c = cands[0]
     assert c.run_ids == ["R1"] and c.extra["param_reruns"] == 82
+    assert c.extra["triggers"] == ["param_reruns", "serial_calls"]
+    assert c.extra["serial_calls"] == 35
     assert c.signature.startswith("demo:param_sweep_thrash:")
     assert "R1" not in c.signature
     assert any("param reruns over" in e for e in c.evidence)
