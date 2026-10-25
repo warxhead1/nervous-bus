@@ -28,11 +28,8 @@ the lane, checkpoint what it learned, and turn the sweep into ONE scripted,
 gated measurement (a sweep script that writes a table, then a test that pins
 the chosen value's acceptance criterion).
 
-Thresholds were derived 2026-10-24 from podracing lanes (receipts in the PR).
-The stopped sonnet podbot lane is the positive. The negatives are a playability
-lane that also swept but gated and committed every ~20 min, a yaw-settle lane,
-and a rocks lane. The serial-call thresholds were set from all 29 lanes of that
-session.
+The thresholds were derived from real lanes. The derivation and its margins
+are in the PR that added this detector.
 
 Reads transcripts (transcript_steps): the bus summary keeps only command verbs.
 Remediation rung: AUTOMATE candidate (a lane-side counter that interrupts after
@@ -397,9 +394,9 @@ class ParamSweepThrashDetector(BaseDetector):
                since_ts: Optional[str] = None) -> list[PatternCandidate]:
         cache = StepCache()
         out: list[PatternCandidate] = []
-        # a stretch needs >= MIN_PARAM_RERUNS Bash calls: skip runs too small to hold one
+        # either trigger needs that many Bash calls: skip runs too small to hold one
         for ref in run_refs(conn, since_ts=since_ts, roots=self.transcript_roots,
-                            min_events=MIN_PARAM_RERUNS):
+                            min_events=min(MIN_PARAM_RERUNS, MIN_SERIAL_CALLS)):
             steps = cache.steps_for(ref)
             if not steps:
                 continue

@@ -105,6 +105,15 @@ def test_backfill_fills_rows_from_before_the_columns(tmp_path):
                      ).fetchone() == ("wait", 300)
 
 
+def test_untimed_lane_reports_the_split_as_unknown(tmp_path):
+    conn = sqlite3.connect(_ledger(tmp_path))
+    conn.execute("UPDATE tool_calls SET duration_s = NULL")
+    since = (T0 - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S")
+    [lane] = tr.lanes(conn, since)
+    assert lane["tool_min"] is None and lane["model_min"] is None
+    assert lane["untimed_calls"] == 5 and lane["wall_min"] > 0
+
+
 def test_old_db_gets_the_columns_added(tmp_path):
     db = tmp_path / "old.db"
     c = sqlite3.connect(db)

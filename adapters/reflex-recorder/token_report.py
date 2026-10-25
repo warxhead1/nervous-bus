@@ -103,14 +103,25 @@ def lanes(conn: sqlite3.Connection, since: str, project: Optional[str] = None,
     if project:
         sql += " AND project = ?"
         params.append(project)
+    sessions = _rows(conn, sql, params)
+    # two batched reads for the whole window (one query per session is ~40 s host-wide)
+    scope = sql.replace("SELECT key, project, agent_id, agent_type, agent_model, description,"
+                        " started, ended", "SELECT key")
+    reqs_by: dict[str, list] = {}
+    for key, *rest in conn.execute(
+            "SELECT session_key, ts, model, input + cache_read + cache_create FROM requests"
+            f" WHERE session_key IN ({scope}) ORDER BY session_key, seq", params):
+        reqs_by.setdefault(key, []).append(tuple(rest))
+    tcols = "ts, tool, time_class, duration_s" if timed else "ts, tool, NULL, NULL"
+    calls_by: dict[str, list] = {}
+    for key, *rest in conn.execute(
+            f"SELECT session_key, {tcols} FROM tool_calls"
+            f" WHERE session_key IN ({scope}) ORDER BY session_key, ts", params):
+        calls_by.setdefault(key, []).append(tuple(rest))
     out = []
-    for s in _rows(conn, sql, params):
-        reqs = conn.execute(
-            "SELECT ts, model, input + cache_read + cache_create FROM requests"
-            " WHERE session_key = ? ORDER BY seq", (s["key"],)).fetchall()
-        tcols = "ts, tool, time_class, duration_s" if timed else "ts, tool, NULL, NULL"
-        calls = conn.execute(f"SELECT {tcols} FROM tool_calls WHERE session_key = ? ORDER BY ts",
-                             (s["key"],)).fetchall()
+    for s in sessions:
+        reqs = reqs_by.get(s["key"], [])
+        calls = calls_by.get(s["key"], [])
         t0, t1 = parse_ts(s["started"]), parse_ts(s["ended"])
         wall = max(0.0, t1 - t0) if t0 is not None and t1 is not None else 0.0
         ivals, by_class, long_n, long_s, untimed = [], {}, 0, 0.0, 0
@@ -127,6 +138,9 @@ def lanes(conn: sqlite3.Connection, since: str, project: Optional[str] = None,
                 long_n, long_s = long_n + 1, long_s + dur
         tool_s = min(wall, _union_s(ivals)) if wall else _union_s(ivals)
         first_edit = next((ts for ts, tool, _, _ in calls if tool in EDIT_TOOLS), None)
+        # no call has a duration yet (rows from before the columns, not backfilled):
+        # report the split as unknown, never as "all model time"
+        unknown = bool(calls) and untimed == len(calls)
         models: dict[str, int] = {}
         for _, m, _ in reqs:
             models[m or "?"] = models.get(m or "?", 0) + 1
@@ -136,8 +150,8 @@ def lanes(conn: sqlite3.Connection, since: str, project: Optional[str] = None,
             "model": max(models, key=models.get) if models else s["agent_model"],
             "turns": len(reqs),
             "wall_min": round(wall / 60, 1),
-            "model_min": round(max(0.0, wall - tool_s) / 60, 1),
-            "tool_min": round(tool_s / 60, 1),
+            "model_min": None if unknown else round(max(0.0, wall - tool_s) / 60, 1),
+            "tool_min": None if unknown else round(tool_s / 60, 1),
             "turns_to_first_edit": (sum(1 for ts, _, _ in reqs if ts < first_edit)
                                     if first_edit else None),
             "ctx_first": reqs[0][2] if reqs else None,
@@ -496,7 +510,8 @@ def lanes_table(rows: list[dict]) -> list[str]:
         cls = ", ".join(f"{c} {m}" for c, m in list(r["tool_min_by_class"].items())[:4])
         out.append(f"| {r['lane']} | " + (f"{(r.get('description') or '')[:40]} | " if desc else "")
                    + f"{r['project']} | {r['agent_type']} | {r['model']} | {r['turns']} | "
-                   f"{r['wall_min']} | {r['model_min']} | {r['tool_min']} | "
+                   f"{r['wall_min']} | {'?' if r['model_min'] is None else r['model_min']} | "
+                   f"{'?' if r['tool_min'] is None else r['tool_min']} | "
                    f"{'' if r['turns_to_first_edit'] is None else r['turns_to_first_edit']} | "
                    f"{k(r['ctx_first'])} | {k(r['ctx_last'])} | {cls} |")
     return out

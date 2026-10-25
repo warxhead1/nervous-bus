@@ -16,10 +16,8 @@ the foreground with a timeout gives the same result with no polling, and
 work goes ahead. Either one also keeps the result tied to the job, so the agent
 does not read a marker in a log that may be stale.
 
-Threshold (derived 2026-10-24 from the 29 lanes of one podracing session;
-receipts in the PR): per-lane foreground wait totals were 24.3, 12.8, 9.7, 9.6
-and 5.8 min, and then 1.6, 1.5, 0.6 and 0 for the rest. MIN_WAIT_MIN = 4 sits
-in that gap.
+The threshold was derived from real lanes. The derivation and its margins are
+in the PR that added this detector.
 
 Reads transcripts (transcript_steps); the bus summary does not carry durations.
 Remediation rung: INFORM. Automate candidate: a PreToolUse hook that warns on a
