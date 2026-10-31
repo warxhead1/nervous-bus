@@ -40,6 +40,19 @@ CHANNEL = "agent.cli.correction.v1"
 # nothing about the command's arguments.
 NOT_RUN = re.compile(r"^(?:Exit code \d+\n)?(?:PreToolUse:\w+ hook error|The user doesn't want to proceed|"
                      r"Permission to use \w+ with command|Hook PreToolUse)", re.M)
+# Body lines that mean the harness lost or never produced the command's output.
+HARNESS = "(harness)"
+LOST_OUTPUT = re.compile(r"(?:Command output was lost|\[Tool call interrupted)")
+
+
+def harness_failure(text: str) -> bool:
+    """True when the failure came from the harness, not the program: a hook or
+    permission denial (the hook payload carries the bare deny reason, with no
+    `Exit code N` line), an interrupt, or output the harness lost."""
+    if NOT_RUN.search(text[:400]):
+        return True
+    m = re.match(r"Exit code \d+\n?", text)
+    return not m or bool(LOST_OUTPUT.match(text, m.end()))
 
 
 # ---------------------------------------------------------------- identity
@@ -391,7 +404,12 @@ def on_failure(db, cfg: dict, ev: dict) -> list[str]:
     session = ev.get("session_id") or ""
     segs = segment.parse(command)
     notes: list[str] = []
-    if NOT_RUN.search(text[:400]):
+    if harness_failure(text):
+        store.upsert_count(db, "sigs", {"name": HARNESS, "ctx": "", "err_class": "harness",
+                                        "sig": errclass.signature(text)}, {"bin_key": "", "via": ""})
+        if ev.get("tool_use_id"):
+            db.execute("UPDATE applied SET outcome='not-run' WHERE tool_use_id=? AND outcome IS NULL",
+                       (ev["tool_use_id"],))
         return notes
     _settle_applied(db, cfg, ev, failed=True, text=text)
     rejs = errclass.classify(text)

@@ -10,7 +10,7 @@ Operator:
   argshape status                      mode, breaker, counts, recent corrections
   argshape mode [off|observe|advise|correct] [--bin NAME | --sql]
   argshape explain '<command>'         dry-run: segments + what pre would do
-  argshape fixes [--all] | rejects | sigs [--top N] | columns | shapes
+  argshape fixes [--all] | rejects | sigs [--top N] [--harness] | columns | shapes
   argshape learn <bin> [subcmd ...]    learn a binary's --help now
   argshape demote <bin|conn> <bad> | promote <bin|conn> <bad>
   argshape breaker reset
@@ -196,6 +196,10 @@ def cmd_status(db, cfg) -> None:
     for t in ("bins", "specs", "rejects", "fixes", "sigs", "columns", "shapes", "applied"):
         n = db.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
         print(f"  {t:8} {n}")
+    h = db.execute("SELECT coalesce(sum(n),0) FROM sigs WHERE err_class='harness'").fetchone()[0]
+    rows = db.execute("SELECT err_class, sum(n) FROM sigs WHERE err_class!='harness' GROUP BY 1 ORDER BY 2 DESC").fetchall()
+    print(f"failures seen: {', '.join(f'{c} {n}' for c, n in rows) or 'none'}"
+          f"   (+{h} harness: denied, blocked or lost output; `sigs --harness`)")
     print(f"db: {store.DB_PATH} ({os.path.getsize(store.DB_PATH) // 1024} KB)")
     rows = db.execute("SELECT ts, outcome, before, after FROM applied ORDER BY ts DESC LIMIT 8").fetchall()
     if rows:
@@ -342,7 +346,8 @@ def main(argv) -> int:
                    .fetchall(), ["bin", "ctx", "kind", "token", "n", "last"])
         elif cmd == "sigs":
             top = int(args[args.index("--top") + 1]) if "--top" in args else 30
-            _table(db.execute("SELECT name, ctx, err_class, n, sig FROM sigs ORDER BY n DESC LIMIT ?", (top,))
+            where = "err_class='harness'" if "--harness" in args else "err_class!='harness'"
+            _table(db.execute(f"SELECT name, ctx, err_class, n, sig FROM sigs WHERE {where} ORDER BY n DESC LIMIT ?", (top,))
                    .fetchall(), ["bin", "ctx", "class", "n", "signature"])
         elif cmd == "columns":
             _table([(c[:8], r, len(json.loads(cols)), src, _ago(t)) for c, r, cols, src, t in
