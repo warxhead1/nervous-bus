@@ -105,9 +105,11 @@ that visibly use an arg parser. Never from a deny-list (`rm`, `dd`, `mkfs`,
 `kill`, `sudo`, ...). It always runs with stdin closed, pagers off, no TTY, and a
 2s timeout.
 
-## Measured (14-day replay, 24,670 Bash calls)
+## Measured (14-day replay, 101,402 shell calls)
 
-`python3 backtest.py --days 14 --state <scratch dir>` replays transcripts into a scratch state dir.
-Result: 15 rewrites, all `tail -N f1 f2` → `tail -n N f1 f2`, each of which would
-have failed. No other rewrites and no false positives. `plan()` averages 0.9 ms.
-Real flag misuse is rare in this corpus; the SQL path saw 2 real column misses.
+`python3 backtest.py --days 14 --state <scratch dir> [--agent claude]` replays shell calls from
+every agent `adapters/transcripts` can read (sub-agent sessions included) into a scratch state dir.
+Result (2026-10-31): 101,236 Claude Code, 163 Codex and 3 opencode calls; 65 rewrites, all multi-file
+`tail -N` → `tail -n N`, each of which would have failed; 3 SQL column advisories; no false positives
+and no exceptions. `plan()` averages 1.5 ms. Live, the SQL catalog path does the most useful work.
+Real flag misuse is rare; most recorded failures are harness ones (see `argshape status`).

@@ -282,12 +282,15 @@ def cmd_set_demoted(db, args, value: int) -> None:
     print(f"{'demoted' if value else 'promoted'} {n} fix(es)")
 
 
-SETTINGS = os.path.expanduser("~/.claude/settings.json")
+SETTINGS = os.path.join(os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")), "settings.json")
 HOOK_EVENTS = {"PreToolUse": "pre", "PostToolUse": "post", "PostToolUseFailure": "fail"}
 
 
 def cmd_install(remove: bool) -> None:
     exe = os.path.expanduser("~/.local/bin/argshape")
+    if sys.platform == "win32" or not os.path.exists(exe):
+        # No POSIX link (Windows, or not installed): call this script through this interpreter.
+        exe = f'"{sys.executable}" "{os.path.realpath(__file__)}"'
     with open(SETTINGS) as f:
         settings = json.load(f)
     hooks = settings.setdefault("hooks", {})
