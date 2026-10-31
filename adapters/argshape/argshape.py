@@ -36,7 +36,10 @@ import store     # noqa: E402
 # `core` (and the regex-heavy modules it imports) loads lazily: the pre hook
 # runs on every Bash call and must exit in interpreter-startup time when the
 # command touches nothing argshape has a lesson about.
-SQLISH = re.compile(r"\b(select|with|update|delete|insert)\b", re.I)
+# SQL-looking text: a statement keyword followed by SQL structure, so English
+# ("fix with X", "update the docs") does not take the slow post path.
+SQLISH = re.compile(r"\bselect\b.+\bfrom\b|\bwith\s+\w+\s+as\s*\(|\bupdate\s+\w+\s+set\b|"
+                    r"\bdelete\s+from\b|\binsert\s+into\b|\\d\+?\s", re.I | re.S)
 
 
 def _core():
@@ -152,7 +155,7 @@ def _pre(ev, cfg, tool_input, command) -> int:
                                 result["command"], result["applied"])
             for a in result["applied"]:
                 core.emit({"event": "correction", "bin": a.get("label", ""), "kind": a["kind"],
-                           "bad": a["bad"], "good": a["good"], "source": a["source"],
+                           "bad": a["bad"], "good": a.get("render") or a["good"], "source": a["source"],
                            "session_id": session})
             ctx = ("argshape corrected this command before it ran (learned from earlier rejections): "
                    + "; ".join(result["notes"])

@@ -136,6 +136,13 @@ Commands:
         self.assertIsNone(helpspec.unique_fix("--li", sp))      # too short / ambiguous
         self.assertIsNone(helpspec.unique_fix("--zzz", sp))
 
+    def test_sqlish_gate(self):
+        import argshape
+        for txt in ("git commit -m 'fix with tests'", "echo update the docs", "grep select x"):
+            self.assertIsNone(argshape.SQLISH.search(txt), txt)
+        for txt in ("psql -c 'select a from b'", "sqlite3 x 'insert into t values (1)'"):
+            self.assertIsNotNone(argshape.SQLISH.search(txt), txt)
+
     def test_never_runs_denylisted(self):
         self.assertFalse(helpspec.safe_to_run("/bin/rm", "rm", True))
 
@@ -323,6 +330,8 @@ class EndToEnd(unittest.TestCase):
         pre, ran, rc, _ = self.execute("tail -3 a b")              # learned for -N, not just -2
         self.assertEqual(ran, "tail -n 3 a b")
         self.assertEqual(rc, 0)
+        fixes = subprocess.run(self.cli_cmd("fixes"), capture_output=True, text=True, env=self.env).stdout
+        self.assertIn("1/1/0", fixes)                               # outcome stats hit the template row
         pre = self.hook("pre", "head -3 a")                         # other binaries untouched
         self.assertIsNone(pre)
         for valid in ("tail -3 a", "cat a | tail -3"):               # valid contexts untouched
@@ -351,6 +360,14 @@ class EndToEnd(unittest.TestCase):
             f"sqlite3 -header {db} \"select name from devices where mac = 'AA-BB-CC-DD-EE-02'\"")
         self.assertIn("'aa:bb:cc:dd:ee:02'", ran)
         self.assertEqual(rc, 0)
+        out = os.path.join(self.tmp, "results.csv")
+        with open(out, "w") as f:
+            f.write("agent data\n")
+        self.run_cmd(f"sqlite3 {db} \"create table hosts(hname text)\"")
+        _, _, rc, _ = self.execute(f"sqlite3 -header {db} \"select hnme from hosts\" > {out}")
+        self.assertNotEqual(rc, 0)
+        with open(out) as f:
+            self.assertNotIn("ARGSHAPE", f.read())                 # catalog rerun never replays a redirect
         shapes = subprocess.run(self.cli_cmd("shapes"), capture_output=True, text=True, env=self.env).stdout
         self.assertIn("colon/lower", shapes)
         self.assertNotIn("ee:01", shapes)                          # shapes only, never values
