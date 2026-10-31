@@ -15,6 +15,7 @@ STATE_DIR = os.environ.get("ARGSHAPE_STATE_DIR") or os.path.expanduser("~/.local
 DB_PATH = os.path.join(STATE_DIR, "argshape.db")
 CONFIG_PATH = os.environ.get("ARGSHAPE_CONFIG") or os.path.expanduser("~/.config/argshape/config.json")
 MODES = ("off", "observe", "advise", "correct")
+SCHEMA_VERSION = 1
 
 DEFAULT_CONFIG = {
     "mode": "correct",
@@ -69,9 +70,11 @@ def connect(create: bool = True) -> sqlite3.Connection | None:
         return None
     os.makedirs(STATE_DIR, exist_ok=True)
     db = sqlite3.connect(DB_PATH, timeout=2.0, isolation_level=None)
-    db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA synchronous=NORMAL")
-    db.executescript(SCHEMA)
+    if db.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+        db.execute("PRAGMA journal_mode=WAL")      # persistent; set once
+        db.executescript(SCHEMA)
+        db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     return db
 
 

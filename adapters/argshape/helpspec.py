@@ -140,7 +140,7 @@ def safe_to_run(path: str, name: str, proven_parser: bool) -> bool:
     return proven_parser or bool(SCRIPT_PARSER_HINT.search(body))
 
 
-def run_help(path: str, ctx: list[str], timeout: float = 3.0) -> str:
+def run_help(path: str, ctx: list[str], timeout: float = 2.0) -> str:
     env = dict(os.environ)
     env.update({"PAGER": "cat", "MANPAGER": "cat", "GIT_PAGER": "cat",
                 "LESS": "-FRX", "NO_COLOR": "1", "TERM": "dumb",
@@ -166,7 +166,7 @@ def _score(text: str) -> int:
     return len(sp.opts) + len(sp.subcmds)
 
 
-def version_of(path: str, timeout: float = 2.0) -> str:
+def version_of(path: str, timeout: float = 1.5) -> str:
     for flag in ("--version", "-V", "version"):
         try:
             p = subprocess.run([path, flag], stdin=subprocess.DEVNULL,

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """argshape — learn how each CLI and database wants to be called; correct, never block.
 
 Hooks (Claude Code, Bash tool):
@@ -24,20 +24,30 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
-import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
-import core      # noqa: E402
 import segment   # noqa: E402
 import store     # noqa: E402
+
+# `core` (and the regex-heavy modules it imports) loads lazily: the pre hook
+# runs on every Bash call and must exit in interpreter-startup time when the
+# command touches nothing argshape has a lesson about.
+SQLISH = re.compile(r"\b(select|with|update|delete|insert)\b", re.I)
+
+
+def _core():
+    import core
+    return core
 
 ERR_LOG_MAX = 256 * 1024
 
 
 def _log_error() -> None:
+    import traceback   # lazy: ~18 ms of import on the hot path otherwise
     try:
         os.makedirs(store.STATE_DIR, exist_ok=True)
         p = os.path.join(store.STATE_DIR, "errors.log")
@@ -72,6 +82,9 @@ def hook(kind: str) -> int:
     try:
         if kind == "pre":
             return _pre(ev, cfg, tool_input, command)
+        if kind == "post" and not _post_has_work(ev, command):
+            return 0
+        core = _core()
         db = store.connect()
         with db:
             if kind == "post":
@@ -87,6 +100,35 @@ def hook(kind: str) -> int:
     return 0
 
 
+def _post_has_work(ev, command: str) -> bool:
+    """A success only teaches something if it carries SQL output, settles a
+    correction, or answers a pending rejection from this session."""
+    if SQLISH.search(command):
+        return True
+    db = store.connect(create=False)
+    if db is None:
+        return False
+    with db:
+        return bool(db.execute(
+            "SELECT 1 FROM applied WHERE tool_use_id=? AND outcome IS NULL "
+            "UNION SELECT 1 FROM pending WHERE session=? LIMIT 1",
+            (ev.get("tool_use_id") or "", ev.get("session_id") or "")).fetchone())
+
+
+def _worth_planning(db, command: str) -> bool:
+    """Cheap gate: does any segment's program, or any SQL, have a lesson?"""
+    names = {r[0] for r in db.execute("SELECT DISTINCT name FROM rejects")}
+    if not names and not db.execute("SELECT 1 FROM shapes LIMIT 1").fetchone():
+        return False
+    aliases = {r[0][6:] for r in db.execute("SELECT k FROM meta WHERE k LIKE 'alias:%'")}
+    for seg in segment.parse(command):
+        base = os.path.basename(seg.bin or "")
+        if base in names or base in aliases:
+            return True
+    return bool(SQLISH.search(command)) and bool(
+        db.execute("SELECT 1 FROM shapes UNION SELECT 1 FROM rejects WHERE kind='column' LIMIT 1").fetchone())
+
+
 def _pre(ev, cfg, tool_input, command) -> int:
     if cfg.get("mode") == "observe":
         return 0
@@ -96,13 +138,14 @@ def _pre(ev, cfg, tool_input, command) -> int:
     with db:
         session = ev.get("session_id") or ""
         if segment.has_optout(command):
-            undone = core.register_optout(db, session)
+            undone = _core().register_optout(db, session)
             if undone:
                 what = ", ".join(f"`{f['bad']}` -> `{f['good']}`" for f in undone)
                 _out("PreToolUse", additionalContext=f"argshape: opt-out noted; demoted {what} to advice-only.")
             return 0
-        if not db.execute("SELECT 1 FROM rejects LIMIT 1").fetchone():
+        if not _worth_planning(db, command):
             return 0
+        core = _core()
         result = core.plan(db, cfg, command, ev.get("cwd") or os.getcwd())
         if result["command"] != command:
             core.record_applied(db, session, ev.get("tool_use_id") or "", command,
@@ -251,7 +294,7 @@ def cmd_install(remove: bool) -> None:
                 changed = True
         elif not mine:
             groups.append({"matcher": "Bash", "hooks": [
-                {"type": "command", "command": f"{exe} hook {kind}", "timeout": 3 if kind == "pre" else 15}]})
+                {"type": "command", "command": f"{exe} hook {kind}", "timeout": 3 if kind == "pre" else 30}]})
             changed = True
     if not changed:
         print("no change")
@@ -277,6 +320,8 @@ def main(argv) -> int:
     if cmd in ("install", "uninstall"):
         cmd_install(cmd == "uninstall")
         return 0
+    global core
+    core = _core()
     cfg = store.load_config()
     if cmd == "mode":
         cmd_mode(cfg, args)

@@ -15,7 +15,6 @@ a word this parser fully understood.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
 
 OPERATORS = ("&&", "||", "|&", ";;", "|", ";", "&", "(", ")")
 REDIR_RE = re.compile(r"(\d*|&)(>>|>&|<&|<<<|<<-|<<|<>|>\||>|<)")
@@ -49,26 +48,33 @@ DOCKER_EXEC_VALUE_OPTS = {"-e", "--env", "-u", "--user", "-w", "--workdir",
                           "--env-file", "--detach-keys"}
 
 
-@dataclass
 class Word:
-    raw: str            # exact source text, quotes included
-    value: str          # shell-unquoted value (best effort; $() kept verbatim)
-    start: int
-    end: int
-    quoted: bool = False      # any quoting / escaping / substitution inside
-    dynamic: bool = False     # contains $ expansion or backticks
+    """One shell word. raw = exact source (quotes kept); value = unquoted."""
+    __slots__ = ("raw", "value", "start", "end", "quoted", "dynamic")
+
+    def __init__(self, raw, value, start, end, quoted=False, dynamic=False):
+        self.raw, self.value, self.start, self.end = raw, value, start, end
+        self.quoted = quoted      # any quoting / escaping inside
+        self.dynamic = dynamic    # contains $ expansion or backticks
+
+    def __repr__(self):
+        return f"Word({self.raw!r})"
 
 
-@dataclass
 class Segment:
-    words: list[Word] = field(default_factory=list)   # argv after unwrapping
-    assigns: list[Word] = field(default_factory=list)
-    via: list[str] = field(default_factory=list)       # wrapper chain
-    stdin_text: str | None = None
-    stdin_span: tuple[int, int] | None = None
-    start: int = 0
-    end: int = 0
-    redirect_targets: list[Word] = field(default_factory=list)
+    """One simple command: argv after unwrapping, plus what wrapped it."""
+    __slots__ = ("words", "assigns", "via", "stdin_text", "stdin_span", "start", "end",
+                 "redirect_targets")
+
+    def __init__(self, start=0):
+        self.words: list[Word] = []
+        self.assigns: list[Word] = []
+        self.via: list[str] = []
+        self.stdin_text: str | None = None
+        self.stdin_span: tuple[int, int] | None = None
+        self.start = start
+        self.end = 0
+        self.redirect_targets: list[Word] = []
 
     @property
     def bin(self) -> str | None:
@@ -79,13 +85,11 @@ class Segment:
         return self.words[1:]
 
 
-@dataclass
 class _Tok:
-    kind: str           # "word" | "op" | "redir" | "nl" | "comment"
-    text: str
-    start: int
-    end: int
-    word: Word | None = None
+    __slots__ = ("kind", "text", "start", "end", "word")
+
+    def __init__(self, kind, text, start, end, word=None):
+        self.kind, self.text, self.start, self.end, self.word = kind, text, start, end, word
 
 
 def _scan_subst(s: str, i: int) -> int:

@@ -164,6 +164,35 @@ class ShapeTests(unittest.TestCase):
                          "select name from t where x='nme'")
 
 
+class SchemaTests(unittest.TestCase):
+    def test_emitted_payloads_match_schema(self):
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest("jsonschema not installed")
+        schema = json.load(open(os.path.join(HERE, "..", "..", "schemas", "agent.cli.correction.v1.json")))
+        import core
+        sent = []
+        orig = core.shutil.which
+        core.shutil.which = lambda name: "/bin/true" if name == "nervous" else orig(name)
+        orig_popen = core.subprocess.Popen
+        core.subprocess.Popen = lambda argv, **kw: sent.append(json.loads(argv[3]))
+        os.environ.pop("ARGSHAPE_NO_BUS", None)
+        try:
+            core.emit({"event": "rejection", "bin": "rg", "ctx": "", "kind": "flag", "bad": "--limt",
+                       "good": "", "version": "ripgrep 15"})
+            core.emit({"event": "correction", "bin": "rg", "kind": "flag", "bad": "--limt",
+                       "good": "--max-count", "source": "spec-unique", "session_id": "s"})
+            core.emit({"event": "demotion", "kind": "column", "bad": "a", "good": "b", "reason": "opt-out"})
+            core.emit({"event": "breaker", "applied": 4, "bad_count": 3})
+        finally:
+            core.shutil.which = orig
+            core.subprocess.Popen = orig_popen
+        self.assertEqual(len(sent), 4)
+        for p in sent:
+            jsonschema.Draft202012Validator(schema).validate(p)
+
+
 class EndToEnd(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="argshape-test-")
@@ -283,6 +312,26 @@ class EndToEnd(unittest.TestCase):
         for cmd in ["echo --limt", "fakecli show --limt", "grep -rn -- --limt .", "fakecli list '--limt' 5"]:
             pre = self.hook("pre", cmd)
             self.assertFalse(pre and "updatedInput" in pre, cmd)
+
+    def test_numeric_obsolete_option_generalizes(self):
+        for n in ("a", "b"):
+            with open(os.path.join(self.tmp, n), "w") as f:
+                f.write("1\n2\n3\n")
+        _, _, rc, post = self.execute("tail -2 a b")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("-n 2", post["additionalContext"])
+        pre, ran, rc, _ = self.execute("tail -3 a b")              # learned for -N, not just -2
+        self.assertEqual(ran, "tail -n 3 a b")
+        self.assertEqual(rc, 0)
+        pre = self.hook("pre", "head -3 a")                         # other binaries untouched
+        self.assertIsNone(pre)
+        for valid in ("tail -3 a", "cat a | tail -3"):               # valid contexts untouched
+            self.assertIsNone(self.hook("pre", valid), valid)
+
+    def test_dash_value_advice(self):
+        _, _, rc, post = self.execute("grep -E '->|x' /dev/null")
+        if rc != 0 and post:
+            self.assertIn("-e", post["additionalContext"])
 
     @unittest.skipUnless(shutil.which("sqlite3"), "sqlite3 not installed")
     def test_sql_column_and_mac_shape(self):

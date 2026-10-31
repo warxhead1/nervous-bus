@@ -21,7 +21,7 @@ FLAG_TOK = r"(-{1,2}[A-Za-z0-9][\w.\-]*)"
 
 @dataclass
 class Rejection:
-    kind: str                 # flag | short | subcmd | column | relation | missing_arg
+    kind: str                 # flag | subcmd | column | relation | missing_arg | dash_value
     token: str
     prog: str | None = None   # program named in the message, if any
     hint: str | None = None   # the tool's own suggested replacement
@@ -36,6 +36,11 @@ def _q(s: str) -> str:
 # (kind, regex, token group, hint group or None). Order matters: the more
 # specific shapes (with hints) first.
 FLAG_PATTERNS = [
+    # GNU head/tail obsolete `-N` mixed with other options or several files:
+    # tail: option used in invalid context -- 2   ->  `-n 2`
+    ("numeric", re.compile(r"option used in invalid context -- (\d+)"), 1, None),
+    # A value that starts with `-` parsed as an option: ugrep: invalid option ->|reject
+    ("dash_value", re.compile(r"(?:invalid|unknown|unrecognized) option[: ]+['‘`]?(-[^\s'’`]*[^\w\s'’`=.,\-][^\s'’`]*)"), 1, None),
     # clap: error: unexpected argument '--limt' found ... tip: a similar argument exists: '--limit'
     ("flag", re.compile(r"unexpected argument '(-[^']+)' found(?:.*?\n)*?.*?tip: (?:a similar argument exists|to pass '[^']*' as a value)[^']*'(-[^'=]+)", re.I), 1, 2),
     ("flag", re.compile(r"unexpected argument '(-[^'=]+)[^']*' found", re.I), 1, None),
@@ -125,12 +130,15 @@ def classify(text: str) -> list[Rejection]:
             tok = _q(m.group(tg))
             if kind == "flag" and not tok.startswith("-"):
                 tok = ("--" if len(tok) > 1 else "-") + tok   # git prints without dashes
-            if kind in ("short", "missing_arg") and not tok.startswith("-"):
+            if kind in ("short", "missing_arg", "numeric") and not tok.startswith("-"):
                 tok = "-" + tok
-            hint = _q(m.group(hg)) if hg and m.group(hg) else None
+            if kind == "numeric":
+                hint = "-n " + tok[1:]
+            if kind != "numeric":
+                hint = _q(m.group(hg)) if hg and m.group(hg) else None
             if any(r.token == tok for r in out):
                 continue
-            add(Rejection("flag" if kind == "short" else kind, tok, prog_before(m.start()), hint))
+            add(Rejection("flag" if kind in ("short", "numeric") else kind, tok, prog_before(m.start()), hint))
     for rx, tg, hg in SUBCMD_PATTERNS:
         for m in rx.finditer(t):
             hint = _q(m.group(hg)) if hg and m.lastindex and m.lastindex >= hg and m.group(hg) else None

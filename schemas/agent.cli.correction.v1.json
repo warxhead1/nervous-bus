@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/agent.cli.correction.v1.json",
+  "title": "agent.cli.correction v1",
+  "description": "What argshape (adapters/argshape/) learned or changed about how an agent called a CLI or database. Published by its Claude Code Bash hooks: the first time a binary build rejects a token (rejection), each time a known-bad token is rewritten before a command runs (correction), when a fix is withdrawn because it failed or the agent opted out (demotion), and when the circuit breaker drops corrections to advice (breaker). Consumers (reflex-recorder, dashboards) measure whether corrections cut repeated failures. Carries tokens and binary names only; never command output or row values.",
+  "type": "object",
+  "required": ["event"],
+  "properties": {
+    "event": {"type": "string", "enum": ["rejection", "correction", "demotion", "breaker"]},
+    "bin": {"type": "string", "maxLength": 200, "description": "Binary name, plus subcommand context when known (e.g. 'gh pr')"},
+    "ctx": {"type": "string", "maxLength": 200, "description": "Subcommand path the token was rejected under"},
+    "kind": {"type": "string", "enum": ["flag", "subcmd", "column", "shape"]},
+    "bad": {"type": "string", "maxLength": 300, "description": "The rejected token"},
+    "good": {"type": "string", "maxLength": 300, "description": "The replacement, empty when none is known"},
+    "source": {"type": "string", "enum": ["tool-hint", "pg-hint", "spec-unique", "catalog", "session-pair", "shape"]},
+    "version": {"type": "string", "maxLength": 200, "description": "First line of the binary's --version"},
+    "reason": {"type": "string", "maxLength": 300},
+    "session_id": {"type": "string"},
+    "applied": {"type": "integer", "minimum": 0},
+    "bad_count": {"type": "integer", "minimum": 0},
+    "ts": {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": false
+}

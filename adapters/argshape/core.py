@@ -72,7 +72,7 @@ def option_words(seg, spec=None):
         v = w.value
         if v == "--":
             return
-        if not v.startswith("-") or v == "-" or NUMERIC_OPT.match(v) or w.dynamic:
+        if not v.startswith("-") or v == "-" or w.dynamic:
             continue
         name = v.split("=", 1)[0] if v.startswith("--") else v
         if spec and spec.opts.get(name) and "=" not in v:
@@ -123,7 +123,7 @@ def fix_eligible(fix: dict, spec, cfg: dict) -> bool:
     if fix["n_bad"] > fix["n_ok"] and fix["n_bad"] > 0:
         return False
     if fix["kind"] == "flag" and spec and spec.opts:
-        if fix["bad"] in spec.opts or fix["good"] not in spec.opts:
+        if fix["bad"] in spec.opts or fix["good"].split()[0] not in spec.opts:
             return False
     if fix["kind"] == "subcmd" and spec and spec.subcmds and fix["good"] not in spec.subcmds:
         return False
@@ -189,9 +189,15 @@ def plan(db, cfg: dict, command: str, cwd: str) -> dict:
         label = base + (f" {ctx}" if ctx else "")
         # flags
         for _, opt, w in option_words(seg, spec):
-            if not rejected(db, bin_key, ctx, "flag", opt):
+            num = NUMERIC_OPT.match(opt)
+            if num and not _numeric_invalid_context(seg, opt):
+                continue      # `| tail -5` and `tail -5 file` are valid; only mixed use fails
+            key_tok = "-#" if num else opt      # `-N` lessons generalize over N
+            if not rejected(db, bin_key, ctx, "flag", key_tok):
                 continue
-            fix, all_fixes = best_fix(db, bin_key, ctx, "flag", opt, spec, cfg)
+            fix, all_fixes = best_fix(db, bin_key, ctx, "flag", key_tok, spec, cfg)
+            if fix and num:
+                fix = {**fix, "good": fix["good"].replace("#", opt[1:])}
             rewritable = w.raw.startswith(opt) and not w.quoted
             if fix and mode == "correct" and rewritable:
                 edits.append((w.start, w.start + len(opt), fix["good"]))
@@ -264,6 +270,13 @@ def plan(db, cfg: dict, command: str, cwd: str) -> dict:
     return {"command": new_command, "notes": notes, "applied": applied}
 
 
+def _numeric_invalid_context(seg, opt: str) -> bool:
+    """GNU head/tail reject obsolete `-N` only beside other options or with 2+ files."""
+    others = [n for _, n, _ in option_words(seg) if n != opt]
+    files = [w for _, w in positionals(seg)]
+    return bool(others) or len(files) >= 2
+
+
 def known_columns(db, conn: str, rels: list[str]) -> list[str]:
     cols: list[str] = []
     for rel in rels or [""]:
@@ -274,6 +287,16 @@ def known_columns(db, conn: str, rels: list[str]) -> list[str]:
 
 
 def record_applied(db, session: str, tool_use_id: str, before: str, after: str, applied: list[dict]) -> None:
+    db.execute("BEGIN")
+    try:
+        _record_applied(db, session, tool_use_id, before, after, applied)
+        db.execute("COMMIT")
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
+
+
+def _record_applied(db, session, tool_use_id, before, after, applied) -> None:
     db.execute("INSERT OR REPLACE INTO applied VALUES (?,?,?,?,?,?,NULL)",
                (tool_use_id or f"t{time.time()}", session, time.time(),
                 json.dumps([{k: a[k] for k in ("scope", "ctx", "kind", "bad", "good")} for a in applied]),
@@ -317,11 +340,11 @@ def attribute(rej, segs, db, cwd):
     for seg in segs:
         if not seg.bin:
             continue
-        if rej.kind in ("flag", "missing_arg"):
+        if rej.kind in ("flag", "missing_arg", "dash_value"):
             tok = rej.token
             hit = False
             for _, name, w in option_words(seg):
-                if name == tok:
+                if name == tok or w.value == tok:
                     hit = True
                 elif len(tok) == 2 and tok[0] == "-" and not name.startswith("--") and tok[1] in name[1:]:
                     hit = True
@@ -387,7 +410,13 @@ def on_failure(db, cfg: dict, ev: dict) -> list[str]:
                                {"bin_key": "", "via": " > ".join(last.via)})
         return notes
     for rej, seg in attributed:
-        if rej.kind in ("flag", "subcmd", "missing_arg"):
+        if rej.kind == "dash_value":
+            name = os.path.basename(seg.bin)
+            store.upsert_count(db, "sigs", {"name": name, "ctx": "", "err_class": "dash_value",
+                                            "sig": errclass.signature(text)}, {"bin_key": "", "via": " > ".join(seg.via)})
+            notes.append(f"argshape: `{name}` parsed `{rej.token}` as an option because it starts with `-`. "
+                         f"Pass it as `-e '{rej.token}'` (grep family) or put it after `--`.")
+        elif rej.kind in ("flag", "subcmd", "missing_arg"):
             notes += _learn_arg_rejection(db, cfg, rej, seg, cwd, session, text)
         else:
             notes += _learn_sql_rejection(db, cfg, rej, seg, cwd, session, text, command)
@@ -417,10 +446,12 @@ def _learn_arg_rejection(db, cfg, rej, seg, cwd, session, text) -> list[str]:
     ctx_words = []
     if root and root.subcmds and pos and pos[0] in root.subcmds and rej.kind != "subcmd":
         ctx_words = [pos[0]]
+        # One level per failure keeps the hook bounded (<= 2 binaries' --help);
+        # a deeper level is learned on a later failure if it ever matters.
         sub = _ensure_spec(db, bin_key, path, name, ctx_words, proven=True)
-        if sub and sub.subcmds and len(pos) > 1 and pos[1] in sub.subcmds:
+        if sub and sub.subcmds and len(pos) > 1 and pos[1] in sub.subcmds \
+                and store.get_spec(db, bin_key, f"{pos[0]} {pos[1]}"):
             ctx_words.append(pos[1])
-            _ensure_spec(db, bin_key, path, name, ctx_words, proven=True)
     ctx = " ".join(ctx_words)
     spec = store.get_spec(db, bin_key, ctx) or root
     tok = rej.token
@@ -434,6 +465,10 @@ def _learn_arg_rejection(db, cfg, rej, seg, cwd, session, text) -> list[str]:
         if spec and tok in spec.opts:
             return [f"`{name}{' ' + ctx if ctx else ''} {tok}` takes a value"]
         return []
+    shown = tok
+    if NUMERIC_OPT.match(tok):
+        tok = "-#"
+        rej = errclass.Rejection(rej.kind, tok, rej.prog, "-n #")
     first = db.execute("SELECT n FROM rejects WHERE bin_key=? AND ctx=? AND kind=? AND token=?",
                        (bin_key, "" if kind == "subcmd" else ctx, kind, tok)).fetchone() is None
     store.upsert_count(db, "rejects", {"bin_key": bin_key, "ctx": "" if kind == "subcmd" else ctx,
@@ -455,7 +490,7 @@ def _learn_arg_rejection(db, cfg, rej, seg, cwd, session, text) -> list[str]:
         if len(close) == 1:
             good = close[0]
             store.add_fix(db, bin_key, fctx, kind, tok, good, "spec-unique", session, name)
-    if kind == "flag" and session:
+    if kind == "flag" and session and tok != "-#":
         opts = sorted({n for _, n, _ in option_words(seg, spec)})
         db.execute("INSERT OR REPLACE INTO pending VALUES (?,?,?,?,?,?)",
                    (session, bin_key, ctx, tok, json.dumps(opts), time.time()))
@@ -464,9 +499,10 @@ def _learn_arg_rejection(db, cfg, rej, seg, cwd, session, text) -> list[str]:
               "good": good or "", "version": (spec.version if spec else "")})
     label = name + (f" {ctx}" if ctx else "")
     ver = (root.version if root and root.version else "")
-    head = f"argshape: `{label}`{f' ({ver})' if ver else ''} does not accept `{tok}`."
+    head = f"argshape: `{label}`{f' ({ver})' if ver else ''} does not accept `{shown}` here."
     if good:
-        return [head + f" Use `{good}`; argshape will apply this fix automatically next time."]
+        good_shown = good.replace("#", shown[1:]) if tok == "-#" else good
+        return [head + f" Use `{good_shown}`; argshape will apply this fix automatically next time."]
     if kind == "flag" and spec and spec.opts:
         near = helpspec.nearest(tok, spec.opts)
         return [head + (f" Nearest valid options: {', '.join(near)}." if near else
@@ -654,7 +690,7 @@ def _check_breaker(db, cfg) -> None:
     if n >= int(cfg.get("breaker_min_applied", 4)) and bad / n >= float(cfg.get("breaker_fail_ratio", 0.5)):
         if not breaker_open(db):
             store.meta_set(db, "breaker_until", str(time.time() + window))
-            emit({"event": "breaker", "applied": n, "bad": bad})
+            emit({"event": "breaker", "applied": n, "bad_count": bad})
 
 
 # ---------------------------------------------------------------- bus
