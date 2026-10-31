@@ -7,6 +7,7 @@ subprocess with JSON on stdin, against a throwaway state dir, a real fake CLI
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -336,6 +337,20 @@ class EndToEnd(unittest.TestCase):
         self.assertIsNone(pre)
         for valid in ("tail -3 a", "cat a | tail -3"):               # valid contexts untouched
             self.assertIsNone(self.hook("pre", valid), valid)
+
+    def test_harness_failures_are_not_cli_failures(self):
+        deny = ("This agent is isolated in the worktree /w, but this command is too complex to "
+                "verify that it stays inside the worktree. Refusing to run it.")
+        for text in (deny, "Exit code 1\nCommand output was lost: the temp filesystem is full"):
+            self.assertIsNone(self.hook("fail", "fakecli list --limt 5 | tail -3", error=text))
+        db = sqlite3.connect(os.path.join(self.env["ARGSHAPE_STATE_DIR"], "argshape.db"))
+        self.assertEqual(db.execute("SELECT count(*) FROM rejects").fetchone()[0], 0)
+        self.assertEqual(db.execute("SELECT count(*) FROM specs").fetchone()[0], 0)
+        self.assertEqual(db.execute("SELECT DISTINCT name, err_class FROM sigs").fetchall(), [("(harness)", "harness")])
+        sigs = subprocess.run(self.cli_cmd("sigs"), capture_output=True, text=True, env=self.env).stdout
+        self.assertNotIn("isolated", sigs)
+        status = subprocess.run(self.cli_cmd("status"), capture_output=True, text=True, env=self.env).stdout
+        self.assertIn("+2 harness", status)
 
     def test_dash_value_advice(self):
         _, _, rc, post = self.execute("grep -E '->|x' /dev/null")
