@@ -126,8 +126,10 @@ def test_legacy_or_malformed_shapes_are_rejected(mutation, reason: str) -> None:
         ("occurred_at", "not-a-timestamp"),
         ("title", 7),
         ("project", ""),
-        ("category", "application"),
-        ("source_type", "unknown-source"),
+        ("category", "Not A Slug"),
+        ("category", "x" * 65),
+        ("source_type", "Unknown Source"),
+        ("source_type", "-leading-hyphen"),
         ("file", ""),
     ],
 )
@@ -136,6 +138,16 @@ def test_identifier_timestamp_type_enum_and_required_value_guards(field: str, va
     event[field] = value
     with pytest.raises(ValidationError):
         _validator().validate(event)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("category", "application"), ("category", "shader-architecture"), ("source_type", "unknown-source"), ("source_type", "generated")],
+)
+def test_novel_slug_category_and_source_type_validate(field: str, value: str) -> None:
+    event = _event("kb.entry.create", "manual", "concept", _default_confidence())
+    event[field] = value
+    _validator().validate(event)
 
 
 def test_missing_required_provenance_field_fails() -> None:
