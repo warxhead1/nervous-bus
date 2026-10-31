@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime
 import glob
+import pathlib
 import json
 import os
 import sqlite3
@@ -32,7 +33,10 @@ class OpenCode(Source):
     live_hooks = "plugin hooks tool.execute.before / tool.execute.after"
 
     def roots(self) -> list[str]:
-        return unique([os.path.join(xdg_data(), "opencode")] + extra_roots(self.name))
+        # opencode resolves paths with the xdg-basedir package: ~/.local/share on every OS
+        # unless XDG_DATA_HOME is set. The platform data dir is a fallback.
+        xdg = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+        return unique([os.path.join(xdg, "opencode"), os.path.join(xdg_data(), "opencode")] + extra_roots(self.name))
 
     def sessions(self, since: float = 0.0):
         seen = set()
@@ -102,7 +106,7 @@ class OpenCode(Source):
 
 
 def _ro(path: str) -> sqlite3.Connection:
-    uri = "file:" + path.replace("?", "%3f").replace("#", "%23") + "?mode=ro"
+    uri = pathlib.Path(os.path.abspath(path)).as_uri() + "?mode=ro"
     return sqlite3.connect(uri, uri=True, timeout=0.5)
 
 
