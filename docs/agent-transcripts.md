@@ -10,6 +10,24 @@ the row when you add or fix a source.
 Readable today (`transcripts sources`): see the registry in
 `adapters/transcripts/sources/`. Everything else below is a work order.
 
+## Readers in this repo
+
+| agent | module | verified on real sessions |
+|:-|:-|:-|
+| Claude Code | `sources/claude.py` | yes, including `<session>/subagents/` |
+| Codex CLI | `sources/codex.py` | yes, both shell-call generations |
+| Gemini CLI | `sources/gemini.py` | legacy `.json` yes; `.jsonl` tool calls from a fixture only (no real `.jsonl` session with tool calls seen yet) |
+| Antigravity CLI | `sources/agy.py` | yes, `brain/<id>/.system_generated/logs/transcript_full.jsonl` |
+| Cursor CLI | `sources/cursor.py` | yes; the format records no tool results |
+| opencode | `sources/opencode.py` | yes, SQLite read-only (`session`, `part`) |
+
+Findings from building them, which override the research notes below:
+
+- **Gemini CLI.** Results are at `result[0].functionResponse.response` (`output` or `error`). Shell `status` is `success` even when the program exited nonzero. The exit code is an `Exit Code: N` line in the output, and some successful calls don't have one. Denied or cancelled calls carry status `error`/`cancelled` and text such as `Tool execution denied`. JSONL metadata lines are `{"$set": {"lastUpdated": ...}}`. `~/.gemini/projects.json` (`{projects: {path: shortname}}`) maps `tmp/<name>` back to a cwd.
+- **Antigravity CLI.** The steps after a `PLANNER_RESPONSE` step, up to the next planner step, are the results of its `tool_calls`, in order (the counts matched in 97% of planner steps). Most `run_command` results are `GENERIC` steps, not `RUN_COMMAND`. Exit text is `The command completed successfully`, `The command exited with code N`, or `The command failed with exit code N`. `RUNNING` marks a background task that has no result. `transcript.jsonl` is truncated (`truncated_fields`) and `transcript_full.jsonl` is not.
+- **Cursor CLI.** The shell tool is `Shell` with input `{command, description}`. `tool_use` blocks have no `id`, and no results are written.
+- **opencode.** A tool part's `data` is `{type: "tool", tool: "bash", state: {status, input: {command}, output, metadata: {exit, output, truncated}}}`. The database also has `session_message` and `event` tables (event-sourced, not read yet) and credential tables, which a reader must never select.
+
 ## (a) Summary table
 
 | Agent | Linux | macOS | Windows | Format | Live hook | Evidence |
