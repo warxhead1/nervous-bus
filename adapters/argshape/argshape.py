@@ -152,7 +152,7 @@ def _pre(ev, cfg, tool_input, command) -> int:
                                 result["command"], result["applied"])
             for a in result["applied"]:
                 core.emit({"event": "correction", "bin": a.get("label", ""), "kind": a["kind"],
-                           "bad": a["bad"], "good": a["good"], "source": a["source"],
+                           "bad": a["bad"], "good": a.get("render") or a["good"], "source": a["source"],
                            "session_id": session})
             ctx = ("argshape corrected this command before it ran (learned from earlier rejections): "
                    + "; ".join(result["notes"])

@@ -323,6 +323,8 @@ class EndToEnd(unittest.TestCase):
         pre, ran, rc, _ = self.execute("tail -3 a b")              # learned for -N, not just -2
         self.assertEqual(ran, "tail -n 3 a b")
         self.assertEqual(rc, 0)
+        fixes = subprocess.run(self.cli_cmd("fixes"), capture_output=True, text=True, env=self.env).stdout
+        self.assertIn("1/1/0", fixes)                               # outcome stats hit the template row
         pre = self.hook("pre", "head -3 a")                         # other binaries untouched
         self.assertIsNone(pre)
         for valid in ("tail -3 a", "cat a | tail -3"):               # valid contexts untouched

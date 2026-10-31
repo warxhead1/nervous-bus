@@ -196,13 +196,13 @@ def plan(db, cfg: dict, command: str, cwd: str) -> dict:
             if not rejected(db, bin_key, ctx, "flag", key_tok):
                 continue
             fix, all_fixes = best_fix(db, bin_key, ctx, "flag", key_tok, spec, cfg)
-            if fix and num:
-                fix = {**fix, "good": fix["good"].replace("#", opt[1:])}
+            render = fix["good"].replace("#", opt[1:]) if fix and num else (fix["good"] if fix else "")
             rewritable = w.raw.startswith(opt) and not w.quoted
             if fix and mode == "correct" and rewritable:
-                edits.append((w.start, w.start + len(opt), fix["good"]))
-                applied.append({**fix, "label": label})
-                notes.append(f"`{label} {opt}` -> `{fix['good']}` ({fix['source']})")
+                edits.append((w.start, w.start + len(opt), render))
+                # `fix` keeps its stored key (`-n #`) so outcome stats find the row.
+                applied.append({**fix, "label": label, "render": render})
+                notes.append(f"`{label} {opt}` -> `{render}` ({fix['source']})")
             else:
                 near = helpspec.nearest(opt, spec.opts) if spec else []
                 cand = fix["good"] if fix else (all_fixes[0]["good"] if all_fixes else None)
