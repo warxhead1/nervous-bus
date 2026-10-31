@@ -8,6 +8,8 @@ on:
       - 'schemas/bus.system.resource.sample.*.json'
       - 'adapters/needs-you/**'
       - 'schemas/agent.attention.*.json'
+      - 'adapters/argshape/**'
+      - 'schemas/agent.cli.correction.*.json'
       - '.github/workflows/ci-host-load.yml'
   pull_request:
     branches: [main]
@@ -16,6 +18,8 @@ on:
       - 'schemas/bus.system.resource.sample.*.json'
       - 'adapters/needs-you/**'
       - 'schemas/agent.attention.*.json'
+      - 'adapters/argshape/**'
+      - 'schemas/agent.cli.correction.*.json'
       - '.github/workflows/ci-host-load.yml'
   workflow_dispatch:
 
@@ -47,3 +51,5 @@ jobs:
         run: python3 -m unittest discover -s adapters/host-load -p 'test_*.py'
       - name: Test the needs-you Stop hook and queue
         run: python3 -m unittest discover -s adapters/needs-you -p 'test_*.py'
+      - name: Test argshape (CLI/SQL argument learner and corrector hooks)
+        run: python3 -m unittest discover -s adapters/argshape -p 'test_*.py'
