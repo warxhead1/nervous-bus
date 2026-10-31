@@ -61,16 +61,24 @@ sudo pacman -S redis && sudo systemctl enable --now redis
 sudo apt install redis-server && sudo systemctl enable --now redis
 ```
 
-### 2. Install the shell SDK
+### 2. Install the CLIs
 
 ```bash
 git clone --recurse-submodules https://github.com/warxhead1/nervous-bus
 cd nervous-bus
-chmod +x sdk/shell/nervous
-cp sdk/shell/nervous ~/.local/bin/nervous   # or symlink
 
-nervous setup    # bootstraps ~/.config/nervous-bus/
+make doctor     # what is present / missing on this machine (py tools/setup.py doctor)
+make install    # link nervous, nbd, probe, argshape, needs-you, transcripts into ~/.local/bin
 ```
+
+No `make`? Run `python3 tools/setup.py install` (Windows: `py tools/setup.py install`). `install` creates `~/.config/nervous-bus/` (what `nervous setup` does), never overwrites a file that is not already a nervous-bus link, and prints the `PATH` line to add if the bin dir is not on it. `make uninstall` removes only links that point into this checkout; `make hooks` wires argshape into Claude Code; `make test` runs each test suite in its own process (`make help` lists everything).
+
+Platform notes:
+
+- **Linux / macOS:** symlinks into `~/.local/bin`.
+- **Windows:** the Python parts (`argshape`, `needs-you`, `transcripts`, `setup.py`) run natively; `install` writes `.cmd` shims into `%LOCALAPPDATA%\nervous-bus\bin`. The shell SDK (`nervous`, `nbd`, `probe`) needs bash: use WSL or Git Bash.
+
+**Supported coding agents:** Claude Code and Codex CLI transcripts are read through `adapters/transcripts`; see [docs/agent-transcripts.md](docs/agent-transcripts.md).
 
 The `--recurse-submodules` flag populates the `autobench/` submodule for kernel evolution and the autobench-pulse dashboard. Omit it if you only need the core bus.
 
