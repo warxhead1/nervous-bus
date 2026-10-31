@@ -75,6 +75,29 @@ class TestLedger(unittest.TestCase):
             self.assertEqual(s, ("sonnet-worker", 1))
             self.assertEqual(c.execute("SELECT DISTINCT project FROM sessions").fetchall(), [("proj",)])
 
+    def test_archive_copy_without_meta_is_attributed_from_live_dir(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            rel = Path("-home-eric-p") / "s1" / "subagents" / "agent-b.jsonl"
+            archive = home / "archive"
+            (archive / rel).parent.mkdir(parents=True)
+            (archive / rel).write_text(_asst("m1", "2026-10-01T00:00:01Z", _usage(), []) + "\n")
+            live_meta = (home / ".claude" / "projects" / rel).with_suffix("").with_suffix(".meta.json")
+            live_meta.parent.mkdir(parents=True)
+            orig_home, orig_roots = tl.HOME, tl.ROOTS
+            tl.HOME, tl.ROOTS = home, (("claude", archive),)
+            try:
+                db = home / "tokens.db"
+                tl.run(db, tl.ROOTS)                       # meta not written yet: untyped
+                c = sqlite3.connect(db)
+                self.assertIn(c.execute("SELECT agent_type FROM sessions").fetchone()[0], (None, ""))
+                live_meta.write_text(json.dumps({"agentType": "sonnet-worker", "model": "sonnet"}))
+                self.assertEqual(tl.run(db, tl.ROOTS)["subagent_meta_backfilled"], 1)
+                self.assertEqual(c.execute("SELECT agent_type, agent_model FROM sessions").fetchone(),
+                                 ("sonnet-worker", "sonnet"))
+            finally:
+                tl.HOME, tl.ROOTS = orig_home, orig_roots
+
     def test_classify_and_project(self):
         self.assertEqual(tl.classify_command("cargo test -p x"), "test")
         self.assertEqual(tl.classify_command("go build ./..."), "build")

@@ -313,6 +313,18 @@ class TestSubagentTranscripts(unittest.TestCase):
             self.assertEqual((Path(dst_root) / rel).read_bytes(),
                              (Path(src_root) / rel).read_bytes())
 
+    def test_subagent_meta_mirrored(self):
+        with tempfile.TemporaryDirectory() as src_root, tempfile.TemporaryDirectory() as dst_root:
+            sub = Path(src_root) / "-home-eric-p" / "sess-1" / "subagents"
+            _write_jsonl(sub / "agent-a1.jsonl", 1)
+            (sub / "agent-a1.meta.json").write_text('{"agentType": "sonnet-worker"}')
+            ts.sync_once(src_root=src_root, dst_root=dst_root)
+            dst = Path(dst_root) / "-home-eric-p" / "sess-1" / "subagents" / "agent-a1.meta.json"
+            self.assertEqual(dst.read_text(), '{"agentType": "sonnet-worker"}')
+            (sub / "agent-a1.meta.json").write_text('{"agentType": "sonnet-worker", "x": 1}')
+            ts.sync_once(src_root=src_root, dst_root=dst_root)
+            self.assertIn('"x": 1', dst.read_text())
+
 
 class TestSyncAll(unittest.TestCase):
     """Multi-root: claude keeps the legacy layout, mmx lands under <dst>/mmx/."""

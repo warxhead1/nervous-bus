@@ -131,6 +131,27 @@ def _iter_jsonl(src_dir: str) -> List[str]:
 
 # ── file-level mirror ─────────────────────────────────────────────────────────
 
+def _mirror_meta(src_path: str, dst_path: str) -> None:
+    """Copy a subagent's sibling ``<agent>.meta.json`` (agent type, requested
+    model, description). It is tiny and rewritten whole, so copy it whenever
+    the size differs. Without it the archive copy cannot be attributed."""
+    if not src_path.endswith(".jsonl"):
+        return
+    src_meta = src_path[: -len(".jsonl")] + ".meta.json"
+    dst_meta = dst_path[: -len(".jsonl")] + ".meta.json"
+    try:
+        size = os.path.getsize(src_meta)
+    except OSError:
+        return
+    try:
+        if os.path.getsize(dst_meta) == size:
+            return
+    except OSError:
+        pass
+    os.makedirs(os.path.dirname(dst_meta), exist_ok=True)
+    shutil.copyfile(src_meta, dst_meta)
+
+
 def _stat_inode_size(path: str) -> Tuple[int, int]:
     return (os.stat(path).st_ino, os.stat(path).st_size)
 
@@ -222,6 +243,7 @@ def sync_once(src_root: str = DEFAULT_SRC, dst_root: str = DEFAULT_DST) -> Dict[
                 stats["errors"].append(f"{rel}: {type(e).__name__}: {e}")
                 continue
 
+            _mirror_meta(src_path, dst_path)
             counter = {"new": "files_new", "appended": "files_appended",
                        "recopied": "files_recopied"}.get(action)
             if counter:

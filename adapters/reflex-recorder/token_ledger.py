@@ -270,6 +270,35 @@ class _Session:
         self.meta: dict = {}
 
 
+def _subagent_meta(key: str, path: Path) -> dict:
+    """<agent>.meta.json beside the transcript; for an archive copy without one,
+    the live file under ~/.claude/projects (same relative path)."""
+    cands = [path.with_suffix("").with_suffix(".meta.json")]
+    if key.startswith("claude:"):
+        cands.append((HOME / ".claude" / "projects" / key[len("claude:"):]).with_suffix("").with_suffix(".meta.json"))
+    for c in cands:
+        try:
+            return json.loads(c.read_text())
+        except (OSError, ValueError):
+            continue
+    return {}
+
+
+def backfill_subagent_meta(conn: sqlite3.Connection) -> int:
+    """Attribute subagent sessions ingested without their meta.json. Returns rows fixed."""
+    fixed = 0
+    rows = conn.execute("SELECT key FROM sessions WHERE is_subagent = 1 AND source = 'claude'"
+                        " AND (agent_type IS NULL OR agent_type = '')").fetchall()
+    for (key,) in rows:
+        meta = _subagent_meta(key, ROOTS[0][1] / key[len("claude:"):])
+        if meta.get("agentType"):
+            conn.execute("UPDATE sessions SET agent_type=?, agent_model=COALESCE(agent_model, ?),"
+                         " description=COALESCE(description, ?) WHERE key=?",
+                         (meta["agentType"], meta.get("model"), meta.get("description"), key))
+            fixed += 1
+    return fixed
+
+
 def ingest_file(conn: sqlite3.Connection, key: str, source: str, path: Path) -> int:
     """Ingest new complete lines of one transcript. Returns requests added."""
     row = conn.execute("SELECT offset FROM files WHERE key=?", (key,)).fetchone()
@@ -290,12 +319,7 @@ def ingest_file(conn: sqlite3.Connection, key: str, source: str, path: Path) -> 
 
     st = _Session(conn, key)
     is_sub = "/subagents/" in key
-    meta = {}
-    if is_sub and not row:
-        try:
-            meta = json.loads(path.with_suffix("").with_suffix(".meta.json").read_text())
-        except (OSError, ValueError):
-            meta = {}
+    meta = _subagent_meta(key, path) if is_sub and not row else {}
     sess = {"session_id": None, "agent_id": None, "cwd": None, "first": None, "last": None}
     seen_msg: set[str] = set()
     added = 0
@@ -773,6 +797,8 @@ def run(db: Path = DEFAULT_DB, roots=None, max_files: Optional[int] = None,
             by = stats["requests_added_by_source"]
             by[source] = by.get(source, 0) + n
     inherit_parent_project(conn)
+    stats["subagent_meta_backfilled"] = backfill_subagent_meta(conn)
+    conn.commit()
     stats["elapsed_s"] = round(time.time() - t0, 1)
     conn.close()
     return stats
