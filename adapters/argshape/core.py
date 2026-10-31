@@ -557,6 +557,11 @@ def _catalog_learn(db, seg, conn, rels, cwd, command) -> list[str]:
     """Ask the same connection for its column list. Read-only catalog query."""
     if not SQL_BINS.search(seg.bin or "") or "sudo" in seg.via:
         return []
+    # The rerun reuses the segment's own text, redirections included: a
+    # `> results.csv` would be overwritten with catalog lines. Only /dev/null
+    # and fd duplications are safe to replay.
+    if any(w.value != "/dev/null" and not w.value.isdigit() for w in seg.redirect_targets):
+        return []
     arg_slots = [(s0, s1) for _, s0, s1, is_stdin in sqlshape.find_sql(seg) if not is_stdin]
     if len(arg_slots) != 1:
         return []

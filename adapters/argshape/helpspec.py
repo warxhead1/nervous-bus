@@ -167,7 +167,9 @@ def _score(text: str) -> int:
 
 
 def version_of(path: str, timeout: float = 1.5) -> str:
-    for flag in ("--version", "-V", "version"):
+    # Flags only: a bare `version` word is an arbitrary verb to a script
+    # (and a network call for some CLIs).
+    for flag in ("--version", "-V"):
         try:
             p = subprocess.run([path, flag], stdin=subprocess.DEVNULL,
                                capture_output=True, timeout=timeout,
