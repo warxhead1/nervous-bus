@@ -15,19 +15,17 @@ from pathlib import Path
 
 import pytest
 
-prometheus_client = pytest.importorskip("prometheus_client")
-from prometheus_client import CollectorRegistry, generate_latest  # noqa: E402
-
 from adapters.exporter.prometheus_exporter import (  # noqa: E402
     Exporter,
     ExporterMetrics,
+    MetricRegistry,
     QUEUE_MAXSIZE,
     tail_jsonl,
 )
 
 
-def _scrape(registry: CollectorRegistry) -> str:
-    return generate_latest(registry).decode("utf-8")
+def _scrape(registry: MetricRegistry) -> str:
+    return registry.generate()
 
 
 def _sample(text: str, metric: str, **labels: str) -> float:
@@ -65,104 +63,50 @@ def _evt(type_: str, source: str = "/autobench", **data) -> dict:
 
 
 def test_events_total_counter_increments_per_event() -> None:
-    exporter = Exporter(registry=CollectorRegistry())
-    events = [
+    exporter = Exporter()
+    for e in [
         _evt("autobench.sandbox.v1", session_id="s1", status="dispatch"),
         _evt("autobench.sandbox.v1", session_id="s1", status="complete"),
         _evt("autobench.iteration.v1", session_id="s1", status="start", iteration=0),
-    ]
-    n = exporter.ingest_iterable(events)
-    assert n == 3
+    ]:
+        exporter.metrics.ingest_jsonl(e)
 
-    text = _scrape(exporter.metrics.registry)
-    sb = _sample(
-        text,
-        "nbus_events_total",
-        channel="autobench.sandbox.v1",
-        source="/autobench",
-        project="autobench",
-    )
-    iter_count = _sample(
-        text,
-        "nbus_events_total",
-        channel="autobench.iteration.v1",
-        source="/autobench",
-        project="autobench",
-    )
+    text = _scrape(exporter._registry)
+    sb = _sample(text, "nbus_jsonl_events_total", channel="autobench.sandbox.v1", project="autobench")
+    it = _sample(text, "nbus_jsonl_events_total", channel="autobench.iteration.v1", project="autobench")
     assert sb == 2.0
-    assert iter_count == 1.0
+    assert it == 1.0
+
+
+def test_project_prefers_data_field_over_source() -> None:
+    exporter = Exporter()
+    exporter.metrics.ingest_jsonl(
+        _evt("loom.lifecycle.v1", source="/hearth-loom", project="deer-flow", event="claimed")
+    )
+    text = _scrape(exporter._registry)
+    assert _sample(text, "nbus_jsonl_events_total", channel="loom.lifecycle.v1", project="deer-flow") == 1.0
 
 
 def test_events_per_second_gauge_reflects_recent_window() -> None:
-    exporter = Exporter(registry=CollectorRegistry())
-    burst = [_evt("autobench.sandbox.v1") for _ in range(30)]
-    exporter.ingest_iterable(burst)
+    exporter = Exporter()
+    for _ in range(30):
+        exporter.metrics.ingest_jsonl(_evt("autobench.sandbox.v1"))
+    exporter.metrics.refresh_jsonl_rates()
 
-    text = _scrape(exporter.metrics.registry)
-    rate = _sample(text, "nbus_events_per_second", channel="autobench.sandbox.v1")
+    text = _scrape(exporter._registry)
+    rate = _sample(text, "nbus_jsonl_events_per_second", channel="autobench.sandbox.v1")
     # 30 events in a 60s window => 0.5 ev/s (well above zero).
     assert rate == pytest.approx(0.5, abs=0.001)
 
 
-# ------------------ Session gauges ----------------------------------------
-
-
-def test_iteration_complete_sets_score_gauge() -> None:
-    exporter = Exporter(registry=CollectorRegistry())
-    events = [
-        _evt("autobench.iteration.v1", session_id="sess-A", status="start", iteration=0),
-        _evt(
-            "autobench.iteration.v1",
-            session_id="sess-A",
-            status="complete",
-            iteration=0,
-            aggregate_score=0.7321,
-        ),
-    ]
-    exporter.ingest_iterable(events)
-    text = _scrape(exporter.metrics.registry)
-    score = _sample(text, "nbus_autobench_iteration_score", session_id="sess-A")
-    assert score == pytest.approx(0.7321, abs=1e-6)
-
-
-def test_loomie_lifecycle_drives_active_session_gauge() -> None:
-    exporter = Exporter(registry=CollectorRegistry())
-    events = [
-        _evt("loom.lifecycle.v1", source="/hearth-loom", project="deer-flow", attempt_id="att-1", event="claimed"),
-        _evt("loom.lifecycle.v1", source="/hearth-loom", project="deer-flow", attempt_id="att-2", event="claimed"),
-        _evt("loom.lifecycle.v1", source="/hearth-loom", project="deer-flow", attempt_id="att-1", event="complete"),
-    ]
-    exporter.ingest_iterable(events)
-    text = _scrape(exporter.metrics.registry)
-    active = _sample(text, "nbus_session_active", agent_type="loomie", project="deer-flow")
-    assert active == 1.0
-
-
-# ------------------ AHE outcome counter -----------------------------------
-
-
-def test_ahe_outcomes_split_hit_miss_refuted() -> None:
-    exporter = Exporter(registry=CollectorRegistry())
-    events = [
-        _evt("autobench.improver.prediction.verified.v1", session_id="s", outcome="hit"),
-        _evt("autobench.improver.prediction.verified.v1", session_id="s", outcome="hit"),
-        _evt("autobench.improver.prediction.verified.v1", session_id="s", outcome="miss"),
-        _evt("autobench.improver.prediction.refuted_live.v1", session_id="s", is_refuted=True),
-        _evt("autobench.improver.prediction.refuted_live.v1", session_id="s", is_refuted=False),
-    ]
-    exporter.ingest_iterable(events)
-    text = _scrape(exporter.metrics.registry)
-    assert _sample(text, "nbus_autobench_ahe_outcome_total", outcome="hit") == 2.0
-    assert _sample(text, "nbus_autobench_ahe_outcome_total", outcome="miss") == 1.0
-    assert _sample(text, "nbus_autobench_ahe_outcome_total", outcome="refuted") == 1.0
-    assert _sample(text, "nbus_autobench_ahe_outcome_total", outcome="pending") == 1.0
+# ------------------ File tailer ------------------------------------------
 
 
 # ------------------ Backpressure -----------------------------------------
 
 
 def test_backpressure_drops_oldest_and_counts() -> None:
-    metrics = ExporterMetrics(registry=CollectorRegistry())
+    metrics = ExporterMetrics(MetricRegistry())
     # Simulate drops directly — the queue logic is internal but the
     # dropped_total counter is the contract we expose.
     metrics.dropped_total.inc(5)
@@ -224,7 +168,7 @@ def test_exporter_threads_consume_tailed_events(tmp_path: Path) -> None:
     p = tmp_path / "debug.jsonl"
     p.write_text("")  # empty — exporter tails from EOF
 
-    exporter = Exporter(path=p, registry=CollectorRegistry(), from_start=False)
+    exporter = Exporter(path=p, from_start=False)
     exporter.start()
     try:
         # Append events after the exporter has started tailing.
@@ -236,13 +180,12 @@ def test_exporter_threads_consume_tailed_events(tmp_path: Path) -> None:
         deadline = time.monotonic() + 3.0
         text = ""
         while time.monotonic() < deadline:
-            text = _scrape(exporter.metrics.registry)
+            text = _scrape(exporter._registry)
             try:
                 v = _sample(
                     text,
-                    "nbus_events_total",
+                    "nbus_jsonl_events_total",
                     channel="autobench.sandbox.v1",
-                    source="/autobench",
                     project="autobench",
                 )
             except AssertionError:

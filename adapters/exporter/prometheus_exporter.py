@@ -451,16 +451,24 @@ def _project_from_source(source: str) -> str:
 
 # ── JSONL tailer ──────────────────────────────────────────────────────────────
 
-def _tail_jsonl(path: Path, stop_event: threading.Event):
+def tail_jsonl(
+    path: Path,
+    stop_event: threading.Event,
+    *,
+    from_start: bool = False,
+    poll_interval: float = 0.25,
+):
+    """Tail a JSONL file. Yields one parsed dict per line; skips bad JSON."""
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
     with open(path, "r") as fh:
-        fh.seek(0, 2)
+        if not from_start:
+            fh.seek(0, 2)
         while not stop_event.is_set():
             line = fh.readline()
             if not line:
-                stop_event.wait(0.25)
+                stop_event.wait(poll_interval)
                 continue
             line = line.strip()
             if not line:
@@ -501,9 +509,11 @@ class Exporter:
         port: int = DEFAULT_PORT,
         path: Path = DEFAULT_DEBUG_FILE,
         valkey_url: str = VALKEY_URL,
+        from_start: bool = False,
     ) -> None:
         self.port = port
         self.path = path
+        self.from_start = from_start
         self._registry = MetricRegistry()
         hostload_metrics.attach(self._registry)
         self.metrics = ExporterMetrics(self._registry, valkey_url=valkey_url)
@@ -512,7 +522,7 @@ class Exporter:
         self._threads: list[threading.Thread] = []
 
     def _producer(self) -> None:
-        for evt in _tail_jsonl(self.path, self._stop):
+        for evt in tail_jsonl(self.path, self._stop, from_start=self.from_start):
             try:
                 self._q.put_nowait(evt)
             except queue.Full:
