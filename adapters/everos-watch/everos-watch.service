@@ -17,7 +17,9 @@ Environment=NO_PROXY=127.0.0.1,localhost,::1
 Environment=PYTHONUNBUFFERED=1
 # Hardening: read-only view of the memory root; state + bus log are the only writes.
 ProtectSystem=strict
-ReadWritePaths=%h/.local/state/everos-watch %h/.cache/nervous-bus
+# StateDirectory creates ~/.local/state/everos-watch (user unit) before namespacing.
+StateDirectory=everos-watch
+ReadWritePaths=%h/.cache/nervous-bus
 ReadOnlyPaths=%h/data2/everos/root
 PrivateTmp=true
 NoNewPrivileges=true
