@@ -1,0 +1,28 @@
+[Unit]
+Description=everos-watch: publish EverOS memory-tree changes (ids only) to the nervous-bus
+After=hearth-everos.service
+
+[Service]
+Type=simple
+# Repo path is the canonical checkout; adjust if installed elsewhere.
+ExecStart=/usr/bin/python3 %h/projects/nervous-bus/adapters/everos-watch/everos_watch.py --root %h/data2/everos/root
+Restart=on-failure
+RestartSec=5
+# Egress-free, same fail-closed posture as hearth-everos.service: this process
+# only reads local markdown and shells out to the local nervous publisher.
+Environment=HTTP_PROXY=http://127.0.0.1:9
+Environment=HTTPS_PROXY=http://127.0.0.1:9
+Environment=ALL_PROXY=http://127.0.0.1:9
+Environment=NO_PROXY=127.0.0.1,localhost,::1
+Environment=PYTHONUNBUFFERED=1
+# Hardening: read-only view of the memory root; state + bus log are the only writes.
+ProtectSystem=strict
+ReadWritePaths=%h/.local/state/everos-watch %h/.cache/nervous-bus
+ReadOnlyPaths=%h/data2/everos/root
+PrivateTmp=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# AF_INET* is kept ONLY because nervous publish talks to local Redis on loopback.
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/memory.node.created.v1.json",
+  "title": "memory.node.created v1",
+  "description": "An EverOS memory node (episode, atomic_fact, foresight, profile, agent_case, agent_skill) appeared. Published by adapters/everos-watch, which diffs entry-id sets of the EverOS markdown memory tree. IDS AND METADATA ONLY: the payload never carries memory content (no subject, summary, text, or hashes of text). Scope map and privacy classes: memory-layer design (hearth#719, nervous-bus#115).",
+  "type": "object",
+  "required": [
+    "app_id",
+    "project_id",
+    "owner_kind",
+    "kind",
+    "entry_id",
+    "md_path",
+    "observed_at"
+  ],
+  "properties": {
+    "app_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "EverOS app scope (path segment 1; default_app on disk = 'default')."
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "EverOS project scope (path segment 2)."
+    },
+    "owner_kind": {
+      "type": "string",
+      "enum": [
+        "user",
+        "agent"
+      ],
+      "description": "users/<id> = user, agents/<id> = agent."
+    },
+    "owner_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "user_id or agent_id. OMITTED when redacted=true (private app scopes, e.g. studio fan hashes)."
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "episode",
+        "atomic_fact",
+        "foresight",
+        "profile",
+        "agent_case",
+        "agent_skill"
+      ]
+    },
+    "entry_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Entry id from the <!-- entry:ID --> marker; 'user' for the single-file profile (user.md); the skill dir name for agent_skill."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "session_id recorded on the entry, when present. OMITTED when redacted=true."
+    },
+    "md_path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path of the markdown file relative to the memory root. The owner segment is replaced by '_redacted_' when redacted=true."
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the watcher observed the change (RFC3339 UTC)."
+    },
+    "redacted": {
+      "type": "boolean",
+      "description": "True when the app scope is private (owner_id, session_id and the owner path segment withheld)."
+    }
+  },
+  "additionalProperties": false
+}
