@@ -25,9 +25,19 @@ The `label_source` column tracks the precedence tier.
 
 PRIVACY: reads bus + bd + git + gh only.  Does NOT read conversation transcripts.
 
+QUEUE STATE: outcome keeps its vocabulary; a run the labeler cannot label is
+told apart from one it has not tried yet by columns store.py adds:
+    label_attempts / last_attempt_at   attempts so far, newest first, backoff 1,2,4 days
+    label_state = 'unattributable'     gave up (max attempts, or no source could ever label it)
+    label_state = 'rolled_up'          verdict cleared: a sibling segment of its run_key landed
+Both parked states leave outcome NULL and drop out of the --unlabeled-only queue.
+
 Usage:
     python label.py [--db-path PATH] [--run-id ID] [--dry-run] [--verbose]
     python label.py --report          # print labeled-runs table then exit
+    python label.py --since-days 30 --unlabeled-only     # nightly incremental queue
+    python label.py --reverify-days 90 [--apply]         # resumable; skips runs seen <7d ago
+    python label.py --rollup-days 90 [--apply --undo-file F]   # retroactive run_key rollup
 """
 from __future__ import annotations
 
@@ -1112,6 +1122,11 @@ PROGRESS_EVERY = 100
 
 STATE_UNATTRIBUTABLE = "unattributable"
 
+#: Set by rollup_labels: the run's own verdict was cleared because a sibling
+#: segment of its run_key landed. Kept apart from 'unattributable' (the
+#: labeler gave up) so the two are not lumped together in SQL.
+STATE_ROLLED_UP = "rolled_up"
+
 _ATTEMPT_COLUMNS = ("label_attempts", "last_attempt_at", "label_state")
 
 
@@ -1146,8 +1161,8 @@ def select_label_queue(
 ) -> list[dict]:
     """Runs the labeling pass should touch, newest first.
 
-    unlabeled_only is the incremental queue: outcome IS NULL, not parked as
-    unattributable, and either never attempted or past its backoff window
+    unlabeled_only is the incremental queue: outcome IS NULL, not parked
+    (label_state IS NULL), and either never attempted or past its backoff window
     (last_attempt_at + LABEL_BACKOFF_BASE_DAYS * 2**(attempts-1) days).
     ignore_backoff re-queues parked and not-yet-due runs too.
 
@@ -1164,13 +1179,12 @@ def select_label_queue(
     if unlabeled_only:
         clauses.append("outcome IS NULL")
         if not ignore_backoff and _has_attempt_columns(conn):
-            clauses.append("COALESCE(label_state, '') != :parked")
+            clauses.append("label_state IS NULL")
             clauses.append(
                 "(COALESCE(label_attempts, 0) = 0 OR last_attempt_at IS NULL OR "
                 "julianday(last_attempt_at) + :base * (1 << MIN(label_attempts - 1, 20)) "
                 "<= julianday(:now))"
             )
-            params["parked"] = STATE_UNATTRIBUTABLE
             params["base"] = LABEL_BACKOFF_BASE_DAYS
             params["now"] = _fmt_ts(now)
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
@@ -1198,6 +1212,8 @@ def record_label_attempt(
     attempts = int(run.get("label_attempts") or 0) + 1
     if labeled:
         state = None
+    elif run.get("label_state") == STATE_ROLLED_UP:
+        state = STATE_ROLLED_UP     # re-checked on request; the rollup still holds
     elif attempts >= max_attempts or not _has_lookup_hooks(run):
         state = STATE_UNATTRIBUTABLE
     else:
@@ -1711,8 +1727,9 @@ def rollup_labels(
     Candidates: outcome='abandoned', label source behavior_inference, non-empty
     run_key. A flip clears outcome/labeled_at (as the B5 retroactive clear
     does), keeps label_history intact, records features.rollup, and parks the
-    run (label_state='unattributable') so the nightly queue does not recompute
-    a verdict that is already known. Explicit labels are never touched.
+    run (label_state='rolled_up', not 'unattributable') so the nightly queue
+    does not recompute a verdict that is already known. Explicit labels are
+    never touched.
 
     dry_run (default True): compute and report, write nothing. A real apply
     needs undo_path: the pre-image of every flipped row is appended there as
@@ -1761,7 +1778,7 @@ def rollup_labels(
                     "UPDATE runs SET outcome=NULL, labeled_at=NULL, features=?, "
                     "label_attempts=?, last_attempt_at=?, label_state=? WHERE run_id=?",
                     (json.dumps(feats), int(run.get("label_attempts") or 0) + 1,
-                     _fmt_ts(now), STATE_UNATTRIBUTABLE, run["run_id"]),
+                     _fmt_ts(now), STATE_ROLLED_UP, run["run_id"]),
                 )
                 written = True
             results.append({

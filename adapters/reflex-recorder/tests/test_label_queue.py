@@ -361,7 +361,7 @@ class TestRollup(_DbCase):
             row = self.row(rid)
             self.assertIsNone(row["outcome"])
             self.assertIsNone(row["labeled_at"])
-            self.assertEqual(row["label_state"], "unattributable")
+            self.assertEqual(row["label_state"], "rolled_up")
             self.assertEqual(json.loads(row["features"])["rollup"]["reason"],
                              "landed_sibling_on_run_key")
         for rid in ("solo", "seg3", "explicit"):
@@ -381,6 +381,23 @@ class TestRollup(_DbCase):
         conn.close()
         self.assertEqual(self.row("seg1")["outcome"], "abandoned")
         self.assertIsNone(self.row("seg1")["label_state"])
+
+    def test_rolled_up_runs_stay_out_of_the_nightly_queue_and_keep_their_state(self):
+        self._fixture()
+        label.rollup_labels(self.db, dry_run=False,
+                            undo_path=Path(self._tmp.name) / "undo.jsonl")
+        calls: list = []
+
+        def fake(run, events, **_):
+            calls.append(run["run_id"])
+            return None
+        with patch.object(label, "compute_label", side_effect=fake):
+            label.backfill(self.db, unlabeled_only=True)
+            self.assertNotIn("seg1", calls)
+            label.backfill(self.db, unlabeled_only=True, ignore_backoff=True)
+        self.assertIn("seg1", calls)
+        self.assertEqual(self.row("seg1")["label_state"], "rolled_up",
+                         "a forced re-check must not relabel it as the labeler giving up")
 
     def test_apply_is_idempotent(self):
         self._fixture()
