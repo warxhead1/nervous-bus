@@ -43,6 +43,7 @@ BUS_KINDS = frozenset({"flag", "subcmd", "column", "shape"})
 GREP_FAMILY = frozenset({"grep", "egrep", "fgrep", "ugrep", "ug", "rg"})
 PATTERN_OPTS = frozenset({"-e", "--regexp", "-f", "--file"})   # take the pattern (or its file), always
 REJECT_HINT = re.compile(r"invalid option|illegal option|unrecognized flag")     # argshape.py gates the post hook on the same words
+SCAN_MAX = 40000      # characters of a success's output read for a rejection
 NON_OPTION_CHAR =re.compile(r"[^\w=.,\-]")
 DASH_KEY = "*"          # rejects.token for the whole class: the word itself is never stored
 # Failures where the command never ran (a hook or the user refused it) teach
@@ -607,12 +608,15 @@ def _learn_dash_value(db, seg, cwd, text) -> list[str]:
 def _learn_masked_dash_values(db, segs, cwd, text) -> list[str]:
     """`grep ... | head` exits 0 however grep fared: its rejection reaches the success hook."""
     notes: list[str] = []
-    for rej in errclass.classify(text):
-        if rej.kind != "dash_value":
-            continue
-        seg = attribute(rej, segs, db, cwd)
-        if seg is not None:
-            notes += _learn_dash_value(db, seg, cwd, text)
+    for hit in list(REJECT_HINT.finditer(text))[:5]:
+        # classify() reads only the head of what it is given: hand it the lines around each hit.
+        window = text[text.rfind("\n", 0, hit.start()) + 1: hit.end() + 1500]
+        for rej in errclass.classify(window):
+            if rej.kind != "dash_value":
+                continue
+            seg = attribute(rej, segs, db, cwd)
+            if seg is not None:
+                notes += _learn_dash_value(db, seg, cwd, window)
     return notes[:1]
 
 
@@ -796,6 +800,8 @@ def on_success(db, cfg: dict, ev: dict) -> list[str]:
     segs = segment.parse(command)
     notes: list[str] = []
     both = f"{stdout}\n{stderr}" if stderr else stdout
+    if len(both) > SCAN_MAX:
+        both = both[:SCAN_MAX // 2] + "\n" + both[-SCAN_MAX // 2:]
     if REJECT_HINT.search(both):
         try:
             notes = _learn_masked_dash_values(db, segs, cwd, both)

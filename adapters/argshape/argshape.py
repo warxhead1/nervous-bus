@@ -44,6 +44,7 @@ SQLISH = re.compile(r"\bselect\b.+\bfrom\b|\bwith\s+\w+\s+as\s*\(|\bupdate\s+\w+
 
 # Same words as core.REJECT_HINT, kept here so the success path does not import core to ask.
 REJECT_HINT = re.compile(r"invalid option|illegal option|unrecognized flag")
+SCAN_MAX = 40000      # characters of a success's output read for a rejection (core.SCAN_MAX is the same)
 
 
 def _core():
@@ -103,6 +104,8 @@ def _post_has_work(ev, command: str) -> bool:
         return True
     resp = ev.get("tool_response")
     out = f"{resp.get('stdout', '')}\n{resp.get('stderr', '')}" if isinstance(resp, dict) else str(resp or "")
+    if len(out) > SCAN_MAX:       # every successful Bash call passes here: bound the scan, keep both ends
+        out = out[:SCAN_MAX // 2] + "\n" + out[-SCAN_MAX // 2:]
     if REJECT_HINT.search(out):
         return True
     db = store.connect(create=False)

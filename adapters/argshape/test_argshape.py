@@ -626,6 +626,16 @@ class EndToEnd(unittest.TestCase):
         _, ran, _, _ = self.execute("printf x | ugrep -E '->|qqq' | head -1")
         self.assertEqual(ran, "printf x | ugrep -E -e '->|qqq' | head -1")
 
+    def test_a_pipe_hidden_rejection_after_a_huge_output_is_still_seen(self):
+        self.install("ugrep")
+        cmd = "printf x | ugrep -E '->|zzz' | head -1"
+        pre = self.hook("pre", cmd, "s1", "big1")
+        self.assertIsNone(pre)
+        out = "line of output\n" * 400000        # 6 MB before the rejection, on stdout
+        post = self.hook("post", cmd, "s1", "big1", tool_response={
+            "stdout": out, "stderr": "ugrep: invalid option ->|zzz\n", "interrupted": False})
+        self.assertIn("-e", post["additionalContext"])
+
     def test_dash_value_is_not_learned_from_output_that_only_quotes_a_rejection(self):
         self.install("ugrep")
         self.execute("printf 'ugrep: invalid option ->|zzz\\n' | cat")       # no ugrep call in this command
