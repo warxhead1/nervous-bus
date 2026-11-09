@@ -33,6 +33,7 @@ import functools
 import os
 import re
 import subprocess
+import time
 from typing import Optional
 
 MISC = "misc"
@@ -199,6 +200,7 @@ def _git_project(path: str, home: str) -> Optional[str]:
 
 
 _PROBE_KIDS = 40       # directories examined inside a container
+_PROBE_BUDGET_S = 3.0  # wall-clock cap on one container's vote
 
 
 @functools.lru_cache(maxsize=1 << 14)
@@ -220,7 +222,10 @@ def _container_repo(container: str, home: str) -> Optional[str]:
     except OSError:
         return None
     seen: set = set()
+    deadline = time.monotonic() + _PROBE_BUDGET_S
     for kid in kids[:_PROBE_KIDS]:
+        if time.monotonic() > deadline:        # a hung mount must not stall a caller
+            return None
         hit = _git_repo(kid, home)
         if hit is None or hit[1] == kid:      # not a repo, or a standalone clone
             continue

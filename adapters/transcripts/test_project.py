@@ -144,6 +144,16 @@ def test_worktree_lane_resolves_to_the_repo_not_the_lane_name(home):
 
 
 @needs_git
+def test_exhausted_probe_budget_falls_back_to_the_layout_name(home, monkeypatch):
+    repo = _repo(home / "projects/realrepo")
+    lane = home / "data2/worktrees/slowlane"
+    lane.mkdir()
+    _git("worktree", "add", "-q", "-b", "b2", str(lane / "agent-aef2500b540413696"), cwd=repo)
+    monkeypatch.setattr(project, "_PROBE_BUDGET_S", -1.0)
+    assert project.project_of(str(lane / "agent-deadbeef0123")) == "slowlane"
+
+
+@needs_git
 def test_container_with_no_surviving_worktree_falls_back_to_its_name(home):
     (home / "data2/worktrees/gone-lane").mkdir()
     assert project.project_of(str(home / "data2/worktrees/gone-lane/agent-deadbeef0123")) == "gone-lane"
