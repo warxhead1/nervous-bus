@@ -42,9 +42,12 @@ context_failure:
 constraint_failure:
   - >=1 permission_requested event in this run (a permission gate was hit;
     this is the only "denial"-shaped signal the bus carries today — we do not
-    have a separate contract-violation probe, so this bucket is currently
-    permission-only and that limitation is stated here rather than papered
-    over with a fabricated second signal)
+    have a separate contract-violation probe, so apart from the guard_denial
+    hit below this bucket is permission-only and that limitation is stated
+    here rather than papered over with a fabricated second signal)
+  - guard_denial hit              (the run lost tool calls to harness and hook
+    denials read from the transcript: worktree guard, report-write block,
+    sleep block, hook block, missing tool, permission refusal)
 
 verification_failure:
   - unverified_completion hit     (delegated agent shipped code edits, ran
@@ -167,6 +170,7 @@ _CONTEXT_DETECTORS = frozenset({
     "reread_same_file", "directive_ground_truth_mismatch", "repeated_question",
     "kb_recall_gap",
 })
+_CONSTRAINT_DETECTORS = frozenset({"guard_denial"})
 _VERIFICATION_DETECTORS = frozenset({"unverified_completion", "edit_build_fail_revert"})
 _PLANNING_DETECTORS = frozenset({"red_baseline_dispatch", "inherited_rationalization",
                                  "param_sweep_thrash"})
@@ -241,6 +245,8 @@ def classify_run(
     constraint_reasons = []
     if permission_count > 0:
         constraint_reasons.append(f"{permission_count} permission_requested event(s)")
+    for name in sorted(hit_detectors & _CONSTRAINT_DETECTORS):
+        constraint_reasons.append(f"{name} hit")
     if constraint_reasons:
         buckets[CONSTRAINT_FAILURE] = constraint_reasons
 
