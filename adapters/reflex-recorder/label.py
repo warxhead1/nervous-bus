@@ -42,6 +42,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 import sqlite3
@@ -304,11 +305,46 @@ def label_from_bead(bead_id: str, worktree_path: Optional[str]) -> Optional[tupl
     return None
 
 
+#: Verdicts already computed in the CURRENT pass, keyed by what the lookup
+#: depends on. A branch is shared by many runs (851 distinct branches back 1,627
+#: queued runs), and each lookup is a gh call or a history-wide git pickaxe.
+#: None outside a pass, so direct callers always get a live answer.
+_PASS_MEMO: Optional[dict] = None
+
+
+def _memoized(key: tuple, compute):
+    memo = _PASS_MEMO
+    if memo is None:
+        return compute()
+    if key not in memo:
+        memo[key] = compute()
+    return memo[key]
+
+
+def _with_pass_memo(fn):
+    """Run `fn` (a whole labeling/reverify pass) with the verdict memo on."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        global _PASS_MEMO
+        prev, _PASS_MEMO = _PASS_MEMO, {}
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _PASS_MEMO = prev
+    return wrapper
+
+
 def label_from_pr(branch: str, worktree_path: Optional[str]) -> Optional[tuple[str, str]]:
     """Try to derive outcome from GitHub PR state.
 
-    Returns (outcome, source) or None.
+    Returns (outcome, source) or None. Within a pass, repeated lookups of the
+    same (branch, worktree) are answered once.
     """
+    return _memoized(("pr", branch, worktree_path),
+                     lambda: _label_from_pr_live(branch, worktree_path))
+
+
+def _label_from_pr_live(branch: str, worktree_path: Optional[str]) -> Optional[tuple[str, str]]:
     pr = _gh_pr_state(branch, worktree_path)
     if not pr:
         # No PR yet — try git revert as fallback
@@ -411,6 +447,15 @@ def label_from_git_merge(
     repo = _project_repo_root(run)
     if not repo:
         return None
+    return _memoized(
+        ("git", repo, git_branch, verify_discards, run_has_commit),
+        lambda: _git_merge_verdict(repo, git_branch, verify_discards, run_has_commit),
+    )
+
+
+def _git_merge_verdict(
+    repo: str, git_branch: str, verify_discards: bool, run_has_commit: Optional[bool],
+) -> Optional[tuple[str, str]]:
     try:
         import git_outcome as go
     except ImportError:
@@ -450,12 +495,21 @@ def label_from_orca_worker_done(
 
     since_days bounds the one-time per-process rollout index build to rollouts
     dated within that many days (None = every rollout ever written).
+
+    Only codex sessions leave a rollout, so any other agent kind is answered
+    None without building the index (cold, that scan is tens of seconds).
     """
+    if run.get("agent_kind") not in (None, ORCA_ROLLOUT_AGENT_KIND):
+        return None
     try:
         import orca_outcome
     except ImportError:
         return None
     return orca_outcome.label_from_orca_worker_done(run, since_days=since_days)
+
+
+#: The one agent kind whose sessions write the codex rollouts orca_outcome joins on.
+ORCA_ROLLOUT_AGENT_KIND = "codex-cli"
 
 
 #: A rollout is dated by its session's START day, and a run segment can begin
@@ -1147,7 +1201,7 @@ def _has_lookup_hooks(run: dict) -> bool:
     return bool(
         run.get("bead_id")
         or (branch and branch not in _TRUNK_BRANCHES)
-        or run.get("agent_kind") == "codex-cli"
+        or run.get("agent_kind") == ORCA_ROLLOUT_AGENT_KIND
     )
 
 
@@ -1227,6 +1281,7 @@ def record_label_attempt(
     return state or ("labeled" if labeled else "pending")
 
 
+@_with_pass_memo
 def backfill(
     db_path: Path,
     run_id_filter: Optional[str] = None,
@@ -1602,6 +1657,7 @@ def reverify_run(
     return _prefer_higher_tier(git_result, orca_result)
 
 
+@_with_pass_memo
 def reverify_labels(
     db_path: Path,
     since_days: Optional[int] = None,

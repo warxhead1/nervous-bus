@@ -249,6 +249,43 @@ class TestIncrementalQueue(_DbCase):
         self.assertGreaterEqual(seen[0], 2)
 
 
+class TestPassLookupCost(_DbCase):
+    def test_runs_sharing_a_branch_cost_one_gh_call_and_one_git_classification(self):
+        from types import SimpleNamespace
+        import git_outcome
+        for i in range(3):
+            self.seed(f"shared{i}", git_branch="feature/shared")
+        self.seed("other", git_branch="feature/other")
+        pending = SimpleNamespace(outcome=None, source=None)
+        with patch.object(label, "_gh_pr_state", return_value=None) as gh, \
+                patch.object(label, "_git_has_revert", return_value=False), \
+                patch.object(label, "_project_repo_root", return_value="/fake/repo"), \
+                patch.object(git_outcome, "live_worktree_branches", return_value=[]), \
+                patch.object(git_outcome, "classify_branch_outcome",
+                             return_value=pending) as classify:
+            label.backfill(self.db, unlabeled_only=True)
+        self.assertEqual(gh.call_count, 2, "one gh lookup per distinct branch")
+        self.assertEqual(classify.call_count, 2, "one git classification per distinct branch")
+
+    def test_memo_does_not_outlive_the_pass(self):
+        self.seed("r0", git_branch="feature/x")
+        with patch.object(label, "_gh_pr_state", return_value=None) as gh, \
+                patch.object(label, "_git_has_revert", return_value=False), \
+                patch.object(label, "_project_repo_root", return_value=None):
+            label.backfill(self.db, unlabeled_only=True, ignore_backoff=True)
+            label.backfill(self.db, unlabeled_only=True, ignore_backoff=True)
+            label.label_from_pr("feature/x", None)
+            label.label_from_pr("feature/x", None)
+        self.assertEqual(gh.call_count, 4, "a new pass, or a direct call, must look again")
+
+    def test_rollout_index_is_not_built_for_agents_that_leave_no_rollout(self):
+        self.seed("claude", agent_kind="host_claude_code", session_id="sess-claude")
+        import orca_outcome
+        with patch.object(orca_outcome, "build_worker_done_index", return_value={}) as build:
+            label.backfill(self.db, unlabeled_only=True)
+        build.assert_not_called()
+
+
 class TestReverifyResume(_DbCase):
     def _seed_inferred(self, run_id: str, outcome: str, **kw):
         hist = [{"outcome": outcome, "labeled_at": _ts(NOW), "label_version": 1,
