@@ -126,6 +126,19 @@ deterministic fix (there is no single fix for "context failure" as a
 category); it exists to make the digest's aggregate counts possible and to
 let a human or a later, more specific detector target the bucket that is
 actually dominating.
+
+Kind: classifier (not a detector)
+=================================
+This class declares ``KIND = KIND_CLASSIFIER`` (detectors/base.py). It labels
+EVERY closed run — a run with no mapped signal gets an explicit `unclassified`
+row — so its hit rate is ~100% by construction. That is a property of the
+taxonomy, not a pathology, so the engine never treats these rows as prevalence
+or issue recurrence (base.BaseDetector.run writes no issues row for them;
+query.py prevalence/issues, the nightly digest and synthesis exclude them).
+Each candidate carries ``extra["classified"]``: True only for the four
+canonical buckets (BUCKETS). `unclassified` and the unconfirmed-cadence tier
+are False and can never produce a propose_fix; a classified bucket can only on
+synthesis' severity/recurrence floors.
 """
 from __future__ import annotations
 
@@ -133,7 +146,7 @@ import sqlite3
 from collections import defaultdict
 from typing import Optional
 
-from detectors.base import BaseDetector, PatternCandidate
+from detectors.base import KIND_CLASSIFIER, BaseDetector, PatternCandidate
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -300,6 +313,7 @@ class FailureTaxonomyDetector(BaseDetector):
     """
 
     DETECTOR_NAME = "failure_taxonomy"
+    KIND = KIND_CLASSIFIER
 
     def detect(
         self, conn: sqlite3.Connection, since_ts: Optional[str] = None
@@ -435,6 +449,7 @@ class FailureTaxonomyDetector(BaseDetector):
                         "remediation_rung": "inform",
                         "remediation_rung_justification": rung_justification,
                         "confidence_tier": confidence_tier,
+                        "classified": bucket in BUCKETS,
                     },
                 )
             )

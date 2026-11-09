@@ -386,12 +386,11 @@ class TestQueryPrevalence(unittest.TestCase):
         self.assertIn("beta", projects)
 
     def test_window_excludes_old_hits(self) -> None:
-        # Add an old hit (15 days ago) — should not count in 7-day window
+        # A run that ended 15 days ago (and was hit then) is outside the
+        # 7-day window: it counts in neither hit_runs nor total_runs.
         old_ts = _ts(15)
-        self.conn.execute(
-            "INSERT INTO detector_hits (run_id, detector, signature, project, ts) VALUES (?,?,?,?,?)",
-            ("p-2", "worktree_leak", "sig-old", "alpha", old_ts),
-        )
+        _insert_run(self.conn, "p-old", "alpha", started=old_ts, ended=old_ts)
+        _insert_hit(self.conn, "p-old", "worktree_leak", "sig-old", "alpha", ts=old_ts)
         rows = query_prevalence(self.conn, project="alpha", days=7)
         row = rows[0]
         # hit_runs should still be 2 (not 3)
