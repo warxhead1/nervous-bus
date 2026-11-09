@@ -15,6 +15,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -284,6 +285,82 @@ class TestPassLookupCost(_DbCase):
         with patch.object(orca_outcome, "build_worker_done_index", return_value={}) as build:
             label.backfill(self.db, unlabeled_only=True)
         build.assert_not_called()
+
+
+class TestSlowVerdictsGoLast(_DbCase):
+    """A few runs whose verdict needs the history-wide pickaxe check must not
+    eat the pass before the cheap runs behind them are looked at."""
+
+    def _git_world(self, slow_branches, verify):
+        from types import SimpleNamespace
+        import git_outcome
+
+        def classify(repo, branch, **_):
+            if branch in slow_branches:
+                return SimpleNamespace(outcome="abandoned", source="git_discarded_unmerged")
+            return SimpleNamespace(outcome=None, source=None)
+        return [
+            patch.object(label, "_gh_pr_state", return_value=None),
+            patch.object(label, "_git_has_revert", return_value=False),
+            patch.object(label, "_project_repo_root", return_value="/fake/repo"),
+            patch.object(git_outcome, "live_worktree_branches", return_value=[]),
+            patch.object(git_outcome, "classify_branch_outcome", side_effect=classify),
+            patch.object(git_outcome, "verify_discarded_landed", side_effect=verify),
+        ]
+
+    def _run(self, patches, **kw):
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            return label.backfill(self.db, unlabeled_only=True, **kw)
+
+    def test_cheap_runs_are_labeled_before_the_slow_ones_at_the_head_of_the_queue(self):
+        self.seed("slow-new", age_days=0.1, git_branch="feature/slow")
+        self.seed("slow-new-2", age_days=0.2, git_branch="feature/slow")
+        for i in range(3):
+            self.seed(f"cheap{i}", age_days=1 + i, git_branch=f"feature/cheap{i}")
+        verify = unittest.mock.Mock(return_value=False)
+        results = self._run(self._git_world({"feature/slow"}, verify))
+        order = [r["run_id"] for r in results]
+        self.assertEqual(sorted(order[:3]), ["cheap0", "cheap1", "cheap2"])
+        self.assertEqual(sorted(order[3:]), ["slow-new", "slow-new-2"])
+        by_id = {r["run_id"]: r for r in results}
+        self.assertEqual(by_id["slow-new"]["outcome"], "abandoned")
+        self.assertEqual(by_id["slow-new-2"]["source"], "git_discarded_verified")
+        self.assertEqual(verify.call_count, 1, "two runs on one branch pay for one pickaxe check")
+
+    def test_a_pass_killed_inside_the_slow_check_has_already_booked_the_attempt(self):
+        self.seed("slow", age_days=0.1, git_branch="feature/slow")
+        seen = {}
+
+        def verify(repo, branch):
+            seen["attempts"] = self.row("slow")["label_attempts"]
+            raise KeyboardInterrupt
+        with self.assertRaises(KeyboardInterrupt):
+            self._run(self._git_world({"feature/slow"}, verify))
+        self.assertEqual(seen["attempts"], 1, "booked before the check started")
+        conn = sqlite3.connect(str(self.db))
+        try:
+            queued = label.select_label_queue(conn, since_days=30, unlabeled_only=True)
+        finally:
+            conn.close()
+        self.assertEqual([r["run_id"] for r in queued], [], "backed off, not retried first tomorrow")
+
+    def test_slow_run_booked_once_whatever_the_check_decides(self):
+        self.seed("slow", age_days=0.1, git_branch="feature/slow")
+        self._run(self._git_world({"feature/slow"}, lambda repo, branch: None))
+        row = self.row("slow")
+        self.assertEqual(row["label_attempts"], 1)
+        self.assertIsNone(row["outcome"])
+        self.assertIsNone(row["label_state"])
+
+    def test_single_run_lookup_is_never_deferred(self):
+        self.seed("slow", age_days=0.1, git_branch="feature/slow")
+        verify = unittest.mock.Mock(return_value=True)
+        results = self._run(self._git_world({"feature/slow"}, verify), run_id_filter="slow")
+        self.assertEqual([(r["outcome"], r["source"]) for r in results],
+                         [("landed", "git_pickaxe_landed")])
 
 
 class TestReverifyResume(_DbCase):

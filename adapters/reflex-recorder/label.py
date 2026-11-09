@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import itertools
 import json
 import re
 import sqlite3
@@ -312,6 +313,11 @@ def label_from_bead(bead_id: str, worktree_path: Optional[str]) -> Optional[tupl
 _PASS_MEMO: Optional[dict] = None
 
 
+class _PickaxeDeferred(Exception):
+    """A verdict needs the history-wide pickaxe check and the caller asked to
+    postpone it (backfill's cheap-first pass); raised, never cached."""
+
+
 def _memoized(key: tuple, compute):
     memo = _PASS_MEMO
     if memo is None:
@@ -413,6 +419,7 @@ def _project_repo_root(run: dict) -> Optional[str]:
 def label_from_git_merge(
     git_branch: str, run: dict, *, verify_discards: bool = True,
     require_dispatch_shape: bool = True, run_has_commit: Optional[bool] = None,
+    defer_pickaxe: bool = False,
 ) -> Optional[tuple[str, str]]:
     """Derive outcome from local git ancestry for a worktree-dispatched branch.
 
@@ -439,6 +446,10 @@ def label_from_git_merge(
 
     run_has_commit: the run's own commit evidence, passed to
     classify_branch_outcome to tell fast-forward-landed from empty branches.
+
+    defer_pickaxe: raise _PickaxeDeferred instead of running the pickaxe
+    check (a `git log -S` per probe line over main's history: minutes for one
+    large branch) so the caller can do every cheap run first.
     """
     if not git_branch:
         return None
@@ -449,12 +460,14 @@ def label_from_git_merge(
         return None
     return _memoized(
         ("git", repo, git_branch, verify_discards, run_has_commit),
-        lambda: _git_merge_verdict(repo, git_branch, verify_discards, run_has_commit),
+        lambda: _git_merge_verdict(
+            repo, git_branch, verify_discards, run_has_commit, defer_pickaxe),
     )
 
 
 def _git_merge_verdict(
     repo: str, git_branch: str, verify_discards: bool, run_has_commit: Optional[bool],
+    defer_pickaxe: bool = False,
 ) -> Optional[tuple[str, str]]:
     try:
         import git_outcome as go
@@ -471,6 +484,8 @@ def _git_merge_verdict(
     if bo.source == "git_discarded_unmerged":
         if not verify_discards:
             return None             # medium confidence; don't write on patch-id alone
+        if defer_pickaxe:
+            raise _PickaxeDeferred(git_branch)
         landed = go.verify_discarded_landed(repo, git_branch)
         if landed is True:
             return "landed", "git_pickaxe_landed"
@@ -910,6 +925,7 @@ def compute_label(
     verbose: bool = False,
     conn: Optional[sqlite3.Connection] = None,
     orca_since_days: Optional[int] = None,
+    defer_pickaxe: bool = False,
 ) -> Optional[tuple[str, str]]:
     """Compute the best available outcome + source for a run.
 
@@ -926,6 +942,9 @@ def compute_label(
     simply skip that check; it can only ever turn a would-be 'abandoned' into
     None, never the reverse, so omitting conn is always safe, just less
     accurate.
+
+    defer_pickaxe: raise _PickaxeDeferred (see label_from_git_merge) rather
+    than run the slow pickaxe check; nothing else is computed or cached.
     """
     bead_id = run.get("bead_id")
     git_branch = run.get("git_branch")
@@ -954,7 +973,8 @@ def compute_label(
         git_result = label_from_pr(git_branch, worktree)
         if git_result is None:
             # EXPLICIT: local git ancestry (squash/merge with no PR — tengine pattern)
-            git_result = label_from_git_merge(git_branch, run, run_has_commit=run_has_commit)
+            git_result = label_from_git_merge(
+                git_branch, run, run_has_commit=run_has_commit, defer_pickaxe=defer_pickaxe)
         if git_result and verbose:
             print(f"  [label] branch={git_branch} → {git_result}")
 
@@ -1320,6 +1340,10 @@ def backfill(
     progress_every: print a progress line to stdout every N runs (0 = off).
     budget_seconds: stop cleanly once this much wall time is spent; the rest
     of the queue is picked up by the next pass.
+
+    Runs whose verdict needs the pickaxe check (_PickaxeDeferred) are taken
+    after all the others, and each is booked as an attempt before the check
+    starts, so neither their cost nor a kill mid-check can starve the queue.
     """
     now = now or datetime.now(timezone.utc)
     conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
@@ -1341,15 +1365,27 @@ def backfill(
 
     orca_days = _orca_scan_days(runs, now)
     t0 = time.monotonic()
-    n_labeled = n_none = n_parked = 0
+    n_labeled = n_none = n_parked = done = 0
+
+    # Cheap first: a run whose verdict needs the pickaxe check (minutes of
+    # `git log -S`) is set aside and taken after every other run, so a few of
+    # them at the head of the queue cannot eat the whole pass. A single-run
+    # lookup (--run-id) is never set aside.
+    deferred: list[dict] = []
+    order = itertools.chain(((run, False) for run in runs), ((run, True) for run in deferred))
+    second_pass_announced = False
 
     results = []
-    for idx, run in enumerate(runs, start=1):
+    for run, second_pass in order:
         if budget_seconds is not None and time.monotonic() - t0 >= budget_seconds:
-            print(f"[label] budget {budget_seconds:.0f}s spent after {idx - 1}/{len(runs)} "
+            print(f"[label] budget {budget_seconds:.0f}s spent after {done}/{len(runs)} "
                   f"runs; the rest stay queued for the next pass", flush=True)
             break
         run_id = run["run_id"]
+        if second_pass and not second_pass_announced:
+            second_pass_announced = True
+            print(f"[label] {done}/{len(runs)} runs done; {len(deferred)} more need the "
+                  f"slow pickaxe check", flush=True)
 
         # PART A enrichment for pre-live runs
         if not dry_run:
@@ -1364,8 +1400,19 @@ def backfill(
 
         # Compute label
         # B5 fix: None = insufficient signal → leave outcome as null
-        label_result = compute_label(run, run_events, verbose=verbose, conn=conn,
-                                     orca_since_days=orca_days)
+        if second_pass and book_attempts:
+            # Booked BEFORE the slow check: a pass killed mid-run (the nightly
+            # step has a hard timeout) must still count the attempt, or one
+            # run too slow for any pass would be retried first, every night.
+            record_label_attempt(conn, run, labeled=False, now=now,
+                                 max_attempts=max_attempts, dry_run=dry_run)
+        try:
+            label_result = compute_label(run, run_events, verbose=verbose, conn=conn,
+                                         orca_since_days=orca_days,
+                                         defer_pickaxe=not (run_id_filter or second_pass))
+        except _PickaxeDeferred:
+            deferred.append(run)
+            continue
         if label_result is None:
             outcome, source = None, "behavior_inference"
         else:
@@ -1450,8 +1497,9 @@ def backfill(
             "label_state": state,
         })
 
-        if progress_every and idx % progress_every == 0:
-            print(f"[label] {idx}/{len(runs)} runs {time.monotonic() - t0:.0f}s "
+        done += 1
+        if progress_every and done % progress_every == 0:
+            print(f"[label] {done}/{len(runs)} runs {time.monotonic() - t0:.0f}s "
                   f"labeled={n_labeled} pending={n_none} unattributable={n_parked}",
                   flush=True)
 
