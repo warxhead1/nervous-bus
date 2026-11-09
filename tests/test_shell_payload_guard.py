@@ -255,18 +255,51 @@ def redis_server(tmp_path: Path):
 
 
 @pytest.fixture(params=["python", "redis-cli"])
-def delivery(request, tmp_path: Path) -> dict[str, str]:
-    """Env that forces one of the two XADD delivery paths in the script."""
-    if request.param == "python":
-        return {}
-    if shutil.which("redis-cli") is None:
+def delivery(request, tmp_path: Path):
+    """Env that forces one of the two XADD delivery paths in the script, and
+    proves afterwards that exactly that path carried the publishes.
+
+    `_env` points HOME at tmp_path, which hides a user-site redis install from
+    the script's interpreter. Without help the python path cannot import
+    redis, fails silently (2>/dev/null) and the script falls back to
+    redis-cli, so a "python" run would really be a second redis-cli run.
+    Both variants therefore put a recording `redis-cli` shim on PATH: the
+    python variant's shim exits 1 (any call is a silent fallback, and the
+    teardown fails the test); the redis-cli variant's shim records the call
+    and execs the real binary (so the fallback is proven to have run).
+    """
+    real_cli = shutil.which("redis-cli")
+    if real_cli is None:
         pytest.skip("redis-cli not on PATH")
-    # Shadow the redis module so the python path fails and the script falls
-    # back to redis-cli.
-    stub = tmp_path / "noredis"
-    stub.mkdir()
-    (stub / "redis.py").write_text("raise ImportError('redis hidden for test')\n")
-    return {"PYTHONPATH": str(stub)}
+    redis = pytest.importorskip("redis")
+
+    bindir = tmp_path / "shim-bin"
+    bindir.mkdir()
+    calls = tmp_path / "redis-cli.calls"
+    shim = bindir / "redis-cli"
+    path = f"{bindir}{os.pathsep}{os.environ['PATH']}"
+    if request.param == "python":
+        shim.write_text(f'#!/bin/sh\necho called >> "{calls}"\nexit 1\n')
+        # Make redis importable despite HOME=tmp_path (user-site installs).
+        site = str(Path(redis.__file__).resolve().parent.parent)
+        env = {"PATH": path, "PYTHONPATH": site}
+    else:
+        shim.write_text(f'#!/bin/sh\necho called >> "{calls}"\nexec "{real_cli}" "$@"\n')
+        # Shadow the redis module so the python path fails and the script
+        # falls back to redis-cli.
+        stub = tmp_path / "noredis"
+        stub.mkdir()
+        (stub / "redis.py").write_text("raise ImportError('redis hidden for test')\n")
+        env = {"PATH": path, "PYTHONPATH": str(stub)}
+    shim.chmod(0o755)
+
+    yield env
+
+    used_cli = calls.exists()
+    if request.param == "python":
+        assert not used_cli, "python delivery silently fell back to redis-cli"
+    else:
+        assert used_cli, "redis-cli variant never reached redis-cli"
 
 
 def _publish_n(tmp_path, server, delivery, channel, n, *args, **env) -> None:
