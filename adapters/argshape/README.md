@@ -128,6 +128,13 @@ that visibly use an arg parser. Never from a deny-list (`rm`, `dd`, `mkfs`,
 `python3 backtest.py --days 14 --state <scratch dir> [--agent claude]` replays shell calls from
 every agent `adapters/transcripts` can read (sub-agent sessions included) into a scratch state dir.
 Result (2026-10-31): 101,236 Claude Code, 163 Codex and 3 opencode calls; 65 rewrites, all multi-file
-`tail -N` → `tail -n N`, each of which would have failed; 3 SQL column advisories; no false positives
-and no exceptions. `plan()` averages 1.5 ms. Live, the SQL catalog path does the most useful work.
+`tail -N` → `tail -n N` (judged by review: each would have failed); 3 SQL column advisories; no exceptions.
+`plan()` averages 1.5 ms. Live, the SQL catalog path does the most useful work.
 Real flag misuse is rare; most recorded failures are harness ones (see `argshape status`).
+
+Only the dash-value rule is scored against what each call really did: `prevented` (the original failed with
+that rejection), `false` (the original had succeeded), `unclear` (it failed for another reason). The summary
+line `dash_value: failures=.. rewrites=.. prevented=.. false=.. unclear=..` carries the counts. A replay
+can prevent at most one fewer failure than it sees per binary build, since the first one teaches the rule;
+`--seed-dash-value NAME[=ALIAS],...` opens the rule for binaries that never failed, to bound false rewrites.
+`--strict-window` drops calls older than `--days` (a session file touched since still counts otherwise).
