@@ -145,12 +145,21 @@ def scan_denied(conn: sqlite3.Connection, since: str, until: Optional[str] = Non
     """Harness-denied or blocked tool calls in the window, read from the
     transcripts through adapters/transcripts (ToolCall.harness). The ledger does
     not record a call's outcome, so this re-reads the transcripts of the claude
-    and mmx sessions active in the window. A transcript that is gone from every
-    root is counted in `missing`, never silently skipped."""
+    and mmx sessions active in the window. The scan is one section of the digest
+    and must never take the digest down: a transcript that is gone from every
+    root is counted in `missing`; one that is there but cannot be read (EACCES,
+    EIO, deleted between the exists() check and the open) in `unreadable`, and
+    contributes nothing, not even the calls read before the error.
+
+    `calls` counts distinct, dated calls: the ledger keeps one row per call id and
+    dates it from the assistant record that issued it, while Claude transcripts
+    also replay tool_use/tool_result in timestamp-less `api-request-blob` records.
+    A replay is the same call again and an undated record cannot be placed in the
+    window, so neither is counted."""
     roots = ROOTS if roots is None else roots
     loaded = _claude_source()
     out = {"available": loaded is not None, "sessions": 0, "scanned": 0, "missing": 0,
-           "calls": 0, "denied": {}, "meta": {}}
+           "unreadable": 0, "calls": 0, "denied": {}, "meta": {}}
     if loaded is None:
         return out
     src, session_ref = loaded
@@ -164,22 +173,36 @@ def scan_denied(conn: sqlite3.Connection, since: str, until: Optional[str] = Non
     if project:
         sql += " AND project = ?"
         params.append(project)
+    seen: set = set()
     for key, source, proj, is_sub, atype in conn.execute(sql, params).fetchall():
         out["sessions"] += 1
         rel = key.partition(":")[2]
-        path = (next((root / rel for s, root in roots if s == source and (root / rel).exists()), None)
-                if rel else None)
+        path, found = None, {}
+        try:
+            path = (next((root / rel for s, root in roots if s == source and (root / rel).exists()), None)
+                    if rel else None)
+            if path is not None:
+                for tc in src.tool_calls(session_ref("claude", path.stem, str(path), 0.0)):
+                    if not tc.ts or tc.ts < since or (until and tc.ts >= until):
+                        continue
+                    found.setdefault(tc.call_id or f"{key}:{tc.ts}:{tc.tool}",
+                                     (tc.tool, classify_denial(tc.output) if tc.harness else None))
+        except OSError:
+            # dropped whole: a half-read session would skew the denied share
+            out["unreadable"] += 1
+            continue
         if path is None:
             out["missing"] += 1
             continue
         out["scanned"] += 1
         out["meta"][key] = (proj, (atype or "subagent?") if is_sub else f"main:{source}")
-        for tc in src.tool_calls(session_ref("claude", path.stem, str(path), 0.0)):
-            if tc.ts and (tc.ts < since or (until and tc.ts >= until)):
+        for cid, (tool, cls) in found.items():
+            if cid in seen:
                 continue
+            seen.add(cid)
             out["calls"] += 1
-            if tc.harness:
-                out["denied"][tc.call_id] = (key, tc.tool, classify_denial(tc.output))
+            if cls:
+                out["denied"][cid] = (key, tool, cls)
     return out
 
 
@@ -391,7 +414,7 @@ def request_view(conn: sqlite3.Connection, since: str, until: Optional[str] = No
            "requests_all_denied": len(den_recs), "iet": int(sum(r["turn_iet"] for r in den_recs)),
            "requests_some_denied": sum(1 for r in recs if r.get("denied_n")),
            "calls": len(denied), "calls_matched_to_requests": sum(1 for c in denied if c in call_req),
-           "scan": ({k: sc[k] for k in ("sessions", "scanned", "missing", "calls")} if sc else None),
+           "scan": ({k: sc[k] for k in ("sessions", "scanned", "missing", "unreadable", "calls")} if sc else None),
            "by_class": sorted(den_by_class.values(), key=lambda e: -e["calls"]),
            "by_tool": [{"tool": t, "calls": n} for t, n in sorted(den_by_tool.items(), key=lambda kv: -kv[1])[:8]],
            "by_agent": [{"agent": a, "calls": n} for a, n in sorted(den_by_agent.items(), key=lambda kv: -kv[1])[:10]],
@@ -736,7 +759,7 @@ def build(conn: sqlite3.Connection, days: int = 7, roots=None) -> dict:
                   "permission, missing tool). Each spends a full-context request that does nothing. "
                   "`requests` counts requests whose every call was denied; `calls` counts all denied calls. "
                   "Read from transcripts through adapters/transcripts, so a transcript that is gone from "
-                  "disk is not scanned (see scan.missing)"),
+                  "disk is not scanned (see scan.missing, scan.unreadable)"),
          "detail": {k: den[k] for k in ("calls", "requests_some_denied", "calls_matched_to_requests", "scan",
                                         "by_class", "by_tool", "by_agent", "by_project")}},
         {"id": "long_context", "iet": sum(r["excess_iet"] or 0 for r in long_ctx),
