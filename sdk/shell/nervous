@@ -126,7 +126,9 @@ _nbus_emit_dead_letter() {
     dl_log="${NERVOUS_DEBUG_LOG:-$HOME/.cache/nervous-bus/debug.jsonl}"
     mkdir -p "$(dirname "$dl_log")"
     printf '%s\n' "$dl_envelope" >> "$dl_log"
-    _nbus_redis_xadd "$dl_envelope"
+    # bus.dead_letter is shared by every producer: pin its cap so one producer's
+    # NERVOUS_TYPED_MAXLEN cannot trim everyone's dead letters.
+    _nbus_redis_xadd "$dl_envelope" 10000
 }
 
 # Byte-bounded publish guard (issue #27). MAXLEN bounds entry COUNT; this
@@ -343,7 +345,7 @@ return 1
 cmd_publish() {
     # Parse flags before positional args so Go can call:  nervous publish --json
     # (stdin = complete CloudEvents envelope, no channel arg needed).
-    # Or: nervous publish <channel> [--subject S] <payload>
+    # Or: nervous publish [--subject S] [--maxlen N] [--max-bytes N] <channel> <payload>
     local subject="" pass_through=false flag_maxlen="" flag_max_bytes=""
     while [[ $# -gt 0 && "$1" == --* ]]; do
         case "$1" in
@@ -376,7 +378,7 @@ cmd_publish() {
             echo "nervous publish --json: failed to parse event type from payload" >&2; return 2
         }
     else
-        channel="${1:?usage: nervous publish <channel> [--subject S] [--json] <payload>}"
+        channel="${1:?usage: nervous publish [--subject S] [--maxlen N] [--max-bytes N] [--json] <channel> <payload>  (flags BEFORE the channel)}"
     fi
 
     # ── uwb: allowlist enforcement via nervous.toml ─────────────────────────────────

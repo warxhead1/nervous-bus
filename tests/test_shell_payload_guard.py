@@ -334,3 +334,23 @@ def test_refused_payload_never_reaches_redis_but_its_dead_letter_does(
     assert len(fanout) == 1
     assert fanout[0][1]["type"] == "bus.dead_letter"
     assert len(fanout[0][1]["_raw"]) < 4096
+
+
+def test_dead_letter_stream_is_not_trimmed_by_a_producers_typed_maxlen(
+    tmp_path, redis_server, delivery
+) -> None:
+    # bus.dead_letter is shared by every producer; one producer's own
+    # NERVOUS_TYPED_MAXLEN must not trim it.
+    for _ in range(8):
+        proc = _publish(
+            tmp_path,
+            "big.snapshot.v1",
+            _payload(LARGE),
+            NERVOUS_NO_REDIS="0",
+            NERVOUS_REDIS_URL=redis_server.url,
+            NERVOUS_TYPED_MAXLEN="2",
+            **delivery,
+        )
+        assert proc.returncode == 5, proc.stderr
+
+    assert redis_server.xlen("nbus:bus.dead_letter") == 8
