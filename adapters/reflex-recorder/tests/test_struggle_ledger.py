@@ -12,6 +12,8 @@ import sys
 import tempfile
 import unittest
 
+import pytest
+
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
@@ -48,6 +50,51 @@ class _FakeAdapter(ProjectAdapter):
 
 
 CWD = "/home/eric/projects/myproj/x"
+
+
+@pytest.fixture(autouse=True)
+def _fixture_roots(monkeypatch):
+    # the fixtures use literal /home/eric/... cwds; pin the roots so they resolve anywhere
+    from project import cache_clear
+    monkeypatch.setenv("NBUS_PROJECT_ROOTS", os.pathsep.join(
+        f"/home/eric/{p}" for p in ("projects", "data2/worktrees", "data2/orca")))
+    cache_clear()
+    yield
+    cache_clear()
+
+
+class TestProjectAttribution(unittest.TestCase):
+    """Rows belong to the project that holds the cwd, wherever the checkout lives."""
+
+    FRICTION = "device or resource busy"
+
+    def _projects(self, files):
+        with tempfile.TemporaryDirectory() as d:
+            for dirname, lines in files.items():
+                _write(os.path.join(d, dirname), "s.jsonl", lines)
+            events, _, _h = SL.scan(d, adapters=[])
+            return sorted({e.project for e in events})
+
+    def test_worktree_orca_and_fork_agent_cwds_are_not_unknown(self):
+        cwds = ["/home/eric/data2/worktrees/myproj/agent-ab12cd34ef56",
+                "/home/eric/data2/orca/myproj/ws1",
+                "/home/eric/projects/myproj/.claude/worktrees/agent-ab12cd34ef56"]
+        lines = [_rec("2026-06-01", f"s{i}", c, result=self.FRICTION) for i, c in enumerate(cwds)]
+        self.assertEqual(self._projects({"x": lines}), ["myproj"])
+
+    def test_record_without_cwd_takes_the_project_from_the_transcript_directory(self):
+        lines = [_rec("2026-06-01", "s1", "", result=self.FRICTION)]
+        self.assertEqual(
+            self._projects({"-home-eric-projects-myproj--claude-worktrees-x": lines}), ["myproj"])
+
+    def test_nothing_resolvable_stays_unknown(self):
+        lines = [_rec("2026-06-01", "s1", "/work", result=self.FRICTION)]
+        self.assertEqual(self._projects({"mmx": lines}), ["(unknown)"])
+
+    def test_cwd_wins_over_the_directory_name(self):
+        lines = [_rec("2026-06-01", "s1", "/home/eric/projects/other/x", result=self.FRICTION)]
+        self.assertEqual(
+            self._projects({"-home-eric-projects-myproj--claude-worktrees-x": lines}), ["other"])
 
 
 class TestClassification(unittest.TestCase):

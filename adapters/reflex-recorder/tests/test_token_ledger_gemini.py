@@ -21,11 +21,21 @@ class TestGeminiLedger(unittest.TestCase):
         self.root = Path(self.td.name) / "tmp"
         self.chat = self.root / "abc" / "chats" / "session-1.json"
         self.chat.parent.mkdir(parents=True)
-        (self.root / "abc" / ".project_root").write_text("/home/eric/projects/demo\n")
+        # The shared resolver finds projects under NBUS_PROJECT_ROOTS (default: under
+        # $HOME), so a literal /home/<user>/projects path only resolves on that user's box.
+        projects = Path(self.td.name) / "projects"
+        self.cwd = str(projects / "demo")
+        self._roots = os.environ.get("NBUS_PROJECT_ROOTS")
+        os.environ["NBUS_PROJECT_ROOTS"] = str(projects)
+        (self.root / "abc" / ".project_root").write_text(self.cwd + "\n")
         shutil.copy(FIX, self.chat)
         self.db = Path(self.td.name) / "tokens.db"
 
     def tearDown(self):
+        if self._roots is None:
+            os.environ.pop("NBUS_PROJECT_ROOTS", None)
+        else:
+            os.environ["NBUS_PROJECT_ROOTS"] = self._roots
         self.td.cleanup()
 
     def _run(self):
@@ -39,7 +49,7 @@ class TestGeminiLedger(unittest.TestCase):
         # cached is inside input; thoughts are billed as output and kept as a subset
         self.assertEqual(row, ("gemini-fake", 400, 600, 0, 100, 20, 2))
         s = c.execute("SELECT source, session_id, project, cwd FROM sessions").fetchone()
-        self.assertEqual(s, ("gemini", "sess-fake-1", "demo", "/home/eric/projects/demo"))
+        self.assertEqual(s, ("gemini", "sess-fake-1", "demo", self.cwd))
         tools = {r[0]: r[1:] for r in c.execute("SELECT tool, cmd_class, cmd, result_chars FROM tool_calls")}
         self.assertEqual(tools["run_shell_command"][:2], ("test", "pytest -q"))
         self.assertGreater(tools["run_shell_command"][2], 0)

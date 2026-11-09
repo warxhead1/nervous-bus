@@ -48,7 +48,8 @@ class TestReport(unittest.TestCase):
         rep = tr.build(sqlite3.connect(self.db), days=7)
         cands = {c["id"]: c for c in rep["candidates"]}
         self.assertEqual(set(cands), {"long_context", "cache_rewrites", "big_tool_results",
-                                      "startup_context", "redundant_reruns", "uncached_input"})
+                                      "startup_context", "redundant_reruns", "uncached_input",
+                                      "unbatched_reads", "denied_calls"})
         gaps = cands["cache_rewrites"]["detail"]["by_idle_gap"]
         self.assertEqual([(g["kind"], g["idle_gap"], g["ttl5m_tokens"]) for g in gaps],
                          [("subagent", "b 5-60m", 151_000)])

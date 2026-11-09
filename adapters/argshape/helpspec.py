@@ -29,11 +29,20 @@ SCRIPT_PARSER_HINT = re.compile(
     rb"argparse|click|typer|docopt|getopts|getopt|optparse|commander|yargs|"
     rb"clap|cobra|flag\.Parse|--help|usage\(\)|Usage:", re.I)
 
+# Short options whose letter is a symbol that this parser used to skip: ugrep -% -%% -@ -+ -^,
+# rsync -@, zstd -#. core._dash_word shares this set: a `-` word led by one of these that the spec
+# lacks is never called an operand, so a spec learned before they were parsed cannot misfire.
+# (`-?` was always parsed, so a spec without it really does not have it.)
+SYMBOL_OPTS = "%@+#^~"
+_SYM = re.escape(SYMBOL_OPTS)
+
 # One option-spec line: leading indent, then options separated by ", " or
 # " | ", then (two+ spaces or end) the description.
-OPT_LINE = re.compile(r"^\s{0,12}(-{1,2}[\[A-Za-z0-9?].*?)(?:\s{2,}|\t|$)")
+OPT_LINE = re.compile(r"^\s{0,12}(-{1,2}[\[A-Za-z0-9?" + _SYM + r"].*?)(?:\s{2,}|\t|$)")
+# A symbol option is its letter(s) alone, never followed by a word character or `]` (that is
+# `[-+]NUM`, a number's sign, not an option).
 OPT_TOKEN = re.compile(
-    r"(?<![\w-])(-{1,2}(?:\[no-\])?[A-Za-z0-9?][\w.\-]*)"
+    r"(?<![\w-])(-{1,2}(?:\[no-\])?(?:[A-Za-z0-9?][\w.\-]*|[" + _SYM + r"]+(?![\w\]])))"
     r"(\[?[= ]?(?:<[^>]+>|\[[^\]]+\]|[A-Z][A-Z0-9_\-]*\b|\{[^}]+\}|"
     r"(?:int|uint|string|strings|duration|float|bool|value|list|path|file|num|n)\b))?")
 SECTION_CMDS = re.compile(r"^\s*(?:[A-Za-z][\w -]{0,40}\s)?(?:sub-?)?(?:commands|actions)\s*:?\s*$", re.I)
@@ -86,6 +95,8 @@ def parse_help(text: str) -> Spec:
         if not m:
             continue
         head = m.group(1)
+        line_names: list[str] = []
+        line_takes = False
         for tm in OPT_TOKEN.finditer(head):
             name, arg = tm.group(1), tm.group(2)
             takes = bool(arg and arg.strip("[ =")) and not (arg or "").startswith("[")
@@ -100,6 +111,12 @@ def parse_help(text: str) -> Spec:
             if len(name) < 2 or name in ("--", "-"):
                 continue
             spec.opts[name] = spec.opts.get(name, False) or takes
+            line_names.append(name)
+            line_takes = line_takes or takes
+        # GNU writes the value once: `-e, --regexp=PATTERNS`. Aliases share the arity.
+        if line_takes and ("," in head or "|" in head):
+            for name in line_names:
+                spec.opts[name] = True
     if not spec.subcmds:
         # Help without a "Commands:" heading (git groups commands under prose
         # headings): take indented `name   description` lines, if there are many.

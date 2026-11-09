@@ -36,6 +36,16 @@ PAIR_WINDOW_S = 15 * 60
 SQL_BINS = re.compile(r"(^|/)(psql|pgcli|sqlite3?|duckdb|mysql|mariadb|clickhouse(-client)?|[\w.-]*(db|sql|psql)[\w.-]*\.sh)$", re.I)
 NUMERIC_OPT = re.compile(r"^-\d+$")
 CHANNEL = "agent.cli.correction.v1"
+# `kind` values the bus schema (schemas/agent.cli.correction.v1.json) accepts. A
+# correction of any other kind is applied and recorded locally but not published.
+BUS_KINDS = frozenset({"flag", "subcmd", "column", "shape"})
+# Dash-leading values: the rule-shaped correction (no exact token ever repeats).
+GREP_FAMILY = frozenset({"grep", "egrep", "fgrep", "ugrep", "ug", "rg"})
+PATTERN_OPTS = frozenset({"-e", "--regexp", "-f", "--file"})   # take the pattern (or its file), always
+REJECT_HINT = re.compile(r"invalid option|illegal option|unrecognized flag")     # argshape.py gates the post hook on the same words
+SCAN_MAX = 40000      # characters of a success's output read for a rejection
+NON_OPTION_CHAR =re.compile(r"[^\w=.,\-]")
+DASH_KEY = "*"          # rejects.token for the whole class: the word itself is never stored
 # Failures where the command never ran (a hook or the user refused it) teach
 # nothing about the command's arguments.
 NOT_RUN = re.compile(r"^(?:Exit code \d+\n)?(?:PreToolUse:\w+ hook error|The user doesn't want to proceed|"
@@ -222,6 +232,16 @@ def plan(db, cfg: dict, command: str, cwd: str) -> dict:
                 notes.append(f"advice: this build of `{label}` rejected `{opt}` before"
                              + (f"; likely `{cand}`" if cand else "")
                              + (f"; nearest valid: {', '.join(near)}" if near and not cand else ""))
+        # a value that starts with `-`
+        try:
+            dash = _dash_value_plan(db, mode, seg, bin_key, ctx)
+        except Exception:      # a bug here must cost this rule, never the command or the other fixes
+            store.log_error()
+            dash = None
+        if dash:
+            edits += dash["edits"]
+            applied += dash["applied"]
+            notes += dash["notes"]
         # subcommand
         pos = list(positionals(seg, store.get_spec(db, bin_key, "")))
         if pos:
@@ -283,6 +303,139 @@ def plan(db, cfg: dict, command: str, cwd: str) -> dict:
     return {"command": new_command, "notes": notes, "applied": applied}
 
 
+def _dash_word(v: str, spec):
+    """How a getopt parser reads one `-`-leading word, from the learned spec.
+
+    (role, consumes_next, arg_option): role is `opt` (a real option, maybe with its
+    value attached), `cand` (an operand that merely starts with `-`: its first
+    character, or its long-option name, is not an option character), or `unk`
+    (cannot tell: leave the command alone). arg_option names the value-taking
+    option the word is, for pattern detection.
+    """
+    opts = spec.opts
+    if v in opts:
+        return "opt", bool(opts[v]), v if opts[v] else None
+    if v.startswith("--"):
+        name = v.split("=", 1)[0]
+        attached = "=" in v
+        if name in opts:
+            return "opt", bool(opts[name]) and not attached, name if opts[name] else None
+        near = [o for o in opts if o.startswith("--") and o.startswith(name)]
+        if len(near) == 1:      # getopt_long unique abbreviation
+            return "opt", bool(opts[near[0]]) and not attached, near[0] if opts[near[0]] else None
+        if not near and NON_OPTION_CHAR.search(name[2:]):
+            return "cand", False, None
+        return "unk", False, None
+    if NUMERIC_OPT.match(v):
+        return "opt", False, None
+    body = v[1:]
+    if not body:
+        return "unk", False, None
+    if "-" + body[0] in opts:
+        # A listed option leads the word (`-e->x`, `-A3`, `-d' '`, `-F:`), so it is an option word: what
+        # follows is a value or more flags. A --help that misses an option's arity (`-F fs`) must not
+        # turn that into an operand.
+        for i, c in enumerate(body):
+            o = "-" + c
+            if o not in opts:
+                break
+            if opts[o]:
+                return "opt", i == len(body) - 1, o
+        return "opt", False, None
+    if body[0] in helpspec.SYMBOL_OPTS:
+        # `-%`, `-@`, `-+` are real options in ugrep. A spec that lacks one was learned before the
+        # parser read symbol options, or its --help names the option somewhere the parser does not
+        # look. Either way "not listed" does not make it an operand.
+        return "unk", False, None
+    if NON_OPTION_CHAR.match(body[0]):
+        return "cand", False, None
+    return "unk", False, None
+
+
+def _dash_value_plan(db, mode: str, seg, bin_key: str, ctx: str):
+    """Correct a value that starts with `-` and so was read as an option.
+
+    Applies only when this build of the binary has already rejected such a word
+    (so it is getopt-style) and its --help is learned. The word must be an
+    operand by the spec's own reading: not a listed option, not the value of
+    the option before it, no value-taking option in its first characters.
+    grep family: `-e` before the pattern. Anything else (or a non-pattern
+    operand): `--` before it, only when it is the first operand and nothing
+    option-like or dynamic follows.
+    """
+    if not rejected(db, bin_key, "", "dash_value", DASH_KEY):
+        return None
+    root = store.get_spec(db, bin_key, "")
+    if root is None or not root.opts:
+        return None
+    base = os.path.basename(seg.bin)
+    alias = store.meta_get(db, f"alias:{base}")
+    family = base in GREP_FAMILY or os.path.basename(alias) in GREP_FAMILY
+    items = []                  # (role, word, arg_option)
+    pending = False
+    after_dd = False
+    for w in seg.args:
+        v = w.value
+        if after_dd:
+            items.append(("pos", w, None))
+        elif pending:
+            items.append(("val", w, None))
+            pending = False
+        elif v == "--":
+            items.append(("dd", w, None))
+            after_dd = True
+        elif not v.startswith("-") or v == "-":
+            items.append(("dyn" if w.dynamic else "pos", w, None))
+        elif w.dynamic:
+            items.append(("unk", w, None))
+        else:
+            role, consumes, argopt = _dash_word(v, root)
+            if family and argopt is None and role == "opt":
+                # the pattern options take a value whatever a half-parsed --help says
+                if v in PATTERN_OPTS or v.split("=", 1)[0] in PATTERN_OPTS:
+                    role, consumes, argopt = "opt", "=" not in v, v.split("=", 1)[0]
+                elif not v.startswith("--") and v[1:].isalpha() and v[-1] in "ef":
+                    role, consumes, argopt = "opt", True, "-" + v[-1]      # `-ie PATTERN`
+            items.append((role, w, argopt))
+            pending = consumes
+    cands = [i for i, it in enumerate(items) if it[0] == "cand"]
+    if len(cands) != 1:
+        return None
+    ci = cands[0]
+    word = items[ci][1]
+    if any(it[0] in ("unk", "dyn") for it in items[:ci]):
+        return None
+    shown = word.value if len(word.value) <= 60 else word.value[:57] + "..."
+    label = base
+    tail = items[ci + 1:]
+    insert = None
+    if family:
+        pattern_given = any(it[2] and it[2].split("=", 1)[0] in PATTERN_OPTS for it in items)
+        operands_before = any(it[0] == "pos" for it in items[:ci])
+        if not pattern_given and not operands_before:
+            insert = "-e "
+    if insert is None:
+        if (root.subcmds and not family) or ctx:
+            return None      # `--` after a subcommand tool's verb is not "end of options" for the verb's operands
+        if any(it[0] != "pos" for it in tail):
+            return None
+        if any(it[0] == "pos" for it in items[:ci]):
+            return None      # `printf '%s\n' '- x'`: a parser that stops at its first operand would print the `--`
+        insert = "-- "
+    if store.meta_get(db, f"dash_rule_off:{bin_key}"):
+        return {"edits": [], "applied": [],
+                "notes": [f"advice: this build of `{label}` read `{shown}` as an option before; "
+                          f"put `{insert.strip()}` in front of it"]}
+    if mode != "correct":
+        return {"edits": [], "applied": [],
+                "notes": [f"advice: this build of `{label}` read a value starting with `-` as an option before; "
+                          f"put `{insert.strip()}` in front of `{shown}`"]}
+    return {"edits": [(word.start, word.start, insert)],
+            "applied": [{"scope": bin_key, "ctx": "", "kind": "dash_value", "bad": word.value[:200],
+                         "good": insert.strip(), "source": "rule", "label": f"{label} dash-value"}],
+            "notes": [f"`{label} {shown}` -> `{label} {insert}{shown}` (dash-leading value)"]}
+
+
 def _numeric_invalid_context(seg, opt: str) -> bool:
     """GNU head/tail reject obsolete `-N` only beside other options or with 2+ files."""
     others = [n for _, n, _ in option_words(seg) if n != opt]
@@ -334,6 +487,10 @@ def register_optout(db, session: str) -> list[dict]:
 
 
 def _demote(db, f: dict, why: str) -> None:
+    if f.get("kind") == "dash_value":
+        # A rule, not a stored fix: switch it off for this build of the binary.
+        store.meta_set(db, f"dash_rule_off:{f['scope']}", why)
+        return
     if f.get("kind") == "shape":
         # ctx carries the column for shape corrections.
         db.execute("DELETE FROM shapes WHERE conn=? AND col=?", (f["scope"], f["ctx"]))
@@ -359,6 +516,8 @@ def attribute(rej, segs, db, cwd):
             for _, name, w in option_words(seg):
                 if name == tok or w.value == tok:
                     hit = True
+                elif rej.kind == "dash_value" and w.value.startswith(tok):
+                    hit = True    # ugrep and rg echo the whole word; getopt names its first character
                 elif len(tok) == 2 and tok[0] == "-" and not name.startswith("--") and tok[1] in name[1:]:
                     hit = True
                 elif tok.startswith("--") and name == "-" + tok[2:]:
@@ -386,7 +545,7 @@ def attribute(rej, segs, db, cwd):
     if len(cands) == 1:
         seg = cands[0]
         if rej.prog and os.path.basename(seg.bin) != rej.prog and shutil.which(rej.prog) \
-                and rej.kind in ("flag", "subcmd", "missing_arg") and "/" not in seg.bin:
+                and rej.kind in ("flag", "subcmd", "missing_arg", "dash_value") and "/" not in seg.bin:
             # A shell function/alias forwards this name to another program
             # (CC's `grep` is ugrep). Learn that once, key on the real binary.
             store.meta_set(db, f"alias:{os.path.basename(seg.bin)}", rej.prog)
@@ -429,16 +588,41 @@ def on_failure(db, cfg: dict, ev: dict) -> list[str]:
         return notes
     for rej, seg in attributed:
         if rej.kind == "dash_value":
-            name = os.path.basename(seg.bin)
-            store.upsert_count(db, "sigs", {"name": name, "ctx": "", "err_class": "dash_value",
-                                            "sig": errclass.signature(text)}, {"bin_key": "", "via": " > ".join(seg.via)})
-            notes.append(f"argshape: `{name}` parsed `{rej.token}` as an option because it starts with `-`. "
-                         f"Pass it as `-e '{rej.token}'` (grep family) or put it after `--`.")
+            notes += _learn_dash_value(db, seg, cwd, text)
         elif rej.kind in ("flag", "subcmd", "missing_arg"):
             notes += _learn_arg_rejection(db, cfg, rej, seg, cwd, session, text)
         else:
             notes += _learn_sql_rejection(db, cfg, rej, seg, cwd, session, text, command)
     return notes
+
+
+def _learn_dash_value(db, seg, cwd, text) -> list[str]:
+    """This build of the binary reads a `-`-leading operand as an option: it is
+    getopt-style, so `_dash_value_plan` may now correct such words for it."""
+    name = os.path.basename(seg.bin)
+    bin_key, path = bin_identity(db, seg.bin, cwd)
+    _ensure_spec(db, bin_key, path, name, [], proven=True)
+    store.upsert_count(db, "rejects", {"bin_key": bin_key, "ctx": "", "kind": "dash_value", "token": DASH_KEY},
+                       {"name": name})
+    store.upsert_count(db, "sigs", {"name": name, "ctx": "", "err_class": "dash_value",
+                                    "sig": errclass.signature(text)}, {"bin_key": bin_key, "via": " > ".join(seg.via)})
+    return [f"argshape: `{name}` read a value that starts with `-` as an option. Pass it as `-e '<value>'` "
+            "(grep family) or after `--`; argshape will insert that for you next time."]
+
+
+def _learn_masked_dash_values(db, segs, cwd, text) -> list[str]:
+    """`grep ... | head` exits 0 however grep fared: its rejection reaches the success hook."""
+    notes: list[str] = []
+    for hit in list(REJECT_HINT.finditer(text))[:5]:
+        # classify() reads only the head of what it is given: hand it the lines around each hit.
+        window = text[text.rfind("\n", 0, hit.start()) + 1: hit.end() + 1500]
+        for rej in errclass.classify(window):
+            if rej.kind != "dash_value":
+                continue
+            seg = attribute(rej, segs, db, cwd)
+            if seg is not None:
+                notes += _learn_dash_value(db, seg, cwd, window)
+    return notes[:1]
 
 
 def _ensure_spec(db, bin_key, path, name, ctx_words, proven):
@@ -614,10 +798,20 @@ def on_success(db, cfg: dict, ev: dict) -> list[str]:
     command = (ev.get("tool_input") or {}).get("command", "")
     resp = ev.get("tool_response") or {}
     stdout = resp.get("stdout", "") if isinstance(resp, dict) else str(resp)
+    stderr = resp.get("stderr", "") if isinstance(resp, dict) else ""
     cwd = ev.get("cwd") or os.getcwd()
     session = ev.get("session_id") or ""
     _settle_applied(db, cfg, ev, failed=False, text=stdout)
     segs = segment.parse(command)
+    notes: list[str] = []
+    both = f"{stdout}\n{stderr}" if stderr else stdout
+    if len(both) > SCAN_MAX:
+        both = both[:SCAN_MAX // 2] + "\n" + both[-SCAN_MAX // 2:]
+    if REJECT_HINT.search(both):
+        try:
+            notes = _learn_masked_dash_values(db, segs, cwd, both)
+        except Exception:      # a lesson that cannot be learned must not cost the ones below
+            store.log_error()
     # session-pair learning
     if session:
         rows = db.execute("SELECT bin_key, ctx, bad, opts, ts FROM pending WHERE session=?", (session,)).fetchall()
@@ -651,7 +845,7 @@ def on_success(db, cfg: dict, ev: dict) -> list[str]:
         conn = sqlshape.conn_key(seg, cwd)
         sql = slots[0][0]
         _learn_from_output(db, conn, seg, sql, stdout)
-    return []
+    return notes
 
 
 def _learn_from_output(db, conn, seg, sql, stdout) -> None:
@@ -692,7 +886,9 @@ def _settle_applied(db, cfg, ev, failed: bool, text: str) -> None:
     if failed:
         rejs = errclass.classify(text)
         toks = {r.token.split(".")[-1].lower() for r in rejs} | {r.token for r in rejs}
-        related = [f for f in fixes if f["good"] in toks or f["good"].lower() in toks or f["bad"] in toks]
+        dashed = any(r.kind == "dash_value" for r in rejs)
+        related = [f for f in fixes if f["good"] in toks or f["good"].lower() in toks or f["bad"] in toks
+                   or (dashed and f["kind"] == "dash_value")]
         outcome = "fail-related" if related else "fail-other"
         for f in related:
             _demote(db, f, "corrected command rejected the replacement")

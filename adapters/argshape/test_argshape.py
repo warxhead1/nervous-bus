@@ -36,6 +36,112 @@ a = p.parse_args()
 print("ok", a.cmd, getattr(a, "limit", ""))
 '''
 
+# A getopt-style tool with grep's option letters. Installed as `ugrep` it echoes the whole
+# bad word (ugrep, rg); under any other name it reports the first bad character (GNU).
+# `-%` is a documented symbol option (ugrep's --bool) and `-@` one its --help does not list.
+FAKE_GETOPT = r'''#!/usr/bin/env python3
+import os, sys
+NAME = os.path.basename(sys.argv[0])
+FLAGS, TAKES = set("Ein%@"), set("eAd")
+LONG = {"bool": 0, "extended-regexp": 0, "ignore-case": 0, "regexp": 1, "after-context": 1, "delimiter": 1, "include": 1}
+HELP = """Usage: NAME [OPTION]... [PATTERN] [FILE]...
+  -E, --extended-regexp     patterns are extended
+  -i, --ignore-case         ignore case
+  -n, --line-number         number lines
+  -%, --bool                boolean query
+  -e, --regexp=PATTERN      use PATTERN
+  -A, --after-context=NUM   lines after
+  -d, --delimiter=CHAR      field delimiter
+      --include=GLOB        only matching files
+""".replace("NAME", NAME)
+
+
+def bad(word, ch=None, long=False):
+    if NAME.endswith("ugrep"):
+        sys.stderr.write("ugrep: invalid option %s\nFor more help, run `ugrep --help' or `ugrep --help %s'\n" % (word, word))
+    elif long:
+        sys.stderr.write("%s: unrecognized option '%s'\nTry '%s --help' for more information.\n" % (NAME, word, NAME))
+    else:
+        sys.stderr.write("%s: invalid option -- '%s'\nUsage: %s [OPTION]... [PATTERN] [FILE]...\n" % (NAME, ch, NAME))
+    sys.exit(2)
+
+
+args, pats, files, i, done = sys.argv[1:], [], [], 0, False
+if args == ["--help"]:
+    print(HELP)
+    sys.exit(0)
+while i < len(args):
+    a = args[i]
+    i += 1
+    if done or a == "-" or not a.startswith("-"):
+        files.append(a)
+    elif a == "--":
+        done = True
+    elif a.startswith("--"):
+        name, eq, val = a[2:].partition("=")
+        hit = [k for k in LONG if k == name] or [k for k in LONG if k.startswith(name)]
+        if len(hit) != 1:
+            bad(a, long=True)
+        if LONG[hit[0]] and not eq:
+            val, i = args[i], i + 1
+        if hit[0] == "regexp":
+            pats.append(val)
+    else:
+        j = 1
+        while j < len(a):
+            c = a[j]
+            if c in FLAGS:
+                j += 1
+            elif c in TAKES:
+                val = a[j + 1:] or args[i]
+                i += 0 if a[j + 1:] else 1
+                if c == "e":
+                    pats.append(val)
+                break
+            else:
+                bad(a, ch=c)
+print("ok", pats, files)
+'''
+
+# gawk-style --help: the value is a lowercase word (`-F fs`), which a help parser cannot tell from prose.
+FAKE_AWKISH = r'''#!/usr/bin/env python3
+import sys
+HELP = """Usage: awkish [options] 'program' file ...
+POSIX options:\t\tGNU long options: (standard)
+\t-f progfile\t\t--file=progfile
+\t-F fs\t\t\t--field-separator=fs
+\t-v var=val\t\t--assign=var=val
+\t-q\t\t\t--quiet
+"""
+args = sys.argv[1:]
+if args == ["--help"]:
+    print(HELP)
+    sys.exit(0)
+i = 0
+while i < len(args) and args[i].startswith("-") and args[i] not in ("-", "--"):
+    a, i = args[i], i + 1
+    if a[1] in "fFv":
+        i += 1 if len(a) == 2 else 0
+    elif a[1] != "q":
+        sys.stderr.write("awkish: invalid option -- '%s'\n" % a[1])
+        sys.exit(2)
+print("ok")
+'''
+
+
+# A getopt-style tool whose --help lists no options: it rejects a dash value, and argshape has no spec to read.
+FAKE_BLIND = r'''#!/usr/bin/env python3
+import sys
+if sys.argv[1:] == ["--help"]:
+    print("blind: no option summary available")
+    sys.exit(0)
+for a in sys.argv[1:]:
+    if a.startswith("-") and a != "-":
+        sys.stderr.write("blind: invalid option -- '%s'\\n" % a[1])
+        sys.exit(2)
+print("ok")
+'''
+
 
 class SegmentTests(unittest.TestCase):
     def bins(self, cmd):
@@ -95,6 +201,17 @@ class ErrclassTests(unittest.TestCase):
         "Error: No such option: --limt Did you mean --limit?": ("flag", "--limt", "--limit"),
         'ERROR:  column "session_date" does not exist\nLINE 1: x\nHINT:  Perhaps you meant to reference the column "t.trade_date".': ("column", "session_date", "t.trade_date"),
         "Error: in prepare, no such column: nme": ("column", "nme", None),
+        "Exit code 2\nugrep: invalid option ->|rejected|error\nFor more help, run `ugrep --help' or `ugrep --help ->|rejected|error'":
+            ("dash_value", "->|rejected|error", None),
+        "ugrep: invalid option -> foo\nFor more help, run `ugrep --help' or `ugrep --help -> foo'": ("dash_value", "-> foo", None),
+        "rg: unrecognized flag --- FAIL|no such file|Error:|^ok\n": ("dash_value", "--- FAIL|no such file|Error:|^ok", None),
+        "rg: unrecognized flag ->\n": ("dash_value", "->", None),
+        "grep: invalid option -- '>'\nUsage: grep [OPTION]... PATTERNS [FILE]...": ("dash_value", "->", None),
+        "grep: invalid option -- ' '\nUsage: grep [OPTION]... PATTERNS [FILE]...": ("dash_value", "- ", None),
+        "illegal option -- >\nusage: grep [-abc] pattern": ("dash_value", "->", None),
+        "rg: unrecognized flag --colr\n": ("flag", "--colr", None),
+        "ugrep: invalid option --colr\n": ("flag", "--colr", None),
+        "cat: invalid option -- 'V'\nTry 'cat --help'": ("flag", "-V", None),
     }
 
     def test_cases(self):
@@ -102,6 +219,10 @@ class ErrclassTests(unittest.TestCase):
             r = errclass.classify(text)
             self.assertTrue(r, text)
             self.assertEqual((r[0].kind, r[0].token, r[0].hint), (kind, tok, hint), text)
+
+    def test_dash_value_names_the_program(self):
+        r = errclass.classify("ugrep: invalid option ->|x\nFor more help, run `ugrep --help'")
+        self.assertEqual((r[0].kind, r[0].prog), ("dash_value", "ugrep"))
 
     def test_signature_is_stable(self):
         a = errclass.signature("Exit code 2\nls: cannot access '/tmp/a1': No such file")
@@ -128,6 +249,41 @@ Commands:
         self.assertIn("--no-color", sp.opts)
         self.assertIn("-timeout", sp.opts)
         self.assertEqual(sp.subcmds, ["list", "show"])
+
+    def test_short_alias_shares_the_long_options_arity(self):
+        gnu = """Usage: grep [OPTION]... PATTERNS [FILE]...
+  -E, --extended-regexp     PATTERNS are extended regular expressions
+  -e, --regexp=PATTERNS     use PATTERNS for matching
+  -A, --after-context=NUM   print NUM lines of trailing context
+  -s, --no-messages         suppress error messages
+      --color[=WHEN]        use markers
+"""
+        sp = helpspec.parse_help(gnu)
+        self.assertTrue(sp.opts["-e"] and sp.opts["-A"])
+        self.assertFalse(sp.opts["-E"] or sp.opts["-s"] or sp.opts["--color"])
+
+    def test_symbol_short_options_are_listed(self):
+        ug = """Usage: ugrep [OPTIONS] [PATTERN] [-e PATTERN] [FILE ...]
+    --all, -@
+            Search all files except those explicitly excluded.
+    --bool, -%, -%%
+            Specifies a Boolean query.
+    --heading, -+
+            Group matches per file.
+    --tree, -^
+            Output directories with matching files in a tree.
+    -n, --line-number
+            Number lines.
+    -#, --shift=[N]
+            less-style
+"""
+        sp = helpspec.parse_help(ug)
+        self.assertEqual({o for o in sp.opts if not o.startswith("--")}, {"-@", "-%", "-%%", "-+", "-^", "-#", "-n"})
+        self.assertIn("--bool", sp.opts)
+
+    def test_a_number_sign_is_not_a_symbol_option(self):
+        sp = helpspec.parse_help("  -n, --lines=[-+]NUM     output NUM lines; with +, skip them\n  -q, --quiet     no output\n")
+        self.assertEqual({o for o in sp.opts if not o.startswith("--")}, {"-n", "-q"})
 
     def test_unique_fix_is_conservative(self):
         sp = helpspec.Spec({"--limit": True, "--line": False, "--format": True, "-n": True})
@@ -199,6 +355,78 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(len(sent), 4)
         for p in sent:
             jsonschema.Draft202012Validator(schema).validate(p)
+
+
+class BacktestTests(unittest.TestCase):
+    """backtest.py scores the dash-value rule against what each replayed call really did."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="argshape-bt-")
+        self.bin = os.path.join(self.tmp, "bin")
+        os.makedirs(self.bin)
+        with open(os.path.join(self.bin, "ugrep"), "w") as f:
+            f.write(FAKE_GETOPT.replace("#!/usr/bin/env python3", "#!" + sys.executable))
+        os.chmod(os.path.join(self.bin, "ugrep"), 0o755)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    BAD = "Exit code 2\nugrep: invalid option ->|{}\nFor more help, run `ugrep --help' or `ugrep --help ->|{}'"
+
+    def write_session(self, root, calls):
+        proj = os.path.join(root, "projects", "p1")
+        os.makedirs(proj, exist_ok=True)
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+        with open(os.path.join(proj, "s1.jsonl"), "w") as f:
+            for i, (cmd, output, is_error) in enumerate(calls):
+                base = {"sessionId": "s1", "timestamp": stamp, "cwd": self.tmp}
+                f.write(json.dumps({**base, "message": {"content": [
+                    {"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": cmd}}]}}) + "\n")
+                f.write(json.dumps({**base, "message": {"content": [
+                    {"type": "tool_result", "tool_use_id": f"t{i}", "content": output, "is_error": is_error}]}}) + "\n")
+
+    def run_backtest(self, *extra, roots=()):
+        env = {**os.environ, "CLAUDE_CONFIG_DIR": os.path.join(self.tmp, "claude"),
+               "PATH": self.bin + ":" + os.environ["PATH"],
+               "NBUS_TRANSCRIPTS_CLAUDE": os.pathsep.join(os.path.join(r, "projects") for r in roots)}
+        p = subprocess.run([sys.executable, "-I", os.path.join(HERE, "backtest.py"), "--days", "1", "--agent", "claude",
+                            "--state", os.path.join(self.tmp, "state"), *extra],
+                           capture_output=True, text=True, env=env, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stdout
+
+    def test_scores_prevented_false_and_counts_a_twice_seen_call_once(self):
+        calls = [("printf x | ugrep -E '->|zzz'", self.BAD.format("zzz", "zzz"), True),     # teaches the rule
+                 ("printf x | ugrep -E '->|qqq'", self.BAD.format("qqq", "qqq"), True),     # rewritten: prevented
+                 ("printf x | ugrep -e '->x'", "ok ['->x'] []", False),                     # valid: untouched
+                 ("printf x | ugrep -E '->|www'", "ok [] ['->|www']", False)]               # claims success: a false rewrite
+        self.write_session(os.path.join(self.tmp, "claude"), calls)
+        mirror = os.path.join(self.tmp, "mirror")
+        self.write_session(mirror, calls)
+        out = self.run_backtest(roots=[mirror])
+        self.assertIn("calls=4 dupes_skipped=4", out)
+        self.assertIn("dash_value: failures=2 (masked_by_pipe=0) rewrites=2 prevented=1 false=1 unclear=0", out)
+        rewrites = json.load(open(os.path.join(self.tmp, "state", "out.json")))
+        self.assertEqual([r["dash_rule"] for r in rewrites if "dash_rule" in r], ["prevented", "false"])
+        self.assertEqual(rewrites[0]["after"], "printf x | ugrep -E -e '->|qqq'")
+
+    def test_seeding_opens_the_rule_for_a_binary_that_never_failed(self):
+        self.write_session(os.path.join(self.tmp, "claude"), [
+            ("printf x | ugrep -E '->|zzz'", "ok [] ['->|zzz']", False), ("printf x | ugrep -e '->x'", "ok ['->x'] []", False)])
+        self.assertIn("dash_value: failures=0 (masked_by_pipe=0) rewrites=0", self.run_backtest())
+        out = self.run_backtest("--seed-dash-value", "ugrep")
+        self.assertIn("rewrites=1 prevented=0 false=1", out)
+
+    def test_output_that_quotes_a_rejection_is_not_counted_as_one(self):
+        self.write_session(os.path.join(self.tmp, "claude"), [
+            ("cat notes.txt", self.BAD.format("zzz", "zzz").split("\n", 1)[1], False)])
+        self.assertIn("dash_value: failures=0", self.run_backtest())
+
+    def test_a_rejection_hidden_by_a_pipe_still_counts_as_prevented(self):
+        self.write_session(os.path.join(self.tmp, "claude"), [
+            ("printf x | ugrep -E '->|zzz' | head", self.BAD.format("zzz", "zzz").split("\n", 1)[1], False)])
+        out = self.run_backtest("--seed-dash-value", "ugrep")
+        self.assertIn("failures=1 (masked_by_pipe=1) rewrites=1 prevented=1 false=0", out)
 
 
 class EndToEnd(unittest.TestCase):
@@ -352,10 +580,343 @@ class EndToEnd(unittest.TestCase):
         status = subprocess.run(self.cli_cmd("status"), capture_output=True, text=True, env=self.env).stdout
         self.assertIn("+2 harness", status)
 
-    def test_dash_value_advice(self):
-        _, _, rc, post = self.execute("grep -E '->|x' /dev/null")
-        if rc != 0 and post:
-            self.assertIn("-e", post["additionalContext"])
+    def install(self, name, text=FAKE_GETOPT):
+        path = os.path.join(self.bin, name)
+        with open(path, "w") as f:
+            f.write(text.replace("#!/usr/bin/env python3", "#!" + sys.executable))
+        os.chmod(path, 0o755)
+        return path
+
+    def untouched(self, *commands):
+        for cmd in commands:
+            pre = self.hook("pre", cmd)
+            self.assertFalse(pre and "updatedInput" in pre, cmd)
+
+    def install_grep_over_ugrep(self):
+        """Claude Code's `grep` is ugrep behind a shell function."""
+        self.install("ugrep")
+        with open(os.path.join(self.bin, "grep"), "w") as f:
+            f.write('#!/bin/sh\nexec ugrep "$@"\n')
+        os.chmod(os.path.join(self.bin, "grep"), 0o755)
+
+    def statedb(self):
+        return sqlite3.connect(os.path.join(self.env["ARGSHAPE_STATE_DIR"], "argshape.db"), isolation_level=None)
+
+    def test_dash_value_is_corrected_with_dash_e(self):
+        self.install_grep_over_ugrep()
+        self.untouched("printf 'a->b\\n' | grep -E '->|zzz'")                   # no history yet
+        _, _, rc, post = self.execute("printf 'a->b\\n' | grep -E '->|zzz'")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("-e", post["additionalContext"])
+        pre, ran, rc, _ = self.execute("printf 'a->b\\n' | grep -E '->|qqq'")
+        self.assertEqual(ran, "printf 'a->b\\n' | grep -E -e '->|qqq'")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("permissionDecision", pre)
+        self.assertIn("argshape:off", pre["additionalContext"])
+        for cmd, want in [
+                ('printf x | ugrep "->x"', 'printf x | ugrep -e "->x"'),
+                ("printf x | ugrep -n '-> a b' file1", "printf x | ugrep -n -e '-> a b' file1"),
+                ("printf x | ugrep '--- FAIL|x' f", "printf x | ugrep -e '--- FAIL|x' f"),
+                ("printf x | ugrep -e foo '->x'", "printf x | ugrep -e foo -- '->x'"),   # a file, not a second pattern
+                ("printf x | ugrep -ne foo '->x'", "printf x | ugrep -ne foo -- '->x'"),   # -e at the end of a cluster
+        ]:
+            pre = self.hook("pre", cmd)
+            self.assertEqual(pre and pre.get("updatedInput", {}).get("command"), want, cmd)
+        self.untouched("printf x | ugrep -v'|x' f")            # -v is not in the learned --help: unknown, leave it
+
+    def test_dash_value_leaves_valid_commands_alone(self):
+        self.install("ugrep")
+        self.execute("printf x | ugrep -E '->|zzz'")
+        self.untouched(
+            "printf x | ugrep -i zzz",
+            "printf x | ugrep -e '->x'",                 # the value of -e
+            "printf x | ugrep --regexp '->x'",
+            "printf x | ugrep --regexp='->x'",
+            "printf x | ugrep -e'->x'",                  # value attached
+            "printf x | ugrep -ie '->x'",                # value of the -e at the end of a cluster
+            "printf x | ugrep -A '-> x'",
+            "printf x | ugrep --include='-> y' zzz",     # a real option with a value
+            "printf x | ugrep -E -- '->x'",              # already past the options
+            "printf x | ugrep -d' ' zzz",
+            "printf x | ugrep '->x' -e foo",             # a file operand with an option after it
+            "printf x | ugrep '-> a' '-> b'",            # two candidates: ambiguous
+            "printf x | ugrep -E $PAT '->x'",            # $PAT may expand to an option that takes it
+            "printf x | ugrep --limt '->x'",             # an unknown option: someone else's problem
+        )
+
+    def test_dash_value_other_getopt_tool_gets_double_dash(self):
+        self.install("lister")
+        _, _, rc, post = self.execute("lister '-> x'")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("--", post["additionalContext"])
+        pre, ran, rc, _ = self.execute("lister -i '-> y'")
+        self.assertEqual(ran, "lister -i -- '-> y'")
+        self.assertEqual(rc, 0)
+        pre = self.hook("pre", "lister -i '-?x'")          # `?` was always parsed: a spec without `-?` has no `-?`
+        self.assertEqual(pre["updatedInput"]["command"], "lister -i -- '-?x'")
+        self.untouched(
+            "lister b '-> y'",                 # not the first operand: some parsers would print the `--`
+            "lister '-> y' -i",                # an option follows: `--` would turn it into an operand
+            "lister '-> y' $MORE",             # so might this
+            "lister -- '-> y'",                # already past the options
+            "lister -d '-> y'",                # the value of -d
+            "lister -d'-> y'",
+            "lister --include='-> y' f",
+            "lister --inc '-> y'",             # unique abbreviation of a value-taking option
+            "lister -i f g",
+            "lister '-> y' '-> z'",            # two candidates: ambiguous
+        )
+
+    def test_dash_value_is_learned_from_a_rejection_a_pipe_hid(self):
+        self.install("ugrep")
+        _, _, rc, post = self.execute("printf x | ugrep -E '->|zzz' | head -1")
+        self.assertEqual(rc, 0)                       # head ended the call at exit 0: the success hook sees it
+        self.assertIn("-e", post["additionalContext"])
+        _, ran, _, _ = self.execute("printf x | ugrep -E '->|qqq' | head -1")
+        self.assertEqual(ran, "printf x | ugrep -E -e '->|qqq' | head -1")
+
+    def test_a_pipe_hidden_rejection_after_a_huge_output_is_still_seen(self):
+        self.install("ugrep")
+        cmd = "printf x | ugrep -E '->|zzz' | head -1"
+        pre = self.hook("pre", cmd, "s1", "big1")
+        self.assertIsNone(pre)
+        out = "line of output\n" * 400000        # 6 MB before the rejection, on stdout
+        post = self.hook("post", cmd, "s1", "big1", tool_response={
+            "stdout": out, "stderr": "ugrep: invalid option ->|zzz\n", "interrupted": False})
+        self.assertIn("-e", post["additionalContext"])
+
+    def test_dash_value_is_not_learned_from_output_that_only_quotes_a_rejection(self):
+        self.install("ugrep")
+        self.execute("printf 'ugrep: invalid option ->|zzz\\n' | cat")       # no ugrep call in this command
+        self.execute("printf 'ugrep: invalid option ->|zzz\\n' | ugrep -E y | cat")    # and no such word in this one
+        self.untouched("printf x | ugrep -E '->|qqq'")
+
+    def test_dash_value_leaves_an_option_alone_when_help_hides_its_value(self):
+        self.install("awkish", FAKE_AWKISH)
+        self.execute("awkish '-> x' f")
+        pre, ran, rc, _ = self.execute("awkish '-> y'")
+        self.assertEqual(ran, "awkish -- '-> y'")
+        self.assertEqual(rc, 0)
+        self.untouched(
+            "awkish -F: '{print $1}' f",
+            "awkish -F'\\t' '{print $1}' f",
+            "awkish -F '|' '{print $1}' f",
+            "awkish -v x=a:b -F: '{print $1}'",
+            "awkish -q -F:, 'x'",
+        )
+
+    def test_dash_value_needs_this_binary_to_have_rejected_one(self):
+        self.install("ugrep")
+        self.install("lister")
+        self.install("other")
+        self.execute("printf x | ugrep -E '->|zzz'")
+        self.untouched("other '-> y'", "lister '-> y'", "printf x | other -E '->|zzz'")
+        self.execute("lister a '-> x'")
+        os.utime(os.path.join(self.bin, "lister"), (time.time() + 5, time.time() + 5))     # a different build
+        self.untouched("lister a '-> y'")
+        self.untouched("printf x | ugrep -e '->x'", "printf x | ugrep -i x")
+
+    def test_dash_value_leaves_a_symbol_option_alone(self):
+        self.install("ugrep")
+        self.execute("printf x | ugrep -E '->|zzz'")
+        for cmd in ("ugrep -% 'a b' f", "ugrep -%% 'a b' f"):         # `-%` is in the learned --help
+            self.assertEqual(self.run_cmd(cmd)[2].count("invalid option"), 0, cmd)      # a valid command
+            self.untouched(cmd)
+        # `-@` is a real option its --help does not mention (or a spec learned before symbol options
+        # were parsed): not being listed must not make it an operand.
+        self.assertEqual(self.run_cmd("ugrep -@ 'a b' f")[2].count("invalid option"), 0)
+        self.untouched("ugrep -@ 'a b' f", "ugrep -@I 'a b' f", "printf x | ugrep -+ 'a b' f")
+        pre, ran, rc, _ = self.execute("printf x | ugrep -E '->|qqq'")        # the rule is still open
+        self.assertIn("-e", ran)
+
+    def test_a_known_getopt_tool_is_left_alone_until_it_rejects_a_dash_value(self):
+        self.install("lister")
+        _, _, rc, _ = self.execute("lister --bogus")           # a flag rejection: the spec is learned
+        self.assertNotEqual(rc, 0)
+        db = self.statedb()
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM specs").fetchone()[0], 1)         # it is known ...
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM rejects WHERE kind='dash_value'").fetchone()[0], 0)
+        self.untouched("lister '-> y'", "lister -i '-> y'")                               # ... and not yet getopt-proven
+        self.execute("lister '-> x'")
+        pre, ran, rc, _ = self.execute("lister -i '-> y'")
+        self.assertEqual(ran, "lister -i -- '-> y'")
+        self.assertEqual(rc, 0)
+
+    def test_a_tool_with_no_readable_help_is_left_alone(self):
+        self.install("blind", FAKE_BLIND)
+        _, _, rc, _ = self.execute("blind '-> x'")             # it rejects a dash value, but --help has nothing to learn
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(self.statedb().execute("SELECT COUNT(*) FROM specs").fetchone()[0], 0)
+        self.untouched("blind '-> y'")
+        log = os.path.join(self.env["ARGSHAPE_STATE_DIR"], "errors.log")      # left alone on purpose, not by a swallowed crash
+        self.assertFalse(os.path.exists(log) and os.path.getsize(log), log)
+
+    def test_a_tool_with_subcommands_gets_no_double_dash_in_the_verb_slot(self):
+        import core
+        self.install("lister")
+        self.execute("lister '-> x'")
+        self.execute("fakecli list --limt 5")
+        db = self.statedb()
+        bin_key, _ = core.bin_identity(db, self.cli, self.tmp)
+        self.assertTrue(core.store.get_spec(db, bin_key, "").subcmds)
+        db.execute("INSERT INTO rejects (bin_key, name, ctx, kind, token, n) VALUES (?, 'fakecli', '', 'dash_value', ?, 1)",
+                   (bin_key, core.DASH_KEY))
+        pre, ran, rc, _ = self.execute("lister '-> y'")
+        self.assertEqual(ran, "lister -- '-> y'")              # the same shape, a flat tool: corrected
+        self.untouched("fakecli '-> x'")                       # a verb tool: `--` is not "end of options" for its verb
+
+    def test_a_dash_fix_that_is_itself_rejected_switches_the_rule_off(self):
+        self.install("lister")
+        self.execute("lister '-> x'")
+        pre = self.hook("pre", "lister -i '-> y'", "s1", "t-dash")
+        ran = pre["updatedInput"]["command"]
+        self.assertEqual(ran, "lister -i -- '-> y'")
+        # A parser that took the `--` badly. GNU names only the first bad character, so the token
+        # (`->`) is neither the word we fixed nor the `--` we added.
+        self.hook("fail", ran, "s1", "t-dash", error="Exit code 2\nlister: invalid option -- '>'\nUsage: lister [OPTION]...\n")
+        off = self.statedb().execute("SELECT k, v FROM meta WHERE k LIKE 'dash_rule_off:%'").fetchall()
+        self.assertEqual(len(off), 1, off)
+        pre = self.hook("pre", "lister -i '-> z'")
+        self.assertNotIn("updatedInput", pre)
+        self.assertIn("advice", pre["additionalContext"])
+
+    def test_dash_value_demote_and_promote_take_either_name_of_the_live_grep(self):
+        self.install_grep_over_ugrep()
+        self.execute("printf 'a->b\\n' | grep -E '->|zzz'")                  # stored under `grep`, keyed on ugrep's file
+        cmd = "printf 'a->b\\n' | grep -E '->|qqq'"
+        fixed = "printf 'a->b\\n' | grep -E -e '->|qqq'"
+        self.assertEqual(self.execute(cmd)[1], fixed)
+
+        def argshape(*args):
+            return subprocess.run(self.cli_cmd(*args), capture_output=True, text=True, env=self.env).stdout
+
+        for who in ("ugrep", "grep"):
+            self.assertIn("demoted dash_value rule for 1 build(s)", argshape("demote", who, "dash_value"), who)
+            self.assertEqual(self.execute(cmd)[1], cmd, who)                       # advice only now
+            self.assertIn("promoted dash_value rule for 1 build(s)", argshape("promote", who, "dash_value"), who)
+            self.assertEqual(self.execute(cmd)[1], fixed, who)
+        self.assertIn("for 0 build(s)", argshape("demote", "rg", "dash_value"))        # a name that is neither
+
+    def test_dash_value_optout_demotes_the_rule(self):
+        self.install("ugrep")
+        self.execute("printf x | ugrep -E '->|zzz'")
+        pre, ran, _, _ = self.execute("printf x | ugrep -E '->|qqq'")
+        self.assertIn("-e", ran)
+        pre = self.hook("pre", "printf x | ugrep -E '->|qqq' # argshape:off")
+        self.assertIn("demoted", pre["additionalContext"])
+        pre, ran, _, _ = self.execute("printf x | ugrep -E '->|qqq'")
+        self.assertEqual(ran, "printf x | ugrep -E '->|qqq'")
+        self.assertIn("advice", pre["additionalContext"])
+        out = subprocess.run(self.cli_cmd("promote", "ugrep", "dash_value"), capture_output=True, text=True, env=self.env).stdout
+        self.assertIn("promoted", out)
+        pre, ran, _, _ = self.execute("printf x | ugrep -E '->|qqq'")
+        self.assertIn("-e", ran)
+
+    def test_dash_value_follows_the_mode_tiers(self):
+        self.install("ugrep")
+        self.execute("printf x | ugrep -E '->|zzz'")
+        subprocess.run(self.cli_cmd("mode", "advise"), env=self.env, check=True, capture_output=True)
+        pre = self.hook("pre", "printf x | ugrep -E '->|qqq'")
+        self.assertNotIn("updatedInput", pre)
+        self.assertIn("-e", pre["additionalContext"])
+        subprocess.run(self.cli_cmd("mode", "correct"), env=self.env, check=True, capture_output=True)
+        subprocess.run(self.cli_cmd("mode", "advise", "--bin", "ugrep"), env=self.env, check=True, capture_output=True)
+        self.assertNotIn("updatedInput", self.hook("pre", "printf x | ugrep -E '->|qqq'"))
+        subprocess.run(self.cli_cmd("mode", "off"), env=self.env, check=True, capture_output=True)
+        self.assertIsNone(self.hook("pre", "printf x | ugrep -E '->|qqq'"))
+
+    def test_dash_value_never_publishes_an_off_schema_event(self):
+        schema = json.load(open(os.path.join(HERE, "..", "..", "schemas", "agent.cli.correction.v1.json")))
+        sent = os.path.join(self.tmp, "sent.jsonl")
+        nervous = os.path.join(self.bin, "nervous")
+        with open(nervous, "w") as f:
+            f.write('#!/bin/sh\nprintf "%s\\n" "$3" >> ' + sent + '\n')
+        os.chmod(nervous, 0o755)
+        self.env.pop("ARGSHAPE_NO_BUS")
+        self.install("ugrep")
+        self.execute("printf x | ugrep -E '->|zzz'")
+        pre, ran, _, _ = self.execute("printf x | ugrep -E '->|qqq'")
+        self.assertIn("-e", ran)
+        self.hook("pre", "printf x | ugrep -E '->|qqq' # argshape:off")
+        time.sleep(0.5)       # the hook publishes fire-and-forget
+        events = [json.loads(line) for line in open(sent)] if os.path.exists(sent) else []
+        for ev in events:
+            if "kind" in ev:
+                self.assertIn(ev["kind"], schema["properties"]["kind"]["enum"], ev)
+            if "source" in ev:
+                self.assertIn(ev["source"], schema["properties"]["source"]["enum"], ev)
+
+    def test_a_crash_in_the_dash_rule_fails_open(self):
+        import core
+        from unittest import mock
+        self.execute("fakecli list --limt 5")
+        db = sqlite3.connect(os.path.join(self.env["ARGSHAPE_STATE_DIR"], "argshape.db"), isolation_level=None)
+        bin_key, _ = core.bin_identity(db, "fakecli", self.tmp)
+        db.execute("INSERT INTO rejects (bin_key, name, ctx, kind, token, n) VALUES (?, 'fakecli', '', 'dash_value', ?, 1)",
+                   (bin_key, core.DASH_KEY))
+        cfg = {"mode": "correct"}
+        err_dir = os.path.join(self.tmp, "errs")
+        with mock.patch.object(core.store, "STATE_DIR", err_dir), \
+                mock.patch.object(core, "_dash_value_plan", side_effect=RuntimeError("boom")):
+            with mock.patch.dict(os.environ, {"PATH": self.env["PATH"]}):
+                r = core.plan(db, cfg, "fakecli list --limt 5", self.tmp)
+        self.assertEqual(r["command"], "fakecli list --limit 5")         # the other correction still lands
+        self.assertIn("boom", open(os.path.join(err_dir, "errors.log")).read())
+
+    def test_a_crash_learning_a_pipe_hidden_rejection_fails_open(self):
+        import core
+        from unittest import mock
+        self.execute("fakecli list --limt 5")
+        db = sqlite3.connect(os.path.join(self.env["ARGSHAPE_STATE_DIR"], "argshape.db"), isolation_level=None)
+        err_dir = os.path.join(self.tmp, "errs")
+        ev = {"tool_input": {"command": "printf x | ugrep -E '->|a' | head"}, "cwd": self.tmp, "session_id": "s9",
+              "tool_response": {"stdout": "", "stderr": "ugrep: invalid option ->|a\n"}}
+        with mock.patch.object(core.store, "STATE_DIR", err_dir), \
+                mock.patch.object(core, "_learn_masked_dash_values", side_effect=RuntimeError("boom")):
+            notes = core.on_success(db, {"mode": "correct"}, ev)
+        self.assertEqual(notes, [])
+        with open(os.path.join(err_dir, "errors.log")) as f:
+            self.assertIn("boom", f.read())
+
+    def test_hook_exits_zero_and_silent_when_the_state_is_unreadable(self):
+        self.execute("fakecli list --limt 5")
+        with open(os.path.join(self.env["ARGSHAPE_STATE_DIR"], "argshape.db"), "wb") as f:
+            f.write(os.urandom(4096))
+        for kind, extra in (("pre", {}), ("fail", {"error": "Exit code 2\nugrep: invalid option ->|x\n"}),
+                            ("post", {"tool_response": {"stdout": "a b\n1 2\n3 4\n5 6\n"}})):
+            self.assertIsNone(self.hook(kind, "printf x | grep -E '->|x'", **extra), kind)
+        self.assertTrue(os.path.getsize(os.path.join(self.env["ARGSHAPE_STATE_DIR"], "errors.log")) > 0)
+
+    def real_dash_value(self, name, first, second, want):
+        state = os.path.join(self.tmp, "state")
+        shutil.rmtree(state, ignore_errors=True)
+        _, _, rc, post = self.execute(first)
+        self.assertNotEqual(rc, 0, name)
+        self.assertIn("-e", post["additionalContext"], name)
+        pre, ran, rc, _ = self.execute(second)
+        self.assertEqual(ran, want, name)
+        self.assertEqual(rc, 0, name)
+
+    def test_dash_value_with_the_real_grep_family(self):
+        found = 0
+        for name in ("ugrep", "rg", "grep"):
+            path = shutil.which(name)
+            if not path or (name == "grep" and "GNU" not in subprocess.run(
+                    [path, "-V"], capture_output=True, text=True).stdout):
+                continue
+            found += 1
+            with self.subTest(name):
+                self.real_dash_value(name, f"printf 'a->b\\n' | {name} '->z'", f"printf 'a->b\\n' | {name} '->b'",
+                                     f"printf 'a->b\\n' | {name} -e '->b'")
+                if name == "ugrep":      # symbol options only ugrep has, which this build's own --help must list
+                    with open(os.path.join(self.tmp, "fb.txt"), "w") as f:
+                        f.write("foo bar\n")
+                    for opt in ("-%", "-%%", "-@", "-+", "-^"):
+                        cmd = f"ugrep {opt} 'foo bar' fb.txt"
+                        self.assertEqual(self.run_cmd(cmd)[0], 0, cmd)
+                        self.untouched(cmd)
+        if not found:
+            self.skipTest("none of ugrep, rg, GNU grep installed")
 
     @unittest.skipUnless(shutil.which("sqlite3"), "sqlite3 not installed")
     def test_sql_column_and_mac_shape(self):

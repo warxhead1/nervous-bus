@@ -1509,13 +1509,11 @@ class TestFailureTaxonomyConfidenceTierDecisionCap:
         )
         ev = cadence_evals[0]
         assert ev.get("confidence_tier") == "unconfirmed_cadence_candidate"
-        assert ev["decision"] != "propose_fix", (
-            f"unconfirmed-cadence-only signature reached propose_fix "
-            f"(score={ev['score']}) — the confidence-tier cap did not apply"
+        assert ev["decision"] == "monitor", (
+            f"unconfirmed-cadence-only signature decided {ev['decision']!r} "
+            f"(score={ev['score']}) — expected the confidence-tier cap to hold it at monitor"
         )
-        assert "capped at monitor" in ev["decision_rationale"] or (
-            ev["decision"] in ("monitor", "needs_more_data", "suppressed")
-        )
+        assert "capped at monitor" in ev["decision_rationale"], ev["decision_rationale"]
 
     def test_confirmed_and_unconfirmed_report_as_separate_signatures(self):
         """N unlabeled long runs + M labeled-thrashed runs in the SAME

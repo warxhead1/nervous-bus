@@ -14,9 +14,10 @@ it, and a bad night never wedges the timer.
 
   1. label.py         --since-days LABEL_SINCE_DAYS --unlabeled-only
      Incremental outcome labeling. --unlabeled-only means settled outcomes
-     (landed/reverted/abandoned/clean/thrashed) are never re-verified — only
-     runs still sitting at outcome=NULL get another attempt (a PR may have
-     merged, a bead may have closed). --since-days bounds cost against a
+     (landed/reverted/abandoned/clean/thrashed) are never re-verified. Runs at
+     outcome=NULL are retried with a 1/2/4-day backoff and parked after 4
+     misses; a parked run with a branch, bead or rollout still to look up is
+     revisited every 7 days. --since-days bounds cost against a
      growing run history. First run against a mostly-unlabeled DB may not
      finish inside the timeout; that's fine — progress commits per-row
      (autocommit), so the next night picks up where this one left off.
@@ -189,6 +190,86 @@ def _run_json(name: str, cmd: list[str], timeout: int) -> Optional[object]:
 
 # ── Digest ────────────────────────────────────────────────────────────────────
 
+def render_prevalence_section(prevalence: list[dict], window_days: int) -> list[str]:
+    """Top detector prevalence. Rows flagged suspect_calibration (query.py) are
+    listed apart and never ranked: a detector firing on most runs is
+    mis-calibrated, not the top finding. Classifier rows are not in this table
+    (query.py excludes them; see render_taxonomy_section)."""
+    lines = [f"## Top detector prevalence ({window_days}d)", ""]
+    ranked = [r for r in prevalence if not r.get("suspect_calibration")]
+    suspect = [r for r in prevalence if r.get("suspect_calibration")]
+    if ranked:
+        top = sorted(ranked, key=lambda r: -r.get("hit_runs", 0))[:TOP_DETECTORS]
+        lines.append("| project | detector | hits | of runs | rate |")
+        lines.append("|---|---|---|---|---|")
+        for row in top:
+            lines.append(
+                f"| {row['project']} | {row['detector']} | {row['hit_runs']} | "
+                f"{row['total_runs']} | {row['rate']:.0%} |"
+            )
+    else:
+        lines.append("- no detector hits in window (or query unavailable)")
+    if suspect:
+        lines.append("")
+        lines.append("### Suspect calibration (not ranked)")
+        lines.append("")
+        lines.append(
+            "Firing on more than the plausibility bound of their project's runs: "
+            "read these as detector mis-calibration, not as findings."
+        )
+        lines.append("")
+        lines.append("| project | detector | hits | of runs | rate |")
+        lines.append("|---|---|---|---|---|")
+        for row in sorted(suspect, key=lambda r: -r.get("hit_runs", 0)):
+            lines.append(
+                f"| {row['project']} | {row['detector']} | {row['hit_runs']} | "
+                f"{row['total_runs']} | {row['rate']:.0%} |"
+            )
+    lines.append("")
+    return lines
+
+
+def render_taxonomy_section(classifications: list[dict], window_days: int) -> list[str]:
+    """Failure-taxonomy distribution from classifier rows. Only CLASSIFIED
+    buckets are failure counts; `unclassified` (no failure signal) and the
+    unconfirmed-cadence tier are reported on their own line, never summed in."""
+    lines = [f"## Failure taxonomy ({window_days}d)", ""]
+    if not classifications:
+        lines.append("- no failure-taxonomy hits in window (or query unavailable)")
+        lines.append("")
+        return lines
+    classified = [r for r in classifications if r.get("classified")]
+    other = [r for r in classifications if not r.get("classified")]
+    lines.append("### Totals by bucket")
+    lines.append("")
+    totals: dict[str, int] = {}
+    for row in classified:
+        totals[row["label"]] = totals.get(row["label"], 0) + row.get("runs", 0)
+    if totals:
+        for label, n in sorted(totals.items(), key=lambda kv: -kv[1]):
+            lines.append(f"- {label}: {n} run(s)")
+    else:
+        lines.append("- no run carried a confirmed failure bucket")
+    lines.append("")
+    lines.append("### Not classified as failures")
+    lines.append("")
+    other_totals: dict[str, int] = {}
+    for row in other:
+        other_totals[row["label"]] = other_totals.get(row["label"], 0) + row.get("runs", 0)
+    for label, n in sorted(other_totals.items(), key=lambda kv: -kv[1]):
+        lines.append(f"- {label}: {n} run(s)")
+    lines.append("")
+    if classified:
+        lines.append("### By project")
+        lines.append("")
+        lines.append("| project | bucket | runs |")
+        lines.append("|---|---|---|")
+        for row in sorted(classified, key=lambda r: (-r.get("runs", 0), r["project"])):
+            lines.append(f"| {row['project']} | {row['label']} | {row['runs']} |")
+        lines.append("")
+    return lines
+
+
 def build_digest(
     db_path: Path,
     label_result: StepResult,
@@ -228,22 +309,18 @@ def build_digest(
          "dh.run_id AS run_id, dh.ts AS ts, r.session_id AS session_id "
          "FROM detector_hits dh JOIN runs r ON r.run_id = dh.run_id "
          "WHERE dh.detector = 'harness_change_watch' "
-         f"AND dh.ts >= '{window_cutoff}' ORDER BY dh.ts DESC",
+         f"AND r.ended >= '{window_cutoff}' ORDER BY dh.ts DESC",
          "--json"],
         step_timeout,
     ) or []
 
-    # A2 (failure taxonomy): aggregate distinct-run counts per (project, bucket).
-    # The bucket name is the last ':'-separated segment of the signature
-    # (project:failure_taxonomy:<bucket>) — see detectors/failure_taxonomy.py.
-    taxonomy_hits = _run_json(
-        "query.py sql (failure_taxonomy digest source)",
-        [sys.executable, "query.py", "--db", str(db_path), "sql",
-         "SELECT project AS project, signature AS signature, "
-         "COUNT(DISTINCT run_id) AS n FROM detector_hits "
-         "WHERE detector = 'failure_taxonomy' "
-         f"AND ts >= '{window_cutoff}' GROUP BY project, signature",
-         "--json"],
+    # A2 (failure taxonomy): classifier labels per (project, bucket). A
+    # classifier tags every run, so it is read through its own subcommand and
+    # rendered apart from detector prevalence (see detectors/base.py KIND_*).
+    classifications = _run_json(
+        "query.py classifications (failure_taxonomy digest source)",
+        [sys.executable, "query.py", "--db", str(db_path), "classifications",
+         "--days", str(window_days), "--json"],
         step_timeout,
     ) or []
 
@@ -252,10 +329,11 @@ def build_digest(
     correction_bypass_hits = _run_json(
         "query.py sql (user_correction/skill_opportunity digest source)",
         [sys.executable, "query.py", "--db", str(db_path), "sql",
-         "SELECT detector AS detector, signature AS signature, "
-         "COUNT(DISTINCT run_id) AS n FROM detector_hits "
-         "WHERE detector IN ('user_correction', 'skill_opportunity') "
-         f"AND ts >= '{window_cutoff}' GROUP BY detector, signature",
+         "SELECT dh.detector AS detector, dh.signature AS signature, "
+         "COUNT(DISTINCT dh.run_id) AS n FROM detector_hits dh "
+         "JOIN runs r ON r.run_id = dh.run_id "
+         "WHERE dh.detector IN ('user_correction', 'skill_opportunity') "
+         f"AND r.ended >= '{window_cutoff}' GROUP BY dh.detector, dh.signature",
          "--json"],
         step_timeout,
     ) or []
@@ -346,20 +424,7 @@ def build_digest(
         lines.append("- unavailable (query.py stats failed — see service log)")
     lines.append("")
 
-    lines.append(f"## Top detector prevalence ({window_days}d)")
-    lines.append("")
-    if prevalence:
-        top = sorted(prevalence, key=lambda r: -r.get("hit_runs", 0))[:TOP_DETECTORS]
-        lines.append("| project | detector | hits | of runs | rate |")
-        lines.append("|---|---|---|---|---|")
-        for row in top:
-            lines.append(
-                f"| {row['project']} | {row['detector']} | {row['hit_runs']} | "
-                f"{row['total_runs']} | {row['rate']:.0%} |"
-            )
-    else:
-        lines.append("- no detector hits in window (or query unavailable)")
-    lines.append("")
+    lines.extend(render_prevalence_section(prevalence, window_days))
 
     lines.append(f"## Top open struggle-ledger items ({struggle_window_days}d)")
     lines.append("")
@@ -430,33 +495,8 @@ def build_digest(
         lines.append("- no harness-artifact changes in window (or query unavailable)")
     lines.append("")
 
-    # A2 — failure taxonomy aggregate counts.
-    lines.append(f"## Failure taxonomy ({window_days}d)")
-    lines.append("")
-    if taxonomy_hits:
-        bucket_totals: dict[str, int] = {}
-        per_project_rows: list[dict] = []
-        for row in taxonomy_hits:
-            sig = row.get("signature", "")
-            bucket = sig.rsplit(":", 1)[-1] if sig else "unclassified"
-            n = row.get("n", 0)
-            bucket_totals[bucket] = bucket_totals.get(bucket, 0) + n
-            per_project_rows.append({"project": row.get("project", "?"), "bucket": bucket, "n": n})
-
-        lines.append("### Totals by bucket")
-        lines.append("")
-        for bucket, n in sorted(bucket_totals.items(), key=lambda kv: -kv[1]):
-            lines.append(f"- {bucket}: {n} run(s)")
-        lines.append("")
-        lines.append("### By project")
-        lines.append("")
-        lines.append("| project | bucket | runs |")
-        lines.append("|---|---|---|")
-        for row in sorted(per_project_rows, key=lambda r: (-r["n"], r["project"])):
-            lines.append(f"| {row['project']} | {row['bucket']} | {row['n']} |")
-    else:
-        lines.append("- no failure-taxonomy hits in window (or query unavailable)")
-    lines.append("")
+    # A2 — failure taxonomy (classifier) distribution.
+    lines.extend(render_taxonomy_section(classifications, window_days))
 
     for detector, title, empty in (
         ("user_correction", "User corrections by theme", "no user corrections"),

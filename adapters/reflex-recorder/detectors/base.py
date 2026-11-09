@@ -35,11 +35,40 @@ New SQLite tables (added to store.py by this module's ensure_schema())
 
 Store tables are added via ensure_detector_schema(conn) called from
 SQLiteStore.__init__ when this module is present (or called explicitly in tests).
+
+Detector kind (detector vs classifier)
+======================================
+A *detector* fires on a specific pathology in a minority of runs; its hit rate
+is a meaningful prevalence and its signature's recurrence is a meaningful
+"how often does this happen". A *classifier* (failure_taxonomy) tags EVERY
+closed run with a label (including an explicit "unclassified" one); its hit
+rate is ~100% by construction, so counting it as a prevalence or as issue
+recurrence ranks it first for nothing.
+
+Each class declares ``KIND``. The kind is a property of the class, resolved
+from a registry (``detector_kind``) that ``__init_subclass__`` fills, so every
+reader asks the same question instead of string-matching a detector name:
+
+  - classifier hits are still RECORDED (per-run tags are reconstructable from
+    detector_hits), but ``run()`` never writes/increments an ``issues`` row
+    for them;
+  - prevalence tables, the issues list, the digest and synthesis' prevalence
+    term all exclude classifier-kind rows (query.py, nightly_analysis.py,
+    synthesis.py);
+  - synthesis evaluates a classifier signature on its own severity/recurrence
+    floors, never on prevalence.
+
+DB-only readers (query.py) that have not imported a detector module call
+``load_detector_kinds()`` to import the built-in package and fill the registry.
+Private-overlay classifiers register when their adapter module is imported
+(synthesis loads adapters); a read-only reader does not import overlay code.
 """
 from __future__ import annotations
 
+import importlib
 import inspect
 import json
+import pkgutil
 import sqlite3
 import time
 from abc import ABC, abstractmethod
@@ -50,6 +79,46 @@ from typing import Any, Optional
 
 # We import SQLiteStore lazily to avoid a hard circular dep; the type hint below
 # uses a string forward reference.
+
+
+# ── Detector kind ─────────────────────────────────────────────────────────────
+
+KIND_DETECTOR = "detector"
+KIND_CLASSIFIER = "classifier"
+_VALID_KINDS = (KIND_DETECTOR, KIND_CLASSIFIER)
+
+# DETECTOR_NAME -> KIND, filled by BaseDetector.__init_subclass__.
+_KIND_BY_NAME: dict[str, str] = {}
+_BUILTIN_KINDS_LOADED = False
+
+
+def detector_kind(name: str) -> str:
+    """Kind of the detector registered under *name*; unknown names are plain
+    detectors (an unregistered overlay name must never be silently hidden)."""
+    return _KIND_BY_NAME.get(name, KIND_DETECTOR)
+
+
+def classifier_detector_names() -> frozenset[str]:
+    """DETECTOR_NAMEs of every registered classifier."""
+    return frozenset(n for n, k in _KIND_BY_NAME.items() if k == KIND_CLASSIFIER)
+
+
+def load_detector_kinds() -> None:
+    """Import every module of the built-in detectors package so each subclass
+    registers its kind. For readers that only hold a DB connection (query.py).
+    Idempotent; a module that fails to import is skipped, never fatal."""
+    global _BUILTIN_KINDS_LOADED
+    if _BUILTIN_KINDS_LOADED or not __package__:
+        return
+    _BUILTIN_KINDS_LOADED = True
+    pkg = importlib.import_module(__package__)
+    for info in pkgutil.iter_modules(pkg.__path__):
+        if info.name in ("base", "tests"):
+            continue
+        try:
+            importlib.import_module(f"{__package__}.{info.name}")
+        except Exception:  # pragma: no cover - defensive
+            continue
 
 
 # ── Schema additions ──────────────────────────────────────────────────────────
@@ -203,6 +272,20 @@ class BaseDetector(ABC):
 
     DETECTOR_NAME: str = ""
 
+    #: KIND_DETECTOR (default) or KIND_CLASSIFIER — see "Detector kind" in the
+    #: module docstring. A classifier labels every run, so its rows are never
+    #: prevalence or issue recurrence.
+    KIND: str = KIND_DETECTOR
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        if cls.KIND not in _VALID_KINDS:
+            raise ValueError(
+                f"{cls.__name__}.KIND must be one of {_VALID_KINDS}, got {cls.KIND!r}"
+            )
+        if cls.DETECTOR_NAME:
+            _KIND_BY_NAME[cls.DETECTOR_NAME] = cls.KIND
+
     def __init__(self, conn: sqlite3.Connection):
         if not self.DETECTOR_NAME:
             raise ValueError(f"{self.__class__.__name__} must set DETECTOR_NAME")
@@ -259,6 +342,10 @@ class BaseDetector(ABC):
                 is_new = self.record_hit(run_id, candidate.signature, candidate.project, ts=now)
                 if is_new:
                     new_hit_count += 1
+            if self.KIND == KIND_CLASSIFIER:
+                # Per-run tags stay in detector_hits; a label that every run
+                # carries has no recurrence to track, so no issues row.
+                continue
             self.find_or_create_issue(
                 signature=candidate.signature,
                 project=candidate.project,
@@ -342,18 +429,28 @@ class BaseDetector(ABC):
         hit_rate = distinct_run_ids_with_a_hit / total_runs_in_window
         Returns 0.0 if there are no runs in the window.
 
+        Numerator and denominator share one window (``runs.ended``) and one
+        project attribution (``runs.project``): ``detector_hits.ts`` is when a
+        synthesis pass recorded the hit, which can lag the run by days, so it
+        must not choose which runs count. A hit counts only for a run that
+        exists. A classifier labels every run, so its rate is 0.0 by
+        definition.
+
         This converts boolean alarms ("worktree leaked") into rates
         ("worktree leaked 40% of runs this week vs 8% last").
         """
+        if self.KIND == KIND_CLASSIFIER:
+            return 0.0
         cutoff = _days_ago_utc(window_days)
 
         hit_count = self._conn.execute(
             """
-            SELECT COUNT(DISTINCT run_id)
-            FROM detector_hits
-            WHERE detector = ?
-              AND project  = ?
-              AND ts       >= ?
+            SELECT COUNT(DISTINCT dh.run_id)
+            FROM detector_hits dh
+            JOIN runs r ON r.run_id = dh.run_id
+            WHERE dh.detector = ?
+              AND r.project   = ?
+              AND r.ended     >= ?
             """,
             (self.DETECTOR_NAME, project, cutoff),
         ).fetchone()[0]

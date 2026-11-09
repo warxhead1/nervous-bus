@@ -53,7 +53,13 @@ _HERE = Path(__file__).parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-from detectors.base import BaseDetector, PatternCandidate, ensure_detector_schema
+from detectors.base import (
+    KIND_CLASSIFIER,
+    BaseDetector,
+    PatternCandidate,
+    detector_kind,
+    ensure_detector_schema,
+)
 from detectors.worktree_leak import WorktreeLeakDetector
 from detectors.rebuild_cache_miss import RebuildCacheMissDetector
 from detectors.repeated_question import RepeatedQuestionDetector
@@ -69,10 +75,7 @@ from detectors.gate_bound_loosened import GateBoundLoosenedDetector
 from detectors.foreground_wait import ForegroundWaitDetector
 from detectors.guard_denial import GuardDenialDetector
 from detectors.kb_recall_gap import KbRecallGapDetector
-from detectors.failure_taxonomy import (
-    FailureTaxonomyDetector,
-    UNCONFIRMED_CADENCE_TIER,
-)
+from detectors.failure_taxonomy import FailureTaxonomyDetector
 from detectors.skill_opportunity import SkillOpportunityDetector
 from detectors.user_correction import UserCorrectionDetector
 from adapter_api import load_adapters
@@ -138,6 +141,16 @@ RECENCY_HALF_LIFE_DAYS: float = 14.0
 
 #: Scorer version — bump when scoring weights/formula change.
 SCORER_VERSION: int = 1
+
+#: Classifier floors (detectors.base.KIND_CLASSIFIER). A classifier labels every
+#: run, so prevalence and issue recurrence say nothing about it and are excluded
+#: from its score. A CLASSIFIED signature (a canonical failure bucket — never
+#: `unclassified`, never the unconfirmed-cadence tier) may reach propose_fix only
+#: when, inside the window, it covers at least CLASSIFIER_MIN_RUNS distinct runs
+#: AND at least CLASSIFIER_MIN_CONFIRMED_FAILURES of them carry a labeled failure
+#: outcome (thrashed/abandoned/reverted). Both are CLI-tunable (--classifier-*).
+CLASSIFIER_MIN_RUNS: int = 10
+CLASSIFIER_MIN_CONFIRMED_FAILURES: int = 5
 
 # Detector registry — explicit import list (small + auditable).
 # Built-in detectors shipped with the public engine:
@@ -869,23 +882,30 @@ def _compute_recency(last_seen_str: str) -> float:
 def _compute_labeled_support(
     conn: sqlite3.Connection,
     signature: str,
+    run_ids: Optional[list[str]] = None,
 ) -> dict:
     """Compute labeled support breakdown for an issue signature.
 
     Returns {confirmed_failures, confirmed_clean, unlabeled}.
     Gates STRICTLY on labeled_at IS NOT NULL before trusting outcome.
+
+    ``run_ids`` (when given) replaces the all-time detector_hits lookup — used
+    for classifier signatures, whose support must be the windowed run set.
     """
     FAILURE_OUTCOMES = {"thrashed", "abandoned", "reverted"}
     CLEAN_OUTCOMES = {"clean", "landed", "corrected"}
 
-    # Get all run_ids that have a detector_hit for this signature
-    hit_run_ids = [
-        row[0]
-        for row in conn.execute(
-            "SELECT DISTINCT run_id FROM detector_hits WHERE signature = ?",
-            (signature,),
-        ).fetchall()
-    ]
+    if run_ids is not None:
+        hit_run_ids = list(run_ids)
+    else:
+        # Get all run_ids that have a detector_hit for this signature
+        hit_run_ids = [
+            row[0]
+            for row in conn.execute(
+                "SELECT DISTINCT run_id FROM detector_hits WHERE signature = ?",
+                (signature,),
+            ).fetchall()
+        ]
 
     if not hit_run_ids:
         return {"confirmed_failures": 0, "confirmed_clean": 0, "unlabeled": 0}
@@ -955,7 +975,12 @@ def _compute_prevalence_logical(
 
     = distinct logical_run_ids with ≥1 hit / total logical_run_ids in window
     for (project, detector) over window_days.
+
+    A classifier (KIND_CLASSIFIER) tags every run, so its prevalence is 0.0 by
+    definition: it never contributes the prevalence term of a score.
     """
+    if detector_kind(detector_name) == KIND_CLASSIFIER:
+        return 0.0
     cutoff = _days_ago_utc(window_days)
 
     # Get all run_ids with hits for this (project, detector) in window
@@ -1159,6 +1184,60 @@ def make_decision(
         )
 
 
+def make_classifier_decision(
+    *,
+    classified: bool,
+    window_runs: int,
+    labeled_support: dict,
+    logical_run_count: int,
+    min_runs: int = CLASSIFIER_MIN_RUNS,
+    min_confirmed_failures: int = CLASSIFIER_MIN_CONFIRMED_FAILURES,
+) -> tuple[str, str]:
+    """Return (decision, rationale) for a classifier signature.
+
+    A classifier row is not a prevalence/recurrence signal (it labels every
+    run), so the score never decides it. It reaches propose_fix only when it is
+    CLASSIFIED (a canonical failure bucket) and clears both severity floors:
+    ``window_runs >= min_runs`` and ``confirmed_failures >= min_confirmed_failures``
+    (labeled thrashed/abandoned/reverted runs). `unclassified` and the
+    unconfirmed-cadence tier are capped at monitor regardless of mass.
+    """
+    if logical_run_count < MIN_PROJECT_RUNS:
+        return (
+            "needs_more_data",
+            f"Only {logical_run_count} logical run(s) in window; need >= {MIN_PROJECT_RUNS}.",
+        )
+    if window_runs == 0:
+        return "monitor", "Classifier label carried by no run in the window."
+    if not classified:
+        return (
+            "monitor",
+            "Classifier row with no confirmed failure signal ('unclassified' or the "
+            "unconfirmed-cadence tier): reported for visibility, capped at monitor. "
+            "Classifier rows are not prevalence or recurrence evidence; only a "
+            "classified bucket that clears the severity floors can propose_fix.",
+        )
+    cf = labeled_support.get("confirmed_failures", 0)
+    cc = labeled_support.get("confirmed_clean", 0)
+    if cc > 0 and cc > cf and cc >= 3:
+        return (
+            "suppressed",
+            f"confirmed_clean ({cc}) dominates confirmed_failures ({cf}): pattern may be benign.",
+        )
+    if window_runs >= min_runs and cf >= min_confirmed_failures:
+        return (
+            "propose_fix",
+            f"Classified bucket clears the classifier floors: {window_runs} runs >= {min_runs} "
+            f"and {cf} confirmed failures >= {min_confirmed_failures}. Prevalence/recurrence "
+            f"are not used for classifier rows.",
+        )
+    return (
+        "monitor",
+        f"Classified bucket below the classifier floors: {window_runs} runs (need {min_runs}), "
+        f"{cf} confirmed failures (need {min_confirmed_failures}).",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Eval persistence
 # ---------------------------------------------------------------------------
@@ -1282,6 +1361,7 @@ def build_eval_payload(
         # Internal field used by persist_eval
         "issue": issue,
     }
+    payload["detector_kind"] = detector_kind(issue["detector"])
     # Confidence tier (e.g. failure_taxonomy's "confirmed" vs
     # "unconfirmed_cadence_candidate" split, see detectors/failure_taxonomy.py)
     # — surfaced whenever a detector stamps it, so a reader of the eval (or
@@ -1389,6 +1469,8 @@ def run_synthesis(
     window_days: int = WINDOW_DAYS,
     dry_run: bool = True,
     emit_beads: bool = False,
+    classifier_min_runs: int = CLASSIFIER_MIN_RUNS,
+    classifier_min_confirmed_failures: int = CLASSIFIER_MIN_CONFIRMED_FAILURES,
 ) -> SynthesisResult:
     """Execute the full synthesis pass.
 
@@ -1481,6 +1563,30 @@ def run_synthesis(
     cols = [d[0] for d in cur.description]
     issues = [dict(zip(cols, row)) for row in cur.fetchall()]
 
+    # Classifier signatures are not issues: BaseDetector.run no longer writes
+    # them, and any legacy rows carry an inflated recurrence_count. Evaluate
+    # them from this pass's candidates instead (windowed run counts), keeping a
+    # legacy row only so a stale standing verdict is superseded.
+    legacy_classifier_rows = {
+        i["signature"]: i for i in issues if detector_kind(i["detector"]) == KIND_CLASSIFIER
+    }
+    issues = [i for i in issues if i["signature"] not in legacy_classifier_rows]
+    for sig, cand in sig_to_candidate.items():
+        if detector_kind(cand.detector) != KIND_CLASSIFIER:
+            continue
+        if project_filter and cand.project != project_filter:
+            continue
+        row = legacy_classifier_rows.pop(sig, None) or {
+            "first_seen": synthesis_pass_at,
+            "last_seen": synthesis_pass_at,
+            "recurrence_count_at_apply": None,
+            "evidence_json": json.dumps(cand.evidence),
+        }
+        issues.append(
+            {**row, "signature": sig, "project": cand.project, "detector": cand.detector}
+        )
+    issues.extend(legacy_classifier_rows.values())
+
     if not issues:
         return result
 
@@ -1540,10 +1646,19 @@ def run_synthesis(
                 )
 
         # ── Step 2: Score ─────────────────────────────────────────────────
+        is_classifier = detector_kind(detector_name) == KIND_CLASSIFIER
+        window_run_ids: list[str] = []
+        if is_classifier:
+            # Recurrence for a classifier is the windowed distinct-run count of
+            # THIS pass, never the issues-table counter.
+            window_run_ids = sorted(set(candidate.run_ids)) if candidate else []
+            issue = {**issue, "recurrence_count": len(window_run_ids)}
         prevalence = _compute_prevalence_logical(
             conn, detector_name, project, logical_runs, window_days
         )
-        labeled_support = _compute_labeled_support(conn, signature)
+        labeled_support = _compute_labeled_support(
+            conn, signature, run_ids=window_run_ids if is_classifier else None
+        )
         score, score_components = score_issue(
             issue, prevalence, labeled_support, rung, window_days
         )
@@ -1570,43 +1685,25 @@ def run_synthesis(
             )
 
         # ── Step 5: Decision ──────────────────────────────────────────────
-        decision, decision_rationale = make_decision(
-            score=score,
-            rung=rung,
-            replay=replay,
-            labeled_support=labeled_support,
-            logical_run_count=logical_run_count,
-        )
-
-        # Confidence-tier decision cap (2026-08-28, adversarially-reviewed
-        # narrowing of the failure_taxonomy planning_failure cadence finding):
-        # a candidate whose evidence is ONLY the weak, unconfirmed cadence
-        # heuristic (candidate.extra["confidence_tier"] ==
-        # UNCONFIRMED_CADENCE_TIER — stamped by
-        # detectors/failure_taxonomy.py's split of planning_failure) can never
-        # independently reach propose_fix, no matter how high its own
-        # prevalence/recurrence score climbs. Its score and prevalence are
-        # still computed and surfaced in full (never dropped) — only the
-        # DECISION is capped, so a reader sees the real mass of unconfirmed
-        # backlog without the engine acting on it as if it were diagnosed.
-        # Only a candidate with >=1 confirmed reason (outcome=thrashed/
-        # abandoned, red_baseline_dispatch, inherited_rationalization) can
-        # drive a top-rank propose_fix decision for planning failure.
-        if (
-            candidate is not None
-            and candidate.extra.get("confidence_tier") == UNCONFIRMED_CADENCE_TIER
-            and decision == "propose_fix"
-        ):
-            decision = "monitor"
-            decision_rationale = (
-                f"Unconfirmed-cadence-candidate tier: score={score:.3f} would "
-                f"otherwise propose_fix, but this signature's only evidence is "
-                f"the long-run cadence heuristic (no confirmed thrashed/"
-                f"abandoned outcome, no confirmed planning-detector hit) — "
-                f"capped at monitor. Confirmed evidence alone drives a "
-                f"top-rank decision for planning failure; escalate this "
-                f"backlog by labeling the underlying runs (label.py), not by "
-                f"scoring cadence alone higher."
+        if is_classifier:
+            # The confidence-tier split (failure_taxonomy's unconfirmed-cadence
+            # tier) is carried by extra["classified"]: only a canonical bucket
+            # can propose_fix, and only above the classifier floors.
+            decision, decision_rationale = make_classifier_decision(
+                classified=bool(candidate and candidate.extra.get("classified")),
+                window_runs=len(window_run_ids),
+                labeled_support=labeled_support,
+                logical_run_count=logical_run_count,
+                min_runs=classifier_min_runs,
+                min_confirmed_failures=classifier_min_confirmed_failures,
+            )
+        else:
+            decision, decision_rationale = make_decision(
+                score=score,
+                rung=rung,
+                replay=replay,
+                labeled_support=labeled_support,
+                logical_run_count=logical_run_count,
             )
 
         # ── Step 6: Persist eval ──────────────────────────────────────────
@@ -1682,7 +1779,7 @@ def run_synthesis(
         if material_change:
             persist_eval(conn, eval_payload)
             # Snapshot recurrence_count_at_apply in issues table
-            if decision == "propose_fix":
+            if decision == "propose_fix" and not is_classifier:
                 conn.execute(
                     """
                     UPDATE issues
@@ -1775,6 +1872,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         help=f"Rolling window for prevalence/recency (default {WINDOW_DAYS})",
     )
     parser.add_argument(
+        "--classifier-min-runs", type=int, default=CLASSIFIER_MIN_RUNS, metavar="N",
+        help=("Classifier floor: a classified failure bucket needs >= N distinct "
+              f"runs in the window to propose_fix (default {CLASSIFIER_MIN_RUNS})"),
+    )
+    parser.add_argument(
+        "--classifier-min-confirmed-failures", type=int,
+        default=CLASSIFIER_MIN_CONFIRMED_FAILURES, metavar="N",
+        help=("Classifier floor: ... and >= N of them labeled thrashed/abandoned/"
+              f"reverted (default {CLASSIFIER_MIN_CONFIRMED_FAILURES})"),
+    )
+    parser.add_argument(
         "--json", "-j", action="store_true",
         help="Machine-readable JSON output",
     )
@@ -1806,6 +1914,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         window_days=args.window_days,
         dry_run=dry_run,
         emit_beads=args.file_beads,
+        classifier_min_runs=args.classifier_min_runs,
+        classifier_min_confirmed_failures=args.classifier_min_confirmed_failures,
     )
 
     conn.close()
@@ -1842,7 +1952,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             "rung": e["rung"],
             "replay": replay_status,
             "decision": e["decision"],
-            "prev": f"{comp.get('prevalence', 0):.0%}",
+            # A classifier's prevalence is excluded by construction, not 0%.
+            "prev": "-" if e.get("detector_kind") == KIND_CLASSIFIER
+                    else f"{comp.get('prevalence', 0):.0%}",
             "recur": str(comp.get("recurrence_count", "")),
         })
 

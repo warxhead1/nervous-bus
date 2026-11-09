@@ -8,7 +8,7 @@ model, persists to SQLite, and emits bus.agent.run.closed.v1 via
 
 Usage:
     python recorder.py                  # run continuously
-    python recorder.py --once           # drain current stream and exit
+    python recorder.py --once           # reclaim stranded + drain new entries, then exit
     python recorder.py --config foo.toml
     python recorder.py --replay /path/to/debug.jsonl   # offline fixture mode
 
@@ -51,6 +51,15 @@ run_key, never rows still waiting to be folded — see `_fold_cursor` and
                to any durable store and sit only in Redis's pending-entries
                list (PEL) under the dead consumer's name until the next
                startup's PEL reclaim (see below) claims them.
+
+`ended` never opens a run
+-------------------------
+An `ended` event closes the run it names and is otherwise absorbed:
+`Segmenter.route` returns None for it when no run is open under its key, and
+`_ingest_batch` then neither journals nor folds it.  A subagent's dispatch
+terminal (published with the PARENT session's ids and no worktree) is routed
+to the subagent's own run, `<conversation>#agent-<subagent_id>`, never to the
+parent session's run.  See `segment.compute_run_key`.
 
 PEL reclaim (nervous-bus#54)
 -----------------------------
@@ -453,6 +462,8 @@ class Recorder:
         self._runs_published = 0
         self._events_ingested = 0
         self._events_skipped = 0
+        # `ended` events with no open run to close: neither journaled nor folded.
+        self._events_absorbed = 0
         self._started_at = time.time()
         # Graceful-shutdown bookkeeping.
         self._shutdown_started = False
@@ -522,8 +533,18 @@ class Recorder:
             if parsed is None:
                 continue
             data, _etype, _ts = parsed
+            had_cursor = run_key in self._fold_cursor
+            prior_cursor = self._fold_cursor.get(run_key)
             self._fold_cursor[run_key] = pending_id
-            self.segmenter.ingest(data, now=now)
+            if not self.segmenter.ingest(data, now=now):
+                # A legacy row (journaled before `ended` stopped minting runs)
+                # that the segmenter now absorbs. Leave the cursor as it was.
+                if had_cursor:
+                    self._fold_cursor[run_key] = prior_cursor
+                else:
+                    self._fold_cursor.pop(run_key, None)
+                self._events_absorbed += 1
+                continue
             self._events_ingested += 1
             recovered += 1
         sys.stderr.write(
@@ -681,19 +702,26 @@ class Recorder:
         plan: list[list] = []
         journal_rows: list[tuple[str, str, str, str, str]] = []
         journal_slots: list[list] = []
+        # Open/closed state of each run_key as the batch will leave it, so an
+        # `ended` that follows its run's events in the same batch is planned
+        # against the run those events are about to open.
+        live: dict[str, bool] = {}
         for stream_id, raw_json in entries:
             result = self._parse_envelope(raw_json)
             if result is None:
                 self._events_skipped += 1
                 continue
             data, event_type, ts = result
-            # An empty run_key is refused by Segmenter.ingest, so journaling
-            # under it would accumulate events no run close can ever drain.
-            run_key_tuple = self._get_run_key(data)
-            run_key = run_key_tuple[0] if (run_key_tuple and run_key_tuple[0]) else None
+            # The segmenter refuses an empty run_key and absorbs an `ended`
+            # with no open run; journaling either would accumulate events no
+            # run close can ever drain.
+            run_key = self.segmenter.route(data, live)
+            if run_key is None:
+                self._events_absorbed += 1
+                continue
             slot = [data, run_key, None]
             plan.append(slot)
-            if journal and run_key:
+            if journal:
                 journal_rows.append((run_key, stream_id, ts, event_type, raw_json))
                 journal_slots.append(slot)
 
@@ -709,20 +737,13 @@ class Recorder:
             self.segmenter.ingest(data, now=now)
             self._events_ingested += 1
 
-    def _get_run_key(self, activity: dict) -> Optional[tuple]:
-        """Compute run key for buffering without duplicating logic."""
-        from segment import compute_run_key
-        try:
-            return compute_run_key(activity)
-        except Exception:
-            return None
-
     def log_metrics(self) -> None:
         elapsed = time.time() - self._started_at
         rate = self._events_ingested / max(1, elapsed)
         sys.stderr.write(
             f"[{_now_utc()}] reflex-recorder metrics: "
             f"ingested={self._events_ingested} skipped={self._events_skipped} "
+            f"absorbed={self._events_absorbed} "
             f"closed={self._runs_closed} published={self._runs_published} "
             f"open_runs={self.segmenter.open_run_count} "
             f"rate={rate:.2f}/s\n"
@@ -783,13 +804,30 @@ class Recorder:
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 def _run_xreadgroup(r: redis.Redis, recorder: Recorder, cfg: dict, once: bool = False,
-                    shutdown: Optional[ShutdownSignal] = None) -> None:
+                    shutdown: Optional[ShutdownSignal] = None) -> bool:
+    """The read loop. Returns True unless a `--once` drain aborted on an error.
+
+    Live mode blocks `stream_block_ms` per read so the shutdown latch is polled
+    at that granularity. `--once` never blocks: Redis reads `BLOCK 0` as "wait
+    forever", not "don't wait", so the non-blocking form is the absence of
+    BLOCK (`block=None`). It makes two passes and leaves when a pass comes back
+    empty or the latch is set:
+
+      1. id `0` re-reads this consumer's OWN pending entries (delivered here
+         but never acked, e.g. a batch whose journal commit failed);
+      2. id `>` reads every entry added since, batch by batch, until caught up.
+
+    Other consumers' stranded entries are not this loop's job: main() runs
+    `_reclaim_stranded_pel` before it.
+    """
     last_metrics = time.time()
     last_tick = time.time()
     read_count = cfg["stream_read_count"]
     block_ms = cfg["stream_block_ms"]
     metrics_interval = cfg["metrics_interval_s"]
     tick_interval = cfg["tick_interval_s"]
+    read_id = "0" if once else ">"
+    clean = True
 
     while True:
         if shutdown is not None and shutdown.is_set():
@@ -800,28 +838,31 @@ def _run_xreadgroup(r: redis.Redis, recorder: Recorder, cfg: dict, once: bool = 
             sys.stderr.flush()
             break
 
+        got = False
         try:
             results = r.xreadgroup(
                 groupname=CONSUMER_GROUP,
                 consumername=CONSUMER_NAME,
-                streams={STREAM_NAME: ">"},
+                streams={STREAM_NAME: read_id},
                 count=read_count,
-                block=block_ms if not once else 0,
+                block=None if once else block_ms,
             )
 
-            if results:
-                for _stream, entries in results:
-                    # Journal the whole batch in one transaction, fold each
-                    # event into the Segmenter, THEN ack the whole batch —
-                    # the ack must not precede the journal commit. See
-                    # _ingest_batch / store.journal_events.
-                    batch = [
-                        (stream_id, fields.get("_raw", "{}"))
-                        for stream_id, fields in entries
-                    ]
-                    recorder._ingest_batch(batch)
-                    for stream_id, _fields in entries:
-                        r.xack(STREAM_NAME, CONSUMER_GROUP, stream_id)
+            for _stream, entries in results or []:
+                if not entries:
+                    continue
+                got = True
+                # Journal the whole batch in one transaction, fold each
+                # event into the Segmenter, THEN ack the whole batch —
+                # the ack must not precede the journal commit. See
+                # _ingest_batch / store.journal_events.
+                batch = [
+                    (stream_id, (fields or {}).get("_raw", "{}"))
+                    for stream_id, fields in entries
+                ]
+                recorder._ingest_batch(batch)
+                for stream_id, _fields in entries:
+                    r.xack(STREAM_NAME, CONSUMER_GROUP, stream_id)
 
             now = time.time()
 
@@ -835,7 +876,10 @@ def _run_xreadgroup(r: redis.Redis, recorder: Recorder, cfg: dict, once: bool = 
                 recorder.log_metrics()
                 last_metrics = now
 
-            if once and not results:
+            if once and not got:
+                if read_id == "0":
+                    read_id = ">"
+                    continue
                 break
 
         except KeyboardInterrupt:
@@ -843,14 +887,21 @@ def _run_xreadgroup(r: redis.Redis, recorder: Recorder, cfg: dict, once: bool = 
         except redis.ConnectionError as e:
             sys.stderr.write(f"[reflex-recorder] redis connection lost: {e}; retrying in 5s\n")
             sys.stderr.flush()
+            if once:
+                clean = False
+                break
             _sleep_interruptible(5, shutdown)
         except Exception as e:
             sys.stderr.write(f"[reflex-recorder] error: {e}\n")
             sys.stderr.flush()
+            if once:
+                # A failed batch stays in this consumer's PEL; looping would
+                # re-read the same entries forever.
+                clean = False
+                break
             _sleep_interruptible(1, shutdown)
 
-        if once:
-            break
+    return clean
 
 
 def _run_replay(recorder: Recorder, replay_path: Path) -> None:
@@ -888,7 +939,9 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                         help=f"Path to config TOML (default: {DEFAULT_CONFIG})")
     parser.add_argument("--once", action="store_true",
-                        help="Drain current PEL+stream entries and exit")
+                        help="Reclaim stranded pending entries (idle > reclaim_min_idle_s), "
+                             "drain new stream entries without blocking, then exit "
+                             "(exit 1 if the drain aborted on an error)")
     parser.add_argument("--replay", type=Path, default=None,
                         help="Offline replay mode: read activity events from debug.jsonl file")
     parser.add_argument("--db-path", type=Path, default=None,
@@ -947,11 +1000,11 @@ def main() -> int:
     _cleanup_dead_consumers(r, cfg)
 
     try:
-        _run_xreadgroup(r, recorder, cfg, once=args.once, shutdown=shutdown)
+        clean = _run_xreadgroup(r, recorder, cfg, once=args.once, shutdown=shutdown)
     finally:
         recorder.shutdown()
 
-    return 0
+    return 0 if clean else 1
 
 
 if __name__ == "__main__":

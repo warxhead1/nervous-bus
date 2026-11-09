@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 import sys
@@ -59,11 +60,67 @@ def test_structured_meta_ors_with_prose_and_records_arm():
     assert both["_fired"]["has_file_scope"] == ["prose", "structured"]
 
 
-def test_project_from_cwd():
-    assert project_from_cwd("/home/eric/data2/worktrees/hearth/agent-1") == "hearth"
-    assert project_from_cwd("/home/eric/projects/kb") == "kb"
-    assert project_from_cwd("/home/eric/data2/orca/nervous-bus") == "nervous-bus"
+@pytest.fixture
+def layout(tmp_path, monkeypatch):
+    """A throwaway $HOME with the three project roots, so no host layout leaks in."""
+    from project import cache_clear
+    for sub in ("projects", "data2/worktrees", "data2/orca"):
+        (tmp_path / sub).mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NBUS_PROJECT_ROOTS", raising=False)
+    cache_clear()
+    yield tmp_path
+    cache_clear()
+
+
+def test_project_from_cwd(layout):
+    assert project_from_cwd(str(layout / "data2/worktrees/hearth/agent-1")) == "hearth"
+    assert project_from_cwd(str(layout / "projects/kb")) == "kb"
+    assert project_from_cwd(str(layout / "data2/orca/nervous-bus")) == "nervous-bus"
     assert project_from_cwd("") == "unknown"
+
+
+def test_project_from_cwd_fork_agent_is_its_repo_not_its_worktree_slug(layout):
+    # a fork agent's checkout lives under <repo>/.claude/worktrees/<slug>
+    assert project_from_cwd(str(layout / "projects/tengine/.claude/worktrees/agent-a3f67d389e54ce3f8")) == "tengine"
+    assert project_from_cwd(str(layout / "projects/hearth/.claude/worktrees/review-notes-durable")) == "hearth"
+
+
+def test_project_from_cwd_cannot_tell_is_unknown_not_a_basename(layout):
+    assert project_from_cwd("/work/.claude/worktrees/agent-af710ac8d4ef5414c") == "unknown"
+    assert project_from_cwd("/work") == "unknown"
+
+
+def test_project_from_cwd_names_the_repo_of_the_session_that_launched_a_lane_worktree(layout):
+    (layout / "data2/orca/biz-worthy").mkdir()
+    cwd = str(layout / "data2/worktrees/edge-and-analysis/agent-a0c9920357f5a3a62")
+    launched = layout / "data2/orca/biz-worthy/edge-and-analysis"
+    transcript = str(layout / ".claude/projects" / re.sub(r"[^A-Za-z0-9]", "-", str(launched))
+                     / "sess-1/subagents/agent-a0c9920357f5a3a62.jsonl")
+    assert project_from_cwd(cwd) == "edge-and-analysis"
+    assert project_from_cwd(cwd, transcript) == "biz-worthy"
+    assert project_from_cwd("", transcript) == "biz-worthy"
+
+
+def test_diff_stat_searches_the_repo_of_a_cron_lane_not_its_family(layout, monkeypatch):
+    import subprocess
+    monkeypatch.setattr(champion, "HOME", layout)
+    repo = layout / "projects/tachyonac-engine"
+    repo.mkdir()
+    run = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
+    run("init", "-b", "main")
+    run("config", "user.email", "t@t")
+    run("config", "user.name", "t")
+    (repo / "a.txt").write_text("1\n")
+    run("add", ".")
+    run("commit", "-m", "init")
+    run("switch", "-c", "feat")
+    (repo / "a.txt").write_text("1\n2\n")
+    run("commit", "-am", "two")
+    run("switch", "main")
+    gone = layout / "data2/worktrees/tachyonac-engine/auto-oxsynth-mmx-sweep-run-5-20260919T1000"
+    assert project_from_cwd(str(gone)) == "auto-oxsynth-mmx-sweep"
+    assert "a.txt" in champion.diff_stat({"cwd": str(gone), "git_branch": "feat"})
 
 
 # ── synthetic stores ────────────────────────────────────────────────────────
