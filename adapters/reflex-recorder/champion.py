@@ -834,7 +834,9 @@ def diff_stat(row: dict, repo_hint: Optional[str] = None) -> Optional[str]:
     wt = row.get("run_worktree") or row.get("cwd") or ""
     if "/worktrees/" in wt:
         # a checkout to look in, not a label: a cron lane's repo, not its auto-<family>
-        repos.append(str(HOME / "projects" / (_resolve_repo(wt) or "unknown")))
+        repo = _resolve_repo(wt)
+        if repo:
+            repos.append(str(HOME / "projects" / repo))
     for branch in (row.get("run_branch"), row.get("git_branch")):
         for repo in dict.fromkeys(repos):
             if branch and Path(repo).is_dir() and _git(["rev-parse", "--verify", branch], repo):
