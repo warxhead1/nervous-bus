@@ -2,14 +2,28 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import token_ledger as tl  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fixture_roots(monkeypatch):
+    # the fixtures use literal /home/eric/... cwds; pin the roots so they resolve anywhere
+    from project import cache_clear
+    monkeypatch.setenv("NBUS_PROJECT_ROOTS", os.pathsep.join(
+        f"/home/eric/{p}" for p in ("projects", "data2/worktrees", "data2/orca")))
+    cache_clear()
+    yield
+    cache_clear()
 
 
 def _asst(mid, ts, usage, content):
@@ -103,6 +117,15 @@ class TestLedger(unittest.TestCase):
         self.assertEqual(tl.classify_command("go build ./..."), "build")
         self.assertEqual(tl.classify_command("ls"), "other")
         self.assertEqual(tl.project_of("/home/eric/projects/hearth/src"), "hearth")
+
+    def test_project_of_is_the_repo_not_the_lane_or_a_basename(self):
+        self.assertEqual(tl.project_of("/home/eric/projects/tengine/.claude/worktrees/agent-a3f67d389e54ce3f8"),
+                         "tengine")
+        self.assertEqual(tl.project_of("/home/eric/data2/worktrees/kb/wf_3998f149-2b7-2"), "kb")
+        self.assertEqual(tl.project_of("/home/eric/projects/kb.worktrees/feature-x"), "kb")
+        self.assertIsNone(tl.project_of("/work"))
+        self.assertIsNone(tl.project_of(""))
+        self.assertIsNone(tl.project_of(None))
 
 
 if __name__ == "__main__":

@@ -29,9 +29,17 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, Optional
+
+# the one cwd -> project resolver lives with the transcript readers; append so the
+# sibling modules of this directory keep precedence over its top-level names
+_TRANSCRIPTS = str(Path(__file__).resolve().parent.parent / "transcripts")
+if _TRANSCRIPTS not in sys.path:
+    sys.path.append(_TRANSCRIPTS)
+from project import project_of as _resolve_project  # noqa: E402
 
 CHANNEL = "bus.workflow.agent.dispatch.v1"
 DEFAULT_PROMPT_BOUND = 1000  # matches the Agent/Task tool_summary bound decision
@@ -43,13 +51,8 @@ def _projects_root() -> Path:
 
 
 def _project_from_cwd(cwd: str) -> str:
-    """Derive a project slug from an agent cwd (segment after '/projects/')."""
-    parts = Path(cwd).parts
-    if "projects" in parts:
-        i = parts.index("projects")
-        if i + 1 < len(parts):
-            return parts[i + 1]
-    return Path(cwd).name or "unknown"
+    """Project slug for an agent cwd via the shared resolver; 'unknown' when it cannot tell."""
+    return _resolve_project(cwd) or "unknown"
 
 
 @dataclass

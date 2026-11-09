@@ -59,11 +59,35 @@ def test_structured_meta_ors_with_prose_and_records_arm():
     assert both["_fired"]["has_file_scope"] == ["prose", "structured"]
 
 
-def test_project_from_cwd():
-    assert project_from_cwd("/home/eric/data2/worktrees/hearth/agent-1") == "hearth"
-    assert project_from_cwd("/home/eric/projects/kb") == "kb"
-    assert project_from_cwd("/home/eric/data2/orca/nervous-bus") == "nervous-bus"
+@pytest.fixture
+def layout(tmp_path, monkeypatch):
+    """A throwaway $HOME with the three project roots, so no host layout leaks in."""
+    from project import cache_clear
+    for sub in ("projects", "data2/worktrees", "data2/orca"):
+        (tmp_path / sub).mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NBUS_PROJECT_ROOTS", raising=False)
+    cache_clear()
+    yield tmp_path
+    cache_clear()
+
+
+def test_project_from_cwd(layout):
+    assert project_from_cwd(str(layout / "data2/worktrees/hearth/agent-1")) == "hearth"
+    assert project_from_cwd(str(layout / "projects/kb")) == "kb"
+    assert project_from_cwd(str(layout / "data2/orca/nervous-bus")) == "nervous-bus"
     assert project_from_cwd("") == "unknown"
+
+
+def test_project_from_cwd_fork_agent_is_its_repo_not_its_worktree_slug(layout):
+    # a fork agent's checkout lives under <repo>/.claude/worktrees/<slug>
+    assert project_from_cwd(str(layout / "projects/tengine/.claude/worktrees/agent-a3f67d389e54ce3f8")) == "tengine"
+    assert project_from_cwd(str(layout / "projects/hearth/.claude/worktrees/review-notes-durable")) == "hearth"
+
+
+def test_project_from_cwd_cannot_tell_is_unknown_not_a_basename(layout):
+    assert project_from_cwd("/work/.claude/worktrees/agent-af710ac8d4ef5414c") == "unknown"
+    assert project_from_cwd("/work") == "unknown"
 
 
 # ── synthetic stores ────────────────────────────────────────────────────────

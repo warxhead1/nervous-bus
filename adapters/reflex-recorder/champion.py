@@ -33,6 +33,12 @@ from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# the one cwd -> project resolver lives with the transcript readers; append so the
+# sibling modules of this directory keep precedence over its top-level names
+_TRANSCRIPTS = str(Path(__file__).resolve().parent.parent / "transcripts")
+if _TRANSCRIPTS not in sys.path:
+    sys.path.append(_TRANSCRIPTS)
+from project import project_of as _resolve_project  # noqa: E402
 
 from label import _source_tier  # noqa: E402
 from detectors.dispatch_lineage import DEFAULT_COHORT_WINDOW_S, _epoch  # noqa: E402
@@ -145,15 +151,10 @@ def sha256(text: str) -> str:
 
 
 def project_from_cwd(cwd: str) -> str:
-    """Project slug from a cwd: /data2/worktrees/<proj>/..., /projects/<proj>,
-    /data2/orca/<proj>[-lane]. Falls back to the last path segment."""
-    parts = Path(cwd).parts if cwd else ()
-    for marker in ("worktrees", "projects", "orca"):
-        if marker in parts:
-            i = parts.index(marker)
-            if i + 1 < len(parts):
-                return parts[i + 1]
-    return (Path(cwd).name if cwd else "") or "unknown"
+    """Project for a cwd via the shared resolver; 'unknown' when it cannot tell.
+    A fork agent's .claude/worktrees/agent-<id> checkout belongs to the repo that
+    holds it, never to its own slug."""
+    return _resolve_project(cwd) or "unknown"
 
 
 def _read_lines(path: Path, limit: int) -> Iterator[dict]:

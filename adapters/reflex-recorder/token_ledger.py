@@ -45,6 +45,13 @@ import time
 from pathlib import Path
 from typing import Iterator, Optional
 
+# the one cwd -> project resolver lives with the transcript readers; append so the
+# sibling modules of this directory keep precedence over its top-level names
+_TRANSCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "transcripts")
+if _TRANSCRIPTS not in sys.path:
+    sys.path.append(_TRANSCRIPTS)
+from project import project_of as _resolve_project  # noqa: E402
+
 HOME = Path.home()
 DEFAULT_DB = HOME / ".cache" / "nervous-bus" / "reflex" / "tokens.db"
 ROOTS = (
@@ -137,12 +144,6 @@ _BUILD_RE = re.compile(
     r"tsc\b|make\b|cmake --build|gradlew? \S*(?:assemble|build)|hearth-build)")
 _COMMIT_RE = re.compile(r"\bgit (?:-C \S+ )?commit\b")
 _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
-_PROJECT_RES = (
-    re.compile(r"^/home/[^/]+/data2/worktrees/([^/]+)"),
-    re.compile(r"^/home/[^/]+/data2/orca/([^/]+)"),
-    re.compile(r"^/home/[^/]+/projects/([^/]+)"),
-    re.compile(r"^/home/[^/]+/data2/([^/]+)"),
-)
 
 
 def classify_command(cmd: str) -> str:
@@ -197,13 +198,8 @@ def time_class(tool: str, raw_cmd: Optional[str] = None) -> str:
 
 
 def project_of(cwd: Optional[str]) -> Optional[str]:
-    if not cwd:
-        return None
-    for rx in _PROJECT_RES:
-        m = rx.match(cwd)
-        if m:
-            return m.group(1)
-    return os.path.basename(cwd.rstrip("/")) or None
+    """Project for a session cwd; None when the shared resolver cannot tell."""
+    return _resolve_project(cwd)
 
 
 def _iter_transcripts(root: Path) -> Iterator[tuple[str, Path]]:
