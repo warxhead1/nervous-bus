@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from detectors._truncated_json import string_field
 from detectors.edit_build_fail_revert import (
     BUILD_KEYWORDS,
     FAIL_PATTERNS,
@@ -66,7 +67,13 @@ DEFAULT_COHORT_WINDOW_S = 90.0
 # so json.loads (what _parse_summary does) FAILS and returns {} — silently losing
 # fields that are textually present. The fields we join on (agentId, model, name)
 # appear BEFORE the long prompt, so they survive truncation as raw text. These
-# helpers recover them: try the parsed dict first, then regex the raw string.
+# helpers recover them: try the parsed dict first, then read the raw string.
+
+# Keys whose value may be returned as a prefix when the bound cut it mid-string.
+# Everything else (agentId, model, name, isolation, ...) is an id or enum: a cut
+# one is a wrong value, so it comes back "" unless its closing quote survived.
+_PARTIAL_OK_KEYS = frozenset({"prompt"})
+
 
 def _summary_field(raw: str, key: str) -> str:
     """Extract a string field from a possibly-truncated summary JSON string."""
@@ -76,8 +83,7 @@ def _summary_field(raw: str, key: str) -> str:
     val = parsed.get(key)
     if isinstance(val, str) and val:
         return val
-    m = re.search(r'"' + re.escape(key) + r'"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
-    return m.group(1) if m else ""
+    return string_field(raw, key, partial=key in _PARTIAL_OK_KEYS)
 
 
 def _summary_contains(raw: str, *needles: str) -> bool:
