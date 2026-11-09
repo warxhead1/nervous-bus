@@ -978,7 +978,12 @@ def main() -> int:
                                         rerun_ids=rerun_calls(conn, since)[2])
         view["top_lanes"] = sorted(lanes(conn, since, a.project, per_session=by_session),
                                    key=lambda r: -r["turns"])[:15]
-        print("\n".join(requests_md(view)) if a.md else json.dumps(view, indent=1))
+        text = "\n".join(requests_md(view)) if a.md else json.dumps(view, indent=1)
+        if a.out:
+            a.out.parent.mkdir(parents=True, exist_ok=True)
+            a.out.write_text(text)
+        else:
+            print(text)
         return 0
     if a.lanes:
         since = _since(a.days)

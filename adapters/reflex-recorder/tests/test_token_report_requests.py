@@ -211,6 +211,17 @@ def test_build_finds_reruns_in_requests(tmp_path):
     assert {w["id"]: w["requests"] for w in rep["requests"]["waste"]}["redundant_reruns"] == 1
 
 
+def test_requests_cli_writes_the_view_to_out(tmp_path, monkeypatch):
+    conn, _ = _ledger(tmp_path)
+    conn.close()
+    out = tmp_path / "view.json"
+    monkeypatch.setattr(sys, "argv", ["token_report.py", "--db", str(tmp_path / "tokens.db"),
+                                      "--days", "1", "--requests", "--out", str(out)])
+    assert tr.main() == 0
+    view = json.loads(out.read_text())
+    assert view["totals"]["requests"] == 13 and view["top_lanes"][0]["agent_model"] == "sonnet"
+
+
 def test_denial_families():
     cls = tr.classify_denial
     assert cls(GUARD) == "worktree_guard"
