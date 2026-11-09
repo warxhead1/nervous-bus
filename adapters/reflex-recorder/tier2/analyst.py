@@ -51,9 +51,10 @@ _CLEAN_OUTCOMES = frozenset({"clean", "landed", "corrected"})
 # ── MiniMax / Anthropic call shape (mirrors pattern_consumer.py) ───────────────
 MINIMAX_ENDPOINT = "https://api.minimax.io/anthropic/v1/messages"
 MINIMAX_MODEL = os.environ.get("TIER2_ANALYST_MODEL", "MiniMax-M3.1-Flash")
-# M3.x models reason before answering and the thinking tokens count against
-# max_tokens; a small cap returns an empty text block.
-MINIMAX_MAX_TOKENS = int(os.environ.get("TIER2_MAX_TOKENS", "16384"))
+# M3.x models reason before answering, cannot be told not to (thinking:disabled
+# is a 400), and the thinking tokens count against max_tokens.  Too small a cap
+# returns a thinking-only response with no text block.
+MINIMAX_MAX_TOKENS = int(os.environ.get("TIER2_MAX_TOKENS", "24576"))
 MINIMAX_CONNECT_TIMEOUT_S = float(os.environ.get("TIER2_CONNECT_TIMEOUT_S", "10"))
 MINIMAX_READ_TIMEOUT_S = float(os.environ.get("TIER2_READ_TIMEOUT_S", "240"))
 
@@ -314,7 +315,7 @@ async def _call_minimax(api_key: str, prompt: str) -> tuple[list[dict] | None, s
                 return None, "transient"
             return _parse_response(resp.json()), None
     except Exception as e:
-        sys.stderr.write(f"tier2-analyst: MiniMax error: {e}\n")
+        sys.stderr.write(f"tier2-analyst: MiniMax error: {type(e).__name__}: {e}\n")
         return None, "transient"
 
 
@@ -351,7 +352,7 @@ async def _call_anthropic(prompt: str) -> tuple[list[dict] | None, str | None]:
                 return None, "transient"
             return _parse_response(resp.json()), None
     except Exception as e:
-        sys.stderr.write(f"tier2-analyst: Anthropic error: {e}\n")
+        sys.stderr.write(f"tier2-analyst: Anthropic error: {type(e).__name__}: {e}\n")
         return None, "transient"
 
 
@@ -364,6 +365,17 @@ def _parse_response(data: dict) -> list[dict] | None:
         if isinstance(b, dict) and b.get("type") == "text"
     ]
     text = "".join(text_parts).strip()
+    if not text:
+        # Reasoning models can spend the whole max_tokens budget thinking and
+        # return only a thinking block; say so instead of "JSON parse error".
+        usage = data.get("usage") or {}
+        sys.stderr.write(
+            "tier2-analyst: response has no text block "
+            f"(stop_reason={data.get('stop_reason')} "
+            f"output_tokens={usage.get('output_tokens')} "
+            f"max_tokens={MINIMAX_MAX_TOKENS}); raise TIER2_MAX_TOKENS\n"
+        )
+        return None
     text = re.sub(r"^```json?\s*", "", text)
     text = re.sub(r"\s*```$", "", text).strip()
     try:

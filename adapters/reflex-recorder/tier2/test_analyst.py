@@ -663,9 +663,51 @@ class TestMiniMaxRequest(unittest.TestCase):
         return posted[0]
 
     def test_token_budget_leaves_room_for_reasoning(self):
-        # M3.x models spend most of max_tokens thinking; below this the text
-        # block comes back empty and every project reads as "no patterns".
-        self.assertGreaterEqual(self._post()["max_tokens"], 16000)
+        # M3.x models spend most of max_tokens thinking; when the cap is hit
+        # the response has no text block and the project yields nothing.
+        self.assertGreaterEqual(self._post()["max_tokens"], 20000)
+
+    def test_thinking_only_response_is_diagnosed_not_reported_as_bad_json(self):
+        import contextlib
+        import io
+        data = {
+            "content": [{"type": "thinking", "thinking": "..."}],
+            "stop_reason": "max_tokens",
+            "usage": {"output_tokens": 4096},
+        }
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertIsNone(analyst._parse_response(data))
+        self.assertIn("stop_reason=max_tokens", err.getvalue())
+        self.assertNotIn("JSON parse error", err.getvalue())
+
+    def test_transport_error_names_its_exception_type(self):
+        import asyncio
+        import contextlib
+        import io
+        import types
+
+        class _Client:
+            def __init__(self, **_kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_a):
+                return False
+
+            async def post(self, *_a, **_kw):
+                raise TimeoutError()   # str(e) == "" like httpx.ReadTimeout
+
+        fake = types.SimpleNamespace(AsyncClient=_Client, Timeout=lambda **_kw: None)
+        err = io.StringIO()
+        with patch.dict(sys.modules, {"httpx": fake}), \
+                patch.object(analyst, "_HTTPX_AVAILABLE", True), \
+                contextlib.redirect_stderr(err):
+            result = asyncio.run(analyst._call_minimax("k", "prompt"))
+        self.assertEqual(result, (None, "transient"))
+        self.assertIn("TimeoutError", err.getvalue())
 
     def test_model_is_not_the_retired_m2_family(self):
         self.assertNotRegex(self._post()["model"], r"^MiniMax-M2")
@@ -692,6 +734,16 @@ class TestServiceUnit(unittest.TestCase):
         sep = argv.index("--")
         self.assertTrue(argv[sep + 1].endswith("python3"), argv[sep + 1])
         self.assertTrue(argv[-1].endswith("tier2/analyst.py"), argv[-1])
+
+    def test_timeout_covers_a_sequential_pass_over_every_project(self):
+        unit = Path(__file__).parent / "systemd" / "tier2-analyst.service"
+        timeouts = [
+            int(ln.split("=", 1)[1])
+            for ln in unit.read_text().splitlines()
+            if ln.startswith("TimeoutSec=")
+        ]
+        self.assertEqual(len(timeouts), 1)
+        self.assertGreaterEqual(timeouts[0], 3600)
 
 
 if __name__ == "__main__":

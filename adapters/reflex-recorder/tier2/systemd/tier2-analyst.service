@@ -13,7 +13,9 @@ ExecStart=%h/.local/bin/hearth-vault exec --prefix ai/ --redact -- %h/.pyenv/ver
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=tier2-analyst
-TimeoutSec=600
+# One sequential reasoning-model request per eligible project, each taking
+# minutes; the old 600s cap killed the run partway through the project list.
+TimeoutSec=10800
 ReadWritePaths=%h/.cache/nervous-bus
 
 [Install]
