@@ -306,7 +306,12 @@ async def _call_minimax(api_key: str, prompt: str) -> tuple[list[dict] | None, s
                     "Content-Type": "application/json",
                 },
             )
-            if resp.status_code in (401, 403, 429):
+            if resp.status_code in (401, 403):
+                sys.stderr.write(
+                    f"tier2-analyst: MiniMax rejected the API key (HTTP {resp.status_code})\n"
+                )
+                return None, "auth"
+            if resp.status_code == 429:
                 return None, "rate_limit"
             if resp.status_code != 200:
                 sys.stderr.write(
@@ -343,7 +348,12 @@ async def _call_anthropic(prompt: str) -> tuple[list[dict] | None, str | None]:
                     "content-type": "application/json",
                 },
             )
-            if resp.status_code in (401, 403, 429):
+            if resp.status_code in (401, 403):
+                sys.stderr.write(
+                    f"tier2-analyst: Anthropic rejected the API key (HTTP {resp.status_code})\n"
+                )
+                return None, "auth"
+            if resp.status_code == 429:
                 return None, "rate_limit"
             if resp.status_code != 200:
                 sys.stderr.write(
@@ -480,8 +490,8 @@ def analyse_project(
     patterns, err = asyncio.run(_call_minimax(api_key, prompt))
     request_counter[0] += 1
 
-    if err == "rate_limit":
-        sys.stderr.write("tier2-analyst: MiniMax rate-limited; trying Anthropic fallback\n")
+    if err in ("rate_limit", "auth"):
+        sys.stderr.write(f"tier2-analyst: MiniMax {err}; trying Anthropic fallback\n")
         patterns, err = asyncio.run(_call_anthropic(prompt))
         request_counter[0] += 1
 

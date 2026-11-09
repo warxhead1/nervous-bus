@@ -681,6 +681,53 @@ class TestMiniMaxRequest(unittest.TestCase):
         self.assertIn("stop_reason=max_tokens", err.getvalue())
         self.assertNotIn("JSON parse error", err.getvalue())
 
+    def _call_with_status(self, status: int):
+        import asyncio
+        import contextlib
+        import io
+        import types
+
+        class _Resp:
+            status_code = status
+            text = ""
+
+            def json(self):
+                return {}
+
+        class _Client:
+            def __init__(self, **_kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_a):
+                return False
+
+            async def post(self, *_a, **_kw):
+                return _Resp()
+
+        fake = types.SimpleNamespace(AsyncClient=_Client, Timeout=lambda **_kw: None)
+        err = io.StringIO()
+        with patch.dict(sys.modules, {"httpx": fake}), \
+                patch.object(analyst, "_HTTPX_AVAILABLE", True), \
+                contextlib.redirect_stderr(err):
+            result = asyncio.run(analyst._call_minimax("k", "prompt"))
+        return result, err.getvalue()
+
+    def test_rejected_key_is_not_reported_as_rate_limiting(self):
+        for status in (401, 403):
+            (patterns, kind), err = self._call_with_status(status)
+            self.assertIsNone(patterns)
+            self.assertNotEqual(kind, "rate_limit", status)
+            self.assertIn("rejected the API key", err)
+            self.assertIn(str(status), err)
+
+    def test_http_429_is_still_rate_limiting(self):
+        (patterns, kind), _err = self._call_with_status(429)
+        self.assertIsNone(patterns)
+        self.assertEqual(kind, "rate_limit")
+
     def test_transport_error_names_its_exception_type(self):
         import asyncio
         import contextlib
