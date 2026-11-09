@@ -28,9 +28,16 @@ PRIVACY: reads bus + bd + git + gh only.  Does NOT read conversation transcripts
 QUEUE STATE: outcome keeps its vocabulary; a run the labeler cannot label is
 told apart from one it has not tried yet by columns store.py adds:
     label_attempts / last_attempt_at   attempts so far, newest first, backoff 1,2,4 days
-    label_state = 'unattributable'     gave up (max attempts, or no source could ever label it)
+    label_state = 'unattributable'     parked after max attempts, or at once when no source
+                                       could ever label it
     label_state = 'rolled_up'          verdict cleared: a sibling segment of its run_key landed
-Both parked states leave outcome NULL and drop out of the --unlabeled-only queue.
+Both parked states leave outcome NULL and drop out of the --unlabeled-only queue,
+with one exception: an 'unattributable' run that still has a lookup hook (a
+non-trunk branch, a bead, a codex rollout) is only parked on a slow cadence. Its PR
+can merge or its bead close on day 8, long after the 1+2+4 day backoff ran out, so
+it re-enters the queue every LABEL_REVISIT_DAYS while its start is inside
+--since-days. Only a run with no hook is terminal, because a behavior verdict is a
+pure function of its frozen run_events.
 
 Usage:
     python label.py [--db-path PATH] [--run-id ID] [--dry-run] [--verbose]
@@ -1191,6 +1198,14 @@ LABEL_MAX_ATTEMPTS = 4
 #: backoff window instead of one per night.
 LABEL_BACKOFF_BASE_DAYS = 1.0
 
+#: A run parked as 'unattributable' that still has a lookup hook (see
+#: _has_lookup_hooks) re-enters the --unlabeled-only queue once its last attempt
+#: is this many days old, so a PR that merges (or a bead that closes) after the
+#: 1+2+4 day backoff is still found. The nightly's --since-days bounds how long
+#: that goes on; this bounds the cost to one lookup per parked run per window,
+#: not one per night.
+LABEL_REVISIT_DAYS = 7.0
+
 #: Progress line cadence (runs) for long passes; 0 disables.
 PROGRESS_EVERY = 100
 
@@ -1235,36 +1250,55 @@ def select_label_queue(
 ) -> list[dict]:
     """Runs the labeling pass should touch, newest first.
 
-    unlabeled_only is the incremental queue: outcome IS NULL, not parked
-    (label_state IS NULL), and either never attempted or past its backoff window
-    (last_attempt_at + LABEL_BACKOFF_BASE_DAYS * 2**(attempts-1) days).
+    unlabeled_only is the incremental queue: outcome IS NULL and either
+      - not parked (label_state IS NULL) and either never attempted or past its
+        backoff window (last_attempt_at + LABEL_BACKOFF_BASE_DAYS * 2**(attempts-1)
+        days), or
+      - parked as 'unattributable' but still hooked to an external source
+        (_has_lookup_hooks) and last attempted LABEL_REVISIT_DAYS ago: a PR can
+        merge long after the backoff ran out, so a hooked run is parked on a
+        slow cadence, never for good.
+    A run with no hook, and a 'rolled_up' run, stay out. since_days bounds all
+    of it by the run's start, so a run is revisited only while it is recent.
     ignore_backoff re-queues parked and not-yet-due runs too.
 
     Newest first so a pass cut off by its time budget has spent it on the
     runs a reader is most likely to look at, instead of re-walking the oldest
-    never-labelable ones every night.
+    never-labelable ones every night; revisits of old parked runs come last.
     """
     now = now or datetime.now(timezone.utc)
     clauses: list[str] = []
     params: dict = {}
+    revisit = False
     if since_days is not None:
         clauses.append("started >= :cutoff")
         params["cutoff"] = _fmt_ts(now - timedelta(days=int(since_days)))
     if unlabeled_only:
         clauses.append("outcome IS NULL")
         if not ignore_backoff and _has_attempt_columns(conn):
-            clauses.append("label_state IS NULL")
+            revisit = True
             clauses.append(
+                "((label_state IS NULL AND "
                 "(COALESCE(label_attempts, 0) = 0 OR last_attempt_at IS NULL OR "
                 "julianday(last_attempt_at) + :base * (1 << MIN(label_attempts - 1, 20)) "
-                "<= julianday(:now))"
+                "<= julianday(:now))) OR "
+                "(label_state = :parked AND "
+                "(last_attempt_at IS NULL OR "
+                "julianday(last_attempt_at) + :revisit <= julianday(:now))))"
             )
             params["base"] = LABEL_BACKOFF_BASE_DAYS
             params["now"] = _fmt_ts(now)
+            params["parked"] = STATE_UNATTRIBUTABLE
+            params["revisit"] = LABEL_REVISIT_DAYS
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     cur = conn.execute(f"SELECT * FROM runs {where} ORDER BY started DESC", params)
     cols = [d[0] for d in cur.description]
-    return [dict(zip(cols, row)) for row in cur.fetchall()]
+    rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+    if revisit:
+        # The hook test is _has_lookup_hooks itself, not a SQL copy of it.
+        rows = [r for r in rows
+                if r.get("label_state") != STATE_UNATTRIBUTABLE or _has_lookup_hooks(r)]
+    return rows
 
 
 def record_label_attempt(
@@ -1282,6 +1316,10 @@ def record_label_attempt(
     not labeled    -> attempt counted; parked as unattributable once it has
                       used max_attempts, or at once when no external source
                       could ever change the verdict (_has_lookup_hooks).
+                      A hooked run stays parked only until LABEL_REVISIT_DAYS
+                      after this attempt (select_label_queue re-admits it); a
+                      revisit that finds nothing lands here again and re-parks
+                      with a fresh last_attempt_at.
     """
     attempts = int(run.get("label_attempts") or 0) + 1
     if labeled:
@@ -1334,9 +1372,11 @@ def backfill(
     runs that are STILL unresolved AND due: each failed attempt is booked on
     the run (label_attempts / last_attempt_at), the next retry waits twice as
     long, and after max_attempts the run is parked as label_state=
-    'unattributable' (outcome stays NULL). --run-id and ignore_backoff bypass
-    that bookkeeping filter (an explicit single-run lookup always executes in
-    full).
+    'unattributable' (outcome stays NULL). A parked run that still has a
+    lookup hook is re-queued every LABEL_REVISIT_DAYS while it is inside
+    since_days (its PR may merge after the backoff ran out); one with no hook
+    stays parked. --run-id and ignore_backoff bypass that bookkeeping filter
+    (an explicit single-run lookup always executes in full).
     progress_every: print a progress line to stdout every N runs (0 = off).
     budget_seconds: stop cleanly once this much wall time is spent; the rest
     of the queue is picked up by the next pass.
@@ -2067,10 +2107,13 @@ def main() -> int:
                         help="Incremental queue for nightly automation: only runs with no "
                              "outcome that were never attempted or are past their backoff "
                              "window (1, 2, 4 days), newest first; a run that fails "
-                             "--max-attempts times is parked as label_state=unattributable")
+                             "--max-attempts times is parked as label_state=unattributable "
+                             "and, if it still has a branch/bead/rollout to look up, "
+                             f"retried every {LABEL_REVISIT_DAYS:g} days while inside "
+                             "--since-days")
     parser.add_argument("--ignore-backoff", action="store_true",
                         help="With --unlabeled-only: also retry runs that are not yet due "
-                             "or are parked as unattributable")
+                             "or are parked (unattributable or rolled_up)")
     parser.add_argument("--max-attempts", type=int, default=LABEL_MAX_ATTEMPTS,
                         help="Failed attempts before a run is parked as unattributable "
                              f"(default {LABEL_MAX_ATTEMPTS})")

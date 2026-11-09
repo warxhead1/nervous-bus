@@ -169,8 +169,11 @@ class TestIncrementalQueue(_DbCase):
         self.assertEqual(row["label_state"], "unattributable")
         self.assertIsNone(row["outcome"], "parking must not invent an outcome")
 
-        # parked runs leave the queue even when their backoff is long past
-        self.exec("UPDATE runs SET last_attempt_at='2020-01-01T00:00:00Z' WHERE run_id='r0'")
+        # A parked run with a lookup hook is not gone for good (its PR can still
+        # merge): it leaves the queue for LABEL_REVISIT_DAYS, then comes back
+        # (TestParkedRunsAreRevisited covers the retry itself).
+        recent = _ts(datetime.now(timezone.utc) - timedelta(days=label.LABEL_REVISIT_DAYS - 0.1))
+        self.exec("UPDATE runs SET last_attempt_at=? WHERE run_id='r0'", (recent,))
         again: list = []
         self._run_pass(again)
         self.assertEqual(again, [])
@@ -248,6 +251,121 @@ class TestIncrementalQueue(_DbCase):
         self.assertIsNotNone(seen[0], "an unbounded scan reads every rollout ever written")
         self.assertLess(seen[0], 40)
         self.assertGreaterEqual(seen[0], 2)
+
+
+class TestParkedRunsAreRevisited(_DbCase):
+    """'unattributable' is terminal only for a run no external source can ever
+    label. A run that still has a lookup hook (a non-trunk branch, a bead, a
+    codex rollout) was parked by a string of "not yet", and "not yet" can turn
+    into "merged" on day 8: it is retried every LABEL_REVISIT_DAYS while its
+    start is inside --since-days."""
+
+    def park(self, run_id: str, *, days_since_attempt: float, state: str = "unattributable"):
+        self.exec(
+            "UPDATE runs SET label_attempts=?, label_state=?, last_attempt_at=? WHERE run_id=?",
+            (label.LABEL_MAX_ATTEMPTS, state, _ts(NOW - timedelta(days=days_since_attempt)), run_id),
+        )
+
+    def queue(self, **kw) -> list[str]:
+        conn = sqlite3.connect(str(self.db))
+        try:
+            rows = label.select_label_queue(conn, unlabeled_only=True, now=NOW, **kw)
+        finally:
+            conn.close()
+        return [r["run_id"] for r in rows]
+
+    def _backfill(self, calls: list, result=None, **kw) -> list[dict]:
+        def fake(run, events, **_):
+            calls.append(run["run_id"])
+            return result
+        with patch.object(label, "compute_label", side_effect=fake):
+            return label.backfill(self.db, unlabeled_only=True, **kw)
+
+    def test_each_kind_of_lookup_hook_is_readmitted_after_the_revisit_window(self):
+        self.seed("branch", git_branch="feature/x")
+        self.seed("bead", bead_id="nervous-bus-abc")
+        self.seed("codex", agent_kind=label.ORCA_ROLLOUT_AGENT_KIND, session_id="s1")
+        for rid in ("branch", "bead", "codex"):
+            self.park(rid, days_since_attempt=label.LABEL_REVISIT_DAYS + 0.5)
+        self.assertEqual(sorted(self.queue()), ["bead", "branch", "codex"])
+
+        for rid in ("branch", "bead", "codex"):
+            self.park(rid, days_since_attempt=label.LABEL_REVISIT_DAYS - 0.5)
+        self.assertEqual(self.queue(), [], "still inside the revisit window")
+
+    def test_run_parked_while_its_pr_was_open_is_labeled_when_the_pr_merges_later(self):
+        # The nightly shape: --since-days 30, a run first seen a day after it started.
+        # Walk the real clock through backoff 1/2/4 days into the parked state.
+        self.seed("r0", age_days=1, git_branch="feature/slow-review")
+        t = NOW
+        for step in (0.0, 1.01, 2.01, 4.01):                  # attempts 1..4, each once due
+            t += timedelta(days=step)
+            calls: list = []
+            self._backfill(calls, since_days=30, now=t)
+            self.assertEqual(calls, ["r0"], f"attempt at +{(t - NOW).days}d should run")
+        parked_at = t
+        self.assertEqual(self.row("r0")["label_state"], "unattributable")
+        self.assertIsNone(self.row("r0")["outcome"])
+
+        # Still inside the window after parking: not touched, however long it is parked.
+        calls = []
+        self._backfill(calls, since_days=30, now=parked_at + timedelta(days=label.LABEL_REVISIT_DAYS - 0.1))
+        self.assertEqual(calls, [])
+
+        # The PR merges meanwhile; the next revisit finds it and clears the park.
+        calls = []
+        self._backfill(calls, result=("landed", "pr_merge"), since_days=30,
+                       now=parked_at + timedelta(days=label.LABEL_REVISIT_DAYS + 0.1))
+        self.assertEqual(calls, ["r0"])
+        row = self.row("r0")
+        self.assertEqual(row["outcome"], "landed")
+        self.assertIsNone(row["label_state"])
+
+    def test_revisit_that_still_finds_nothing_rearms_the_window(self):
+        self.seed("r0", git_branch="feature/x")
+        self.park("r0", days_since_attempt=label.LABEL_REVISIT_DAYS + 1)
+        calls: list = []
+        self._backfill(calls, now=NOW)
+        self.assertEqual(calls, ["r0"])
+        row = self.row("r0")
+        self.assertEqual(row["label_state"], "unattributable")
+        self.assertIsNone(row["outcome"])
+        self.assertEqual(row["label_attempts"], label.LABEL_MAX_ATTEMPTS + 1)
+        self.assertEqual(row["last_attempt_at"], _ts(NOW))
+        again: list = []
+        self._backfill(again, now=NOW + timedelta(days=1))
+        self.assertEqual(again, [], "re-parked: the next look is a full window away")
+
+    def test_parked_run_nothing_can_ever_label_stays_parked(self):
+        self.seed("nohook")                                    # host agent, no branch, no bead
+        self.seed("trunk", git_branch="main")
+        self._backfill([], now=NOW)
+        for rid in ("nohook", "trunk"):
+            self.assertEqual(self.row(rid)["label_state"], "unattributable", rid)
+            self.park(rid, days_since_attempt=3650)
+        self.assertEqual(self.queue(), [])
+        calls: list = []
+        self._backfill(calls, now=NOW + timedelta(days=3650))
+        self.assertEqual(calls, [])
+
+    def test_rolled_up_run_is_never_readmitted(self):
+        self.seed("seg", git_branch="feature/x")
+        self.park("seg", days_since_attempt=3650, state="rolled_up")
+        self.assertEqual(self.queue(), [])
+
+    def test_readmission_stops_once_the_run_is_older_than_since_days(self):
+        self.seed("recent", age_days=20, git_branch="feature/a")
+        self.seed("stale", age_days=40, git_branch="feature/b")
+        for rid in ("recent", "stale"):
+            self.park(rid, days_since_attempt=label.LABEL_REVISIT_DAYS + 1)
+        self.assertEqual(self.queue(since_days=30), ["recent"])
+        self.assertEqual(sorted(self.queue()), ["recent", "stale"])
+
+    def test_readmitted_runs_queue_behind_fresh_ones(self):
+        self.seed("parked", age_days=25, git_branch="feature/a")
+        self.seed("fresh", age_days=0.5, git_branch="feature/b")
+        self.park("parked", days_since_attempt=label.LABEL_REVISIT_DAYS + 1)
+        self.assertEqual(self.queue(), ["fresh", "parked"])
 
 
 class TestPassLookupCost(_DbCase):
