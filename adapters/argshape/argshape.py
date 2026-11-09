@@ -283,8 +283,15 @@ def cmd_learn(db, args) -> None:
 def cmd_set_demoted(db, args, value: int) -> None:
     who, bad = args[0], args[1]
     if bad == "dash_value":      # the dash-leading-value rule, per binary build
-        keys = [r[0] for r in db.execute("SELECT bin_key FROM rejects WHERE kind='dash_value' AND (name=? OR bin_key=?)",
-                                         (who, who))]
+        # Claude Code's `grep` is a function over ugrep, so the rejection is stored under `grep` with
+        # the bin_key of ugrep's file. Either name finds it: `who` itself, a name that forwards to
+        # `who`, and the build `who` resolves to now.
+        names = {who} | {k[6:] for k, v in db.execute("SELECT k, v FROM meta WHERE k LIKE 'alias:%'")
+                         if os.path.basename(v) == who}
+        want_keys = {core.bin_identity(db, who, os.getcwd())[0], who}
+        keys = [r[0] for r in db.execute(
+            "SELECT DISTINCT bin_key FROM rejects WHERE kind='dash_value' AND (name IN (%s) OR bin_key IN (%s))"
+            % (",".join("?" * len(names)), ",".join("?" * len(want_keys))), (*names, *want_keys))]
         for k in keys:
             store.meta_set(db, f"dash_rule_off:{k}", "operator" if value else "")
         print(f"{'demoted' if value else 'promoted'} dash_value rule for {len(keys)} build(s)")

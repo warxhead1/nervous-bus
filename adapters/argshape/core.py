@@ -342,6 +342,11 @@ def _dash_word(v: str, spec):
             if opts[o]:
                 return "opt", i == len(body) - 1, o
         return "opt", False, None
+    if body[0] in helpspec.SYMBOL_OPTS:
+        # `-%`, `-@`, `-+` are real options in ugrep. A spec that lacks one was learned before the
+        # parser read symbol options, or its --help names the option somewhere the parser does not
+        # look. Either way "not listed" does not make it an operand.
+        return "unk", False, None
     if NON_OPTION_CHAR.match(body[0]):
         return "cand", False, None
     return "unk", False, None

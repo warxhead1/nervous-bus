@@ -54,9 +54,14 @@ argshape learns its `--help` (the success hook reads the rejection from the outp
 The word must be an operand by the learned spec: not a listed option, not the value of the option
 before it, and no value-taking option among its first characters (`-e->x`, `-A3`, `-d' '` are valid
 and left alone). Anything it cannot place (unknown option before it, two such words, a `--` already
-present) is left alone. `# argshape:off` after a rewrite switches the rule off for that build
-(`argshape demote ugrep dash_value` / `promote`). The bus schema has no kind for it yet, so these
-corrections are applied and recorded locally but not published.
+present) is left alone. A word led by one of `% @ + # ^ ~` (short options in ugrep `-% -%% -@ -+ -^`, rsync `-@`, zstd `-#`)
+that the spec does not list is left alone too, whatever its other characters. `--help` text is parsed
+for them, but a spec learned before that, or help that names one somewhere the parser does not read,
+must not turn a real option into an operand.
+`# argshape:off` after a rewrite switches the rule off for that build
+(`argshape demote <bin> dash_value` / `promote`; `grep` and `ugrep` both reach Claude Code's grep, because
+the rejection is stored under `grep` but keyed on ugrep's file). The bus schema has no kind for it yet, so
+these corrections are applied and recorded locally but not published.
 
 ## Tiers and turning it off
 
