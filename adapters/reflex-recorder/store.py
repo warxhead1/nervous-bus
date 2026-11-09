@@ -113,6 +113,38 @@ INSERT OR REPLACE INTO runs (
 """
 
 
+#: Per-run bookkeeping owned by label.py's incremental pass. `outcome` keeps its
+#: vocabulary (landed/reverted/abandoned/clean/thrashed/corrected or NULL); a
+#: run the labeler has given up on stays outcome=NULL and is told apart from a
+#: merely-unlabeled run by label_state='unattributable'.
+_LABEL_ATTEMPT_COLUMNS = (
+    ("label_attempts", "INTEGER NOT NULL DEFAULT 0"),
+    ("last_attempt_at", "TEXT"),
+    ("label_state", "TEXT"),
+)
+
+
+def ensure_label_columns(conn: sqlite3.Connection) -> None:
+    """Idempotently add the label-attempt columns to an existing `runs` table.
+
+    CREATE TABLE IF NOT EXISTS never alters a table that already exists, so a
+    live runs.db needs ALTER TABLE. Safe to call from any process on every
+    open: a column that is already there is skipped, and a concurrent opener
+    that wins the ALTER race is tolerated.
+    """
+    have = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+    if not have:
+        return  # no runs table (e.g. a detector-only fixture)
+    for name, ddl in _LABEL_ATTEMPT_COLUMNS:
+        if name in have:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE runs ADD COLUMN {name} {ddl}")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+
+
 class SQLiteStore:
     """SQLite-backed run store.
 
@@ -137,6 +169,7 @@ class SQLiteStore:
 
     def _init_schema(self) -> None:
         self._conn.executescript(_SCHEMA_SQL)
+        ensure_label_columns(self._conn)
         # Lazily add detector_hits + issues tables (defined in detectors/base.py).
         # We import here to avoid a circular import at module load time.
         try:
