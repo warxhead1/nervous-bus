@@ -10,7 +10,8 @@ rest in "(unknown)". Everything that needs "which project is this cwd" calls thi
 
 Order of resolution for project_of(cwd):
   1. cron family   .../auto-<family>-run-<N>-<ts>          -> 'auto-<family>'
-  2. scratch/home  $HOME itself, dot-dirs under it, /tmp, claude-tmp  -> 'misc'
+  2. scratch/home  $HOME itself, dot-dirs under it, claude-tmp, and /tmp or /var/tmp
+                   outside $HOME (a $HOME that lives under /tmp keeps its own children)  -> 'misc'
   3. under a configured root (NBUS_PROJECT_ROOTS) the first directory below it stands
      for the project: `git rev-parse --git-common-dir` on it (or, for a plain directory
      of worktrees, on the worktrees still inside it) names the repo; the directory
@@ -20,6 +21,9 @@ Order of resolution for project_of(cwd):
      <project>.worktrees/..., agent-<id> / wt-* basename -> parent directory
 None means "cannot tell". Callers keep their own sentinel for it; the basename of an
 unrecognised path is never invented.
+
+POSIX only: a cwd must be an absolute '/' path (anything else, a Windows drive path
+included, is None), and every layout helper splits on '/'.
 
 Configuration (environment, read on every call):
   NBUS_PROJECT_ROOTS    os.pathsep-separated directories whose children are projects.
@@ -122,12 +126,14 @@ def _is_misc(path: str, home: str, root_list: tuple) -> bool:
     if any(_under(path, r) is not None for r in root_list):
         return False
     parts = [s for s in path.split("/") if s]
-    if "claude-tmp" in parts or parts[:1] == ["tmp"] or parts[:2] == ["var", "tmp"]:
-        return True
-    if path == home:
+    if "claude-tmp" in parts or path == home:
         return True
     rest = _under(path, home)
-    return bool(rest) and rest[0].startswith(".")
+    if rest and rest[0].startswith("."):
+        return True
+    if rest and home != "/":
+        return False        # /tmp is scratch only outside $HOME; a $HOME that lives under it is not
+    return parts[:1] == ["tmp"] or parts[:2] == ["var", "tmp"]
 
 
 def _root_child(path: str, root_list: tuple) -> Optional[tuple[str, str]]:
@@ -361,7 +367,10 @@ def project_of_dirname(name) -> Optional[str]:
     if name in {_munge(r) for r in root_list}:
         return MISC
     hm = _munge(home)
-    if name == hm or name.startswith(hm + "--") or "-claude-tmp" in name or \
-            name.startswith(("-tmp-", "-var-tmp-")) or name == "-tmp":
+    if name == hm or name.startswith(hm + "--") or "-claude-tmp" in name:
+        return MISC
+    if name.startswith(hm + "-"):           # under $HOME, even when $HOME itself is under /tmp
+        return None
+    if name.startswith(("-tmp-", "-var-tmp-")) or name == "-tmp":
         return MISC
     return None

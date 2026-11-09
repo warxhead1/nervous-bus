@@ -1,7 +1,11 @@
 """project.project_of / project_of_dirname: one cwd -> project answer for every caller.
 
-Hermetic: every path lives under a tmp HOME, so nothing depends on the host layout.
+Hermetic: every path lives under a tmp HOME, so nothing depends on the host layout, nor on
+whether pytest's basetemp is under /tmp (ubuntu runners) or not (macOS, a custom TMPDIR).
 Classes mirror the differential run over the real runs.db / tokens.db / transcript mirror.
+
+POSIX only, like the resolver: Windows drive paths are 'cannot tell' by design, so the
+fixtures built from tmp_path cannot resolve there.
 """
 import os
 import re
@@ -14,6 +18,8 @@ import pytest
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, HERE)
 import project  # noqa: E402
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX cwd resolver")
 
 HAVE_GIT = shutil.which("git") is not None
 needs_git = pytest.mark.skipif(not HAVE_GIT, reason="git not installed")
@@ -86,6 +92,32 @@ def test_tmp_is_misc():
     assert project.project_of("/var/tmp/anything") == project.MISC
 
 
+def test_a_home_under_tmp_keeps_its_children_while_tmp_elsewhere_stays_scratch(monkeypatch):
+    # pytest's basetemp on a stock Linux runner is /tmp/pytest-of-<user>/..., so a tmp HOME
+    # lands under /tmp; only the real /tmp layout (HOME outside it) may call /tmp scratch.
+    fake = "/tmp/nbus-fake-home"
+    monkeypatch.setenv("HOME", fake)
+    project.cache_clear()
+    assert project.project_of(f"{fake}/projects/kb") == "kb"
+    assert project.project_of(f"{fake}/elsewhere/foo/wt-L1-split") == "foo"
+    assert project.project_of(f"{fake}/Documents/notes") is None
+    for scratch in (fake, f"{fake}/.codex/memories", f"{fake}/data2/claude-tmp/x",
+                    "/tmp/other-scratch/x", "/var/tmp/x"):
+        assert project.project_of(scratch) == project.MISC, scratch
+    munged = re.sub(r"[^A-Za-z0-9]", "-", fake)
+    assert project.project_of_dirname(f"{munged}-Documents-notes") is None
+    for scratch in (munged, f"{munged}--codex-memories", "-tmp-other-scratch", "-var-tmp-x"):
+        assert project.project_of_dirname(scratch) == project.MISC, scratch
+
+
+def test_home_of_slash_does_not_swallow_tmp(monkeypatch):
+    monkeypatch.setenv("HOME", "/")
+    project.cache_clear()
+    assert project.project_of("/tmp/x") == project.MISC
+    assert project.project_of("/var/tmp/x") == project.MISC
+    assert project.project_of_dirname("-tmp-x") == project.MISC
+
+
 @pytest.mark.parametrize("cwd", [
     "", None, "relative/path", "unknown", "/work", "/work/apps/thermoflow",
     "/work/.claude/worktrees/agent-af710ac8d4ef5414c",
@@ -100,9 +132,9 @@ def test_lane_directories_are_never_projects(home):
         str(home / "data2/worktrees/agent-ac5d5249d1e2ec589/agent-ace5145d18f82d00b")) is None
 
 
-def test_wt_basename_resolves_to_its_parent_outside_the_roots(tmp_path):
-    assert project.project_of(str(tmp_path / "elsewhere/foo/wt-L1-split")) == "foo"
-    assert project.project_of(str(tmp_path / "elsewhere/foo/agent-ab12cd34ef56")) == "foo"
+def test_wt_basename_resolves_to_its_parent_outside_the_roots(home):
+    assert project.project_of(str(home / "elsewhere/foo/wt-L1-split")) == "foo"
+    assert project.project_of(str(home / "elsewhere/foo/agent-ab12cd34ef56")) == "foo"
 
 
 def test_dated_batch_directory_is_not_a_project(home):
@@ -116,10 +148,10 @@ def test_trailing_slash_and_dotdot_do_not_split_a_project(home):
 
 # ── configuration ────────────────────────────────────────────────────────────────
 
-def test_custom_roots_replace_the_defaults(home, tmp_path, monkeypatch):
-    monkeypatch.setenv("NBUS_PROJECT_ROOTS", os.pathsep.join([str(tmp_path / "code"), str(tmp_path / "wt")]))
-    assert project.project_of(str(tmp_path / "code/app/src")) == "app"
-    assert project.project_of(str(tmp_path / "wt/app2/lane")) == "app2"
+def test_custom_roots_replace_the_defaults(home, monkeypatch):
+    monkeypatch.setenv("NBUS_PROJECT_ROOTS", os.pathsep.join([str(home / "code"), str(home / "wt")]))
+    assert project.project_of(str(home / "code/app/src")) == "app"
+    assert project.project_of(str(home / "wt/app2/lane")) == "app2"
     assert project.project_of(str(home / "projects/kb")) is None
 
 
@@ -179,8 +211,8 @@ def test_conflicting_survivors_do_not_vote(home):
 
 
 @needs_git
-def test_repo_outside_every_root_is_named_by_git(tmp_path):
-    repo = _repo(tmp_path / "elsewhere" / "myrepo")
+def test_repo_outside_every_root_is_named_by_git(home):
+    repo = _repo(home / "elsewhere" / "myrepo")
     (repo / "sub").mkdir()
     assert project.project_of(str(repo / "sub")) == "myrepo"
 
