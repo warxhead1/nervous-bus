@@ -129,6 +129,10 @@ def test_hook_basename_shapes():
     assert hook_basename("PreToolUse:Bash hook error: [/a/b/c.py]: BLOCKED") == "c.py"
     assert hook_basename("PreToolUse:Bash hook error: [python3 /a/b/guard.py --strict]: BLOCKED") == "guard.py"
     assert hook_basename("PreToolUse:Bash hook error: [guard]: BLOCKED") == "guard"
+    assert hook_basename("PreToolUse:Bash hook error: [<R>/claude-hook-fast rules]: DISPATCH BLOCKED") \
+        == "claude-hook-fast rules"
+    assert hook_basename("PreToolUse:Bash hook error: [<R>/claude-hook-fast --strict]: x") \
+        == "claude-hook-fast"
     assert hook_basename("PreToolUse:Bash hook error: BLOCKED") == "unknown_hook"
 
 

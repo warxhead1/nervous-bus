@@ -172,13 +172,18 @@ def worktree_sub_reason(text: str) -> str:
 
 
 def hook_basename(text: str) -> str:
-    """Basename of the hook script named in `hook error: [<script> ...]`."""
+    """Basename of the hook named in `hook error: [<script> ...]`. A binary with no
+    extension that dispatches on a subcommand (`claude-hook-fast rules`) keeps the
+    subcommand, so the hooks behind one binary stay distinct."""
     m = re.search(r"hook error:\s*\[([^\]]*)\]", text)
     if not m:
         return "unknown_hook"
     parts = m.group(1).split()
-    path = next((p for p in parts if "/" in p), parts[0] if parts else "")
-    return os.path.basename(path) or "unknown_hook"
+    i = next((k for k, p in enumerate(parts) if "/" in p), 0)
+    base = os.path.basename(parts[i]) if parts else ""
+    if base and "." not in base and i + 1 < len(parts) and not parts[i + 1].startswith("-"):
+        base = f"{base} {parts[i + 1]}"
+    return base or "unknown_hook"
 
 
 def classify(step: Step) -> Optional[Denial]:
