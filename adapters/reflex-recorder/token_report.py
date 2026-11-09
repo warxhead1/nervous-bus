@@ -21,12 +21,24 @@ token_ledger.time_class). A lane is named by its agent id, type and model. Its
 dispatch DESCRIPTION is prompt text, so it is NOT in the digest; `--lanes`
 prints a local table that carries it.
 
+The plan bills by REQUESTS per 5h window, not tokens, so a `requests` section
+beside the token candidates counts the unit that is billed. It carries the
+request shape (no tool / one tool / parallel), waste ranked in requests
+(`unbatched_reads`, `denied_calls`, `redundant_reruns`), and requests per agent
+type x requested tier, per project, per lane and per commit. Two of those are
+estimates and say so: `unbatched_reads` is an UPPER bound (a later read can
+depend on the earlier result) and `denied_calls` only sees transcripts that
+still exist (read through adapters/transcripts, ToolCall.harness). Request
+views cover claude and mmx, whose requests carry tool calls in the ledger.
+
     token_report.py [--db PATH] [--days 7] [--json | --md] [--out FILE]
     token_report.py --lanes [--project P] [--days 7]      (local view, not sanitized)
+    token_report.py --requests [--project P] [--days 7] [--md]   (request view only)
 """
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import re
 import sqlite3
@@ -36,7 +48,7 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
-from token_ledger import DEFAULT_DB  # noqa: E402
+from token_ledger import DEFAULT_DB, ROOTS, time_class  # noqa: E402
 from transcript_steps import parse_ts  # noqa: E402
 
 W_IN, W_READ, W_5M, W_1H, W_OUT = 1.0, 0.1, 1.25, 2.0, 5.0
@@ -50,6 +62,22 @@ LONG_CTX = 100_000
 LONG_CALL_S = 60.0
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch", "replace", "write_file"}
 PROPOSALS = DEFAULT_DB.parent / "token-digest" / "proposals.jsonl"
+
+# Sources billed per request whose requests carry tool calls in the ledger.
+REQUEST_SOURCES = ("claude", "mmx")
+READ_TOOLS = frozenset({"Read", "Grep", "Glob", "LS", "NotebookRead"})
+CHAIN_BUCKETS = ((2, 2, "2"), (3, 3, "3"), (4, 5, "4-5"), (6, 10, "6-10"), (11, None, "11+"))
+TRANSCRIPTS_DIR = Path(__file__).resolve().parent.parent / "transcripts"
+# Denial text -> a fixed family. The digest carries the family, never the text.
+DENIAL_CLASSES = (
+    ("worktree_guard", re.compile(r"isolated in the worktree")),
+    ("blocked_sleep", re.compile(r"Blocked: sleep")),
+    ("hook_blocked", re.compile(r"PreToolUse:\w+ hook error|^Hook PreToolUse")),
+    ("permission_denied", re.compile(r"^(?:Permission (?:for|to use)|The user doesn't want to proceed)")),
+    ("tool_unavailable", re.compile(r"No such tool available")),
+    ("output_lost", re.compile(r"\[Tool call interrupted|Command output was lost")),
+    ("tool_use_error", re.compile(r"<tool_use_error>")),
+)
 
 
 def _since(days: int) -> str:
@@ -90,12 +118,323 @@ def _union_s(intervals: list[tuple[float, float]]) -> float:
     return total + (hi - lo if hi is not None else 0.0)
 
 
+def classify_denial(output: Optional[str]) -> str:
+    for name, rx in DENIAL_CLASSES:
+        if rx.search(output or ""):
+            return name
+    return "other"
+
+
+def _claude_source():
+    """(Claude source, SessionRef) from adapters/transcripts, or None when it
+    cannot be imported. Appended, not prepended: its generic module names
+    (`model`, `sources`) must never shadow anything already importable."""
+    d = str(TRANSCRIPTS_DIR)
+    if d not in sys.path:
+        sys.path.append(d)
+    try:
+        from model import SessionRef
+        from sources.claude import Claude
+    except Exception:
+        return None
+    return Claude(), SessionRef
+
+
+def scan_denied(conn: sqlite3.Connection, since: str, until: Optional[str] = None,
+                project: Optional[str] = None, roots=None) -> dict:
+    """Harness-denied or blocked tool calls in the window, read from the
+    transcripts through adapters/transcripts (ToolCall.harness). The ledger does
+    not record a call's outcome, so this re-reads the transcripts of the claude
+    and mmx sessions active in the window. A transcript that is gone from every
+    root is counted in `missing`, never silently skipped."""
+    roots = ROOTS if roots is None else roots
+    loaded = _claude_source()
+    out = {"available": loaded is not None, "sessions": 0, "scanned": 0, "missing": 0,
+           "calls": 0, "denied": {}, "meta": {}}
+    if loaded is None:
+        return out
+    src, session_ref = loaded
+    ph = ",".join("?" * len(REQUEST_SOURCES))
+    sql = (f"SELECT key, source, project, is_subagent, agent_type FROM sessions"
+           f" WHERE source IN ({ph}) AND COALESCE(ended, started) >= ?")
+    params: list = [*REQUEST_SOURCES, since]
+    if until:
+        sql += " AND started < ?"
+        params.append(until)
+    if project:
+        sql += " AND project = ?"
+        params.append(project)
+    for key, source, proj, is_sub, atype in conn.execute(sql, params).fetchall():
+        out["sessions"] += 1
+        rel = key.partition(":")[2]
+        path = (next((root / rel for s, root in roots if s == source and (root / rel).exists()), None)
+                if rel else None)
+        if path is None:
+            out["missing"] += 1
+            continue
+        out["scanned"] += 1
+        out["meta"][key] = (proj, (atype or "subagent?") if is_sub else f"main:{source}")
+        for tc in src.tool_calls(session_ref("claude", path.stem, str(path), 0.0)):
+            if tc.ts and (tc.ts < since or (until and tc.ts >= until)):
+                continue
+            out["calls"] += 1
+            if tc.harness:
+                out["denied"][tc.call_id] = (key, tc.tool, classify_denial(tc.output))
+    return out
+
+
+def _load_requests(conn: sqlite3.Connection, since: str, until: Optional[str],
+                   project: Optional[str]) -> tuple[dict, dict, dict]:
+    """Requests of the window per session (seq order), each with the tool calls
+    it issued. A call belongs to the last request at or before its timestamp;
+    that agrees with the recorded n_tool_uses on every request of a 197-session
+    sample, and a request where it does not is never called read-only."""
+    ph = ",".join("?" * len(REQUEST_SOURCES))
+    scope = f" AND s.source IN ({ph})" + (" AND s.project = ?" if project else "")
+    tail = [*REQUEST_SOURCES] + ([project] if project else [])
+    rsql = ("SELECT r.session_key, r.seq, r.ts, r.n_tool_uses, r.input, r.cache_read, r.output,"
+            " s.source, s.project, s.is_subagent, s.agent_type, s.agent_model"
+            " FROM requests r JOIN sessions s ON s.key = r.session_key WHERE r.ts >= ?"
+            + (" AND r.ts < ?" if until else "") + scope + " ORDER BY r.session_key, r.seq")
+    by_sess: dict[str, list[dict]] = {}
+    for (sk, seq, ts, nuse, inp, cr, out, source, proj, is_sub, atype, amodel) in conn.execute(
+            rsql, [since] + ([until] if until else []) + tail):
+        by_sess.setdefault(sk, []).append({
+            "sk": sk, "seq": seq, "ts": ts, "n_uses": nuse, "source": source, "project": proj,
+            "agent": (atype or "subagent?") if is_sub else f"main:{source}",
+            "tier": amodel if is_sub else None, "calls": [],
+            # the turn itself: prefix read + generation. Cache writes are left out:
+            # the result they carry would be written by the batched request anyway.
+            "turn_iet": inp * W_IN + cr * W_READ + out * W_OUT})
+    stamps = {sk: [r["ts"] for r in lst] for sk, lst in by_sess.items()}
+    csql = ("SELECT t.session_key, t.ts, t.id, t.tool, t.time_class, t.cmd_class,"
+            " CASE WHEN t.time_class IS NULL THEN t.cmd END"
+            " FROM tool_calls t JOIN sessions s ON s.key = t.session_key WHERE t.ts >= ?"
+            + (" AND t.ts < ?" if until else "") + scope + " ORDER BY t.session_key, t.ts, t.rowid")
+    call_req: dict[str, dict] = {}
+    seq_calls: dict[str, list] = {}
+    for sk, ts, cid, tool, tclass, cmd_class, cmd in conn.execute(
+            csql, [since] + ([until] if until else []) + tail):
+        reqs = by_sess.get(sk)
+        j = bisect.bisect_right(stamps[sk], ts) - 1 if reqs else -1
+        if j < 0:
+            continue
+        if tclass is None and tool == "Bash":
+            tclass = time_class("Bash", cmd or "")
+        is_read = tool in READ_TOOLS or (tool == "Bash" and tclass == "read")
+        reqs[j]["calls"].append((cid, tool, is_read, cmd_class))
+        call_req[cid] = reqs[j]
+        seq_calls.setdefault(sk, []).append((is_read, j))
+    return by_sess, call_req, seq_calls
+
+
+def _read_only(rec: dict) -> bool:
+    c = rec["calls"]
+    return bool(c) and len(c) == rec["n_uses"] and all(x[2] for x in c)
+
+
+def _share(n: int, d: int) -> Optional[float]:
+    return round(n / d, 3) if d else None
+
+
+def request_view(conn: sqlite3.Connection, since: str, until: Optional[str] = None,
+                 project: Optional[str] = None, roots=None,
+                 rerun_ids=frozenset(), scan: bool = True) -> tuple[dict, dict]:
+    """The window in the unit the plan bills: requests.
+
+    Returns (view, by_session). The view is digest-safe (counts, project names,
+    agent types, tiers, fixed denial families). by_session maps a ledger session
+    key to its unbatched-read and denied counts for the lanes table, and is NOT
+    digest-safe (the key embeds a transcript path); callers must not emit it.
+
+      unbatched_reads  read-only requests whose previous request in the session
+                       was also read-only. UPPER bound on requests one parallel
+                       call could have absorbed: a later read may need the
+                       earlier result, and a user message between two requests
+                       is invisible here.
+      denied_calls     requests whose every call the harness denied or blocked.
+      redundant_reruns requests whose every call re-ran a test/build unchanged.
+    """
+    by_sess, call_req, seq_calls = _load_requests(conn, since, until, project)
+    recs = [r for lst in by_sess.values() for r in lst]
+
+    # read-only chains: one request per extra link is the upper-bound saving
+    runs: dict[int, int] = {}
+    for lst in by_sess.values():
+        run, prev = 0, None
+        for r in lst:
+            if _read_only(r):
+                if run and prev["seq"] + 1 == r["seq"]:
+                    run += 1
+                    r["absorbable"] = True
+                else:
+                    if run > 1:
+                        runs[run] = runs.get(run, 0) + 1
+                    run = 1
+            else:
+                if run > 1:
+                    runs[run] = runs.get(run, 0) + 1
+                run = 0
+            prev = r
+        if run > 1:
+            runs[run] = runs.get(run, 0) + 1
+    # the same chain counted per CALL, as the issue measured it
+    calls_after_read = cross_request = read_calls = n_calls = 0
+    for lst in seq_calls.values():
+        for i, (is_read, j) in enumerate(lst):
+            n_calls += 1
+            read_calls += is_read
+            if i and is_read and lst[i - 1][0]:
+                calls_after_read += 1
+                cross_request += j != lst[i - 1][1]
+
+    sc = scan_denied(conn, since, until, project, roots) if scan else None
+    denied = sc["denied"] if sc else {}
+    for cid in denied:
+        rec = call_req.get(cid)
+        if rec is not None:
+            rec["denied_n"] = rec.get("denied_n", 0) + 1
+    for r in recs:
+        calls = r["calls"]
+        full = bool(calls) and len(calls) == r["n_uses"]
+        r["all_denied"] = full and all(c[0] in denied for c in calls)
+        r["all_rerun"] = full and all(c[0] in rerun_ids for c in calls)
+
+    def agg(keyfn) -> list[dict]:
+        acc: dict = {}
+        for r in recs:
+            a = acc.setdefault(keyfn(r), {"sessions": set(), "requests": 0, "one": 0, "commits": 0,
+                                           "unbatched": 0, "denied": 0})
+            a["sessions"].add(r["sk"])
+            a["requests"] += 1
+            a["one"] += r["n_uses"] == 1
+            a["commits"] += sum(1 for c in r["calls"] if c[3] == "commit")
+            a["unbatched"] += bool(r.get("absorbable"))
+            a["denied"] += r["all_denied"]
+        rows = []
+        for k, a in acc.items():
+            rows.append({"key": k, "sessions": len(a["sessions"]), "requests": a["requests"],
+                         "requests_per_session": round(a["requests"] / len(a["sessions"]), 1),
+                         "single_call_share": _share(a["one"], a["requests"]),
+                         "commits": a["commits"],
+                         "requests_per_commit": round(a["requests"] / a["commits"], 1) if a["commits"] else None,
+                         "unbatched_read_requests": a["unbatched"], "denied_requests": a["denied"]})
+        rows.sort(key=lambda x: -x["requests"])
+        return rows
+
+    def named(rows, **names) -> list[dict]:
+        return [{**{n: (row["key"][i] if isinstance(row["key"], tuple) else row["key"])
+                    for i, n in enumerate(names)},
+                 **{k: v for k, v in row.items() if k != "key"}} for row in rows]
+
+    all_agent_tier = named(agg(lambda r: (r["agent"], r["tier"])), agent=0, requested_tier=1)
+    all_agent = named(agg(lambda r: r["agent"]), agent=0)
+    all_project = named(agg(lambda r: r["project"]), project=0)
+    by_agent, by_project = all_agent_tier[:15], all_project[:15]
+    denied_per_project: dict = {}
+    for _, (key, _, _) in denied.items():
+        p = sc["meta"].get(key, (None, None))[0]
+        denied_per_project[p] = denied_per_project.get(p, 0) + 1
+    for row in by_project:
+        row["denied_calls"] = denied_per_project.get(row["project"], 0) if sc else None
+
+    total = len(recs)
+    shape = {}
+    for r in recs:
+        s = shape.setdefault(r["source"], {"source": r["source"], "requests": 0, "no_tool": 0,
+                                            "one_tool": 0, "multi_tool": 0,
+                                            "unbatched_read_requests": 0, "denied_requests": 0})
+        s["requests"] += 1
+        s["no_tool" if r["n_uses"] == 0 else "one_tool" if r["n_uses"] == 1 else "multi_tool"] += 1
+        s["unbatched_read_requests"] += bool(r.get("absorbable"))
+        s["denied_requests"] += r["all_denied"]
+    by_source = sorted(shape.values(), key=lambda s: -s["requests"])
+    for s in by_source:
+        s["single_call_share"] = _share(s["one_tool"], s["requests"])
+
+    absorbable = [r for r in recs if r.get("absorbable")]
+    unb_req = len(absorbable)
+    den_recs = [r for r in recs if r["all_denied"]]
+    rerun_recs = [r for r in recs if r["all_rerun"]]
+    chain_rows = []
+    for lo, hi, label in CHAIN_BUCKETS:
+        inside = {n: c for n, c in runs.items() if n >= lo and (hi is None or n <= hi)}
+        chain_rows.append({"requests_in_run": label, "runs": sum(inside.values()),
+                           "absorbable_requests": sum((n - 1) * c for n, c in inside.items())})
+
+    def top(rows, key) -> list[dict]:
+        rows = sorted((r for r in rows if r["unbatched_read_requests"]),
+                      key=lambda r: -r["unbatched_read_requests"])[:10]
+        return [{key: r[key], "requests": r["requests"],
+                 "unbatched_read_requests": r["unbatched_read_requests"]} for r in rows]
+
+    den_by_class: dict[str, dict] = {}
+    den_by_tool: dict[str, int] = {}
+    den_by_agent: dict[str, int] = {}
+    for cid, (key, tool, cls) in denied.items():
+        e = den_by_class.setdefault(cls, {"class": cls, "calls": 0, "requests_all_denied": 0})
+        e["calls"] += 1
+        den_by_tool[tool] = den_by_tool.get(tool, 0) + 1
+        a = sc["meta"].get(key, (None, "?"))[1]
+        den_by_agent[a] = den_by_agent.get(a, 0) + 1
+    for r in den_recs:
+        # a request is filed under the family of its first denied call
+        den_by_class[denied[r["calls"][0][0]][2]]["requests_all_denied"] += 1
+    unb = {"requests": unb_req, "iet": int(sum(r["turn_iet"] for r in absorbable)),
+           "read_calls": read_calls, "calls": n_calls,
+           "read_calls_after_read": calls_after_read,
+           "of_which_in_another_request": cross_request,
+           "chain_lengths": chain_rows,
+           "by_project": top(all_project, "project"),
+           "by_agent": top(all_agent, "agent")}
+    den = {"available": bool(sc and sc["available"]),
+           "requests_all_denied": len(den_recs), "iet": int(sum(r["turn_iet"] for r in den_recs)),
+           "requests_some_denied": sum(1 for r in recs if r.get("denied_n")),
+           "calls": len(denied), "calls_matched_to_requests": sum(1 for c in denied if c in call_req),
+           "scan": ({k: sc[k] for k in ("sessions", "scanned", "missing", "calls")} if sc else None),
+           "by_class": sorted(den_by_class.values(), key=lambda e: -e["calls"]),
+           "by_tool": [{"tool": t, "calls": n} for t, n in sorted(den_by_tool.items(), key=lambda kv: -kv[1])[:8]],
+           "by_agent": [{"agent": a, "calls": n} for a, n in sorted(den_by_agent.items(), key=lambda kv: -kv[1])[:10]],
+           "by_project": [{"project": p, "calls": n} for p, n in
+                          sorted(denied_per_project.items(), key=lambda kv: -kv[1])[:10]]}
+    rerun_iet = int(sum(r["turn_iet"] for r in rerun_recs))
+    waste = [
+        {"id": "unbatched_reads", "requests": unb_req, "turn_iet": unb["iet"],
+         "bound": "upper: a later read may need the earlier result"},
+        {"id": "denied_calls", "requests": len(den_recs), "turn_iet": den["iet"],
+         "bound": ("transcripts still on disk" if den["available"] else "not measured: transcripts unreadable")},
+        {"id": "redundant_reruns", "requests": len(rerun_recs), "turn_iet": rerun_iet,
+         "bound": "requests that held only reruns; a rerun beside other calls is not counted"},
+    ]
+    for w in waste:
+        w["share_of_requests"] = _share(w["requests"], total)
+    waste.sort(key=lambda w: -w["requests"])
+    commits = sum(1 for r in recs for c in r["calls"] if c[3] == "commit")
+    view = {"sources": list(REQUEST_SOURCES), "since": since, "until": until,
+            "totals": {"requests": total, "sessions": len(by_sess),
+                       "single_call_share": _share(sum(s["one_tool"] for s in by_source), total),
+                       "commits": commits,
+                       "requests_per_commit": round(total / commits, 1) if commits else None},
+            "by_source": by_source, "waste": waste,
+            "unbatched_reads": unb, "denied_calls": den,
+            "by_agent_tier": by_agent, "by_project": by_project}
+    by_session: dict[str, dict] = {}
+    for r in recs:
+        e = by_session.setdefault(r["sk"], {"unbatched_read_requests": 0, "denied_calls": 0})
+        e["unbatched_read_requests"] += bool(r.get("absorbable"))
+    for cid, (key, _, _) in denied.items():
+        by_session.setdefault(key, {"unbatched_read_requests": 0, "denied_calls": 0})["denied_calls"] += 1
+    return view, by_session
+
+
 def lanes(conn: sqlite3.Connection, since: str, project: Optional[str] = None,
-          with_description: bool = False) -> list[dict]:
+          with_description: bool = False, per_session: Optional[dict] = None) -> list[dict]:
     """One row per subagent session started in the window: where its wall time
     went. model_s = wall - union(tool intervals): generation, thinking and API
     latency between calls. turns_to_first_edit counts requests before the first
-    edit-tool call (None when the lane never edited)."""
+    edit-tool call (None when the lane never edited). `turns` is the lane's
+    request count; agent_model is the tier the dispatch asked for. per_session
+    (from request_view) adds unbatched-read and denied-call counts."""
     timed = _has_tool_times(conn)
     sql = ("SELECT key, project, agent_id, agent_type, agent_model, description, started, ended"
            " FROM sessions WHERE is_subagent = 1 AND started >= ?")
@@ -109,7 +448,7 @@ def lanes(conn: sqlite3.Connection, since: str, project: Optional[str] = None,
                         " started, ended", "SELECT key")
     reqs_by: dict[str, list] = {}
     for key, *rest in conn.execute(
-            "SELECT session_key, ts, model, input + cache_read + cache_create FROM requests"
+            "SELECT session_key, ts, model, input + cache_read + cache_create, n_tool_uses FROM requests"
             f" WHERE session_key IN ({scope}) ORDER BY session_key, seq", params):
         reqs_by.setdefault(key, []).append(tuple(rest))
     tcols = "ts, tool, time_class, duration_s" if timed else "ts, tool, NULL, NULL"
@@ -124,8 +463,9 @@ def lanes(conn: sqlite3.Connection, since: str, project: Optional[str] = None,
         calls = calls_by.get(s["key"], [])
         t0, t1 = parse_ts(s["started"]), parse_ts(s["ended"])
         wall = max(0.0, t1 - t0) if t0 is not None and t1 is not None else 0.0
-        ivals, by_class, long_n, long_s, untimed = [], {}, 0, 0.0, 0
+        ivals, by_class, long_n, long_s, untimed, commits = [], {}, 0, 0.0, 0, 0
         for ts, tool, cls, dur in calls:
+            commits += cls == "commit"
             start = parse_ts(ts)
             if dur is None or start is None:
                 untimed += 1
@@ -142,17 +482,21 @@ def lanes(conn: sqlite3.Connection, since: str, project: Optional[str] = None,
         # report the split as unknown, never as "all model time"
         unknown = bool(calls) and untimed == len(calls)
         models: dict[str, int] = {}
-        for _, m, _ in reqs:
+        for _, m, _, _ in reqs:
             models[m or "?"] = models.get(m or "?", 0) + 1
         row = {
             "lane": (s["agent_id"] or s["key"].rsplit("/", 1)[-1])[:17],
             "project": s["project"], "agent_type": s["agent_type"],
+            "agent_model": s["agent_model"],
             "model": max(models, key=models.get) if models else s["agent_model"],
             "turns": len(reqs),
+            "single_call_requests": sum(1 for r in reqs if r[3] == 1),
+            "commits": commits if timed else None,
+            "requests_per_commit": round(len(reqs) / commits, 1) if timed and commits else None,
             "wall_min": round(wall / 60, 1),
             "model_min": None if unknown else round(max(0.0, wall - tool_s) / 60, 1),
             "tool_min": None if unknown else round(tool_s / 60, 1),
-            "turns_to_first_edit": (sum(1 for ts, _, _ in reqs if ts < first_edit)
+            "turns_to_first_edit": (sum(1 for ts, _, _, _ in reqs if ts < first_edit)
                                     if first_edit else None),
             "ctx_first": reqs[0][2] if reqs else None,
             "ctx_last": reqs[-1][2] if reqs else None,
@@ -161,6 +505,10 @@ def lanes(conn: sqlite3.Connection, since: str, project: Optional[str] = None,
                                   sorted(by_class.items(), key=lambda kv: -kv[1][1])[:5]},
             "untimed_calls": untimed,
         }
+        if per_session is not None:
+            extra = per_session.get(s["key"], {})
+            row["unbatched_read_requests"] = extra.get("unbatched_read_requests", 0)
+            row["denied_calls"] = extra.get("denied_calls", 0)
         if with_description:
             row["description"] = s["description"]
         out.append(row)
@@ -185,7 +533,43 @@ def tool_time(conn: sqlite3.Connection, since: str, project: Optional[str] = Non
     return _rows(conn, sql, (since, project) if project else (since,))
 
 
-def build(conn: sqlite3.Connection, days: int = 7) -> dict:
+def rerun_calls(conn: sqlite3.Connection, since: str) -> tuple[list[dict], dict, set]:
+    """Test/build commands re-run with no edit in between: (top rows by command
+    family, runs per class, the ids of every re-run call)."""
+    p = (since,)
+    calls = _rows(conn, """
+        SELECT t.id, t.session_key, t.ts, t.tool, t.cmd_class, t.cmd, t.cmd_hash, t.result_chars, s.project
+        FROM tool_calls t JOIN sessions s ON s.key = t.session_key
+        WHERE t.ts >= ? AND (t.cmd_class IN ('test', 'build')
+              OR t.tool IN (""" + EDIT_TOOLS_SQL + """))
+        ORDER BY t.session_key, t.ts""", p)
+    reruns: dict[tuple, dict] = {}
+    rerun_ids: set = set()
+    runs_by_class = {"test": 0, "build": 0}
+    seen: set = set()
+    cur_session = None
+    for c in calls:
+        if c["session_key"] != cur_session:
+            cur_session, seen = c["session_key"], set()
+        if c["cmd_class"] is None:
+            seen = set()  # an edit invalidates every prior result
+            continue
+        runs_by_class[c["cmd_class"]] += 1
+        if c["cmd_hash"] in seen:
+            rerun_ids.add(c["id"])
+            k = (c["project"], c["cmd_class"], _cmd_head(c["cmd"] or ""))
+            e = reruns.setdefault(k, {"project": k[0], "class": k[1], "command": k[2],
+                                      "reruns": 0, "result_tokens": 0})
+            e["reruns"] += 1
+            e["result_tokens"] += (c["result_chars"] or 0) // CHARS_PER_TOKEN
+        seen.add(c["cmd_hash"])
+    rerun_rows = sorted(reruns.values(), key=lambda e: -e["reruns"])[:15]
+    return rerun_rows, runs_by_class, rerun_ids
+
+
+def build(conn: sqlite3.Connection, days: int = 7, roots=None) -> dict:
+    """The digest. `roots` are the transcript roots the denied-call scan reads
+    (default: token_ledger.ROOTS, the same ones the ledger ingested)."""
     since = _since(days)
     p = (since,)
     out: dict = {"window_days": days, "since": since,
@@ -296,31 +680,7 @@ def build(conn: sqlite3.Connection, days: int = 7) -> dict:
         GROUP BY 1, 2 ORDER BY iet DESC LIMIT 15""", p)
 
     # 5. Re-running the same test/build command with no edit in between.
-    calls = _rows(conn, """
-        SELECT t.session_key, t.ts, t.tool, t.cmd_class, t.cmd, t.cmd_hash, t.result_chars, s.project
-        FROM tool_calls t JOIN sessions s ON s.key = t.session_key
-        WHERE t.ts >= ? AND (t.cmd_class IN ('test', 'build')
-              OR t.tool IN (""" + EDIT_TOOLS_SQL + """))
-        ORDER BY t.session_key, t.ts""", p)
-    reruns: dict[tuple, dict] = {}
-    runs_by_class = {"test": 0, "build": 0}
-    seen: set = set()
-    cur_session = None
-    for c in calls:
-        if c["session_key"] != cur_session:
-            cur_session, seen = c["session_key"], set()
-        if c["cmd_class"] is None:
-            seen = set()  # an edit invalidates every prior result
-            continue
-        runs_by_class[c["cmd_class"]] += 1
-        if c["cmd_hash"] in seen:
-            k = (c["project"], c["cmd_class"], _cmd_head(c["cmd"] or ""))
-            e = reruns.setdefault(k, {"project": k[0], "class": k[1], "command": k[2],
-                                      "reruns": 0, "result_tokens": 0})
-            e["reruns"] += 1
-            e["result_tokens"] += (c["result_chars"] or 0) // CHARS_PER_TOKEN
-        seen.add(c["cmd_hash"])
-    rerun_rows = sorted(reruns.values(), key=lambda e: -e["reruns"])[:15]
+    rerun_rows, runs_by_class, rerun_ids = rerun_calls(conn, since)
 
     # 6. Output per commit, per project.
     per_commit = _rows(conn, f"""
@@ -356,7 +716,29 @@ def build(conn: sqlite3.Connection, days: int = 7) -> dict:
         WHERE r.ts >= ? GROUP BY r.session_key HAVING excess_iet > 0
         ORDER BY excess_iet DESC LIMIT 10""", p)
 
+    view, by_session = request_view(conn, since, roots=roots, rerun_ids=rerun_ids)
+    unb, den = view["unbatched_reads"], view["denied_calls"]
+    n_req = view["totals"]["requests"]
+    waste = {w["id"]: w for w in view["waste"]}
+
     candidates = [
+        {"id": "unbatched_reads", "iet": unb["iet"], "requests": unb["requests"],
+         "what": ("UPPER BOUND on requests one parallel call could have absorbed: read-only requests "
+                  "(Read/Grep/Glob or a Bash cat/sed/grep/head) whose previous request in the same session "
+                  "was also read-only. A later read may need the earlier result, and a user message between "
+                  "two requests is invisible to the ledger. IET is the absorbed turn's prefix read and "
+                  "output; its cache write is left out because the result is still written once"),
+         "detail": {k: unb[k] for k in ("read_calls", "calls", "read_calls_after_read",
+                                        "of_which_in_another_request", "chain_lengths",
+                                        "by_project", "by_agent")}},
+        {"id": "denied_calls", "iet": den["iet"], "requests": den["requests_all_denied"],
+         "what": ("Tool calls the harness denied or blocked (worktree guard, hook block, Blocked: sleep, "
+                  "permission, missing tool). Each spends a full-context request that does nothing. "
+                  "`requests` counts requests whose every call was denied; `calls` counts all denied calls. "
+                  "Read from transcripts through adapters/transcripts, so a transcript that is gone from "
+                  "disk is not scanned (see scan.missing)"),
+         "detail": {k: den[k] for k in ("calls", "requests_some_denied", "calls_matched_to_requests", "scan",
+                                        "by_class", "by_tool", "by_agent", "by_project")}},
         {"id": "long_context", "iet": sum(r["excess_iet"] or 0 for r in long_ctx),
          "what": f"Cache reads above {LONG_CTX:,} tokens/request: long sessions re-read the whole prefix every turn",
          "detail": {"ctx_buckets": buckets, "by_kind_model": long_ctx, "top_sessions": long_sessions}},
@@ -380,12 +762,19 @@ def build(conn: sqlite3.Connection, days: int = 7) -> dict:
     ]
     for c in candidates:
         c["share_of_total"] = round(c["iet"] / total_iet, 3)
+        if c["id"] == "redundant_reruns":
+            c["requests"] = waste["redundant_reruns"]["requests"]
+        if "requests" in c:
+            c["share_of_requests"] = _share(c["requests"], n_req)
     candidates.sort(key=lambda c: -c["iet"])
     out["total_iet"] = total_iet
     out["candidates"] = candidates
     out["iet_per_commit"] = per_commit
     out["tool_time"] = tool_time(conn, since)
-    out["lanes"] = lanes(conn, since)[:15]
+    all_lanes = lanes(conn, since, per_session=by_session)
+    out["lanes"] = all_lanes[:15]
+    view["top_lanes"] = sorted(all_lanes, key=lambda r: -r["turns"])[:15]
+    out["requests"] = view
 
     # Agent parity: only when a non-Claude-format source is in the window, so a
     # claude/mmx-only ledger renders exactly as before.
@@ -458,9 +847,12 @@ def to_markdown(rep: dict) -> str:
         lines.append(f"| {t['source']} | {t['model']} | {t['requests']:,} | {t['input']:,} | "
                      f"{t['cache_read']:,} | {t['cache_create']:,} | {t['output']:,} | "
                      f"{t['hit_ratio']} | {t['iet']:,} |")
+    if rep.get("requests"):
+        lines += [""] + requests_md(rep["requests"])
     lines += ["", "## Waste candidates (ranked)", ""]
     for i, c in enumerate(rep["candidates"], 1):
-        lines += [f"### {i}. {c['id']} — {c['iet']:,} IET ({c['share_of_total']:.1%})", "", c["what"], ""]
+        req = f", {c['requests']:,} requests" if "requests" in c else ""
+        lines += [f"### {i}. {c['id']} — {c['iet']:,} IET ({c['share_of_total']:.1%}){req}", "", c["what"], ""]
         lines += _detail_lines(c["detail"]) + [""]
     if rep.get("prior_proposals"):
         lines += ["## Prior proposals: candidate IET at filing vs now", "",
@@ -499,18 +891,64 @@ def to_markdown(rep: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def requests_md(v: dict) -> list[str]:
+    """The request-denominated section: what the plan's 5h window is billed in."""
+    pct = lambda x: "" if x is None else f"{x:.0%}"
+    blank = lambda x: "" if x is None else x
+    t = v["totals"]
+    per_commit = f" ({t['requests_per_commit']} requests per commit)." if t["requests_per_commit"] else "."
+    lines = [f"## Requests (the plan bills per request) — {', '.join(v['sources'])}", "",
+             f"{t['requests']:,} requests in {t['sessions']:,} sessions; {pct(t['single_call_share'])} "
+             f"issued exactly one tool call; {t['commits']:,} commit commands" + per_commit,
+             "", "| source | requests | no tool | 1 tool | 2+ tools (parallel) | 1-tool share | "
+             "unbatched reads | denied |", "|---|---:|---:|---:|---:|---:|---:|---:|"]
+    for r in v["by_source"]:
+        lines.append(f"| {r['source']} | {r['requests']:,} | {r['no_tool']:,} | {r['one_tool']:,} | "
+                     f"{r['multi_tool']:,} | {pct(r['single_call_share'])} | "
+                     f"{r['unbatched_read_requests']:,} | {r['denied_requests']:,} |")
+    lines += ["", "### Request waste (ranked by requests)", "",
+              "| candidate | requests | share of requests | turn IET | bound |", "|---|---:|---:|---:|---|"]
+    for w in v["waste"]:
+        lines.append(f"| {w['id']} | {w['requests']:,} | {pct(w['share_of_requests'])} | "
+                     f"{w['turn_iet']:,} | {w['bound']} |")
+    lines += ["", "### Requests by agent type and requested tier", "",
+              "| agent | tier | sessions | requests | per session | 1-tool share | commits | per commit | "
+              "unbatched reads | denied |", "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    for r in v["by_agent_tier"]:
+        lines.append(f"| {r['agent']} | {r['requested_tier'] or ''} | {r['sessions']:,} | {r['requests']:,} | "
+                     f"{r['requests_per_session']} | {pct(r['single_call_share'])} | {r['commits']} | "
+                     f"{blank(r['requests_per_commit'])} | "
+                     f"{r['unbatched_read_requests']:,} | {r['denied_requests']:,} |")
+    lines += ["", "### Requests by project", "",
+              "| project | sessions | requests | 1-tool share | commits | per commit | unbatched reads | "
+              "denied requests | denied calls |", "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    for r in v["by_project"]:
+        lines.append(f"| {r['project']} | {r['sessions']:,} | {r['requests']:,} | {pct(r['single_call_share'])} | "
+                     f"{r['commits']} | {blank(r['requests_per_commit'])} | "
+                     f"{r['unbatched_read_requests']:,} | {r['denied_requests']:,} | "
+                     f"{blank(r.get('denied_calls'))} |")
+    if v.get("top_lanes"):
+        lines += ["", "### Top lanes by requests", ""] + lanes_table(v["top_lanes"])
+    return lines
+
+
 def lanes_table(rows: list[dict]) -> list[str]:
     desc = any("description" in r for r in rows)
-    head = ("| lane | " + ("description | " if desc else "") + "project | agent | model | turns | "
-            "wall min | model min | tool min | turns to 1st edit | ctx first k | ctx last k | "
+    reqs = any("denied_calls" in r for r in rows)
+    head = ("| lane | " + ("description | " if desc else "") + "project | agent | tier | model | turns | "
+            "1-tool | commits | " + ("unbatched reads | denied | " if reqs else "")
+            + "wall min | model min | tool min | turns to 1st edit | ctx first k | ctx last k | "
             "top tool min by class |")
     out = [head, "|" + "---|" * (head.count("|") - 1)]
     for r in rows:
         k = lambda v: "" if v is None else f"{v / 1000:.0f}"
         cls = ", ".join(f"{c} {m}" for c, m in list(r["tool_min_by_class"].items())[:4])
         out.append(f"| {r['lane']} | " + (f"{(r.get('description') or '')[:40]} | " if desc else "")
-                   + f"{r['project']} | {r['agent_type']} | {r['model']} | {r['turns']} | "
-                   f"{r['wall_min']} | {'?' if r['model_min'] is None else r['model_min']} | "
+                   + f"{r['project']} | {r['agent_type']} | {r.get('agent_model') or ''} | {r['model']} | "
+                   f"{r['turns']} | {r.get('single_call_requests', '')} | "
+                   f"{'' if r.get('commits') is None else r['commits']} | "
+                   + (f"{r.get('unbatched_read_requests', '')} | {r.get('denied_calls', '')} | " if reqs else "")
+                   + f"{r['wall_min']} | {'?' if r['model_min'] is None else r['model_min']} | "
                    f"{'?' if r['tool_min'] is None else r['tool_min']} | "
                    f"{'' if r['turns_to_first_edit'] is None else r['turns_to_first_edit']} | "
                    f"{k(r['ctx_first'])} | {k(r['ctx_last'])} | {cls} |")
@@ -526,12 +964,23 @@ def main() -> int:
     ap.add_argument("--proposals", type=Path, default=PROPOSALS)
     ap.add_argument("--lanes", action="store_true",
                     help="local per-lane time table WITH dispatch descriptions (not sanitized)")
+    ap.add_argument("--requests", action="store_true",
+                    help="request-denominated view only (sanitized), optionally for one --project")
     ap.add_argument("--project")
     a = ap.parse_args()
     conn = sqlite3.connect(f"file:{a.db}?mode=ro", uri=True)
+    if a.requests:
+        since = _since(a.days)
+        view, by_session = request_view(conn, since, project=a.project,
+                                        rerun_ids=rerun_calls(conn, since)[2])
+        view["top_lanes"] = sorted(lanes(conn, since, a.project, per_session=by_session),
+                                   key=lambda r: -r["turns"])[:15]
+        print("\n".join(requests_md(view)) if a.md else json.dumps(view, indent=1))
+        return 0
     if a.lanes:
         since = _since(a.days)
-        rows = lanes(conn, since, a.project, with_description=True)
+        _, by_session = request_view(conn, since, project=a.project)
+        rows = lanes(conn, since, a.project, with_description=True, per_session=by_session)
         tt = tool_time(conn, since, a.project)
         if not a.md:
             print(json.dumps({"lanes": rows, "tool_time": tt}, indent=1))
