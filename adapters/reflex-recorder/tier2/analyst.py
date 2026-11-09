@@ -12,6 +12,13 @@ Cost unit: REQUESTS (MiniMax coding-plan = flat-rate; track requests, not
 dollars).  One LLM call per project per analyst run.  Off-peak scheduling
 plus a minimum-labeled-runs gate keep the request count low.
 
+Credentials: MINIMAX_API_KEY must be in the environment.  The systemd unit
+injects it with ``hearth-vault exec --prefix ai/ --redact --``.  A missing key
+(or missing httpx) is a misconfiguration and exits 2 BEFORE any work, so a
+timer that cannot reach the LLM shows up as a failed unit instead of a
+healthy-looking no-op.  A run that issues no LLM request, or loses any request
+or emit, exits 1.
+
 Usage:
     python3 analyst.py [--db-path PATH] [--dry-run] [--verbose]
 """
@@ -43,7 +50,10 @@ _CLEAN_OUTCOMES = frozenset({"clean", "landed", "corrected"})
 
 # ── MiniMax / Anthropic call shape (mirrors pattern_consumer.py) ───────────────
 MINIMAX_ENDPOINT = "https://api.minimax.io/anthropic/v1/messages"
-MINIMAX_MODEL = os.environ.get("TIER2_ANALYST_MODEL", "MiniMax-M2.7-highspeed")
+MINIMAX_MODEL = os.environ.get("TIER2_ANALYST_MODEL", "MiniMax-M3.1-Flash")
+# M3.x models reason before answering and the thinking tokens count against
+# max_tokens; a small cap returns an empty text block.
+MINIMAX_MAX_TOKENS = int(os.environ.get("TIER2_MAX_TOKENS", "16384"))
 MINIMAX_CONNECT_TIMEOUT_S = float(os.environ.get("TIER2_CONNECT_TIMEOUT_S", "10"))
 MINIMAX_READ_TIMEOUT_S = float(os.environ.get("TIER2_READ_TIMEOUT_S", "240"))
 
@@ -52,6 +62,9 @@ FALLBACK_MODEL = os.environ.get("TIER2_FALLBACK_MODEL", "claude-haiku-4-5-202510
 FALLBACK_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 NBUS_ROOT = os.environ.get("NBUS_ROOT", str(Path(__file__).resolve().parents[3]))
+
+EXIT_RUN_FAILED = 1       # ran, but an LLM request or emit was lost / none was issued
+EXIT_NOT_CONFIGURED = 2   # cannot run at all: no API key or no httpx
 
 
 # ── ULID ──────────────────────────────────────────────────────────────────────
@@ -272,7 +285,7 @@ async def _call_minimax(api_key: str, prompt: str) -> tuple[list[dict] | None, s
     import httpx
     payload = {
         "model": MINIMAX_MODEL,
-        "max_tokens": 2048,
+        "max_tokens": MINIMAX_MAX_TOKENS,
         "messages": [{"role": "user", "content": prompt}],
     }
     timeout = httpx.Timeout(
@@ -413,8 +426,15 @@ def analyse_project(
     dry_run: bool,
     verbose: bool,
     request_counter: list[int],
+    failure_counter: Optional[list[int]] = None,
 ) -> list[dict]:
-    """Run contrast analysis for one project.  Returns emitted patterns."""
+    """Run contrast analysis for one project.  Returns emitted patterns.
+
+    ``failure_counter[0]`` is incremented once per lost LLM call and once per
+    pattern that could not be published, so main() can fail the unit.
+    """
+    if failure_counter is None:
+        failure_counter = [0]
     prompt = build_prompt(project, failed_runs, clean_runs)
 
     if verbose:
@@ -440,8 +460,9 @@ def analyse_project(
 
     if not api_key:
         sys.stderr.write(
-            "tier2-analyst: MINIMAX_API_KEY not set — skipping LLM call\n"
+            f"tier2-analyst: MINIMAX_API_KEY not set; no LLM call for project={project}\n"
         )
+        failure_counter[0] += 1
         return []
 
     patterns, err = asyncio.run(_call_minimax(api_key, prompt))
@@ -454,6 +475,7 @@ def analyse_project(
 
     if patterns is None:
         sys.stderr.write(f"tier2-analyst: LLM call failed for project={project}: {err}\n")
+        failure_counter[0] += 1
         return []
 
     emitted = []
@@ -463,8 +485,27 @@ def analyse_project(
         ok = _emit_pattern(project, pat, dry_run=dry_run, verbose=verbose)
         if ok:
             emitted.append(pat)
+        else:
+            sys.stderr.write(
+                f"tier2-analyst: emit failed for project={project} "
+                f"pattern={pat.get('pattern_name', 'unknown')}\n"
+            )
+            failure_counter[0] += 1
 
     return emitted
+
+
+def _preflight_problem(api_key: str) -> Optional[str]:
+    """Return why a live (non-dry-run) analysis cannot reach the LLM, or None."""
+    if not api_key:
+        return (
+            "MINIMAX_API_KEY is not set.  Run under "
+            "`hearth-vault exec --prefix ai/ --redact --` (see "
+            "systemd/tier2-analyst.service)."
+        )
+    if not _HTTPX_AVAILABLE:
+        return "httpx is not importable by this interpreter; no LLM call is possible."
+    return None
 
 
 def main() -> int:
@@ -490,6 +531,13 @@ def main() -> int:
         )
         return 0
 
+    api_key = os.environ.get("MINIMAX_API_KEY", "")
+    if not args.dry_run:
+        problem = _preflight_problem(api_key)
+        if problem:
+            sys.stderr.write(f"tier2-analyst: NOT CONFIGURED: {problem}\n")
+            return EXIT_NOT_CONFIGURED
+
     runs = _load_labeled_runs(args.db_path)
     if not runs:
         sys.stderr.write(
@@ -510,14 +558,8 @@ def main() -> int:
         )
         return 0
 
-    api_key = os.environ.get("MINIMAX_API_KEY", "")
-    if not api_key and not args.dry_run:
-        sys.stderr.write(
-            "tier2-analyst: MINIMAX_API_KEY not set; "
-            "will try Anthropic fallback or exit.\n"
-        )
-
     request_counter = [0]
+    failure_counter = [0]
     total_emitted = 0
 
     for project, sides in contrast_sets.items():
@@ -529,6 +571,7 @@ def main() -> int:
             dry_run=args.dry_run,
             verbose=args.verbose,
             request_counter=request_counter,
+            failure_counter=failure_counter,
         )
         total_emitted += len(emitted)
         if args.verbose or args.dry_run:
@@ -543,8 +586,23 @@ def main() -> int:
     mode = "[DRY-RUN] " if args.dry_run else ""
     sys.stderr.write(
         f"tier2-analyst: {mode}done.  projects_analysed={len(contrast_sets)}  "
-        f"patterns_emitted={total_emitted}  llm_requests={request_counter[0]}\n"
+        f"patterns_emitted={total_emitted}  llm_requests={request_counter[0]}  "
+        f"failures={failure_counter[0]}\n"
     )
+
+    if args.dry_run:
+        return 0
+    if request_counter[0] == 0:
+        sys.stderr.write(
+            f"tier2-analyst: FAILED: {len(contrast_sets)} project(s) eligible but "
+            "no LLM request was issued.\n"
+        )
+        return EXIT_RUN_FAILED
+    if failure_counter[0]:
+        sys.stderr.write(
+            f"tier2-analyst: FAILED: {failure_counter[0]} LLM call(s) or emit(s) lost.\n"
+        )
+        return EXIT_RUN_FAILED
     return 0
 
 

@@ -517,5 +517,182 @@ class TestSummariseRun(unittest.TestCase):
         self.assertIn("bash_fail_rate=0.33", summary)
 
 
+# ── main() exit status ────────────────────────────────────────────────────────
+# The unit is a daily oneshot: its exit status is the only health signal anyone
+# reads.  These pin that a run which did not analyse anything cannot exit 0.
+
+class _MainHarness(unittest.TestCase):
+
+    def _write_db(self, path: Path, *, eligible: bool = True) -> None:
+        conn = sqlite3.connect(str(path), isolation_level=None)
+        conn.execute(
+            "CREATE TABLE runs (run_id TEXT PRIMARY KEY, project TEXT, agent_kind TEXT, "
+            "started TEXT, ended TEXT, close_reason TEXT, event_count INTEGER, "
+            "tool_histogram TEXT, git_branch TEXT, bead_id TEXT, outcome TEXT, "
+            "labeled_at TEXT, label_history TEXT, features TEXT)"
+        )
+        outcomes = ["thrashed", "abandoned", "clean", "landed"] if eligible else []
+        for i, outcome in enumerate(outcomes):
+            conn.execute(
+                "INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (f"r{i}", "proj-main", "host_subagent", "2026-06-13T01:00:00Z",
+                 "2026-06-13T02:00:00Z", "ended", 20, "{}", None, None, outcome,
+                 "2026-06-13T03:00:00Z", "[]", "{}"),
+            )
+        conn.close()
+
+    def _run_main(self, *, eligible=True, key="test-key", dry_run=False,
+                  patterns=None, llm_err=None, emit_ok=True, httpx_ok=True):
+        """Run analyst.main() against a fixture DB; return (rc, stderr, llm_calls)."""
+        import contextlib
+        import io
+        from unittest.mock import AsyncMock
+
+        llm = AsyncMock(return_value=(patterns, llm_err))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db = Path(tmpdir) / "runs.db"
+            self._write_db(db, eligible=eligible)
+            argv = ["analyst.py", "--db-path", str(db), "--force"]
+            if dry_run:
+                argv.append("--dry-run")
+            env = {k: v for k, v in os.environ.items() if k != "MINIMAX_API_KEY"}
+            if key:
+                env["MINIMAX_API_KEY"] = key
+            err = io.StringIO()
+            with patch.dict(os.environ, env, clear=True), \
+                    patch.object(sys, "argv", argv), \
+                    patch.object(analyst, "_call_minimax", llm), \
+                    patch.object(analyst, "_emit_pattern", return_value=emit_ok), \
+                    patch.object(analyst, "_HTTPX_AVAILABLE", httpx_ok), \
+                    contextlib.redirect_stderr(err), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                rc = analyst.main()
+        return rc, err.getvalue(), llm.await_count
+
+
+class TestMainExitStatus(_MainHarness):
+
+    def test_missing_key_exits_nonzero_and_names_the_key(self):
+        rc, err, llm_calls = self._run_main(key="")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("MINIMAX_API_KEY", err)
+        self.assertEqual(llm_calls, 0)
+
+    def test_missing_key_fails_even_when_no_project_is_eligible(self):
+        # A broken credential injection must surface today, not on the day the
+        # contrast set first fills up.
+        rc, _err, _calls = self._run_main(key="", eligible=False)
+        self.assertNotEqual(rc, 0)
+
+    def test_missing_httpx_exits_nonzero(self):
+        rc, err, llm_calls = self._run_main(httpx_ok=False, patterns=[])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("httpx", err)
+        self.assertEqual(llm_calls, 0)
+
+    def test_dry_run_needs_no_key(self):
+        rc, _err, llm_calls = self._run_main(key="", dry_run=True)
+        self.assertEqual(rc, 0)
+        self.assertEqual(llm_calls, 0)
+
+    def test_every_llm_call_failing_exits_nonzero(self):
+        rc, err, llm_calls = self._run_main(patterns=None, llm_err="transient")
+        self.assertEqual(llm_calls, 1)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("proj-main", err)
+
+    def test_unpublishable_pattern_exits_nonzero(self):
+        found = [{"pattern_name": "p", "occurrences": 2, "evidence": []}]
+        rc, _err, _calls = self._run_main(patterns=found, emit_ok=False)
+        self.assertNotEqual(rc, 0)
+
+    def test_successful_run_exits_zero(self):
+        found = [{"pattern_name": "p", "occurrences": 2, "evidence": []}]
+        rc, err, llm_calls = self._run_main(patterns=found)
+        self.assertEqual(rc, 0)
+        self.assertEqual(llm_calls, 1)
+        self.assertIn("patterns_emitted=1", err)
+
+    def test_llm_answering_no_patterns_is_not_a_failure(self):
+        rc, _err, llm_calls = self._run_main(patterns=[])
+        self.assertEqual(rc, 0)
+        self.assertEqual(llm_calls, 1)
+
+    def test_no_labeled_runs_with_key_is_not_a_failure(self):
+        rc, _err, llm_calls = self._run_main(eligible=False)
+        self.assertEqual(rc, 0)
+        self.assertEqual(llm_calls, 0)
+
+
+# ── MiniMax request shape ─────────────────────────────────────────────────────
+
+class TestMiniMaxRequest(unittest.TestCase):
+
+    def _post(self) -> dict:
+        import asyncio
+        import types
+
+        posted: list[dict] = []
+
+        class _Resp:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"content": [{"type": "text", "text": "[]"}]}
+
+        class _Client:
+            def __init__(self, **_kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_a):
+                return False
+
+            async def post(self, _url, json=None, headers=None):
+                posted.append(json)
+                return _Resp()
+
+        fake = types.SimpleNamespace(AsyncClient=_Client, Timeout=lambda **_kw: None)
+        with patch.dict(sys.modules, {"httpx": fake}), \
+                patch.object(analyst, "_HTTPX_AVAILABLE", True):
+            asyncio.run(analyst._call_minimax("k", "prompt"))
+        self.assertEqual(len(posted), 1)
+        return posted[0]
+
+    def test_token_budget_leaves_room_for_reasoning(self):
+        # M3.x models spend most of max_tokens thinking; below this the text
+        # block comes back empty and every project reads as "no patterns".
+        self.assertGreaterEqual(self._post()["max_tokens"], 16000)
+
+    def test_model_is_not_the_retired_m2_family(self):
+        self.assertNotRegex(self._post()["model"], r"^MiniMax-M2")
+
+
+# ── systemd unit ──────────────────────────────────────────────────────────────
+
+class TestServiceUnit(unittest.TestCase):
+
+    def test_execstart_injects_the_key_from_the_vault(self):
+        unit = Path(__file__).parent / "systemd" / "tier2-analyst.service"
+        exec_lines = [
+            ln.split("=", 1)[1].strip()
+            for ln in unit.read_text().splitlines()
+            if ln.startswith("ExecStart=")
+        ]
+        self.assertEqual(len(exec_lines), 1)
+        argv = exec_lines[0].split()
+        self.assertTrue(argv[0].endswith("/hearth-vault"), argv[0])
+        self.assertEqual(argv[1], "exec")
+        self.assertIn("--prefix", argv)
+        self.assertEqual(argv[argv.index("--prefix") + 1], "ai/")
+        self.assertIn("--redact", argv)
+        sep = argv.index("--")
+        self.assertTrue(argv[sep + 1].endswith("python3"), argv[sep + 1])
+        self.assertTrue(argv[-1].endswith("tier2/analyst.py"), argv[-1])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -6,8 +6,10 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=%h/projects/nervous-bus/adapters/reflex-recorder/tier2
+# MINIMAX_API_KEY comes from hearth-vault (key ai/minimax-api-key), never a file.
+# analyst.py exits 2 when the key is missing, so a broken injection fails the unit.
 # Pyenv 3.11.13 — keep in sync with rest of reflex-recorder stack
-ExecStart=%h/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/reflex-recorder/tier2/analyst.py
+ExecStart=%h/.local/bin/hearth-vault exec --prefix ai/ --redact -- %h/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/reflex-recorder/tier2/analyst.py
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=tier2-analyst
