@@ -14,6 +14,12 @@ In addition to the original PEL/bundle checks this version:
      check window) using the stream's entries-added counter — cheapest path
      to dead-letter alerting per the audit: piggyback this existing timer
      instead of standing up Prometheus alertmanager.
+  5. Tracks the age of the newest entry on nbus:bus.pattern.signal.v1 — the
+     pipeline's OUTPUT. Every check above looks at plumbing (service up, group
+     present, bundler writing); none notices a pipeline that is wired up and
+     produces nothing. Older than PATTERN_SIGNAL_MAX_AGE_S (or an empty
+     stream) makes the run exit 1 with a "no bus.pattern.signal.v1 for ..."
+     line on every run; the bus warn + marker publish once per outage.
 
 Alert markers use:
   marker_type = "error.spike"   (problem)  / "quality.signal" (recovery)
@@ -31,7 +37,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-import redis
+# redis is imported in main(): the checks only call methods on the client they
+# are handed, so the module stays importable (and testable) without the package.
 
 STREAM = "nbus:bundles"
 GROUP = "deer-flow-patterns"
@@ -57,6 +64,14 @@ DLQ_STREAM = "nbus:bus.dead_letter"
 DLQ_GROWTH_THRESHOLD = 50           # new dead letters within one check window = alert
 DLQ_HEALTH_KEY = "nbus:watchdog:dlq:growth"
 DLQ_HEALTH_KEY_TTL = 7200           # 2 h
+
+# Pipeline-output freshness: the newest bus.pattern.signal.v1 entry must be
+# younger than this. Override with PATTERN_SIGNAL_MAX_AGE_S (seconds, > 0).
+SIGNAL_STREAM = "nbus:bus.pattern.signal.v1"
+SIGNAL_MAX_AGE_ENV = "PATTERN_SIGNAL_MAX_AGE_S"
+DEFAULT_SIGNAL_MAX_AGE_S = 3 * 86400
+SIGNAL_HEALTH_KEY = "nbus:watchdog:signal"
+SIGNAL_HEALTH_KEY_TTL = 7200        # 2 h
 
 NBUS_ROOT = os.environ.get("NBUS_ROOT", str(Path(__file__).resolve().parents[2]))
 
@@ -292,6 +307,118 @@ def _check_dead_letter_growth(r: redis.Redis) -> list[str]:
     return issues
 
 
+# ── Pipeline output freshness ────────────────────────────────────────────────
+
+def _signal_max_age_s() -> float:
+    raw = os.environ.get(SIGNAL_MAX_AGE_ENV, "").strip()
+    if not raw:
+        return float(DEFAULT_SIGNAL_MAX_AGE_S)
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 0.0
+    if value > 0:
+        return value
+    sys.stderr.write(
+        f"[pattern-watchdog] ignoring invalid {SIGNAL_MAX_AGE_ENV}={raw!r}; "
+        f"using {DEFAULT_SIGNAL_MAX_AGE_S}s\n"
+    )
+    return float(DEFAULT_SIGNAL_MAX_AGE_S)
+
+
+def _fmt_age(seconds: float) -> str:
+    if seconds >= 2 * 86400:
+        return f"{seconds / 86400:.1f} days"
+    if seconds >= 2 * 3600:
+        return f"{seconds / 3600:.1f} h"
+    return f"{seconds / 60:.0f} min"
+
+
+def _check_signal_age(r: redis.Redis, now: float | None = None) -> list[str]:
+    """Fail when the pattern pipeline has stopped producing signals.
+
+    Returns an issue string on EVERY run while the stream is stale or empty, so
+    the unit keeps exiting 1 and the journal keeps saying why. The bus warn and
+    the error.spike marker are latched in Valkey and publish once per outage;
+    a fresh signal publishes the recovery marker.
+    """
+    now = time.time() if now is None else now
+    max_age = _signal_max_age_s()
+
+    try:
+        entries = r.xrevrange(SIGNAL_STREAM, count=1)
+    except Exception as e:
+        return [f"signal freshness check failed: {e}"]
+
+    last_ts: float | None = None
+    if entries:
+        try:
+            last_ts = int(entries[0][0].split("-")[0]) / 1000
+        except (ValueError, IndexError, AttributeError) as e:
+            return [f"signal freshness check failed: bad entry id {entries[0][0]!r}: {e}"]
+
+    if last_ts is None:
+        age = None
+        issue = (
+            f"no bus.pattern.signal.v1 ever: {SIGNAL_STREAM} is empty or missing "
+            f"(pattern pipeline has produced nothing)"
+        )
+    else:
+        age = max(0.0, now - last_ts)
+        last_iso = datetime.fromtimestamp(last_ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        issue = (
+            f"no bus.pattern.signal.v1 for {_fmt_age(age)} "
+            f"(bound {_fmt_age(max_age)}, set {SIGNAL_MAX_AGE_ENV} to change); "
+            f"last signal {last_iso}"
+        )
+    stale = age is None or age > max_age
+
+    try:
+        state = r.hgetall(SIGNAL_HEALTH_KEY)
+    except Exception:
+        state = {}
+    alerted = state.get("alerted", "0") == "1"
+
+    if stale and not alerted:
+        sys.stderr.write(f"[pattern-watchdog] ALERT: {issue}\n")
+        _publish_warn(issue)
+        _publish_marker(
+            linked_id=SIGNAL_STREAM,
+            marker_type="error.spike",
+            outcome="failed",
+            quality_score=0.0,
+        )
+    elif not stale and alerted:
+        sys.stderr.write(
+            f"[pattern-watchdog] RECOVERY: {SIGNAL_STREAM} has a signal "
+            f"{_fmt_age(age)} old\n"
+        )
+        _publish_marker(
+            linked_id=SIGNAL_STREAM,
+            marker_type="quality.signal",
+            outcome="accepted",
+            quality_score=1.0,
+        )
+    elif not stale:
+        sys.stderr.write(
+            f"[pattern-watchdog] last signal {_fmt_age(age)} ago "
+            f"(bound {_fmt_age(max_age)})\n"
+        )
+
+    try:
+        r.hset(SIGNAL_HEALTH_KEY, mapping={
+            "last_signal_ts": "" if last_ts is None else str(last_ts),
+            "last_signal_age_s": "" if age is None else str(age),
+            "alerted": "1" if stale else "0",
+            "last_check_ts": str(now),
+        })
+        r.expire(SIGNAL_HEALTH_KEY, SIGNAL_HEALTH_KEY_TTL)
+    except Exception:
+        pass
+
+    return [issue] if stale else []
+
+
 # ── Pattern bundle / PEL checks (original) ───────────────────────────────────
 
 def _check(r: redis.Redis) -> list[str]:
@@ -362,6 +489,8 @@ def _check(r: redis.Redis) -> list[str]:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> int:
+    import redis
+
     try:
         r = redis.Redis.from_url(
             "redis://localhost:6379", decode_responses=True,
@@ -375,12 +504,18 @@ def main() -> int:
         return 1
 
     issues = _check(r)
+    # Output freshness publishes its own latched warn; it must not go through
+    # the per-run _publish_warn loop below (a multi-week silence would emit a
+    # warn every 5 minutes) and it never triggers the service restart.
+    signal_issues = _check_signal_age(r)
 
-    if issues:
-        for issue in issues:
-            sys.stderr.write(f"[pattern-watchdog] WARN: {issue}\n")
-            _publish_warn(issue)
+    for issue in issues:
+        sys.stderr.write(f"[pattern-watchdog] WARN: {issue}\n")
+        _publish_warn(issue)
+    for issue in signal_issues:
+        sys.stderr.write(f"[pattern-watchdog] WARN: {issue}\n")
 
+    if issues or signal_issues:
         # Auto-restart if service is down
         if any("service is" in i for i in issues):
             sys.stderr.write(f"[pattern-watchdog] restarting {SERVICE}...\n")
