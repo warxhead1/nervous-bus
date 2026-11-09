@@ -5,6 +5,7 @@ Usage
     python3 query.py runs [--project P] [--outcome O] [--since TS] [--days N] [--json]
     python3 query.py thrash [--project P] [--since TS] [--days N] [--json]
     python3 query.py prevalence [--project P] [--days N] [--json]
+    python3 query.py classifications [--project P] [--days N] [--json]
     python3 query.py issues [--project P] [--since TS] [--days N] [--json]
     python3 query.py stats [--project P] [--since TS] [--days N] [--json]
     python3 query.py sql "<SELECT ...>" [--json]
@@ -41,7 +42,21 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+# detectors/ is a sibling package; `python3 -I query.py` does not put the
+# script directory on sys.path, so add it before the lazy detector imports.
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
 DEFAULT_DB_PATH = Path.home() / ".cache" / "nervous-bus" / "reflex" / "runs.db"
+
+# Plausibility bound for a detector's hit rate. A (project, detector) pair that
+# fires on more than this fraction of >= MIN_SUSPECT_RUNS runs is reported as
+# `suspect_calibration` instead of being ranked as a finding. Chosen from the
+# live 30d table (2026-11-08): every pair but one sat at or below 36% (the
+# outlier was 75%); both are CLI-tunable.
+DEFAULT_MAX_PLAUSIBLE_RATE = 0.5
+DEFAULT_MIN_SUSPECT_RUNS = 20
 
 # Tool names that constitute "read" activity (before a resolving Edit)
 _READ_TOOL_NAMES = {"Read", "Grep", "Glob", "LS"}
@@ -225,43 +240,78 @@ def query_thrash(
 
 # ── prevalence ────────────────────────────────────────────────────────────────
 
+def _classifier_names() -> frozenset[str]:
+    """Registered classifier-kind detector names (detectors.base.KIND_CLASSIFIER)."""
+    from detectors.base import classifier_detector_names, load_detector_kinds
+
+    load_detector_kinds()
+    return classifier_detector_names()
+
+
+def _not_in(column: str, names: frozenset[str]) -> tuple[str, list]:
+    """SQL fragment + params excluding *names* from *column* ('' if no names)."""
+    if not names:
+        return "", []
+    ordered = sorted(names)
+    return f"{column} NOT IN ({','.join('?' * len(ordered))})", ordered
+
+
 def query_prevalence(
     conn: sqlite3.Connection,
     *,
     project: Optional[str] = None,
     days: int = 7,
+    include_classifiers: bool = False,
+    max_plausible_rate: float = DEFAULT_MAX_PLAUSIBLE_RATE,
+    min_suspect_runs: int = DEFAULT_MIN_SUSPECT_RUNS,
 ) -> list[dict]:
     """Return detector hit prevalence per (project, detector).
 
-    Reuses the same math as BaseDetector.prevalence():
-        rate = distinct run_ids with a hit / total runs in window
+        rate = distinct runs with a hit / runs in window
 
-    ``project=None`` returns all projects.
-    Always uses a rolling window (``days``).
+    Numerator and denominator share ONE window and ONE project attribution:
+    runs that ENDED inside the window, grouped by the run's own project. The
+    hit's `ts` is when the synthesis pass recorded it (it can lag the run by
+    days) and `detector_hits.project` is the detector's attribution, so using
+    either made hit_runs exceed total_runs (26 hits / 0 runs).
 
-    Returns list of dicts:
-        project, detector, hit_runs, total_runs, rate, window_days
+    Classifier-kind rows (detectors.base.KIND_CLASSIFIER) tag every run and are
+    not prevalence; they are left out unless ``include_classifiers``.
+
+    A row is flagged ``suspect_calibration`` when it covers at least
+    ``min_suspect_runs`` runs and ``rate > max_plausible_rate`` — such a
+    detector is mis-calibrated, not a finding, and must not be ranked as one.
+
+    ``project=None`` returns all projects. Returns list of dicts:
+        project, detector, kind, hit_runs, total_runs, rate, window_days,
+        suspect_calibration
     """
+    from detectors.base import KIND_DETECTOR, detector_kind
+
+    _classifier_names()  # fills the kind registry (all built-in modules)
     cutoff = _cutoff(None, days)
 
-    # Get distinct (project, detector) pairs that have hits in the window
-    clauses = ["ts >= ?"]
+    clauses = ["r.ended >= ?"]
     params: list = [cutoff]
     if project:
-        clauses.append("dh.project = ?")
+        clauses.append("r.project = ?")
         params.append(project)
-
-    where_dh = "WHERE " + " AND ".join(clauses)
+    if not include_classifiers:
+        frag, frag_params = _not_in("dh.detector", _classifier_names())
+        if frag:
+            clauses.append(frag)
+            params.extend(frag_params)
 
     cur = conn.execute(
         f"""
         SELECT
-            dh.project,
-            dh.detector,
+            r.project  AS project,
+            dh.detector AS detector,
             COUNT(DISTINCT dh.run_id) AS hit_runs
         FROM detector_hits dh
-        {where_dh}
-        GROUP BY dh.project, dh.detector
+        JOIN runs r ON r.run_id = dh.run_id
+        WHERE {" AND ".join(clauses)}
+        GROUP BY r.project, dh.detector
         """,
         params,
     )
@@ -270,20 +320,18 @@ def query_prevalence(
     if not hit_rows:
         return []
 
-    # Get total runs per project in the window (gating: ended >= cutoff)
+    # Total runs per project in the same window (same `ended` gate).
     total_clauses = ["ended >= ?"]
     total_params: list = [cutoff]
     if project:
         total_clauses.append("project = ?")
         total_params.append(project)
 
-    total_where = "WHERE " + " AND ".join(total_clauses)
-
     cur2 = conn.execute(
         f"""
         SELECT project, COUNT(*) AS total
         FROM runs
-        {total_where}
+        WHERE {" AND ".join(total_clauses)}
         GROUP BY project
         """,
         total_params,
@@ -294,15 +342,88 @@ def query_prevalence(
     for (proj, detector), hit_runs in sorted(hit_rows.items()):
         total = total_by_project.get(proj, 0)
         rate = hit_runs / total if total > 0 else 0.0
+        kind = detector_kind(detector)
         results.append({
             "project": proj,
             "detector": detector,
+            "kind": kind,
             "hit_runs": hit_runs,
             "total_runs": total,
             "rate": round(rate, 4),
             "window_days": days,
+            # A classifier's ~100% rate is by construction, not miscalibration.
+            "suspect_calibration": (
+                kind == KIND_DETECTOR and total >= min_suspect_runs and rate > max_plausible_rate
+            ),
         })
     return results
+
+
+def query_classifications(
+    conn: sqlite3.Connection,
+    *,
+    project: Optional[str] = None,
+    days: int = 7,
+) -> list[dict]:
+    """Classifier labels (failure_taxonomy buckets) per project, over runs that
+    ENDED in the window — the digest's distribution view, kept apart from
+    prevalence because a classifier tags every run.
+
+    Returns list of dicts: project, detector, label, classified, runs,
+    total_runs. ``label`` is the signature's last ':' segment; ``classified`` is
+    True only for a canonical failure bucket (not `unclassified`, not the
+    unconfirmed-cadence tier). Sorted by runs descending.
+    """
+    from detectors.failure_taxonomy import BUCKETS
+
+    names = sorted(_classifier_names())
+    if not names:
+        return []
+    cutoff = _cutoff(None, days)
+    clauses = ["r.ended >= ?", f"dh.detector IN ({','.join('?' * len(names))})"]
+    params: list = [cutoff, *names]
+    if project:
+        clauses.append("r.project = ?")
+        params.append(project)
+    cur = conn.execute(
+        f"""
+        SELECT r.project AS project, dh.detector AS detector,
+               dh.signature AS signature, COUNT(DISTINCT dh.run_id) AS runs
+        FROM detector_hits dh
+        JOIN runs r ON r.run_id = dh.run_id
+        WHERE {" AND ".join(clauses)}
+        GROUP BY r.project, dh.detector, dh.signature
+        """,
+        params,
+    )
+    rows = cur.fetchall()
+    if not rows:
+        return []
+    total_params: list = [cutoff]
+    total_where = "ended >= ?"
+    if project:
+        total_where += " AND project = ?"
+        total_params.append(project)
+    totals = {
+        r["project"]: r["total"]
+        for r in conn.execute(
+            f"SELECT project, COUNT(*) AS total FROM runs WHERE {total_where} GROUP BY project",
+            total_params,
+        ).fetchall()
+    }
+    out = []
+    for r in rows:
+        label = r["signature"].rsplit(":", 1)[-1]
+        out.append({
+            "project": r["project"],
+            "detector": r["detector"],
+            "label": label,
+            "classified": label in BUCKETS,
+            "runs": r["runs"],
+            "total_runs": totals.get(r["project"], 0),
+        })
+    out.sort(key=lambda d: (-d["runs"], d["project"], d["label"]))
+    return out
 
 
 # ── issues ────────────────────────────────────────────────────────────────────
@@ -313,16 +434,27 @@ def query_issues(
     project: Optional[str] = None,
     since: Optional[str] = None,
     days: Optional[int] = None,
+    include_classifiers: bool = False,
 ) -> list[dict]:
     """Return recurring issue signatures, ordered by recurrence_count DESC.
 
     ``since``/``days`` filters on ``last_seen`` so recently active issues
     surface first within the window.
+
+    Classifier-kind signatures (failure_taxonomy buckets) are not issues — a
+    label every run carries has no recurrence — and BaseDetector.run no longer
+    writes them. Legacy rows are hidden unless ``include_classifiers``.
     """
     cutoff = _cutoff(since, days)
 
     clauses: list[str] = []
     params: list = []
+
+    if not include_classifiers:
+        frag, frag_params = _not_in("detector", _classifier_names())
+        if frag:
+            clauses.append(frag)
+            params.extend(frag_params)
 
     if project:
         clauses.append("project = ?")
@@ -592,7 +724,10 @@ SCHEMA_CATALOG: dict[str, dict[str, str]] = {
         "detector": "DETECTOR_NAME string, e.g. 'worktree_leak'.",
         "signature": "Stable cross-run issue identifier: '{project}:{detector}:{anchor}'.",
         "project": "Project the hit belongs to.",
-        "ts": "RFC3339 UTC timestamp of the hit.",
+        "ts": (
+            "RFC3339 UTC timestamp the synthesis pass RECORDED the hit — it can lag the "
+            "run by days. Window by the joined runs.ended, not by this column."
+        ),
     },
     "issues": {
         "signature": "Primary key; stable cross-run identifier for a recurring pattern.",
@@ -600,7 +735,10 @@ SCHEMA_CATALOG: dict[str, dict[str, str]] = {
         "detector": "DETECTOR_NAME that discovered this issue.",
         "first_seen": "RFC3339 UTC timestamp of first occurrence.",
         "last_seen": "RFC3339 UTC timestamp of most recent occurrence.",
-        "recurrence_count": "Total times this signature has been hit across runs.",
+        "recurrence_count": (
+            "Total times this signature has been hit across runs. Classifier-kind "
+            "detectors (failure_taxonomy) are never written here; legacy rows are inert."
+        ),
         "recurrence_count_at_apply": (
             "Snapshot of recurrence_count when a fix was applied. "
             "NULL if no fix applied yet. Hits after apply = regression evidence."
@@ -784,6 +922,9 @@ def cmd_prevalence(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
         conn,
         project=args.project,
         days=args.days or 7,
+        include_classifiers=args.include_classifiers,
+        max_plausible_rate=args.max_plausible_rate,
+        min_suspect_runs=args.min_suspect_runs,
     )
     if args.json:
         print(json.dumps(rows, indent=2))
@@ -799,10 +940,29 @@ def cmd_prevalence(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
             "total_runs": r["total_runs"],
             "rate": f"{r['rate']:.1%}",
             "window_days": r["window_days"],
+            "flag": "SUSPECT CALIBRATION" if r["suspect_calibration"] else "",
         }
         for r in rows
     ]
     print(_fmt_table(display))
+    suspects = sum(1 for r in rows if r["suspect_calibration"])
+    if suspects:
+        print(
+            f"\n{suspects} row(s) flagged SUSPECT CALIBRATION: rate > "
+            f"{args.max_plausible_rate:.0%} over >= {args.min_suspect_runs} runs "
+            f"(a mis-calibrated detector, not a finding)."
+        )
+
+
+def cmd_classifications(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
+    rows = query_classifications(conn, project=args.project, days=args.days or 7)
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return
+    if not rows:
+        print("No classifier labels found in window.")
+        return
+    print(_fmt_table(rows, ["project", "detector", "label", "classified", "runs", "total_runs"]))
 
 
 def cmd_issues(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
@@ -811,6 +971,7 @@ def cmd_issues(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
         project=args.project,
         since=args.since,
         days=args.days,
+        include_classifiers=args.include_classifiers,
     )
     if args.json:
         print(json.dumps(rows, indent=2))
@@ -1361,10 +1522,29 @@ def build_parser() -> argparse.ArgumentParser:
     sp_prev.add_argument("--project", "-p", help="Filter by project name")
     sp_prev.add_argument("--days", "-d", type=int, default=7, help="Rolling window in days (default 7)")
     sp_prev.add_argument("--json", "-j", action="store_true", help="JSON output")
+    sp_prev.add_argument("--include-classifiers", action="store_true",
+                         help="Also list classifier-kind rows (failure_taxonomy) — they tag every run")
+    sp_prev.add_argument("--max-plausible-rate", type=float, default=DEFAULT_MAX_PLAUSIBLE_RATE,
+                         help=f"Flag a detector above this hit rate as suspect calibration "
+                              f"(default {DEFAULT_MAX_PLAUSIBLE_RATE})")
+    sp_prev.add_argument("--min-suspect-runs", type=int, default=DEFAULT_MIN_SUSPECT_RUNS,
+                         help=f"Only flag rows covering at least this many runs "
+                              f"(default {DEFAULT_MIN_SUSPECT_RUNS})")
+
+    # classifications
+    sp_cls = sub.add_parser(
+        "classifications",
+        help="Classifier labels (failure_taxonomy buckets) per project — not prevalence",
+    )
+    sp_cls.add_argument("--project", "-p", help="Filter by project name")
+    sp_cls.add_argument("--days", "-d", type=int, default=7, help="Rolling window in days (default 7)")
+    sp_cls.add_argument("--json", "-j", action="store_true", help="JSON output")
 
     # issues
     sp_issues = sub.add_parser("issues", help="Recurring issue signatures")
     _add_common(sp_issues)
+    sp_issues.add_argument("--include-classifiers", action="store_true",
+                           help="Also list legacy classifier-kind rows (not real recurrence)")
 
     # stats
     sp_stats = sub.add_parser(
@@ -1445,6 +1625,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             "runs": cmd_runs,
             "thrash": cmd_thrash,
             "prevalence": cmd_prevalence,
+            "classifications": cmd_classifications,
             "issues": cmd_issues,
             "stats": cmd_stats,
             "time": cmd_time,
