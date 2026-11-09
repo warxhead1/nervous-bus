@@ -59,6 +59,33 @@ def test_resolve_subagent_transcript_under_a_mirror_root(tmp_path):
         ts.LIVE_ROOT, ts.MIRROR_ROOT = old
 
 
+def test_resolve_workflow_agent_transcript(tmp_path):
+    """A Workflow-dispatched agent's transcript sits one level deeper, under
+    subagents/workflows/<run id>/, in the live tree and in the mirror alike."""
+    import transcript_steps as ts
+    live, mirror = tmp_path / "live", tmp_path / "mirror"
+    host = live / "-proj" / "sess1.jsonl"
+    old = (ts.LIVE_ROOT, ts.MIRROR_ROOT)
+    ts.LIVE_ROOT, ts.MIRROR_ROOT = live, mirror
+    try:
+        in_mirror = mirror / "-proj" / "sess1" / "subagents" / "workflows" / "wf_1-a" / "agent-def.jsonl"
+        in_mirror.parent.mkdir(parents=True)
+        in_mirror.write_text("")
+        assert resolve_transcript(str(host), "sess1", "def", roots=[live, mirror]) == in_mirror
+
+        in_live = live / "-proj" / "sess1" / "subagents" / "workflows" / "wf_2-b" / "agent-def.jsonl"
+        in_live.parent.mkdir(parents=True)
+        in_live.write_text("")
+        assert resolve_transcript(str(host), "sess1", "def", roots=[live, mirror]) == in_live
+
+        direct = live / "-proj" / "sess1" / "subagents" / "agent-def.jsonl"
+        direct.write_text("")
+        assert resolve_transcript(str(host), "sess1", "def", roots=[live, mirror]) == direct
+        assert resolve_transcript(str(host), "sess1", "nope", roots=[live, mirror]) is None
+    finally:
+        ts.LIVE_ROOT, ts.MIRROR_ROOT = old
+
+
 def test_number_masking_ignores_digits_inside_identifiers():
     assert numbers_in("const T63_MAX: f64 = 0.35;") == ["0.35"]
     assert numbers_in("w12 = 3e-4_f32 + 7") == ["3e-4_f32", "7"]

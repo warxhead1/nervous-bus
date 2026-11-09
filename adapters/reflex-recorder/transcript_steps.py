@@ -218,10 +218,13 @@ def resolve_transcript(transcript_path: str, session_id: str = "",
     candidates: list[Path] = []
     if subagent_id:
         sess = session_id or host.stem
-        sub_rel = Path(f"{sess}/subagents/agent-{subagent_id}.jsonl")
-        if rel is not None:
-            candidates += [r / rel.parent / sub_rel for r in roots]
-        candidates.append(host.parent / sub_rel)
+        name = f"agent-{subagent_id}.jsonl"
+        bases = [r / rel.parent for r in roots] if rel is not None else []
+        bases.append(host.parent)
+        candidates += [b / sess / "subagents" / name for b in bases]
+        # A Workflow-dispatched agent writes under subagents/workflows/<run id>/.
+        for b in bases:
+            candidates += sorted((b / sess / "subagents" / "workflows").glob(f"*/{name}"))
     else:
         if rel is not None:
             candidates += [r / rel for r in roots]

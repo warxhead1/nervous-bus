@@ -84,13 +84,16 @@ per-subagent table; the digest carries a sanitized one).
 
 `transcript_steps.py` turns a transcript into ordered tool calls (input, bounded
 output, start/end) and resolves a run to its transcript (live root, then the
-mirror). Detectors built on it, all rung `inform`:
+mirror; a subagent under `subagents/`, a Workflow agent under
+`subagents/workflows/<run id>/`). Detectors built on it, all rung `inform`
+except `guard_denial` (rung `automate`, added in #144):
 
 | detector | fires when | lead's response |
 |---|---|---|
 | `param_sweep_thrash` | >= 15 reruns of one harness with only numeric edits/args between them over >= 45 min and no passing test/gate, OR >= 10 foreground calls > 60 s that run a harness serially (loop/chain) totalling >= 20 min | stop the lane, checkpoint, script the sweep (parallel/detached) and pin the value with a test |
 | `gate_bound_loosened` | a test/gate bound widened after a failure of that gate in the same run (quotes the edit and the failure) | ask for the bound's derivation; accuses nothing |
 | `foreground_wait` | >= 4 min in foreground sleep-poll loops / long sleeps | run the job in the foreground with a timeout, or in the background and do other work |
+| `guard_denial` | >= 3 tool calls denied by the harness or a hook AND >= 1% of the run's calls (worktree guard, report-file and sleep blocks, hook blocks, missing tools, permission denials) | fix the dispatch brief for that family (claude-hook-fast `brief-lint` warns at dispatch) |
 
 Fixtures are real lanes, trimmed and redacted (`tests/fixtures/transcripts/make_fixture.py`).
 
