@@ -1400,10 +1400,12 @@ def backfill(
 
         # Compute label
         # B5 fix: None = insufficient signal → leave outcome as null
-        if second_pass and book_attempts:
+        if second_pass and book_attempts and run.get("outcome") is None:
             # Booked BEFORE the slow check: a pass killed mid-run (the nightly
             # step has a hard timeout) must still count the attempt, or one
             # run too slow for any pass would be retried first, every night.
+            # Only for a run with no label: a labeled run re-checked by a full
+            # pass must never be parked on a claim.
             record_label_attempt(conn, run, labeled=False, now=now,
                                  max_attempts=max_attempts, dry_run=dry_run)
         try:

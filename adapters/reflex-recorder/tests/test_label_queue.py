@@ -313,7 +313,7 @@ class TestSlowVerdictsGoLast(_DbCase):
         with ExitStack() as stack:
             for p in patches:
                 stack.enter_context(p)
-            return label.backfill(self.db, unlabeled_only=True, **kw)
+            return label.backfill(self.db, **{"unlabeled_only": True, **kw})
 
     def test_cheap_runs_are_labeled_before_the_slow_ones_at_the_head_of_the_queue(self):
         self.seed("slow-new", age_days=0.1, git_branch="feature/slow")
@@ -346,6 +346,19 @@ class TestSlowVerdictsGoLast(_DbCase):
         finally:
             conn.close()
         self.assertEqual([r["run_id"] for r in queued], [], "backed off, not retried first tomorrow")
+
+    def test_a_labeled_run_is_never_parked_by_a_full_pass_that_dies_in_the_slow_check(self):
+        self.seed("slow", age_days=0.1, git_branch="feature/slow")
+        self.exec("UPDATE runs SET outcome='landed', labeled_at='2026-01-01T00:00:00Z', "
+                  "label_attempts=5 WHERE run_id='slow'")
+
+        def verify(repo, branch):
+            raise KeyboardInterrupt
+        with self.assertRaises(KeyboardInterrupt):
+            self._run(self._git_world({"feature/slow"}, verify), unlabeled_only=False)
+        row = self.row("slow")
+        self.assertEqual(row["outcome"], "landed")
+        self.assertIsNone(row["label_state"], "a real outcome and a parked state must never coexist")
 
     def test_slow_run_booked_once_whatever_the_check_decides(self):
         self.seed("slow", age_days=0.1, git_branch="feature/slow")
