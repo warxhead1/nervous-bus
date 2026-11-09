@@ -550,6 +550,13 @@ def query_stats(
 
     # ── Query 1: per-project totals + labeled/unlabeled counts ────────────────
     # Use a single pass over the runs table with explicit labeled_at gating.
+    # unlabeled_runs = pending_runs + parked_runs. A parked run (label_state set:
+    # 'unattributable' or 'rolled_up') is one the labeler has stopped queueing,
+    # so it must not read as backlog. Stores older than the label_state column
+    # report every unlabeled run as pending.
+    has_state = any(r[1] == "label_state" for r in conn.execute("PRAGMA table_info(runs)"))
+    parked_sql = ("SUM(CASE WHEN labeled_at IS NULL AND label_state IS NOT NULL "
+                  "THEN 1 ELSE 0 END)") if has_state else "0"
     cur = conn.execute(
         f"""
         SELECT
@@ -557,6 +564,7 @@ def query_stats(
             COUNT(*) AS total_runs,
             COUNT(labeled_at) AS labeled_runs,
             COUNT(*) - COUNT(labeled_at) AS unlabeled_runs,
+            {parked_sql} AS parked_runs,
             AVG(event_count) AS avg_event_count
         FROM runs
         {where}
@@ -567,11 +575,14 @@ def query_stats(
     totals_by_proj: dict[str, dict] = {}
     for row in cur.fetchall():
         proj = row["project"]
+        parked = row["parked_runs"] or 0
         totals_by_proj[proj] = {
             "project": proj,
             "total_runs": row["total_runs"],
             "labeled_runs": row["labeled_runs"],
             "unlabeled_runs": row["unlabeled_runs"],
+            "pending_runs": row["unlabeled_runs"] - parked,
+            "parked_runs": parked,
             "avg_event_count": round(row["avg_event_count"] or 0.0, 1),
             "outcome_breakdown": {},
         }

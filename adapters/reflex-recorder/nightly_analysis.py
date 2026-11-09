@@ -86,6 +86,14 @@ DEFAULT_STRUGGLE_WINDOW_DAYS = 14   # struggle-ledger scan window
 # 2.6G runs.db). Passed explicitly here rather than relying on synthesis.py's
 # own default so the nightly's cost bound is visible in one place.
 DEFAULT_SYNTHESIS_WINDOW_DAYS = 30
+# label.py ends its pass this many seconds before the step's kill so it exits
+# cleanly (ok) instead of being SIGKILLed. It checks its budget only between
+# runs, and one git-pickaxe-class run can take over a minute, so the margin
+# must cover the slowest single run, not just process exit.
+LABEL_BUDGET_MARGIN_S = 100
+LABEL_ECHO_LINES = 5          # label.py progress lines copied into the journal
+LABEL_FAILURES_FATAL = 2      # consecutive failed label nights that fail the unit
+STATE_FILE = "nightly_state.json"
 TOP_DETECTORS = 10
 TOP_STRUGGLES = 8
 TOP_HARNESS_CHANGES = 30
@@ -111,10 +119,21 @@ class StepResult:
         self.stderr = stderr
 
 
-def run_step(name: str, cmd: list[str], timeout: int) -> StepResult:
+def _echo_tail(name: str, out, lines: int) -> None:
+    """Copy the last `lines` lines of a step's stdout to stderr (the journal)."""
+    if not lines or not out:
+        return
+    if isinstance(out, bytes):
+        out = out.decode(errors="replace")
+    for line in out.strip().splitlines()[-lines:]:
+        print(f"[nightly] {name} | {line}", file=sys.stderr)
+
+
+def run_step(name: str, cmd: list[str], timeout: int, echo_stdout_lines: int = 0) -> StepResult:
     """Run one batch step as a subprocess. Never raises — timeouts and
     non-zero exits are captured and reported, not propagated, so the caller
-    can always move on to the next step."""
+    can always move on to the next step. echo_stdout_lines > 0 copies the tail
+    of the step's stdout to stderr so its progress lines reach journalctl."""
     t0 = time.monotonic()
     print(f"[nightly] >>> {name}: {' '.join(cmd)}", file=sys.stderr)
     try:
@@ -122,6 +141,7 @@ def run_step(name: str, cmd: list[str], timeout: int) -> StepResult:
             cmd, cwd=str(HERE), capture_output=True, text=True, timeout=timeout,
         )
         dur = time.monotonic() - t0
+        _echo_tail(name, proc.stdout, echo_stdout_lines)
         if proc.returncode != 0:
             print(f"[nightly] <<< {name} FAILED (exit {proc.returncode}, {dur:.1f}s)\n"
                   f"{proc.stderr[-2000:]}", file=sys.stderr)
@@ -136,6 +156,7 @@ def run_step(name: str, cmd: list[str], timeout: int) -> StepResult:
         partial_out = (exc.stdout or b"")
         if isinstance(partial_out, bytes):
             partial_out = partial_out.decode(errors="replace")
+        _echo_tail(name, partial_out, echo_stdout_lines)
         return StepResult(name, False, f"timeout after {timeout}s", dur, partial_out, "")
     except Exception as exc:
         dur = time.monotonic() - t0
@@ -401,12 +422,15 @@ def build_digest(
     lines.append(f"## Run counts ({window_days}d)")
     lines.append("")
     if stats:
-        lines.append("| project | runs | labeled | unlabeled |")
-        lines.append("|---|---|---|---|")
+        # pending = still queued for labeling; parked = the labeler gave up on it
+        lines.append("| project | runs | labeled | pending | parked |")
+        lines.append("|---|---|---|---|---|")
         for row in sorted(stats, key=lambda r: -r.get("total_runs", 0)):
+            parked = row.get("parked_runs", 0) or 0
+            pending = row.get("pending_runs", row["unlabeled_runs"] - parked)
             lines.append(
                 f"| {row['project']} | {row['total_runs']} | "
-                f"{row['labeled_runs']} | {row['unlabeled_runs']} |"
+                f"{row['labeled_runs']} | {pending} | {parked} |"
             )
         lines.append("")
         lines.append("### Labeled-outcome distribution")
@@ -537,6 +561,38 @@ def write_digest(text: str, digest_path: Path = DIGEST_PATH) -> None:
     digest_path.write_text(text)
 
 
+def label_argv(db: Path, since_days: int, step_timeout: int) -> list[str]:
+    """label.py argv for the nightly: incremental, window-bounded, and with a
+    budget that ends the pass before the step's own kill."""
+    budget = max(step_timeout - LABEL_BUDGET_MARGIN_S, 1)
+    return [sys.executable, "label.py", "--db-path", str(db),
+            "--since-days", str(since_days), "--unlabeled-only",
+            "--budget-seconds", str(budget)]
+
+
+def record_label_result(db: Path, result: StepResult) -> int:
+    """Persist the consecutive-failure count for label.py beside runs.db and
+    return it (0 after a clean night). A state file that cannot be read or
+    written never fails the batch; it only forgets the streak."""
+    path = db.parent / STATE_FILE
+    try:
+        state = json.loads(path.read_text())
+        if not isinstance(state, dict):
+            state = {}
+    except (OSError, ValueError):
+        state = {}
+    streak = 0 if result.ok else int(state.get("label_failures", 0) or 0) + 1
+    state["label_failures"] = streak
+    state["label_last"] = {"ok": result.ok, "detail": result.detail,
+                           "seconds": round(result.duration, 1),
+                           "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    try:
+        path.write_text(json.dumps(state, indent=2) + "\n")
+    except OSError as exc:
+        print(f"[nightly] could not write {path}: {exc}", file=sys.stderr)
+    return streak
+
+
 def run_token_digest(out_dir: Path, days: int, timeout: int) -> bool:
     """Ingest new transcript usage, then write latest + dated token digests.
     Non-fatal like label.py: the ledger resumes from per-file offsets."""
@@ -593,10 +649,11 @@ def main() -> int:
 
     label_result = run_step(
         "label.py",
-        [sys.executable, "label.py", "--db-path", str(args.db),
-         "--since-days", str(args.label_since_days), "--unlabeled-only"],
+        label_argv(args.db, args.label_since_days, args.step_timeout),
         args.step_timeout,
+        echo_stdout_lines=LABEL_ECHO_LINES,
     )
+    label_failures = record_label_result(args.db, label_result)
 
     detector_result = run_step(
         "synthesis.py",
@@ -628,6 +685,18 @@ def main() -> int:
         print(
             f"[nightly] === reflex nightly analysis DONE WITH FAILURE: "
             f"synthesis.py {detector_result.detail} ===",
+            file=sys.stderr,
+        )
+        return 1
+
+    # label.py is non-fatal for one night (it resumes incrementally), but with
+    # --budget-seconds it should end cleanly; failing night after night means
+    # labels have stopped advancing, and that must show as a failed unit.
+    if label_failures >= LABEL_FAILURES_FATAL:
+        print(
+            f"[nightly] === reflex nightly analysis DONE WITH FAILURE: "
+            f"label.py failed {label_failures} nights in a row "
+            f"(last: {label_result.detail}) ===",
             file=sys.stderr,
         )
         return 1

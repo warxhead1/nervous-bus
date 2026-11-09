@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -155,7 +156,7 @@ class TestFailLoud:
         _make_empty_db(db_path)
         digest_path = tmp_path / "digest.md"
 
-        def fake_run_step(name, cmd, timeout):
+        def fake_run_step(name, cmd, timeout, **_):
             if name == "synthesis.py":
                 return self._make_timeout_step(name, timeout)
             return self._make_ok_step(name)
@@ -183,7 +184,7 @@ class TestFailLoud:
 
         monkeypatch.setattr(
             na, "run_step",
-            lambda name, cmd, timeout: self._make_ok_step(name),
+            lambda name, cmd, timeout, **_: self._make_ok_step(name),
         )
         monkeypatch.setattr(na, "_run_json", lambda *a, **k: [])
         monkeypatch.setattr(
@@ -389,3 +390,113 @@ class TestDigestWindowFollowsRunEnd:
         text = na.build_digest(db_path, _ok_step(), _ok_step(), window_days=7,
                                struggle_window_days=14, step_timeout=120)
         assert "- sudo: 1 run(s)" in text  # new-run only; old-run ended 40d ago
+
+
+# ---------------------------------------------------------------------------
+# Issue #133 — label.py runs under a budget, reports progress, and a streak of
+# failed label nights fails the unit
+# ---------------------------------------------------------------------------
+
+class TestLabelStep:
+    def _argv(self, db_path, digest_path):
+        return ["nightly_analysis.py", "--db", str(db_path), "--digest-path", str(digest_path)]
+
+    def test_label_argv_ends_before_the_step_kill(self, tmp_path):
+        argv = na.label_argv(tmp_path / "runs.db", 30, 300)
+        i = argv.index("--budget-seconds")
+        assert float(argv[i + 1]) == 300 - na.LABEL_BUDGET_MARGIN_S
+        assert "--unlabeled-only" in argv and argv[argv.index("--since-days") + 1] == "30"
+        assert float(na.label_argv(tmp_path / "runs.db", 30, 10)[i + 1]) >= 1
+
+    def test_main_passes_the_budget_and_echoes_label_progress(self, monkeypatch, tmp_path):
+        db_path = tmp_path / "runs.db"
+        _make_empty_db(db_path)
+        seen = {}
+
+        def fake_run_step(name, cmd, timeout, echo_stdout_lines=0):
+            seen[name] = (cmd, echo_stdout_lines)
+            return na.StepResult(name, True, "ok", 1.0, "", "")
+
+        monkeypatch.setattr(na, "run_step", fake_run_step)
+        monkeypatch.setattr(na, "_run_json", lambda *a, **k: [])
+        monkeypatch.setattr(sys, "argv", self._argv(db_path, tmp_path / "d.md"))
+        assert na.main() == 0
+        cmd, echo = seen["label.py"]
+        assert "--budget-seconds" in cmd
+        assert echo == na.LABEL_ECHO_LINES
+
+    def test_echo_tail_copies_the_last_lines_to_stderr(self, capsys):
+        na._echo_tail("label.py", "a\nb\n[label] 40/90 runs\n[label] done\n", 2)
+        err = capsys.readouterr().err
+        assert "[label] 40/90 runs" in err and "[label] done" in err and "| a" not in err
+        na._echo_tail("label.py", b"[label] bytes\n", 5)
+        assert "[label] bytes" in capsys.readouterr().err
+
+    def test_two_failed_label_nights_fail_the_unit_and_a_clean_night_resets(self, monkeypatch, tmp_path):
+        db_path = tmp_path / "runs.db"
+        _make_empty_db(db_path)
+        label_ok = {"v": False}
+
+        def fake_run_step(name, cmd, timeout, echo_stdout_lines=0):
+            if name == "label.py" and not label_ok["v"]:
+                return na.StepResult(name, False, "timeout after 300s", 300.0, "", "")
+            return na.StepResult(name, True, "ok", 1.0, "", "")
+
+        monkeypatch.setattr(na, "run_step", fake_run_step)
+        monkeypatch.setattr(na, "_run_json", lambda *a, **k: [])
+        monkeypatch.setattr(sys, "argv", self._argv(db_path, tmp_path / "d.md"))
+        assert na.main() == 0, "one failed label night stays non-fatal"
+        assert na.main() == 1, "the second failed night in a row fails the unit"
+        label_ok["v"] = True
+        assert na.main() == 0
+        state = json.loads((tmp_path / na.STATE_FILE).read_text())
+        assert state["label_failures"] == 0 and state["label_last"]["ok"] is True
+
+    def test_unreadable_state_file_never_fails_the_batch(self, tmp_path):
+        (tmp_path / na.STATE_FILE).write_text("{not json")
+        res = na.StepResult("label.py", False, "exit 1", 1.0, "", "")
+        assert na.record_label_result(tmp_path / "runs.db", res) == 1
+
+
+class TestPendingVsParked:
+    def _db(self, tmp_path, with_state=True):
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        cols = ("run_id TEXT, project TEXT, started TEXT, outcome TEXT, labeled_at TEXT, event_count INT, "
+                "tool_histogram TEXT DEFAULT '{}', label_history TEXT")
+        if with_state:
+            cols += ", label_state TEXT"
+        conn.execute(f"CREATE TABLE runs ({cols})")
+        rows = [("a", "p", "2026-11-01T00:00:00Z", "landed", "2026-11-02T00:00:00Z", 5, None),
+                ("b", "p", "2026-11-01T00:00:00Z", None, None, 5, None),
+                ("c", "p", "2026-11-01T00:00:00Z", None, None, 5, "unattributable"),
+                ("d", "p", "2026-11-01T00:00:00Z", None, None, 5, "rolled_up")]
+        for r in rows:
+            names = "run_id, project, started, outcome, labeled_at, event_count" + (", label_state" if with_state else "")
+            conn.execute(f"INSERT INTO runs ({names}) VALUES ({','.join('?' * (7 if with_state else 6))})",
+                         r if with_state else r[:6])
+        return conn
+
+    def test_parked_runs_are_split_out_of_unlabeled(self, tmp_path):
+        import query
+        row = query.query_stats(self._db(tmp_path))[0]
+        assert (row["labeled_runs"], row["unlabeled_runs"]) == (1, 3)
+        assert (row["pending_runs"], row["parked_runs"]) == (1, 2)
+
+    def test_store_without_label_state_reports_all_unlabeled_as_pending(self, tmp_path):
+        import query
+        row = query.query_stats(self._db(tmp_path, with_state=False))[0]
+        assert (row["pending_runs"], row["parked_runs"]) == (3, 0)
+
+    def test_digest_shows_pending_and_parked(self, monkeypatch, tmp_path):
+        db_path = tmp_path / "runs.db"
+        _make_empty_db(db_path)
+        stats = [{"project": "p", "total_runs": 4, "labeled_runs": 1, "unlabeled_runs": 3,
+                  "pending_runs": 1, "parked_runs": 2, "outcome_breakdown": {}}]
+        monkeypatch.setattr(na, "_run_json", lambda name, *a, **k: stats if "stats" in name else [])
+        ok = na.StepResult("x", True, "ok", 1.0, "", "")
+        text = na.build_digest(db_path, ok, ok, window_days=7, struggle_window_days=14,
+                               step_timeout=300)
+        assert "| project | runs | labeled | pending | parked |" in text
+        assert "| p | 4 | 1 | 1 | 2 |" in text
