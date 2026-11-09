@@ -46,20 +46,8 @@ def _core():
     import core
     return core
 
-ERR_LOG_MAX = 256 * 1024
-
-
 def _log_error() -> None:
-    import traceback   # lazy: ~18 ms of import on the hot path otherwise
-    try:
-        os.makedirs(store.STATE_DIR, exist_ok=True)
-        p = os.path.join(store.STATE_DIR, "errors.log")
-        if os.path.exists(p) and os.path.getsize(p) > ERR_LOG_MAX:
-            os.replace(p, p + ".1")
-        with open(p, "a") as f:
-            f.write(time.strftime("%Y-%m-%dT%H:%M:%SZ ", time.gmtime()) + traceback.format_exc() + "\n")
-    except OSError:
-        pass
+    store.log_error()
 
 
 def _out(event: str, **fields) -> None:
@@ -123,7 +111,10 @@ def _worth_planning(db, command: str) -> bool:
     names = {r[0] for r in db.execute("SELECT DISTINCT name FROM rejects")}
     if not names and not db.execute("SELECT 1 FROM shapes LIMIT 1").fetchone():
         return False
-    aliases = {r[0][6:] for r in db.execute("SELECT k FROM meta WHERE k LIKE 'alias:%'")}
+    # `grep` is ugrep behind a shell function: a lesson learned under either name serves both.
+    aliases = set()
+    for k, v in db.execute("SELECT k, v FROM meta WHERE k LIKE 'alias:%'"):
+        aliases |= {k[6:], os.path.basename(v)}
     for seg in segment.parse(command):
         base = os.path.basename(seg.bin or "")
         if base in names or base in aliases:
@@ -154,6 +145,8 @@ def _pre(ev, cfg, tool_input, command) -> int:
             core.record_applied(db, session, ev.get("tool_use_id") or "", command,
                                 result["command"], result["applied"])
             for a in result["applied"]:
+                if a["kind"] not in core.BUS_KINDS:
+                    continue
                 core.emit({"event": "correction", "bin": a.get("label", ""), "kind": a["kind"],
                            "bad": a["bad"], "good": a.get("render") or a["good"], "source": a["source"],
                            "session_id": session})
@@ -277,6 +270,13 @@ def cmd_learn(db, args) -> None:
 
 def cmd_set_demoted(db, args, value: int) -> None:
     who, bad = args[0], args[1]
+    if bad == "dash_value":      # the dash-leading-value rule, per binary build
+        keys = [r[0] for r in db.execute("SELECT bin_key FROM rejects WHERE kind='dash_value' AND (name=? OR bin_key=?)",
+                                         (who, who))]
+        for k in keys:
+            store.meta_set(db, f"dash_rule_off:{k}", "operator" if value else "")
+        print(f"{'demoted' if value else 'promoted'} dash_value rule for {len(keys)} build(s)")
+        return
     n = db.execute("UPDATE fixes SET demoted=?, n_bad=CASE WHEN ?=0 THEN 0 ELSE n_bad END "
                    "WHERE (name=? OR scope=?) AND bad=?", (value, value, who, who, bad)).rowcount
     print(f"{'demoted' if value else 'promoted'} {n} fix(es)")

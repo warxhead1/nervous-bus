@@ -86,6 +86,8 @@ def parse_help(text: str) -> Spec:
         if not m:
             continue
         head = m.group(1)
+        line_names: list[str] = []
+        line_takes = False
         for tm in OPT_TOKEN.finditer(head):
             name, arg = tm.group(1), tm.group(2)
             takes = bool(arg and arg.strip("[ =")) and not (arg or "").startswith("[")
@@ -100,6 +102,12 @@ def parse_help(text: str) -> Spec:
             if len(name) < 2 or name in ("--", "-"):
                 continue
             spec.opts[name] = spec.opts.get(name, False) or takes
+            line_names.append(name)
+            line_takes = line_takes or takes
+        # GNU writes the value once: `-e, --regexp=PATTERNS`. Aliases share the arity.
+        if line_takes and ("," in head or "|" in head):
+            for name in line_names:
+                spec.opts[name] = True
     if not spec.subcmds:
         # Help without a "Commands:" heading (git groups commands under prose
         # headings): take indented `name   description` lines, if there are many.
