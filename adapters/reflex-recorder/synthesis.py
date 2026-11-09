@@ -73,6 +73,7 @@ from detectors.harness_change_watch import HarnessChangeWatchDetector
 from detectors.param_sweep_thrash import ParamSweepThrashDetector
 from detectors.gate_bound_loosened import GateBoundLoosenedDetector
 from detectors.foreground_wait import ForegroundWaitDetector
+from detectors.guard_denial import GuardDenialDetector
 from detectors.kb_recall_gap import KbRecallGapDetector
 from detectors.failure_taxonomy import FailureTaxonomyDetector
 from detectors.skill_opportunity import SkillOpportunityDetector
@@ -174,6 +175,7 @@ _BUILTIN_DETECTOR_CLASSES: list[type[BaseDetector]] = [
     ParamSweepThrashDetector,
     GateBoundLoosenedDetector,
     ForegroundWaitDetector,
+    GuardDenialDetector,
     # user_correction / skill_opportunity (issue #39): themed/config-driven
     # ground-truth signals, independent of the other detectors — order vs.
     # them doesn't matter, only "before FailureTaxonomyDetector" matters.
@@ -1615,6 +1617,7 @@ def run_synthesis(
             "param_sweep_thrash": "inform",
             "gate_bound_loosened": "inform",
             "foreground_wait": "inform",
+            "guard_denial": "automate",
             "failure_taxonomy": "inform",
             "user_correction": "inform",
             "skill_opportunity": "inform",
