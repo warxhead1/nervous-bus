@@ -442,7 +442,16 @@ class FailureTaxonomyDetector(BaseDetector):
                     occurrences=len(hits),
                     evidence=evidence,
                     run_ids=run_ids,
-                    proposed_remediation=None,
+                    # Only a classified bucket can ever reach propose_fix, and the
+                    # eval schema requires a remediation on propose_fix. It is a
+                    # triage instruction, not a deterministic fix (INFORM rung).
+                    proposed_remediation=(
+                        f"Triage {bucket} in {project or 'this project'}: review the "
+                        f"run_sample evidence, then add or tune the specific detector "
+                        f"that explains the dominant cause. {bucket} is a category, so "
+                        f"there is no deterministic fix to apply to it directly."
+                        if bucket in BUCKETS else None
+                    ),
                     extra={
                         "bucket": bucket,
                         "runs_tagged": len(hits),
