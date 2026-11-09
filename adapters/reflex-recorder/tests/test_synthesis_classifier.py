@@ -22,7 +22,13 @@ for _p in (_REC_DIR, _TESTS_DIR):
 
 import synthesis as syn
 from detectors.base import KIND_CLASSIFIER, detector_kind
-from detectors.failure_taxonomy import PLANNING_FAILURE, UNCLASSIFIED
+from detectors.failure_taxonomy import (
+    PLANNING_FAILURE,
+    PLANNING_FAILURE_UNCONFIRMED_CADENCE,
+    VERIFICATION_FAILURE,
+    THRASH_EVENT_COUNT_FLOOR,
+    UNCLASSIFIED,
+)
 
 from test_synthesis import _insert_issue, _insert_run, _make_conn, _relative_pair  # noqa: E402
 
@@ -86,6 +92,62 @@ def test_classifier_signatures_never_create_issue_rows():
         "SELECT COUNT(*) FROM issues WHERE detector = 'failure_taxonomy'"
     ).fetchone()[0]
     assert n == 0
+
+
+def _seed_reverted_long_runs(conn, prefix, n):
+    """N labeled-`reverted` runs over the cadence floor.
+
+    `reverted` is a confirmed VERIFICATION failure (it does not leave the cadence
+    tier), but it is not a confirmed PLANNING outcome, so these runs land in the
+    planning_failure_unconfirmed_cadence bucket while every one of them counts
+    as a confirmed failure in labeled support. That is the only shape that
+    clears both severity floors without being `classified`.
+    """
+    _seed(conn, prefix, n, outcome="reverted", labeled=True)
+    conn.execute(
+        "UPDATE runs SET event_count = ? WHERE run_id LIKE ?",
+        (THRASH_EVENT_COUNT_FLOOR, f"{prefix}-%"),
+    )
+
+
+def test_unconfirmed_cadence_mass_over_both_floors_is_still_capped_at_monitor():
+    conn = _make_conn()
+    n = max(syn.CLASSIFIER_MIN_RUNS, syn.CLASSIFIER_MIN_CONFIRMED_FAILURES)
+    _seed_reverted_long_runs(conn, "rv", n)
+    result = syn.run_synthesis(conn, dry_run=True, project_filter=PROJECT)
+    ev = _one(result, PLANNING_FAILURE_UNCONFIRMED_CADENCE)
+    # Precondition, so the cap is what decides: window mass and confirmed
+    # failures both clear the floors the classified path would propose_fix on.
+    assert ev["score_components"]["recurrence_count"] == n
+    assert syn._compute_labeled_support(
+        conn, ev["issue_signature"], run_ids=[f"rv-{i}" for i in range(n)]
+    )["confirmed_failures"] == n
+    assert ev["decision"] == "monitor"
+    assert "capped at monitor" in ev["decision_rationale"]
+    assert ev["confidence_tier"] == "unconfirmed_cadence_candidate"
+    # The same reverted runs ARE a classified verification_failure bucket, which
+    # legitimately proposes a fix; only the cadence signature must stay silent.
+    assert _one(result, VERIFICATION_FAILURE)["decision"] == "propose_fix"
+    assert not [p for p in result.pattern_discovered_payloads
+                if p["payload"]["signature"] == ev["issue_signature"]]
+
+
+def test_make_classifier_decision_caps_unclassified_regardless_of_mass():
+    big = max(syn.CLASSIFIER_MIN_RUNS, syn.CLASSIFIER_MIN_CONFIRMED_FAILURES) * 10
+    support = {"confirmed_failures": big, "confirmed_clean": 0, "unlabeled": 0}
+    decision, why = syn.make_classifier_decision(
+        classified=False, window_runs=big, labeled_support=support,
+        logical_run_count=big,
+    )
+    assert decision == "monitor"
+    assert "capped at monitor" in why
+    # Identical inputs with classified=True DO propose_fix: the cap, and nothing
+    # else in the function, is what holds the unclassified row back.
+    decision, _ = syn.make_classifier_decision(
+        classified=True, window_runs=big, labeled_support=support,
+        logical_run_count=big,
+    )
+    assert decision == "propose_fix"
 
 
 def test_classified_bucket_below_the_floors_stays_monitor():
