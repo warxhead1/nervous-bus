@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from detectors import verify_fields
 from detectors._truncated_json import string_field
 from detectors.edit_build_fail_revert import (
     BUILD_KEYWORDS,
@@ -256,6 +257,16 @@ def default_verify(cmd: str, project: str = "") -> bool:
     return _is_build_command(cmd)
 
 
+def event_is_verify(ev: dict, is_verify=default_verify) -> bool:
+    """Whether a Bash event ran a verification: the hook's verify_class when
+    present (claude-hook-fast#54), else `is_verify` over the verbs plus
+    verify_cmd. See detectors/verify_fields.py."""
+    ts = ev.get("tool_summary", "")
+    if verify_fields.is_verify_class(ts):
+        return True
+    return is_verify(verify_fields.verify_text(ts) or _summary_field(ts, "command"), ev.get("project", ""))
+
+
 # Code file extensions: editing one of these is what creates a verification
 # obligation. Edits confined to non-code artifacts (docs, planning, beads) do not.
 _CODE_EXTS = {
@@ -314,13 +325,16 @@ def last_test_signal_before(
         scanned += 1
         if ev.get("tool_name") != "Bash":
             continue
-        cmd = _summary_field(ev.get("tool_summary", ""), "command")
-        if not is_verify(cmd, ev.get("project", "")):
+        if not event_is_verify(ev, is_verify):
             continue
+        cmd = _summary_field(ev.get("tool_summary", ""), "command")
         rs = _parse_summary(ev.get("tool_response_summary", ""))
         stdout = rs.get("stdout", "") or ""
         stderr = rs.get("stderr", "") or ""
-        if _has_fail_output(stdout, stderr):
+        hook = verify_fields.outcome(ev.get("tool_response_summary", ""))
+        if hook is not None:
+            status = {"fail": "failed", "pass": "passed"}.get(hook, "unknown")
+        elif _has_fail_output(stdout, stderr):
             status = "failed"
         elif stdout or stderr:
             status = "passed"
@@ -438,8 +452,7 @@ def ran_build_or_test(events: list[dict], is_verify=default_verify) -> bool:
     for e in events:
         if e.get("tool_name") != "Bash":
             continue
-        cmd = _summary_field(e.get("tool_summary", ""), "command")
-        if is_verify(cmd, e.get("project", "")):
+        if event_is_verify(e, is_verify):
             return True
     return False
 
@@ -510,8 +523,7 @@ def segment_by_worktree(events: list[dict], is_verify=default_verify) -> dict[st
             if is_code_path(_summary_field(e.get("tool_summary", ""), "file_path")):
                 seg.code_edit_count += 1
         elif tn == "Bash":
-            cmd = _summary_field(e.get("tool_summary", ""), "command")
-            if is_verify(cmd, e.get("project", "")):
+            if event_is_verify(e, is_verify):
                 seg.build_test_count += 1
     return segments
 
@@ -555,9 +567,13 @@ def _last_test_status_in_segment(events: list[dict], is_verify=default_verify) -
     for e in reversed(events):
         if e.get("tool_name") != "Bash":
             continue
-        cmd = _summary_field(e.get("tool_summary", ""), "command")
-        if not is_verify(cmd, e.get("project", "")):
+        if not event_is_verify(e, is_verify):
             continue
+        hook = verify_fields.outcome(e.get("tool_response_summary", ""))
+        if hook == "unknown":
+            continue  # a background launch or an interrupt is not a result
+        if hook is not None:
+            return "failed" if hook == "fail" else "passed"
         rs = _parse_summary(e.get("tool_response_summary", ""))
         if _has_fail_output(rs.get("stdout", "") or "", rs.get("stderr", "") or ""):
             return "failed"
