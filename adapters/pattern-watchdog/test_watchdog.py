@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import sys
 import time
@@ -22,15 +23,43 @@ DAY = 86400.0
 
 
 class FakeRedis:
-    """Just enough of redis-py for the watchdog's checks."""
+    """Just enough of redis-py for the watchdog's checks.
 
-    def __init__(self, *, signal_age_s: float | None, now: float = NOW,
-                 bundle_age_s: float = 60.0):
+    ``signal_age_s`` is the age of the newest REAL signal (None = none at all);
+    ``degraded_ages_s`` are consumer_degraded entries, which the live stream
+    carries in bulk. Entries come in the two shapes redis-mirror writes.
+    """
+
+    def __init__(self, *, signal_age_s: float | None = None, now: float = NOW,
+                 bundle_age_s: float = 60.0, degraded_ages_s=()):
         self.hashes: dict[str, dict[str, str]] = {}
-        self.signal_ids: list[str] = []
+        self.signal_entries: list[tuple[str, dict[str, str]]] = []
+        self.signal_calls = 0
+        self._seq = 0
+        self._now = now
         if signal_age_s is not None:
-            self.signal_ids.append(f"{int((now - signal_age_s) * 1000)}-0")
+            self.add_signal(signal_age_s, "anomaly")
+        for age in degraded_ages_s:
+            self.add_signal(age, "consumer_degraded")
         self.bundle_id = f"{int((now - bundle_age_s) * 1000)}-0"
+
+    def add_signal(self, age_s: float, signal_type: str | None, shape: str = "raw") -> str:
+        self._seq += 1
+        eid = f"{int((self._now - age_s) * 1000)}-{self._seq}"
+        payload = {"signal_id": f"s{self._seq}", "signal_type": signal_type,
+                   "severity": "warn", "confidence": 1.0, "channels": ["c"],
+                   "description": "x"}
+        raw = json.dumps({"specversion": "1.0", "type": "bus.pattern.signal.v1", "data": payload})
+        if shape == "raw":                  # _raw only (the newest degraded entries)
+            fields = {"_raw": raw, "type": "bus.pattern.signal.v1"}
+        elif shape == "flat":               # flattened data.*, _raw cut mid-string
+            fields = {"_raw": raw[:40], "data.signal_type": signal_type}
+        elif shape == "unreadable":         # neither field gives a signal_type
+            fields = {"_raw": "not json", "type": "bus.pattern.signal.v1"}
+        else:
+            raise ValueError(shape)
+        self.signal_entries.append((eid, fields))
+        return eid
 
     def ping(self):
         return True
@@ -46,9 +75,17 @@ class FakeRedis:
     def xrevrange(self, name, max="+", min="-", count=None):
         if name == "nbus:bundles":
             return [(self.bundle_id, {})]
-        if name == "nbus:bus.pattern.signal.v1":
-            return [(i, {}) for i in reversed(self.signal_ids)][:count]
-        return []
+        if name != "nbus:bus.pattern.signal.v1":
+            return []
+        self.signal_calls += 1
+        key = lambda eid: tuple(int(p) for p in eid.split("-"))
+        rows = sorted(self.signal_entries, key=lambda e: key(e[0]), reverse=True)
+        if max != "+":
+            if max.startswith("("):
+                rows = [e for e in rows if key(e[0]) < key(max[1:])]
+            else:
+                rows = [e for e in rows if key(e[0]) <= key(max)]
+        return [(i, dict(f)) for i, f in rows][:count]
 
     def hgetall(self, key):
         return dict(self.hashes.get(key, {}))
@@ -190,7 +227,7 @@ class TestSignalAgeCheck(_Base):
     def test_recovery_publishes_once_when_a_signal_arrives(self):
         fake = FakeRedis(signal_age_s=40 * DAY)
         self.assertEqual(len(self.check(fake)), 1)
-        fake.signal_ids.append(f"{int((NOW - 30) * 1000)}-0")
+        fake.add_signal(30, "anomaly")
         self.assertEqual(self.check(fake), [])
         self.assertEqual(self.check(fake), [])
         markers = self.sp.published("bus.intrinsic.marker.v1")
@@ -204,6 +241,106 @@ class TestSignalAgeCheck(_Base):
         issues = self.check(Broken(signal_age_s=60))
         self.assertEqual(len(issues), 1)
         self.assertIn("boom", issues[0])
+
+
+class TestConsumerDegradedIsNotOutput(_Base):
+    """consumer_degraded is the consumer reporting itself broken (F13/#131).
+
+    The live stream holds 3,602 real signals, all from 2026-05-10/11, followed
+    by 1,842 consumer_degraded entries. Counting those as freshness made the
+    watchdog green for about a third of the days since the pipeline died.
+    """
+
+    def check(self, fake: FakeRedis, now: float = NOW) -> list[str]:
+        with contextlib.redirect_stderr(io.StringIO()):
+            return watchdog._check_signal_age(fake, now=now)
+
+    def test_recent_degraded_only_stream_fails_main(self):
+        fake = FakeRedis(degraded_ages_s=[20, 1200, 2400], now=time.time())
+        rc, err = self.run_main(fake)
+        self.assertEqual(rc, 1)
+        self.assertIn("consumer_degraded", err)
+        self.assertNotIn("pipeline ok", err)
+
+    def test_recent_degraded_with_a_long_dead_real_signal_fails(self):
+        fake = FakeRedis(signal_age_s=182 * DAY, degraded_ages_s=[60, 1800, 3600])
+        issue = self.check(fake)[0]
+        self.assertIn("182.0 days", issue)
+        self.assertRegex(issue, r"last signal \d{4}-\d{2}-\d{2}T")
+        self.assertIn("consumer_degraded", issue)
+
+    def test_recent_real_signal_passes_even_with_newer_degraded_entries(self):
+        fake = FakeRedis(signal_age_s=600, degraded_ages_s=[30, 90])
+        self.assertEqual(self.check(fake), [])
+
+    def test_stale_by_age_even_if_degraded_entries_are_seconds_old(self):
+        # The pre-fix rule (newest entry of any type) was green here.
+        fake = FakeRedis(signal_age_s=5 * DAY, degraded_ages_s=[5])
+        self.assertEqual(len(self.check(fake)), 1)
+
+    def test_degraded_only_stream_reports_no_real_output_not_empty(self):
+        issue = self.check(FakeRedis(degraded_ages_s=[60, 120]))[0]
+        self.assertIn("no non-degraded bus.pattern.signal.v1", issue)
+        self.assertIn("all 2 entries", issue)
+        self.assertNotIn("empty or missing", issue)
+        self.assertNotIn("service is", issue)
+
+    def test_real_signal_is_found_beneath_many_pages_of_degraded_entries(self):
+        fake = FakeRedis(signal_age_s=2 * 3600,
+                         degraded_ages_s=[i + 1 for i in range(1300)])
+        self.assertEqual(self.check(fake), [])
+        self.assertGreater(fake.signal_calls, 2)   # 50 + 500 + 500 + ...
+
+    def test_healthy_stream_costs_one_read(self):
+        fake = FakeRedis(signal_age_s=60)
+        self.assertEqual(self.check(fake), [])
+        self.assertEqual(fake.signal_calls, 1)
+
+    def test_scan_bound_caps_the_read_and_says_so(self):
+        fake = FakeRedis(signal_age_s=DAY, degraded_ages_s=[i + 1 for i in range(120)])
+        with patch.object(watchdog, "SIGNAL_SCAN_MAX", 80):
+            issue = self.check(fake)[0]
+        self.assertIn("newest 80 entries (scan bound)", issue)
+        self.assertEqual(fake.signal_calls, 2)   # 50, then the 30 left under the bound
+
+    def test_flat_field_entries_are_classified_without_valid_raw(self):
+        flat_real = FakeRedis()
+        flat_real.add_signal(120, "correlation", shape="flat")
+        self.assertEqual(self.check(flat_real), [])
+        flat_degraded = FakeRedis()
+        flat_degraded.add_signal(120, "consumer_degraded", shape="flat")
+        self.assertEqual(len(self.check(flat_degraded)), 1)
+
+    def test_unreadable_entries_are_not_proof_of_output(self):
+        fake = FakeRedis()
+        fake.add_signal(60, None, shape="unreadable")
+        issue = self.check(fake)[0]
+        self.assertIn("1 entries had no readable signal_type", issue)
+
+    def test_valkey_tracks_the_real_signal_not_the_degraded_one(self):
+        fake = FakeRedis(signal_age_s=7200, degraded_ages_s=[10])
+        self.check(fake)
+        state = fake.hashes[watchdog.SIGNAL_HEALTH_KEY]
+        self.assertAlmostEqual(float(state["last_signal_age_s"]), 7200, delta=1)
+        self.assertAlmostEqual(NOW - float(state["newest_degraded_ts"]), 10, delta=1)
+
+    def test_degraded_only_outage_publishes_once_then_recovers_on_real_output(self):
+        fake = FakeRedis(degraded_ages_s=[60])
+        for _ in range(3):
+            self.assertEqual(len(self.check(fake)), 1)
+        fake.add_signal(5, "anomaly")
+        self.assertEqual(self.check(fake), [])
+        markers = self.sp.published("bus.intrinsic.marker.v1")
+        self.assertEqual(len(markers), 2)           # one error.spike, one quality.signal
+        self.assertEqual(len(self.sp.published("sys.log.entry.v1")), 1)
+
+    def test_bad_entry_id_is_reported(self):
+        fake = FakeRedis()
+        fake.signal_entries.append(("not-an-id", {"_raw": "{}"}))
+        fake.xrevrange = lambda *a, **k: fake.signal_entries[:1]
+        issues = self.check(fake)
+        self.assertEqual(len(issues), 1)
+        self.assertIn("bad entry id", issues[0])
 
 
 class TestExistingChecksUnchanged(_Base):
