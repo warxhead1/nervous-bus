@@ -12,7 +12,7 @@ Operator:
   argshape explain '<command>'         dry-run: segments + what pre would do
   argshape fixes [--all] | rejects | sigs [--top N] [--harness] | columns | shapes
   argshape learn <bin> [subcmd ...]    learn a binary's --help now
-  argshape demote <bin|conn> <bad> | promote <bin|conn> <bad>
+  argshape demote <bin|conn> <bad> | promote <bin|conn> <bad>   (<bad> = dash_value: the -e / -- rule)
   argshape breaker reset
   argshape install | uninstall         wire/unwire the hooks in ~/.claude/settings.json
 
@@ -42,24 +42,17 @@ SQLISH = re.compile(r"\bselect\b.+\bfrom\b|\bwith\s+\w+\s+as\s*\(|\bupdate\s+\w+
                     r"\bdelete\s+from\b|\binsert\s+into\b|\\d\+?\s", re.I | re.S)
 
 
+# Same words as core.REJECT_HINT, kept here so the success path does not import core to ask.
+REJECT_HINT = re.compile(r"invalid option|illegal option|unrecognized flag")
+SCAN_MAX = 40000      # characters of a success's output read for a rejection (core.SCAN_MAX is the same)
+
+
 def _core():
     import core
     return core
 
-ERR_LOG_MAX = 256 * 1024
-
-
 def _log_error() -> None:
-    import traceback   # lazy: ~18 ms of import on the hot path otherwise
-    try:
-        os.makedirs(store.STATE_DIR, exist_ok=True)
-        p = os.path.join(store.STATE_DIR, "errors.log")
-        if os.path.exists(p) and os.path.getsize(p) > ERR_LOG_MAX:
-            os.replace(p, p + ".1")
-        with open(p, "a") as f:
-            f.write(time.strftime("%Y-%m-%dT%H:%M:%SZ ", time.gmtime()) + traceback.format_exc() + "\n")
-    except OSError:
-        pass
+    store.log_error()
 
 
 def _out(event: str, **fields) -> None:
@@ -104,9 +97,16 @@ def hook(kind: str) -> int:
 
 
 def _post_has_work(ev, command: str) -> bool:
-    """A success only teaches something if it carries SQL output, settles a
-    correction, or answers a pending rejection from this session."""
+    """A success only teaches something if it carries SQL output, prints a tool's
+    own option rejection (a pipe ended the call at exit 0), settles a correction,
+    or answers a pending rejection from this session."""
     if SQLISH.search(command):
+        return True
+    resp = ev.get("tool_response")
+    out = f"{resp.get('stdout', '')}\n{resp.get('stderr', '')}" if isinstance(resp, dict) else str(resp or "")
+    if len(out) > SCAN_MAX:       # every successful Bash call passes here: bound the scan, keep both ends
+        out = out[:SCAN_MAX // 2] + "\n" + out[-SCAN_MAX // 2:]
+    if REJECT_HINT.search(out):
         return True
     db = store.connect(create=False)
     if db is None:
@@ -123,7 +123,10 @@ def _worth_planning(db, command: str) -> bool:
     names = {r[0] for r in db.execute("SELECT DISTINCT name FROM rejects")}
     if not names and not db.execute("SELECT 1 FROM shapes LIMIT 1").fetchone():
         return False
-    aliases = {r[0][6:] for r in db.execute("SELECT k FROM meta WHERE k LIKE 'alias:%'")}
+    # `grep` is ugrep behind a shell function: a lesson learned under either name serves both.
+    aliases = set()
+    for k, v in db.execute("SELECT k, v FROM meta WHERE k LIKE 'alias:%'"):
+        aliases |= {k[6:], os.path.basename(v)}
     for seg in segment.parse(command):
         base = os.path.basename(seg.bin or "")
         if base in names or base in aliases:
@@ -154,6 +157,8 @@ def _pre(ev, cfg, tool_input, command) -> int:
             core.record_applied(db, session, ev.get("tool_use_id") or "", command,
                                 result["command"], result["applied"])
             for a in result["applied"]:
+                if a["kind"] not in core.BUS_KINDS:
+                    continue
                 core.emit({"event": "correction", "bin": a.get("label", ""), "kind": a["kind"],
                            "bad": a["bad"], "good": a.get("render") or a["good"], "source": a["source"],
                            "session_id": session})
@@ -277,6 +282,20 @@ def cmd_learn(db, args) -> None:
 
 def cmd_set_demoted(db, args, value: int) -> None:
     who, bad = args[0], args[1]
+    if bad == "dash_value":      # the dash-leading-value rule, per binary build
+        # Claude Code's `grep` is a function over ugrep, so the rejection is stored under `grep` with
+        # the bin_key of ugrep's file. Either name finds it: `who` itself, a name that forwards to
+        # `who`, and the build `who` resolves to now.
+        names = {who} | {k[6:] for k, v in db.execute("SELECT k, v FROM meta WHERE k LIKE 'alias:%'")
+                         if os.path.basename(v) == who}
+        want_keys = {core.bin_identity(db, who, os.getcwd())[0], who}
+        keys = [r[0] for r in db.execute(
+            "SELECT DISTINCT bin_key FROM rejects WHERE kind='dash_value' AND (name IN (%s) OR bin_key IN (%s))"
+            % (",".join("?" * len(names)), ",".join("?" * len(want_keys))), (*names, *want_keys))]
+        for k in keys:
+            store.meta_set(db, f"dash_rule_off:{k}", "operator" if value else "")
+        print(f"{'demoted' if value else 'promoted'} dash_value rule for {len(keys)} build(s)")
+        return
     n = db.execute("UPDATE fixes SET demoted=?, n_bad=CASE WHEN ?=0 THEN 0 ELSE n_bad END "
                    "WHERE (name=? OR scope=?) AND bad=?", (value, value, who, who, bad)).rowcount
     print(f"{'demoted' if value else 'promoted'} {n} fix(es)")

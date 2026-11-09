@@ -39,8 +39,12 @@ FLAG_PATTERNS = [
     # GNU head/tail obsolete `-N` mixed with other options or several files:
     # tail: option used in invalid context -- 2   ->  `-n 2`
     ("numeric", re.compile(r"option used in invalid context -- (\d+)"), 1, None),
-    # A value that starts with `-` parsed as an option: ugrep: invalid option ->|reject
-    ("dash_value", re.compile(r"(?:invalid|unknown|unrecognized) option[: ]+['‘`]?(-[^\s'’`]*[^\w\s'’`=.,\-][^\s'’`]*)"), 1, None),
+    # A value that starts with `-` parsed as an option. ugrep and rg echo the whole word
+    # (spaces and all):  ugrep: invalid option ->|reject    rg: unrecognized flag --- FAIL|x
+    ("dash_value", re.compile(r"^(?:ugrep|ug|rg)(?:\.exe)?: (?:invalid option|unrecognized flag) (-[^\n]*[^\w=.,\-\n][^\n]*)", re.M), 1, None),
+    # GNU/BSD getopt name only the first bad character:  grep: invalid option -- '>'
+    ("dash_value", re.compile(r"(?:invalid|illegal) option -- ['‘`]?([^\w\n'’`\-])['’`]?"), 1, None),
+    ("dash_value", re.compile(r"(?:invalid|unknown|unrecognized) (?:option|flag)[: ]+['‘`]?(-[^\s'’`]*[^\w\s'’`=.,\-][^\s'’`]*)"), 1, None),
     # clap: error: unexpected argument '--limt' found ... tip: a similar argument exists: '--limit'
     ("flag", re.compile(r"unexpected argument '(-[^']+)' found(?:.*?\n)*?.*?tip: (?:a similar argument exists|to pass '[^']*' as a value)[^']*'(-[^'=]+)", re.I), 1, 2),
     ("flag", re.compile(r"unexpected argument '(-[^'=]+)[^']*' found", re.I), 1, None),
@@ -127,10 +131,10 @@ def classify(text: str) -> list[Rejection]:
 
     for kind, rx, tg, hg in FLAG_PATTERNS:
         for m in rx.finditer(t):
-            tok = _q(m.group(tg))
+            tok = m.group(tg).rstrip("\r") if kind == "dash_value" else _q(m.group(tg))
             if kind == "flag" and not tok.startswith("-"):
                 tok = ("--" if len(tok) > 1 else "-") + tok   # git prints without dashes
-            if kind in ("short", "missing_arg", "numeric") and not tok.startswith("-"):
+            if kind in ("short", "missing_arg", "numeric", "dash_value") and not tok.startswith("-"):
                 tok = "-" + tok
             if kind == "numeric":
                 hint = "-n " + tok[1:]
@@ -138,7 +142,11 @@ def classify(text: str) -> list[Rejection]:
                 hint = _q(m.group(hg)) if hg and m.group(hg) else None
             if any(r.token == tok for r in out):
                 continue
-            add(Rejection("flag" if kind in ("short", "numeric") else kind, tok, prog_before(m.start()), hint))
+            if kind == "dash_value" and any(r.kind == "dash_value" and (r.token.startswith(tok) or tok.startswith(r.token))
+                                            for r in out):
+                continue      # the same word, echoed whole by one pattern and cut short by another
+            add(Rejection("flag" if kind in ("short", "numeric") else kind, tok,
+                          prog_before(m.start()) or prog_before(m.start(tg)), hint))
     for rx, tg, hg in SUBCMD_PATTERNS:
         for m in rx.finditer(t):
             hint = _q(m.group(hg)) if hg and m.lastindex and m.lastindex >= hg and m.group(hg) else None
