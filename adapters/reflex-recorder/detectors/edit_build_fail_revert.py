@@ -62,6 +62,7 @@ import re
 import sqlite3
 from typing import Optional
 
+from detectors import verify_fields
 from detectors.base import BaseDetector, PatternCandidate
 
 
@@ -467,9 +468,9 @@ def _find_thrash_cycles(events: list[dict]) -> list[dict]:
                 continue
             jts = _parse_summary(jev["tool_summary"])
             cmd = jts.get("command", "") or ""
-            if _is_build_command(cmd):
+            if verify_fields.is_verify_class(jts) or _is_build_command(verify_fields.verify_text(jts) or cmd):
                 build_idx = j
-                build_cmd = cmd
+                build_cmd = jts.get("verify_cmd") or cmd
                 break
 
         if build_idx is None:
@@ -485,7 +486,7 @@ def _find_thrash_cycles(events: list[dict]) -> list[dict]:
         brs = _parse_summary(build_ev["tool_response_summary"])
         stdout = brs.get("stdout", "") or ""
         stderr = brs.get("stderr", "") or ""
-        if _has_fail_output(stdout, stderr):
+        if verify_fields.outcome(brs) == "fail" or _has_fail_output(stdout, stderr):
             fail_idx = build_idx
             cmd_not_found = _is_command_not_found(stdout, stderr)
 
@@ -500,7 +501,8 @@ def _find_thrash_cycles(events: list[dict]) -> list[dict]:
                     jcmd = jts.get("command", "") or ""
                     jstdout = jrs.get("stdout", "") or ""
                     jstderr = jrs.get("stderr", "") or ""
-                    if _has_fail_output(jstdout, jstderr):
+                    if (verify_fields.is_verify_class(jts) and verify_fields.outcome(jrs) == "fail") \
+                            or _has_fail_output(jstdout, jstderr):
                         fail_idx = j
                         cmd_not_found = _is_command_not_found(jstdout, jstderr)
                         break

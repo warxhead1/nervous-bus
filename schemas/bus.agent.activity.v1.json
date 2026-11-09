@@ -43,7 +43,7 @@
     },
     "tool_summary": {
       "type": "string",
-      "description": "Truncated one-line summary of the tool call: a JSON object with 'command', 'file_path', 'description', or similar key describing what was invoked. Null on tool_return and error events."
+      "description": "Bounded summary of the tool call, as a JSON object string: 'command' (Bash verbs only, no arguments), 'file_path', 'description', or similar. Bash adds 'verify_class' (test|build|typecheck|lint) and 'verify_cmd' (canonical phrase, e.g. 'cargo test') when the command is a verification; Skill carries 'skill'. Null on tool_return and error events."
     },
     "cwd": {
       "type": "string",
@@ -108,12 +108,17 @@
     },
     "tool_is_error": {
       "type": "boolean",
-      "description": "Whether the tool call resulted in an error, from the hook stdin (Claude Code ~2.1+). Feeds run.closed features.tool_error_rate without transcript mining."
+      "description": "Whether the tool call failed. Set on PostToolUseFailure events (claude-hook-fast#54); PostToolUse fires only on success. Feeds run.closed features.tool_error_rate without transcript mining."
     },
     "tool_error_type": {
       "type": "string",
       "maxLength": 64,
-      "description": "Short label for the error class (e.g. 'exit_code'), parsed from tool_response. Present only when tool_is_error is true."
+      "description": "Short label for the error class: 'exit' (Bash non-zero exit), 'interrupt', or 'error'. Present only when tool_is_error is true. The error text is never published."
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Tool run time in milliseconds, from the hook stdin. Present on failed calls (PostToolUseFailure)."
     },
     "resources": {
       "type": "array",
