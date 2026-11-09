@@ -2,14 +2,28 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import token_ledger as tl  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fixture_roots(monkeypatch):
+    # the fixtures use literal /home/eric/... cwds; pin the roots so they resolve anywhere
+    from project import cache_clear
+    monkeypatch.setenv("NBUS_PROJECT_ROOTS", os.pathsep.join(
+        f"/home/eric/{p}" for p in ("projects", "data2/worktrees", "data2/orca")))
+    cache_clear()
+    yield
+    cache_clear()
 
 
 def _asst(mid, ts, usage, content):
@@ -103,6 +117,43 @@ class TestLedger(unittest.TestCase):
         self.assertEqual(tl.classify_command("go build ./..."), "build")
         self.assertEqual(tl.classify_command("ls"), "other")
         self.assertEqual(tl.project_of("/home/eric/projects/hearth/src"), "hearth")
+
+    def test_project_of_is_the_repo_not_the_lane_or_a_basename(self):
+        self.assertEqual(tl.project_of("/home/eric/projects/tengine/.claude/worktrees/agent-a3f67d389e54ce3f8"),
+                         "tengine")
+        self.assertEqual(tl.project_of("/home/eric/data2/worktrees/kb/wf_3998f149-2b7-2"), "kb")
+        self.assertEqual(tl.project_of("/home/eric/projects/kb.worktrees/feature-x"), "kb")
+        self.assertIsNone(tl.project_of("/work"))
+        self.assertIsNone(tl.project_of(""))
+        self.assertIsNone(tl.project_of(None))
+
+
+def test_subagent_in_a_lane_named_worktree_takes_the_repo_it_was_launched_from(tmp_path, monkeypatch):
+    import re
+    from project import cache_clear
+    home = tmp_path / "home"
+    for sub in ("projects", "data2/worktrees", "data2/orca/biz-worthy"):
+        (home / sub).mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("NBUS_PROJECT_ROOTS", os.pathsep.join(
+        str(home / p) for p in ("projects", "data2/worktrees", "data2/orca")))
+    cache_clear()
+    launch = re.sub(r"[^A-Za-z0-9]", "-", str(home / "data2/orca/biz-worthy/edge-and-analysis"))
+    root = tmp_path / "root"
+    sub = root / launch / "s1" / "subagents" / "agent-a.jsonl"
+    sub.parent.mkdir(parents=True)
+    cwd = str(home / "data2/worktrees/edge-and-analysis/agent-a0c9920357f5a3a62")
+    sub.write_text(json.dumps({"type": "assistant", "timestamp": "2026-10-01T00:00:05Z", "sessionId": "s1",
+                               "cwd": cwd, "message": {"id": "m9", "model": "m", "usage": _usage(cc=50),
+                                                       "content": []}}) + "\n")
+    main = root / launch / "s1.jsonl"
+    main.write_text(json.dumps({"type": "assistant", "timestamp": "2026-10-01T00:00:01Z", "sessionId": "s1",
+                                "cwd": str(home / "data2/orca/biz-worthy/edge-and-analysis"),
+                                "message": {"id": "m1", "model": "m", "usage": _usage(cc=10), "content": []}}) + "\n")
+    db = tmp_path / "tokens.db"
+    tl.run(db, (("claude", root),))
+    got = dict(sqlite3.connect(db).execute("SELECT is_subagent, project FROM sessions").fetchall())
+    assert got == {0: "biz-worthy", 1: "biz-worthy"}
 
 
 if __name__ == "__main__":

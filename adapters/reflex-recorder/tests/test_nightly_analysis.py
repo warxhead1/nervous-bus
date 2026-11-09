@@ -249,3 +249,143 @@ class TestCorrectionAndBypassSections:
                                struggle_window_days=14, step_timeout=300)
         assert "- no user corrections in window" in text
         assert "- no skill bypasses in window" in text
+
+
+# ---------------------------------------------------------------------------
+# Classifier / suspect-calibration handling in the digest
+# ---------------------------------------------------------------------------
+
+def _ok_step():
+    return na.StepResult("x", True, "ok", 1.0, "", "")
+
+
+def _digest(monkeypatch, tmp_path, fake_run_json):
+    db_path = tmp_path / "runs.db"
+    _make_empty_db(db_path)
+    monkeypatch.setattr(na, "_run_json", fake_run_json)
+    return na.build_digest(db_path, _ok_step(), _ok_step(), window_days=7,
+                           struggle_window_days=14, step_timeout=300)
+
+
+def _section(text, heading):
+    """Body of the '## heading' section (up to the next '## ' heading)."""
+    start = text.index(heading)
+    rest = text[start + len(heading):]
+    nxt = rest.find("\n## ")
+    return rest if nxt == -1 else rest[:nxt]
+
+
+class TestPrevalenceSection:
+    def test_suspect_rows_are_listed_apart_and_never_ranked(self, monkeypatch, tmp_path):
+        rows = [
+            {"project": "calm", "detector": "worktree_leak", "hit_runs": 3, "total_runs": 40,
+             "rate": 0.075, "suspect_calibration": False},
+            {"project": "hot", "detector": "noisy_detector", "hit_runs": 90, "total_runs": 100,
+             "rate": 0.9, "suspect_calibration": True},
+        ]
+
+        def fake(name, cmd, timeout):
+            return rows if "query.py prevalence" in name else []
+
+        text = _digest(monkeypatch, tmp_path, fake)
+        section = _section(text, "## Top detector prevalence (7d)")
+        ranked, _, suspect = section.partition("### Suspect calibration (not ranked)")
+        assert "| calm | worktree_leak |" in ranked
+        assert "noisy_detector" not in ranked
+        assert "| hot | noisy_detector |" in suspect
+
+    def test_no_suspect_heading_when_nothing_is_suspect(self, monkeypatch, tmp_path):
+        rows = [{"project": "calm", "detector": "worktree_leak", "hit_runs": 3, "total_runs": 40,
+                 "rate": 0.075, "suspect_calibration": False}]
+        text = _digest(monkeypatch, tmp_path,
+                       lambda name, cmd, timeout: rows if "query.py prevalence" in name else [])
+        assert "Suspect calibration" not in text
+
+
+class TestTaxonomySection:
+    def _classifications(self):
+        return [
+            {"project": "p1", "detector": "failure_taxonomy", "label": "planning_failure",
+             "classified": True, "runs": 4, "total_runs": 30},
+            {"project": "p2", "detector": "failure_taxonomy", "label": "context_failure",
+             "classified": True, "runs": 2, "total_runs": 9},
+            {"project": "p1", "detector": "failure_taxonomy", "label": "unclassified",
+             "classified": False, "runs": 25, "total_runs": 30},
+            {"project": "p1", "detector": "failure_taxonomy",
+             "label": "planning_failure_unconfirmed_cadence",
+             "classified": False, "runs": 3, "total_runs": 30},
+        ]
+
+    def test_unclassified_is_not_summed_into_the_failure_buckets(self, monkeypatch, tmp_path):
+        rows = self._classifications()
+        text = _digest(monkeypatch, tmp_path,
+                       lambda name, cmd, timeout: rows if "query.py classifications" in name else [])
+        section = _section(text, "## Failure taxonomy (7d)")
+        totals, _, others = section.partition("### Not classified as failures")
+        assert "- planning_failure: 4 run(s)" in totals
+        assert "- context_failure: 2 run(s)" in totals
+        assert "unclassified" not in totals
+        assert "- unclassified: 25 run(s)" in others
+        assert "- planning_failure_unconfirmed_cadence: 3 run(s)" in others
+        by_project = others.partition("### By project")[2]
+        assert "| p1 | planning_failure | 4 |" in by_project
+        assert "unclassified" not in by_project
+
+    def test_empty_classifications_render_the_empty_line(self, monkeypatch, tmp_path):
+        text = _digest(monkeypatch, tmp_path, lambda name, cmd, timeout: [])
+        assert "- no failure-taxonomy hits in window (or query unavailable)" in text
+
+
+class TestDigestWindowFollowsRunEnd:
+    """The digest's detector_hits queries window on the run's end, not on the
+    hit's recording time (a late synthesis pass records old runs' hits 'now')."""
+
+    def _db(self, tmp_path):
+        import sqlite3
+        from datetime import datetime, timedelta, timezone
+        from detectors.base import ensure_detector_schema
+
+        fmt = "%Y-%m-%dT%H:%M:%SZ"
+        now = datetime.now(timezone.utc)
+        old = (now - timedelta(days=40)).strftime(fmt)
+        recent = (now - timedelta(hours=2)).strftime(fmt)
+        db_path = tmp_path / "runs.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript(
+            """
+            CREATE TABLE runs (
+                run_id TEXT PRIMARY KEY, run_key TEXT, project TEXT, agent_kind TEXT,
+                session_id TEXT, started TEXT, ended TEXT, close_reason TEXT,
+                tool_histogram TEXT DEFAULT '{}', outcome TEXT, labeled_at TEXT,
+                event_count INTEGER DEFAULT 0, label_history TEXT DEFAULT '[]'
+            );
+            """
+        )
+        ensure_detector_schema(conn)
+        for rid, ended in (("old-run", old), ("new-run", recent)):
+            conn.execute(
+                "INSERT INTO runs (run_id, run_key, project, agent_kind, session_id, started, ended, "
+                "close_reason) VALUES (?,?,?,?,?,?,?,'idle_timeout')",
+                (rid, rid, "proj", "host_claude_code", "s", ended, ended),
+            )
+            # Both hits were RECORDED just now.
+            conn.execute(
+                "INSERT INTO detector_hits (run_id, detector, signature, project, ts) "
+                "VALUES (?, 'user_correction', 'proj:user_correction:sudo', 'proj', ?)",
+                (rid, recent),
+            )
+        conn.commit()
+        conn.close()
+        return db_path
+
+    def test_late_recorded_hit_for_an_old_run_is_not_counted(self, monkeypatch, tmp_path):
+        db_path = self._db(tmp_path)
+        real = na._run_json
+
+        def only_query_py(name, cmd, timeout):
+            return real(name, cmd, timeout) if "query.py" in name else []
+
+        monkeypatch.setattr(na, "_run_json", only_query_py)
+        text = na.build_digest(db_path, _ok_step(), _ok_step(), window_days=7,
+                               struggle_window_days=14, step_timeout=120)
+        assert "- sudo: 1 run(s)" in text  # new-run only; old-run ended 40d ago

@@ -40,6 +40,29 @@ Binary identity is `(device, inode, mtime, size)`; an upgrade or rebuild
 resets what was learned for it. When a binary's `--help` lists the
 replacement, it must exist there and the bad token must not.
 
+## Values that start with `-`
+
+`... 2>&1 | grep -E '->|rejected'` fails: getopt reads `->|rejected` as an option. No two
+patterns repeat, so this is a rule, not a learned token. Once **this build of the binary** has
+printed such a rejection (ugrep and rg echo the word; GNU/BSD getopt name its first character),
+argshape learns its `--help` (the success hook reads the rejection from the output too, so
+`grep ... | head`, which exits 0, still teaches it) and, in `correct` mode, inserts:
+
+- `-e` before the pattern, for `grep egrep fgrep ugrep ug rg`, when no `-e/-f` is given and the word is the first operand;
+- `--` before the word otherwise, only when it is the first operand, nothing option-like or `$`-dynamic follows, and the tool has no subcommands (`printf '%s\n' '- x'` has a valid second operand, and a parser that stops at its first operand would print the `--`).
+
+The word must be an operand by the learned spec: not a listed option, not the value of the option
+before it, and no value-taking option among its first characters (`-e->x`, `-A3`, `-d' '` are valid
+and left alone). Anything it cannot place (unknown option before it, two such words, a `--` already
+present) is left alone. A word led by one of `% @ + # ^ ~` (short options in ugrep `-% -%% -@ -+ -^`, rsync `-@`, zstd `-#`)
+that the spec does not list is left alone too, whatever its other characters. `--help` text is parsed
+for them, but a spec learned before that, or help that names one somewhere the parser does not read,
+must not turn a real option into an operand.
+`# argshape:off` after a rewrite switches the rule off for that build
+(`argshape demote <bin> dash_value` / `promote`; `grep` and `ugrep` both reach Claude Code's grep, because
+the rejection is stored under `grep` but keyed on ugrep's file). The bus schema has no kind for it yet, so
+these corrections are applied and recorded locally but not published.
+
 ## Tiers and turning it off
 
 ```
@@ -110,6 +133,13 @@ that visibly use an arg parser. Never from a deny-list (`rm`, `dd`, `mkfs`,
 `python3 backtest.py --days 14 --state <scratch dir> [--agent claude]` replays shell calls from
 every agent `adapters/transcripts` can read (sub-agent sessions included) into a scratch state dir.
 Result (2026-10-31): 101,236 Claude Code, 163 Codex and 3 opencode calls; 65 rewrites, all multi-file
-`tail -N` → `tail -n N`, each of which would have failed; 3 SQL column advisories; no false positives
-and no exceptions. `plan()` averages 1.5 ms. Live, the SQL catalog path does the most useful work.
+`tail -N` → `tail -n N` (judged by review: each would have failed); 3 SQL column advisories; no exceptions.
+`plan()` averages 1.5 ms. Live, the SQL catalog path does the most useful work.
 Real flag misuse is rare; most recorded failures are harness ones (see `argshape status`).
+
+Only the dash-value rule is scored against what each call really did: `prevented` (the original failed with
+that rejection), `false` (the original had succeeded), `unclear` (it failed for another reason). The summary
+line `dash_value: failures=.. rewrites=.. prevented=.. false=.. unclear=..` carries the counts. A replay
+can prevent at most one fewer failure than it sees per binary build, since the first one teaches the rule;
+`--seed-dash-value NAME[=ALIAS],...` opens the rule for binaries that never failed, to bound false rewrites.
+`--strict-window` drops calls older than `--days` (a session file touched since still counts otherwise).

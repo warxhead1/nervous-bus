@@ -116,6 +116,23 @@ def now() -> float:
     return time.time()
 
 
+ERR_LOG_MAX = 256 * 1024
+
+
+def log_error() -> None:
+    """Append the current exception to errors.log (rotated at 256 KB). Never raises."""
+    import traceback   # lazy: ~18 ms of import on the hot path otherwise
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        p = os.path.join(STATE_DIR, "errors.log")
+        if os.path.exists(p) and os.path.getsize(p) > ERR_LOG_MAX:
+            os.replace(p, p + ".1")
+        with open(p, "a") as f:
+            f.write(time.strftime("%Y-%m-%dT%H:%M:%SZ ", time.gmtime()) + traceback.format_exc() + "\n")
+    except OSError:
+        pass
+
+
 def upsert_count(db, table: str, keys: dict, extra: dict | None = None) -> None:
     t = now()
     cols = {**keys, **(extra or {})}

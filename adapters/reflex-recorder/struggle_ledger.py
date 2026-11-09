@@ -40,6 +40,13 @@ from typing import Iterable, Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from adapter_api import StruggleClass, struggle_classes_for, load_adapters  # noqa: E402
 
+# the one cwd -> project resolver lives with the transcript readers; append so the
+# sibling modules of this directory keep precedence over its top-level names
+_TRANSCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "transcripts")
+if _TRANSCRIPTS not in sys.path:
+    sys.path.append(_TRANSCRIPTS)
+from project import project_of as _resolve_project, project_of_dirname  # noqa: E402
+
 DEFAULT_SRC = os.path.expanduser("~/.cache/nervous-bus/reflex/transcripts")
 FALLBACK_SRC = os.path.expanduser("~/.claude/projects")
 MMX_MIRROR = os.path.join(DEFAULT_SRC, "mmx")
@@ -108,13 +115,11 @@ class StruggleRecord:
 
 # ── scan ──────────────────────────────────────────────────────────────────────
 
-def _project_of(cwd: str) -> str:
-    m = re.search(r"/projects/([^/]+)", cwd or "")
-    if not m:
-        return "(unknown)"
-    # collapse a worktree-suffixed clone dir (hearth-loom-main) to its repo stem only
-    # when the segment itself is the project; keep as-is otherwise.
-    return m.group(1)
+def _project_of(cwd: str, fallback: Optional[str] = None) -> str:
+    """Project for a record's cwd via the shared resolver. ``fallback`` is the project
+    decoded from the transcript file's directory name, for records that carry no usable
+    cwd; '(unknown)' only when neither can tell."""
+    return _resolve_project(cwd) or fallback or "(unknown)"
 
 
 def _blobs(rec: dict):
@@ -406,6 +411,8 @@ def scan(src: str, adapters=None, days_limit: Optional[int] = None,
     gem_names = _gemini_project_names() if "gemini" in sources else {}
     for f in _candidate_files(list(tagged), days_limit):
         source = tagged[f]
+        dir_project = (project_of_dirname(os.path.basename(os.path.dirname(f)))
+                       if source in ("claude", "mmx") else None)
         try:
             for raw, rec, ctx, blob_fn in _units(f, source, gem_names):
                 m = _TS_RE.search(raw)
@@ -425,7 +432,7 @@ def scan(src: str, adapters=None, days_limit: Optional[int] = None,
                 if not day:
                     continue
                 if ctx is None:
-                    project = _project_of(rec.get("cwd", ""))
+                    project = _project_of(rec.get("cwd", ""), dir_project)
                     session = (rec.get("sessionId", "") or "")[:12]
                 else:
                     project, session = ctx
