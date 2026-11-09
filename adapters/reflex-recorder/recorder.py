@@ -8,7 +8,7 @@ model, persists to SQLite, and emits bus.agent.run.closed.v1 via
 
 Usage:
     python recorder.py                  # run continuously
-    python recorder.py --once           # drain pending + new entries, then exit
+    python recorder.py --once           # reclaim stranded + drain new entries, then exit
     python recorder.py --config foo.toml
     python recorder.py --replay /path/to/debug.jsonl   # offline fixture mode
 
@@ -939,7 +939,9 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                         help=f"Path to config TOML (default: {DEFAULT_CONFIG})")
     parser.add_argument("--once", action="store_true",
-                        help="Drain current PEL+stream entries and exit")
+                        help="Reclaim stranded pending entries (idle > reclaim_min_idle_s), "
+                             "drain new stream entries without blocking, then exit "
+                             "(exit 1 if the drain aborted on an error)")
     parser.add_argument("--replay", type=Path, default=None,
                         help="Offline replay mode: read activity events from debug.jsonl file")
     parser.add_argument("--db-path", type=Path, default=None,
