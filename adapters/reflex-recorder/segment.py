@@ -129,11 +129,35 @@ def reconstruct_worktree_path(activity: dict, slug: str) -> Optional[str]:
 
 # ── Run key computation ───────────────────────────────────────────────────────
 
+def is_subagent_dispatch_end(activity: dict) -> bool:
+    """True for the terminal `ended` published when a dispatched subagent returns.
+
+    The publisher strips ``worktree``/``cwd`` from it and stamps the PARENT
+    session's ids into ``conversation_id``/``session_id``/``agent_id``, so
+    the event is addressed by its ``subagent_id``/``assignment_id`` and carries
+    no path context of its own.
+    """
+    return (
+        activity.get("event") == "ended"
+        and activity.get("agent_kind") == "host_subagent"
+        and extract_worktree_slug(activity) is None
+    )
+
+
 def compute_run_key(activity: dict) -> Tuple[str, str, Optional[str]]:
     """Return (run_key, run_key_kind, worktree_slug).
 
     run_key_kind is 'session' or 'worktree'.
     worktree_slug is the raw slug string (or None for session runs).
+
+    A subagent dispatch terminal (see `is_subagent_dispatch_end`) would key on
+    the bare parent conversation id: it would mint a one-event run when none is
+    open and, worse, close the PARENT session's own run when one is. A
+    dispatched subagent working in an isolated worktree is keyed
+    ``<conversation>#agent-<subagent_id>`` (the worktree is named after the
+    subagent), so that is the run its terminal belongs to. With no
+    ``subagent_id`` the terminal cannot be addressed to any run: it returns an
+    empty key, which `Segmenter.route` and the recorder treat as unsegmentable.
     """
     slug = extract_worktree_slug(activity)
     conv_id = activity.get("conversation_id") or activity.get("session_id", "")
@@ -141,8 +165,13 @@ def compute_run_key(activity: dict) -> Tuple[str, str, Optional[str]]:
     if slug:
         run_key = f"{conv_id}#{slug}"
         return run_key, "worktree", slug
-    else:
-        return conv_id, "session", None
+    if is_subagent_dispatch_end(activity):
+        sub = activity.get("subagent_id")
+        if conv_id and isinstance(sub, str) and sub.strip():
+            slug = f"agent-{sub.strip()}"
+            return f"{conv_id}#{slug}", "worktree", slug
+        return "", "session", None
+    return conv_id, "session", None
 
 
 # ── In-memory run state ───────────────────────────────────────────────────────
@@ -251,9 +280,9 @@ class Segmenter:
     """In-memory run segmenter.
 
     Maintains open runs keyed by run_key.  On each activity event:
-    - Open a new run if none exists for this run_key.
+    - Open a new run if none exists for this run_key (an `ended` never does).
     - Fold the event into the existing open run.
-    - If the event is `ended`, close the run.
+    - If the event is `ended`, close the run; with no open run it is absorbed.
     - On tick(), close any runs that have been idle longer than idle_timeout_s.
     - On shutdown(), close all open runs with close_reason=recorder_shutdown.
 
@@ -271,14 +300,46 @@ class Segmenter:
         # Map run_key → most-recently-closed run_id (for continues_run_id)
         self._last_closed_id: Dict[str, str] = {}
 
-    def ingest(self, activity: dict, now: Optional[float] = None) -> None:
-        """Ingest one bus.agent.activity.v1 data payload."""
+    def route(self, activity: dict, live: Optional[Dict[str, bool]] = None) -> Optional[str]:
+        """The run_key `activity` will fold into, or None if it is absorbed.
+
+        An `ended` event closes a run; it never opens one. With no run open
+        under its key it is a terminal for something already closed (an idle
+        timeout got there first) or never seen, and a run holding only that
+        event is a phantom with no tool calls. It is absorbed instead.
+
+        `live` lets a caller plan a whole batch BEFORE folding any of it (the
+        recorder journals first, folds second): it maps run_key -> open?, shadows
+        `self._open`, and is updated here exactly as folding would update the
+        open set, so planning and folding cannot disagree. Pass None to ask
+        about the current state without recording anything.
+        """
+        run_key, _kind, _slug = compute_run_key(activity)
+        if not run_key:
+            return None
+        if activity.get("event") != "ended":
+            if live is not None:
+                live[run_key] = True
+            return run_key
+        is_open = live[run_key] if live is not None and run_key in live else run_key in self._open
+        if not is_open:
+            return None
+        if live is not None:
+            live[run_key] = False
+        return run_key
+
+    def ingest(self, activity: dict, now: Optional[float] = None) -> bool:
+        """Ingest one bus.agent.activity.v1 data payload.
+
+        Returns True when the event was folded into a run, False when it was
+        absorbed (no run key, or an `ended` with no open run to close).
+        """
         if now is None:
             now = time.time()
 
+        if self.route(activity) is None:
+            return False
         run_key, run_key_kind, slug = compute_run_key(activity)
-        if not run_key:
-            return  # can't segment without a run key
 
         event_ts = _ts_to_str(activity.get("ts") or activity.get("time") or "")
 
@@ -308,6 +369,7 @@ class Segmenter:
 
         if activity.get("event") == "ended":
             self._close_run(run_key, ended=event_ts or _now_utc(now), reason="ended")
+        return True
 
     def tick(self, now: Optional[float] = None) -> None:
         """Check for idle runs and close them. Call periodically."""

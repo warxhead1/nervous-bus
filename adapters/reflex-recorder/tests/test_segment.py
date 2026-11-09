@@ -358,12 +358,14 @@ class TestClosedPayloadSchema(unittest.TestCase):
     def test_schema_version_is_1(self):
         closed = []
         seg = Segmenter(idle_timeout_s=900.0, on_run_closed=closed.append)
+        seg.ingest(_activity(event="tool_call"))
         seg.ingest(_activity(event="ended"))
         self.assertEqual(closed[0]["schema_version"], "1")
 
     def test_outcome_and_labeled_at_null_at_close(self):
         closed = []
         seg = Segmenter(idle_timeout_s=900.0, on_run_closed=closed.append)
+        seg.ingest(_activity(event="tool_call"))
         seg.ingest(_activity(event="ended"))
         self.assertIsNone(closed[0]["outcome"])
         self.assertIsNone(closed[0]["labeled_at"])
@@ -430,3 +432,152 @@ if __name__ == "__main__":
 
 def test_arbitrary_matching_directory_is_not_worktree_evidence():
     assert reconstruct_worktree_path({"cwd": "/tmp/shared/source"}, "shared") is None
+
+
+# ── `ended` closes a run, it never opens one ─────────────────────────────────
+
+PARENT = "parent-session-ulid"
+
+
+def _sub_call(sub="a1b2c3d4e5f60718", parent=PARENT, ts="2026-11-06T12:00:00Z",
+              worktree=None, tool_name="Bash"):
+    """A tool_call from a dispatched subagent in its own isolated worktree.
+
+    Shape taken from live host_subagent traffic: every id field holds the
+    PARENT session's id, and the worktree is named after the subagent.
+    """
+    slug = worktree or f"agent-{sub}"
+    return {
+        "agent_kind": "host_subagent", "event": "tool_call", "tool_name": tool_name,
+        "conversation_id": parent, "session_id": parent, "agent_id": parent,
+        "project": "myproject", "ts": ts,
+        "cwd": f"/home/eric/data2/worktrees/myproject/{slug}",
+        "worktree": slug, "subagent_id": sub,
+        "assignment_id": "toolu_dispatch1", "parent_tool_use_id": "toolu_dispatch1",
+    }
+
+
+def _sub_end(sub="a1b2c3d4e5f60718", parent=PARENT, ts="2026-11-06T12:05:00Z", **over):
+    """The terminal `ended` for that dispatch: no worktree, no cwd."""
+    a = {
+        "agent_kind": "host_subagent", "event": "ended", "status": "completed",
+        "conversation_id": parent, "session_id": parent, "agent_id": parent,
+        "project": "myproject", "ts": ts, "subagent_id": sub,
+        "assignment_id": "toolu_dispatch1", "parent_tool_use_id": "toolu_dispatch1",
+    }
+    a.update(over)
+    return a
+
+
+class TestSubagentDispatchEnd(unittest.TestCase):
+    def setUp(self):
+        self.closed = []
+        self.seg = Segmenter(idle_timeout_s=900.0, on_run_closed=self.closed.append)
+
+    def test_end_is_keyed_like_the_subagents_own_tool_calls(self):
+        self.assertEqual(compute_run_key(_sub_end())[0], compute_run_key(_sub_call())[0])
+
+    def test_end_closes_the_subagents_run_and_mints_no_other(self):
+        self.seg.ingest(_sub_call(ts="2026-11-06T12:00:00Z"))
+        self.seg.ingest(_sub_call(ts="2026-11-06T12:00:01Z"))
+        self.seg.ingest(_sub_end())
+        self.assertEqual(len(self.closed), 1)
+        run = self.closed[0]
+        self.assertEqual(run["close_reason"], "ended")
+        self.assertEqual(run["run_key_kind"], "worktree")
+        self.assertEqual(run["event_count"], 3)
+        self.assertEqual(run["tool_histogram"], {"Bash": 2})
+        self.assertEqual(run["ended"], "2026-11-06T12:05:00Z")
+        self.assertEqual(self.seg.open_run_count, 0)
+
+    def test_end_does_not_close_the_parent_session_run(self):
+        parent_call = _activity(conversation_id=PARENT, session_id=PARENT, agent_id=PARENT,
+                                event="tool_call")
+        self.seg.ingest(parent_call)
+        self.seg.ingest(_sub_call())
+        self.seg.ingest(_sub_end())
+        self.assertEqual([r["run_key_kind"] for r in self.closed], ["worktree"])
+        self.assertEqual(self.seg.open_run_count, 1)
+        self.seg.ingest({**parent_call, "ts": "2026-11-06T12:06:00Z"})
+        self.seg.shutdown()
+        parent_runs = [r for r in self.closed if r["run_key"] == PARENT]
+        self.assertEqual(len(parent_runs), 1)
+        self.assertEqual(parent_runs[0]["event_count"], 2)
+        self.assertIsNone(parent_runs[0]["continues_run_id"])
+
+    def test_end_with_no_open_run_mints_nothing(self):
+        self.assertFalse(self.seg.ingest(_sub_end()))
+        self.assertEqual(self.closed, [])
+        self.assertEqual(self.seg.open_run_count, 0)
+
+    def test_end_after_the_run_idle_closed_mints_nothing(self):
+        t0 = time.time()
+        self.seg.ingest(_sub_call(), now=t0)
+        self.seg.tick(now=t0 + 901.0)
+        self.assertEqual([r["close_reason"] for r in self.closed], ["idle_timeout"])
+        self.seg.ingest(_sub_end(), now=t0 + 5000.0)
+        self.assertEqual(len(self.closed), 1)
+        self.assertEqual(self.seg.open_run_count, 0)
+
+    def test_end_without_subagent_id_cannot_touch_the_parent_run(self):
+        parent_call = _activity(conversation_id=PARENT, session_id=PARENT, agent_id=PARENT,
+                                event="tool_call")
+        self.seg.ingest(parent_call)
+        end = _sub_end()
+        del end["subagent_id"]
+        self.assertFalse(self.seg.ingest(end))
+        self.assertEqual(self.closed, [])
+        self.assertEqual(self.seg.open_run_count, 1)
+
+    def test_subagent_sharing_a_named_worktree_does_not_close_that_run(self):
+        # Not isolated: the worktree carries the parent's name, so there is no
+        # run named after the subagent for its terminal to close.
+        self.seg.ingest(_sub_call(worktree="option-edge"))
+        self.assertFalse(self.seg.ingest(_sub_end()))
+        self.assertEqual(self.closed, [])
+        self.assertEqual(self.seg.open_run_count, 1)
+
+    def test_events_after_the_end_reopen_a_continuation(self):
+        self.seg.ingest(_sub_call())
+        self.seg.ingest(_sub_end())
+        self.seg.ingest(_sub_call(ts="2026-11-06T12:10:00Z"))
+        self.seg.shutdown()
+        self.assertEqual(len(self.closed), 2)
+        self.assertEqual(self.closed[1]["continues_run_id"], self.closed[0]["run_id"])
+
+
+class TestEndedNeverOpensARun(unittest.TestCase):
+    def setUp(self):
+        self.closed = []
+        self.seg = Segmenter(idle_timeout_s=900.0, on_run_closed=self.closed.append)
+
+    def test_lone_ended_is_absorbed_for_every_agent_kind(self):
+        for kind in ("codex-cli", "deerflow", "claude-code-minimax", "antigravity-cli",
+                     "host_claude_code"):
+            with self.subTest(kind=kind):
+                self.assertFalse(self.seg.ingest(
+                    _activity(conversation_id=f"c-{kind}", event="ended", agent_kind=kind)))
+        self.assertEqual(self.closed, [])
+        self.assertEqual(self.seg.open_run_count, 0)
+
+    def test_ended_still_closes_an_open_run(self):
+        self.assertTrue(self.seg.ingest(_activity(event="tool_call")))
+        self.assertTrue(self.seg.ingest(_activity(event="ended")))
+        self.assertEqual([r["close_reason"] for r in self.closed], ["ended"])
+
+    def test_second_ended_after_close_is_absorbed(self):
+        self.seg.ingest(_activity(event="tool_call"))
+        self.seg.ingest(_activity(event="ended"))
+        self.assertFalse(self.seg.ingest(_activity(event="ended")))
+        self.assertEqual(len(self.closed), 1)
+
+    def test_route_plans_a_batch_the_way_folding_will_play_it(self):
+        live = {}
+        call, end1, end2 = _sub_call(), _sub_end(), _sub_end()
+        key = compute_run_key(call)[0]
+        self.assertEqual(self.seg.route(call, live), key)
+        self.assertEqual(self.seg.route(end1, live), key)
+        self.assertIsNone(self.seg.route(end2, live))
+        # planning mutated only the overlay, never the segmenter
+        self.assertEqual(self.seg.open_run_count, 0)
+        self.assertIsNone(self.seg.route(end1))
