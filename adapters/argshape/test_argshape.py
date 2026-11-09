@@ -594,13 +594,14 @@ class EndToEnd(unittest.TestCase):
 
     def test_dash_value_other_getopt_tool_gets_double_dash(self):
         self.install("lister")
-        _, _, rc, post = self.execute("lister a '-> x'")
+        _, _, rc, post = self.execute("lister '-> x'")
         self.assertNotEqual(rc, 0)
         self.assertIn("--", post["additionalContext"])
-        pre, ran, rc, _ = self.execute("lister b '-> y'")
-        self.assertEqual(ran, "lister b -- '-> y'")
+        pre, ran, rc, _ = self.execute("lister -i '-> y'")
+        self.assertEqual(ran, "lister -i -- '-> y'")
         self.assertEqual(rc, 0)
         self.untouched(
+            "lister b '-> y'",                 # not the first operand: some parsers would print the `--`
             "lister '-> y' -i",                # an option follows: `--` would turn it into an operand
             "lister '-> y' $MORE",             # so might this
             "lister -- '-> y'",                # already past the options
@@ -612,11 +613,25 @@ class EndToEnd(unittest.TestCase):
             "lister '-> y' '-> z'",            # two candidates: ambiguous
         )
 
+    def test_dash_value_is_learned_from_a_rejection_a_pipe_hid(self):
+        self.install("ugrep")
+        _, _, rc, post = self.execute("printf x | ugrep -E '->|zzz' | head -1")
+        self.assertEqual(rc, 0)                       # head ended the call at exit 0: the success hook sees it
+        self.assertIn("-e", post["additionalContext"])
+        _, ran, _, _ = self.execute("printf x | ugrep -E '->|qqq' | head -1")
+        self.assertEqual(ran, "printf x | ugrep -E -e '->|qqq' | head -1")
+
+    def test_dash_value_is_not_learned_from_output_that_only_quotes_a_rejection(self):
+        self.install("ugrep")
+        self.execute("printf 'ugrep: invalid option ->|zzz\\n' | cat")       # no ugrep call in this command
+        self.execute("printf 'ugrep: invalid option ->|zzz\\n' | ugrep -E y | cat")    # and no such word in this one
+        self.untouched("printf x | ugrep -E '->|qqq'")
+
     def test_dash_value_leaves_an_option_alone_when_help_hides_its_value(self):
         self.install("awkish", FAKE_AWKISH)
         self.execute("awkish '-> x' f")
-        pre, ran, rc, _ = self.execute("awkish p '-> y'")
-        self.assertEqual(ran, "awkish p -- '-> y'")
+        pre, ran, rc, _ = self.execute("awkish '-> y'")
+        self.assertEqual(ran, "awkish -- '-> y'")
         self.assertEqual(rc, 0)
         self.untouched(
             "awkish -F: '{print $1}' f",

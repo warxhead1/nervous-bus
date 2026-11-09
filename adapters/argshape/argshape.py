@@ -42,6 +42,10 @@ SQLISH = re.compile(r"\bselect\b.+\bfrom\b|\bwith\s+\w+\s+as\s*\(|\bupdate\s+\w+
                     r"\bdelete\s+from\b|\binsert\s+into\b|\\d\+?\s", re.I | re.S)
 
 
+# Same words as core.REJECT_HINT, kept here so the success path does not import core to ask.
+REJECT_HINT = re.compile(r"invalid option|illegal option|unrecognized flag")
+
+
 def _core():
     import core
     return core
@@ -92,9 +96,14 @@ def hook(kind: str) -> int:
 
 
 def _post_has_work(ev, command: str) -> bool:
-    """A success only teaches something if it carries SQL output, settles a
-    correction, or answers a pending rejection from this session."""
+    """A success only teaches something if it carries SQL output, prints a tool's
+    own option rejection (a pipe ended the call at exit 0), settles a correction,
+    or answers a pending rejection from this session."""
     if SQLISH.search(command):
+        return True
+    resp = ev.get("tool_response")
+    out = f"{resp.get('stdout', '')}\n{resp.get('stderr', '')}" if isinstance(resp, dict) else str(resp or "")
+    if REJECT_HINT.search(out):
         return True
     db = store.connect(create=False)
     if db is None:

@@ -42,7 +42,8 @@ BUS_KINDS = frozenset({"flag", "subcmd", "column", "shape"})
 # Dash-leading values: the rule-shaped correction (no exact token ever repeats).
 GREP_FAMILY = frozenset({"grep", "egrep", "fgrep", "ugrep", "ug", "rg"})
 PATTERN_OPTS = frozenset({"-e", "--regexp", "-f", "--file"})   # take the pattern (or its file), always
-NON_OPTION_CHAR = re.compile(r"[^\w=.,\-]")
+REJECT_HINT = re.compile(r"invalid option|illegal option|unrecognized flag")     # argshape.py gates the post hook on the same words
+NON_OPTION_CHAR =re.compile(r"[^\w=.,\-]")
 DASH_KEY = "*"          # rejects.token for the whole class: the word itself is never stored
 # Failures where the command never ran (a hook or the user refused it) teach
 # nothing about the command's arguments.
@@ -353,7 +354,8 @@ def _dash_value_plan(db, mode: str, seg, bin_key: str, ctx: str):
     operand by the spec's own reading: not a listed option, not the value of
     the option before it, no value-taking option in its first characters.
     grep family: `-e` before the pattern. Anything else (or a non-pattern
-    operand): `--` before it, only when nothing option-like or dynamic follows.
+    operand): `--` before it, only when it is the first operand and nothing
+    option-like or dynamic follows.
     """
     if not rejected(db, bin_key, "", "dash_value", DASH_KEY):
         return None
@@ -411,6 +413,8 @@ def _dash_value_plan(db, mode: str, seg, bin_key: str, ctx: str):
             return None      # `--` after a subcommand tool's verb is not "end of options" for the verb's operands
         if any(it[0] != "pos" for it in tail):
             return None
+        if any(it[0] == "pos" for it in items[:ci]):
+            return None      # `printf '%s\n' '- x'`: a parser that stops at its first operand would print the `--`
         insert = "-- "
     if store.meta_get(db, f"dash_rule_off:{bin_key}"):
         return {"edits": [], "applied": [],
@@ -600,6 +604,18 @@ def _learn_dash_value(db, seg, cwd, text) -> list[str]:
             "(grep family) or after `--`; argshape will insert that for you next time."]
 
 
+def _learn_masked_dash_values(db, segs, cwd, text) -> list[str]:
+    """`grep ... | head` exits 0 however grep fared: its rejection reaches the success hook."""
+    notes: list[str] = []
+    for rej in errclass.classify(text):
+        if rej.kind != "dash_value":
+            continue
+        seg = attribute(rej, segs, db, cwd)
+        if seg is not None:
+            notes += _learn_dash_value(db, seg, cwd, text)
+    return notes[:1]
+
+
 def _ensure_spec(db, bin_key, path, name, ctx_words, proven):
     ctx = " ".join(ctx_words)
     spec = store.get_spec(db, bin_key, ctx)
@@ -773,10 +789,18 @@ def on_success(db, cfg: dict, ev: dict) -> list[str]:
     command = (ev.get("tool_input") or {}).get("command", "")
     resp = ev.get("tool_response") or {}
     stdout = resp.get("stdout", "") if isinstance(resp, dict) else str(resp)
+    stderr = resp.get("stderr", "") if isinstance(resp, dict) else ""
     cwd = ev.get("cwd") or os.getcwd()
     session = ev.get("session_id") or ""
     _settle_applied(db, cfg, ev, failed=False, text=stdout)
     segs = segment.parse(command)
+    notes: list[str] = []
+    both = f"{stdout}\n{stderr}" if stderr else stdout
+    if REJECT_HINT.search(both):
+        try:
+            notes = _learn_masked_dash_values(db, segs, cwd, both)
+        except Exception:      # a lesson that cannot be learned must not cost the ones below
+            store.log_error()
     # session-pair learning
     if session:
         rows = db.execute("SELECT bin_key, ctx, bad, opts, ts FROM pending WHERE session=?", (session,)).fetchall()
@@ -810,7 +834,7 @@ def on_success(db, cfg: dict, ev: dict) -> list[str]:
         conn = sqlshape.conn_key(seg, cwd)
         sql = slots[0][0]
         _learn_from_output(db, conn, seg, sql, stdout)
-    return []
+    return notes
 
 
 def _learn_from_output(db, conn, seg, sql, stdout) -> None:

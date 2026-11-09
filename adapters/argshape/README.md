@@ -45,10 +45,11 @@ replacement, it must exist there and the bad token must not.
 `... 2>&1 | grep -E '->|rejected'` fails: getopt reads `->|rejected` as an option. No two
 patterns repeat, so this is a rule, not a learned token. Once **this build of the binary** has
 printed such a rejection (ugrep and rg echo the word; GNU/BSD getopt name its first character),
-argshape learns its `--help` and, in `correct` mode, inserts:
+argshape learns its `--help` (the success hook reads the rejection from the output too, so
+`grep ... | head`, which exits 0, still teaches it) and, in `correct` mode, inserts:
 
 - `-e` before the pattern, for `grep egrep fgrep ugrep ug rg`, when no `-e/-f` is given and the word is the first operand;
-- `--` before the word otherwise, only when nothing option-like or `$`-dynamic follows and the tool has no subcommands.
+- `--` before the word otherwise, only when it is the first operand, nothing option-like or `$`-dynamic follows, and the tool has no subcommands (`printf '%s\n' '- x'` has a valid second operand, and a parser that stops at its first operand would print the `--`).
 
 The word must be an operand by the learned spec: not a listed option, not the value of the option
 before it, and no value-taking option among its first characters (`-e->x`, `-A3`, `-d' '` are valid
