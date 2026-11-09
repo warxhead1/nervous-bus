@@ -429,18 +429,28 @@ class BaseDetector(ABC):
         hit_rate = distinct_run_ids_with_a_hit / total_runs_in_window
         Returns 0.0 if there are no runs in the window.
 
+        Numerator and denominator share one window (``runs.ended``) and one
+        project attribution (``runs.project``): ``detector_hits.ts`` is when a
+        synthesis pass recorded the hit, which can lag the run by days, so it
+        must not choose which runs count. A hit counts only for a run that
+        exists. A classifier labels every run, so its rate is 0.0 by
+        definition.
+
         This converts boolean alarms ("worktree leaked") into rates
         ("worktree leaked 40% of runs this week vs 8% last").
         """
+        if self.KIND == KIND_CLASSIFIER:
+            return 0.0
         cutoff = _days_ago_utc(window_days)
 
         hit_count = self._conn.execute(
             """
-            SELECT COUNT(DISTINCT run_id)
-            FROM detector_hits
-            WHERE detector = ?
-              AND project  = ?
-              AND ts       >= ?
+            SELECT COUNT(DISTINCT dh.run_id)
+            FROM detector_hits dh
+            JOIN runs r ON r.run_id = dh.run_id
+            WHERE dh.detector = ?
+              AND r.project   = ?
+              AND r.ended     >= ?
             """,
             (self.DETECTOR_NAME, project, cutoff),
         ).fetchone()[0]

@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _ADAPTER_ROOT = Path(__file__).parent.parent.parent
@@ -141,6 +142,51 @@ class TestRunBookkeeping(unittest.TestCase):
         _ClassifyEveryRun(self.conn).run()
         _ClassifyEveryRun(self.conn).run()  # a second pass changes nothing
         self.assertEqual(self._counts(_ClassifyEveryRun.DETECTOR_NAME), (3, 0))
+
+
+class TestBasePrevalence(unittest.TestCase):
+    """BaseDetector.prevalence(): hits and runs share one window and one project."""
+
+    def setUp(self):
+        self.conn = _db()
+        self.det = _PlainEveryRun(self.conn)
+
+    def _run_ended(self, run_id, days_ago, project="proj"):
+        ended = (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.conn.execute(
+            "INSERT INTO runs (run_id, project, event_count, started, ended, close_reason) "
+            "VALUES (?,?,5,?,?,'idle_timeout')",
+            (run_id, project, ended, ended),
+        )
+
+    def test_hit_recorded_late_for_an_old_run_does_not_count(self):
+        # The run ended 30 days ago; a synthesis pass recorded its hit just now.
+        self._run_ended("old", 30)
+        self.det.record_hit("old", "sig", "proj")
+        self._run_ended("new-a", 1)
+        self._run_ended("new-b", 1)
+        self.assertEqual(self.det.prevalence("proj", window_days=7), 0.0)
+
+    def test_rate_counts_only_hits_of_runs_inside_the_window(self):
+        self._run_ended("old", 30)
+        self.det.record_hit("old", "sig", "proj")
+        self._run_ended("new-hit", 1)
+        self.det.record_hit("new-hit", "sig", "proj")
+        self._run_ended("new-clean", 1)
+        self.assertAlmostEqual(self.det.prevalence("proj", window_days=7), 0.5)
+
+    def test_a_hit_with_no_run_row_never_counts(self):
+        self._run_ended("real", 1)
+        self.det.record_hit("ghost-run", "sig", "proj")
+        self.assertEqual(self.det.prevalence("proj", window_days=7), 0.0)
+
+    def test_classifier_rate_is_zero_where_a_detector_over_the_same_runs_is_not(self):
+        self._run_ended("r1", 1)
+        self._run_ended("r2", 1)
+        _PlainEveryRun(self.conn).run()
+        _ClassifyEveryRun(self.conn).run()
+        self.assertEqual(_PlainEveryRun(self.conn).prevalence("proj", window_days=7), 1.0)
+        self.assertEqual(_ClassifyEveryRun(self.conn).prevalence("proj", window_days=7), 0.0)
 
 
 class TestFailureTaxonomyIsAClassifier(unittest.TestCase):
