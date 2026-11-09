@@ -101,6 +101,31 @@ while i < len(args):
 print("ok", pats, files)
 '''
 
+# gawk-style --help: the value is a lowercase word (`-F fs`), which a help parser cannot tell from prose.
+FAKE_AWKISH = r'''#!/usr/bin/env python3
+import sys
+HELP = """Usage: awkish [options] 'program' file ...
+POSIX options:\t\tGNU long options: (standard)
+\t-f progfile\t\t--file=progfile
+\t-F fs\t\t\t--field-separator=fs
+\t-v var=val\t\t--assign=var=val
+\t-q\t\t\t--quiet
+"""
+args = sys.argv[1:]
+if args == ["--help"]:
+    print(HELP)
+    sys.exit(0)
+i = 0
+while i < len(args) and args[i].startswith("-") and args[i] not in ("-", "--"):
+    a, i = args[i], i + 1
+    if a[1] in "fFv":
+        i += 1 if len(a) == 2 else 0
+    elif a[1] != "q":
+        sys.stderr.write("awkish: invalid option -- '%s'\n" % a[1])
+        sys.exit(2)
+print("ok")
+'''
+
 
 class SegmentTests(unittest.TestCase):
     def bins(self, cmd):
@@ -291,6 +316,73 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(len(sent), 4)
         for p in sent:
             jsonschema.Draft202012Validator(schema).validate(p)
+
+
+class BacktestTests(unittest.TestCase):
+    """backtest.py scores the dash-value rule against what each replayed call really did."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="argshape-bt-")
+        self.bin = os.path.join(self.tmp, "bin")
+        os.makedirs(self.bin)
+        with open(os.path.join(self.bin, "ugrep"), "w") as f:
+            f.write(FAKE_GETOPT.replace("#!/usr/bin/env python3", "#!" + sys.executable))
+        os.chmod(os.path.join(self.bin, "ugrep"), 0o755)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    BAD = "Exit code 2\nugrep: invalid option ->|{}\nFor more help, run `ugrep --help' or `ugrep --help ->|{}'"
+
+    def write_session(self, root, calls):
+        proj = os.path.join(root, "projects", "p1")
+        os.makedirs(proj, exist_ok=True)
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+        with open(os.path.join(proj, "s1.jsonl"), "w") as f:
+            for i, (cmd, output, is_error) in enumerate(calls):
+                base = {"sessionId": "s1", "timestamp": stamp, "cwd": self.tmp}
+                f.write(json.dumps({**base, "message": {"content": [
+                    {"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": cmd}}]}}) + "\n")
+                f.write(json.dumps({**base, "message": {"content": [
+                    {"type": "tool_result", "tool_use_id": f"t{i}", "content": output, "is_error": is_error}]}}) + "\n")
+
+    def run_backtest(self, *extra, roots=()):
+        env = {**os.environ, "CLAUDE_CONFIG_DIR": os.path.join(self.tmp, "claude"),
+               "PATH": self.bin + ":" + os.environ["PATH"],
+               "NBUS_TRANSCRIPTS_CLAUDE": os.pathsep.join(os.path.join(r, "projects") for r in roots)}
+        p = subprocess.run([sys.executable, "-I", os.path.join(HERE, "backtest.py"), "--days", "1", "--agent", "claude",
+                            "--state", os.path.join(self.tmp, "state"), *extra],
+                           capture_output=True, text=True, env=env, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stdout
+
+    def test_scores_prevented_false_and_counts_a_twice_seen_call_once(self):
+        calls = [("printf x | ugrep -E '->|zzz'", self.BAD.format("zzz", "zzz"), True),     # teaches the rule
+                 ("printf x | ugrep -E '->|qqq'", self.BAD.format("qqq", "qqq"), True),     # rewritten: prevented
+                 ("printf x | ugrep -e '->x'", "ok ['->x'] []", False),                     # valid: untouched
+                 ("printf x | ugrep -E '->|www'", "ok [] ['->|www']", False)]               # claims success: a false rewrite
+        self.write_session(os.path.join(self.tmp, "claude"), calls)
+        mirror = os.path.join(self.tmp, "mirror")
+        self.write_session(mirror, calls)
+        out = self.run_backtest(roots=[mirror])
+        self.assertIn("calls=4 dupes_skipped=4", out)
+        self.assertIn("dash_value: failures=2 (masked_by_pipe=0) rewrites=2 prevented=1 false=1 unclear=0", out)
+        rewrites = json.load(open(os.path.join(self.tmp, "state", "out.json")))
+        self.assertEqual([r["dash_rule"] for r in rewrites if "dash_rule" in r], ["prevented", "false"])
+        self.assertEqual(rewrites[0]["after"], "printf x | ugrep -E -e '->|qqq'")
+
+    def test_seeding_opens_the_rule_for_a_binary_that_never_failed(self):
+        self.write_session(os.path.join(self.tmp, "claude"), [
+            ("printf x | ugrep -E '->|zzz'", "ok [] ['->|zzz']", False), ("printf x | ugrep -e '->x'", "ok ['->x'] []", False)])
+        self.assertIn("dash_value: failures=0 (masked_by_pipe=0) rewrites=0", self.run_backtest())
+        out = self.run_backtest("--seed-dash-value", "ugrep")
+        self.assertIn("rewrites=1 prevented=0 false=1", out)
+
+    def test_a_rejection_hidden_by_a_pipe_still_counts_as_prevented(self):
+        self.write_session(os.path.join(self.tmp, "claude"), [
+            ("printf x | ugrep -E '->|zzz' | head", self.BAD.format("zzz", "zzz").split("\n", 1)[1], False)])
+        out = self.run_backtest("--seed-dash-value", "ugrep")
+        self.assertIn("failures=1 (masked_by_pipe=1) rewrites=1 prevented=1 false=0", out)
 
 
 class EndToEnd(unittest.TestCase):
@@ -518,6 +610,20 @@ class EndToEnd(unittest.TestCase):
             "lister --inc '-> y'",             # unique abbreviation of a value-taking option
             "lister -i f g",
             "lister '-> y' '-> z'",            # two candidates: ambiguous
+        )
+
+    def test_dash_value_leaves_an_option_alone_when_help_hides_its_value(self):
+        self.install("awkish", FAKE_AWKISH)
+        self.execute("awkish '-> x' f")
+        pre, ran, rc, _ = self.execute("awkish p '-> y'")
+        self.assertEqual(ran, "awkish p -- '-> y'")
+        self.assertEqual(rc, 0)
+        self.untouched(
+            "awkish -F: '{print $1}' f",
+            "awkish -F'\\t' '{print $1}' f",
+            "awkish -F '|' '{print $1}' f",
+            "awkish -v x=a:b -F: '{print $1}'",
+            "awkish -q -F:, 'x'",
         )
 
     def test_dash_value_needs_this_binary_to_have_rejected_one(self):

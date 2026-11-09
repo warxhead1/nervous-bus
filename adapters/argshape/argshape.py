@@ -12,7 +12,7 @@ Operator:
   argshape explain '<command>'         dry-run: segments + what pre would do
   argshape fixes [--all] | rejects | sigs [--top N] [--harness] | columns | shapes
   argshape learn <bin> [subcmd ...]    learn a binary's --help now
-  argshape demote <bin|conn> <bad> | promote <bin|conn> <bad>
+  argshape demote <bin|conn> <bad> | promote <bin|conn> <bad>   (<bad> = dash_value: the -e / -- rule)
   argshape breaker reset
   argshape install | uninstall         wire/unwire the hooks in ~/.claude/settings.json
 

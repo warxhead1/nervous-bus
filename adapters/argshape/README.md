@@ -40,6 +40,23 @@ Binary identity is `(device, inode, mtime, size)`; an upgrade or rebuild
 resets what was learned for it. When a binary's `--help` lists the
 replacement, it must exist there and the bad token must not.
 
+## Values that start with `-`
+
+`... 2>&1 | grep -E '->|rejected'` fails: getopt reads `->|rejected` as an option. No two
+patterns repeat, so this is a rule, not a learned token. Once **this build of the binary** has
+printed such a rejection (ugrep and rg echo the word; GNU/BSD getopt name its first character),
+argshape learns its `--help` and, in `correct` mode, inserts:
+
+- `-e` before the pattern, for `grep egrep fgrep ugrep ug rg`, when no `-e/-f` is given and the word is the first operand;
+- `--` before the word otherwise, only when nothing option-like or `$`-dynamic follows and the tool has no subcommands.
+
+The word must be an operand by the learned spec: not a listed option, not the value of the option
+before it, and no value-taking option among its first characters (`-e->x`, `-A3`, `-d' '` are valid
+and left alone). Anything it cannot place (unknown option before it, two such words, a `--` already
+present) is left alone. `# argshape:off` after a rewrite switches the rule off for that build
+(`argshape demote ugrep dash_value` / `promote`). The bus schema has no kind for it yet, so these
+corrections are applied and recorded locally but not published.
+
 ## Tiers and turning it off
 
 ```

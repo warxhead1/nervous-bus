@@ -327,16 +327,22 @@ def _dash_word(v: str, spec):
     if NUMERIC_OPT.match(v):
         return "opt", False, None
     body = v[1:]
-    for i, c in enumerate(body):
-        o = "-" + c
-        if o in opts:
-            if opts[o]:         # `-e->x`, `-A3`, `-d' '`: the rest of the word is its value
-                return "opt", i == len(body) - 1, o
-            continue
-        if NON_OPTION_CHAR.match(c):
-            return "cand", False, None
+    if not body:
         return "unk", False, None
-    return "opt", False, None
+    if "-" + body[0] in opts:
+        # A listed option leads the word (`-e->x`, `-A3`, `-d' '`, `-F:`), so it is an option word: what
+        # follows is a value or more flags. A --help that misses an option's arity (`-F fs`) must not
+        # turn that into an operand.
+        for i, c in enumerate(body):
+            o = "-" + c
+            if o not in opts:
+                break
+            if opts[o]:
+                return "opt", i == len(body) - 1, o
+        return "opt", False, None
+    if NON_OPTION_CHAR.match(body[0]):
+        return "cand", False, None
+    return "unk", False, None
 
 
 def _dash_value_plan(db, mode: str, seg, bin_key: str, ctx: str):
