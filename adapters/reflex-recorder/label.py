@@ -25,20 +25,39 @@ The `label_source` column tracks the precedence tier.
 
 PRIVACY: reads bus + bd + git + gh only.  Does NOT read conversation transcripts.
 
+QUEUE STATE: outcome keeps its vocabulary; a run the labeler cannot label is
+told apart from one it has not tried yet by columns store.py adds:
+    label_attempts / last_attempt_at   attempts so far, newest first, backoff 1,2,4 days
+    label_state = 'unattributable'     parked after max attempts, or at once when no source
+                                       could ever label it
+    label_state = 'rolled_up'          verdict cleared: a sibling segment of its run_key landed
+Both parked states leave outcome NULL and drop out of the --unlabeled-only queue,
+with one exception: an 'unattributable' run that still has a lookup hook (a
+non-trunk branch, a bead, a codex rollout) is only parked on a slow cadence. Its PR
+can merge or its bead close on day 8, long after the 1+2+4 day backoff ran out, so
+it re-enters the queue every LABEL_REVISIT_DAYS while its start is inside
+--since-days. Only a run with no hook is terminal, because a behavior verdict is a
+pure function of its frozen run_events.
+
 Usage:
     python label.py [--db-path PATH] [--run-id ID] [--dry-run] [--verbose]
     python label.py --report          # print labeled-runs table then exit
+    python label.py --since-days 30 --unlabeled-only     # nightly incremental queue
+    python label.py --reverify-days 90 [--apply]         # resumable; skips runs seen <7d ago
+    python label.py --rollup-days 90 [--apply --undo-file F]   # retroactive run_key rollup
 """
 from __future__ import annotations
 
 import argparse
+import functools
+import itertools
 import json
 import re
 import sqlite3
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -93,6 +112,20 @@ ABANDON_MIN_EVENTS = 5           # don't call abandon on tiny runs (<5 events)
 
 def _now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _fmt_ts(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_ts(value: Optional[str]) -> Optional[datetime]:
+    """Parse the RFC3339-UTC strings runs.db stores; None on anything else."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def _run_cmd(cmd: list[str], timeout: int = 8) -> Optional[str]:
@@ -280,11 +313,51 @@ def label_from_bead(bead_id: str, worktree_path: Optional[str]) -> Optional[tupl
     return None
 
 
+#: Verdicts already computed in the CURRENT pass, keyed by what the lookup
+#: depends on. Many runs share one branch, and each lookup is a gh call or a
+#: history-wide git pickaxe.
+#: None outside a pass, so direct callers always get a live answer.
+_PASS_MEMO: Optional[dict] = None
+
+
+class _PickaxeDeferred(Exception):
+    """A verdict needs the history-wide pickaxe check and the caller asked to
+    postpone it (backfill's cheap-first pass); raised, never cached."""
+
+
+def _memoized(key: tuple, compute):
+    memo = _PASS_MEMO
+    if memo is None:
+        return compute()
+    if key not in memo:
+        memo[key] = compute()
+    return memo[key]
+
+
+def _with_pass_memo(fn):
+    """Run `fn` (a whole labeling/reverify pass) with the verdict memo on."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        global _PASS_MEMO
+        prev, _PASS_MEMO = _PASS_MEMO, {}
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _PASS_MEMO = prev
+    return wrapper
+
+
 def label_from_pr(branch: str, worktree_path: Optional[str]) -> Optional[tuple[str, str]]:
     """Try to derive outcome from GitHub PR state.
 
-    Returns (outcome, source) or None.
+    Returns (outcome, source) or None. Within a pass, repeated lookups of the
+    same (branch, worktree) are answered once.
     """
+    return _memoized(("pr", branch, worktree_path),
+                     lambda: _label_from_pr_live(branch, worktree_path))
+
+
+def _label_from_pr_live(branch: str, worktree_path: Optional[str]) -> Optional[tuple[str, str]]:
     pr = _gh_pr_state(branch, worktree_path)
     if not pr:
         # No PR yet — try git revert as fallback
@@ -353,6 +426,7 @@ def _project_repo_root(run: dict) -> Optional[str]:
 def label_from_git_merge(
     git_branch: str, run: dict, *, verify_discards: bool = True,
     require_dispatch_shape: bool = True, run_has_commit: Optional[bool] = None,
+    defer_pickaxe: bool = False,
 ) -> Optional[tuple[str, str]]:
     """Derive outcome from local git ancestry for a worktree-dispatched branch.
 
@@ -379,6 +453,10 @@ def label_from_git_merge(
 
     run_has_commit: the run's own commit evidence, passed to
     classify_branch_outcome to tell fast-forward-landed from empty branches.
+
+    defer_pickaxe: raise _PickaxeDeferred instead of running the pickaxe
+    check (a `git log -S` per probe line over main's history: minutes for one
+    large branch) so the caller can do every cheap run first.
     """
     if not git_branch:
         return None
@@ -387,6 +465,17 @@ def label_from_git_merge(
     repo = _project_repo_root(run)
     if not repo:
         return None
+    return _memoized(
+        ("git", repo, git_branch, verify_discards, run_has_commit),
+        lambda: _git_merge_verdict(
+            repo, git_branch, verify_discards, run_has_commit, defer_pickaxe),
+    )
+
+
+def _git_merge_verdict(
+    repo: str, git_branch: str, verify_discards: bool, run_has_commit: Optional[bool],
+    defer_pickaxe: bool = False,
+) -> Optional[tuple[str, str]]:
     try:
         import git_outcome as go
     except ImportError:
@@ -402,6 +491,8 @@ def label_from_git_merge(
     if bo.source == "git_discarded_unmerged":
         if not verify_discards:
             return None             # medium confidence; don't write on patch-id alone
+        if defer_pickaxe:
+            raise _PickaxeDeferred(git_branch)
         landed = go.verify_discarded_landed(repo, git_branch)
         if landed is True:
             return "landed", "git_pickaxe_landed"
@@ -413,7 +504,9 @@ def label_from_git_merge(
 
 # ── Explicit labeling from Orca worker_done self-report ────────────────────────
 
-def label_from_orca_worker_done(run: dict) -> Optional[tuple[str, str]]:
+def label_from_orca_worker_done(
+    run: dict, since_days: Optional[int] = None,
+) -> Optional[tuple[str, str]]:
     """Tier-3 label source: Orca `worker_done --outcome` self-report.
 
     Thin wrapper so label.py has one call site; see orca_outcome.py for the
@@ -421,12 +514,45 @@ def label_from_orca_worker_done(run: dict) -> Optional[tuple[str, str]]:
     outcome mapping. Degrades to None (never raises) if orca_outcome can't be
     imported, matching label_from_git_merge's tolerance of a missing sibling
     module.
+
+    since_days bounds the one-time per-process rollout index build to rollouts
+    dated within that many days (None = every rollout ever written).
+
+    Only codex sessions leave a rollout, so any other agent kind is answered
+    None without building the index (cold, that scan is tens of seconds).
     """
+    if run.get("agent_kind") not in (None, ORCA_ROLLOUT_AGENT_KIND):
+        return None
     try:
         import orca_outcome
     except ImportError:
         return None
-    return orca_outcome.label_from_orca_worker_done(run)
+    return orca_outcome.label_from_orca_worker_done(run, since_days=since_days)
+
+
+#: The one agent kind whose sessions write the codex rollouts orca_outcome joins on.
+ORCA_ROLLOUT_AGENT_KIND = "codex-cli"
+
+
+#: A rollout is dated by its session's START day, and a run segment can begin
+#: days after its session did, so the rollout scan reaches this many days
+#: further back than the oldest run being labeled.
+ORCA_ROLLOUT_PAD_DAYS = 14
+
+
+def _orca_scan_days(runs: list[dict], now: Optional[datetime] = None) -> Optional[int]:
+    """Rollout-scan bound (days) that covers every run in `runs`, or None
+    (unbounded) when it cannot be derived."""
+    starts = []
+    for r in runs:
+        ts = _parse_ts(r.get("started"))
+        if ts is not None:
+            starts.append(ts)
+    if not starts:
+        return None
+    now = now or datetime.now(timezone.utc)
+    age_days = (now - min(starts)).total_seconds() / 86400.0
+    return max(int(age_days) + 1, 1) + ORCA_ROLLOUT_PAD_DAYS
 
 
 # ── Inferred labeling from behavior shape ─────────────────────────────────────
@@ -805,6 +931,8 @@ def compute_label(
     run_events: list[dict],
     verbose: bool = False,
     conn: Optional[sqlite3.Connection] = None,
+    orca_since_days: Optional[int] = None,
+    defer_pickaxe: bool = False,
 ) -> Optional[tuple[str, str]]:
     """Compute the best available outcome + source for a run.
 
@@ -821,6 +949,9 @@ def compute_label(
     simply skip that check; it can only ever turn a would-be 'abandoned' into
     None, never the reverse, so omitting conn is always safe, just less
     accurate.
+
+    defer_pickaxe: raise _PickaxeDeferred (see label_from_git_merge) rather
+    than run the slow pickaxe check; nothing else is computed or cached.
     """
     bead_id = run.get("bead_id")
     git_branch = run.get("git_branch")
@@ -849,7 +980,8 @@ def compute_label(
         git_result = label_from_pr(git_branch, worktree)
         if git_result is None:
             # EXPLICIT: local git ancestry (squash/merge with no PR — tengine pattern)
-            git_result = label_from_git_merge(git_branch, run, run_has_commit=run_has_commit)
+            git_result = label_from_git_merge(
+                git_branch, run, run_has_commit=run_has_commit, defer_pickaxe=defer_pickaxe)
         if git_result and verbose:
             print(f"  [label] branch={git_branch} → {git_result}")
 
@@ -857,7 +989,7 @@ def compute_label(
     # cached rollout text — no subprocess, so it's cheap to always check even
     # when git_result already exists (the tier compare below decides which
     # one wins; it never downgrades git_result).
-    orca_result = label_from_orca_worker_done(run)
+    orca_result = label_from_orca_worker_done(run, since_days=orca_since_days)
     if orca_result and verbose:
         print(f"  [label] session_id={run.get('session_id')} orca_worker_done → {orca_result}")
 
@@ -1057,6 +1189,157 @@ def _backfill_enrich_run(conn: sqlite3.Connection, run: dict) -> dict:
     return run
 
 
+#: A run the pass could not label is retried with exponential backoff and, after
+#: this many failed attempts, parked as label_state='unattributable'.
+LABEL_MAX_ATTEMPTS = 4
+
+#: Days to wait after the first failed attempt; doubles with each further one
+#: (1, 2, 4 ... days), so a run attempted nightly costs one lookup per
+#: backoff window instead of one per night.
+LABEL_BACKOFF_BASE_DAYS = 1.0
+
+#: A run parked as 'unattributable' that still has a lookup hook (see
+#: _has_lookup_hooks) re-enters the --unlabeled-only queue once its last attempt
+#: is this many days old, so a PR that merges (or a bead that closes) after the
+#: 1+2+4 day backoff is still found. The nightly's --since-days bounds how long
+#: that goes on; this bounds the cost to one lookup per parked run per window,
+#: not one per night.
+LABEL_REVISIT_DAYS = 7.0
+
+#: Progress line cadence (runs) for long passes; 0 disables.
+PROGRESS_EVERY = 100
+
+STATE_UNATTRIBUTABLE = "unattributable"
+
+#: Set by rollup_labels: the run's own verdict was cleared because a sibling
+#: segment of its run_key landed. Kept apart from 'unattributable' (the
+#: labeler gave up) so the two are not lumped together in SQL.
+STATE_ROLLED_UP = "rolled_up"
+
+_ATTEMPT_COLUMNS = ("label_attempts", "last_attempt_at", "label_state")
+
+
+def _has_attempt_columns(conn: sqlite3.Connection) -> bool:
+    have = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+    return all(c in have for c in _ATTEMPT_COLUMNS)
+
+
+def _has_lookup_hooks(run: dict) -> bool:
+    """True when an external source (bead, PR/git, Orca rollout) could ever
+    produce a verdict for this run that a re-run would find.
+
+    A run with none of those is decided by behavior inference alone, which is
+    a pure function of its frozen run_events: a None there is final, so there
+    is nothing to back off and retry.
+    """
+    branch = run.get("git_branch")
+    return bool(
+        run.get("bead_id")
+        or (branch and branch not in _TRUNK_BRANCHES)
+        or run.get("agent_kind") == ORCA_ROLLOUT_AGENT_KIND
+    )
+
+
+def select_label_queue(
+    conn: sqlite3.Connection,
+    *,
+    since_days: Optional[int] = None,
+    unlabeled_only: bool = False,
+    now: Optional[datetime] = None,
+    ignore_backoff: bool = False,
+) -> list[dict]:
+    """Runs the labeling pass should touch, newest first.
+
+    unlabeled_only is the incremental queue: outcome IS NULL and either
+      - not parked (label_state IS NULL) and either never attempted or past its
+        backoff window (last_attempt_at + LABEL_BACKOFF_BASE_DAYS * 2**(attempts-1)
+        days), or
+      - parked as 'unattributable' but still hooked to an external source
+        (_has_lookup_hooks) and last attempted LABEL_REVISIT_DAYS ago: a PR can
+        merge long after the backoff ran out, so a hooked run is parked on a
+        slow cadence, never for good.
+    A run with no hook, and a 'rolled_up' run, stay out. since_days bounds all
+    of it by the run's start, so a run is revisited only while it is recent.
+    ignore_backoff re-queues parked and not-yet-due runs too.
+
+    Newest first so a pass cut off by its time budget has spent it on the
+    runs a reader is most likely to look at, instead of re-walking the oldest
+    never-labelable ones every night; revisits of old parked runs come last.
+    """
+    now = now or datetime.now(timezone.utc)
+    clauses: list[str] = []
+    params: dict = {}
+    revisit = False
+    if since_days is not None:
+        clauses.append("started >= :cutoff")
+        params["cutoff"] = _fmt_ts(now - timedelta(days=int(since_days)))
+    if unlabeled_only:
+        clauses.append("outcome IS NULL")
+        if not ignore_backoff and _has_attempt_columns(conn):
+            revisit = True
+            clauses.append(
+                "((label_state IS NULL AND "
+                "(COALESCE(label_attempts, 0) = 0 OR last_attempt_at IS NULL OR "
+                "julianday(last_attempt_at) + :base * (1 << MIN(label_attempts - 1, 20)) "
+                "<= julianday(:now))) OR "
+                "(label_state = :parked AND "
+                "(last_attempt_at IS NULL OR "
+                "julianday(last_attempt_at) + :revisit <= julianday(:now))))"
+            )
+            params["base"] = LABEL_BACKOFF_BASE_DAYS
+            params["now"] = _fmt_ts(now)
+            params["parked"] = STATE_UNATTRIBUTABLE
+            params["revisit"] = LABEL_REVISIT_DAYS
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    cur = conn.execute(f"SELECT * FROM runs {where} ORDER BY started DESC", params)
+    cols = [d[0] for d in cur.description]
+    rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+    if revisit:
+        # The hook test is _has_lookup_hooks itself, not a SQL copy of it.
+        rows = [r for r in rows
+                if r.get("label_state") != STATE_UNATTRIBUTABLE or _has_lookup_hooks(r)]
+    return rows
+
+
+def record_label_attempt(
+    conn: sqlite3.Connection,
+    run: dict,
+    *,
+    labeled: bool,
+    now: datetime,
+    max_attempts: int = LABEL_MAX_ATTEMPTS,
+    dry_run: bool = False,
+) -> str:
+    """Book one labeling attempt against a run; returns its resulting state.
+
+    labeled        -> attempt counted, any parked state cleared.
+    not labeled    -> attempt counted; parked as unattributable once it has
+                      used max_attempts, or at once when no external source
+                      could ever change the verdict (_has_lookup_hooks).
+                      A hooked run stays parked only until LABEL_REVISIT_DAYS
+                      after this attempt (select_label_queue re-admits it); a
+                      revisit that finds nothing lands here again and re-parks
+                      with a fresh last_attempt_at.
+    """
+    attempts = int(run.get("label_attempts") or 0) + 1
+    if labeled:
+        state = None
+    elif run.get("label_state") == STATE_ROLLED_UP:
+        state = STATE_ROLLED_UP     # re-checked on request; the rollup still holds
+    elif attempts >= max_attempts or not _has_lookup_hooks(run):
+        state = STATE_UNATTRIBUTABLE
+    else:
+        state = None
+    if not dry_run:
+        conn.execute(
+            "UPDATE runs SET label_attempts=?, last_attempt_at=?, label_state=? "
+            "WHERE run_id=?",
+            (attempts, _fmt_ts(now), state, run["run_id"]),
+        )
+    return state or ("labeled" if labeled else "pending")
+
+
+@_with_pass_memo
 def backfill(
     db_path: Path,
     run_id_filter: Optional[str] = None,
@@ -1064,6 +1347,12 @@ def backfill(
     verbose: bool = False,
     since_days: Optional[int] = None,
     unlabeled_only: bool = False,
+    *,
+    ignore_backoff: bool = False,
+    max_attempts: int = LABEL_MAX_ATTEMPTS,
+    progress_every: int = PROGRESS_EVERY,
+    budget_seconds: Optional[float] = None,
+    now: Optional[datetime] = None,
 ) -> list[dict]:
     """Run the labeling pass over all (or one) run(s) in runs.db.
 
@@ -1076,36 +1365,67 @@ def backfill(
     since_days: bound the pass to runs started in the last N days.  Without
     this, a growing run history means an unbounded, ever-slower pass (this
     function always recomputes explicit sources, which shell out to gh/bd).
-    unlabeled_only: skip runs that already carry a non-null outcome.  A
+    unlabeled_only: the incremental queue (see select_label_queue). A
     landed/reverted/abandoned/clean/thrashed label is, in practice, terminal
     (a merged PR doesn't un-merge; a behavior-inferred label is a deterministic
-    function of frozen run_events) — so nightly incremental passes should only
-    keep spending gh/bd calls on runs that are STILL unresolved (outcome IS
-    NULL), not re-verify settled history every run. --run-id bypasses both
-    filters (an explicit single-run lookup always executes in full).
+    function of frozen run_events), so nightly passes only spend gh/bd calls on
+    runs that are STILL unresolved AND due: each failed attempt is booked on
+    the run (label_attempts / last_attempt_at), the next retry waits twice as
+    long, and after max_attempts the run is parked as label_state=
+    'unattributable' (outcome stays NULL). A parked run that still has a
+    lookup hook is re-queued every LABEL_REVISIT_DAYS while it is inside
+    since_days (its PR may merge after the backoff ran out); one with no hook
+    stays parked. --run-id and ignore_backoff bypass that bookkeeping filter
+    (an explicit single-run lookup always executes in full).
+    progress_every: print a progress line to stdout every N runs (0 = off).
+    budget_seconds: stop cleanly once this much wall time is spent; the rest
+    of the queue is picked up by the next pass.
+
+    Runs whose verdict needs the pickaxe check (_PickaxeDeferred) are taken
+    after all the others, and each is booked as an attempt before the check
+    starts, so neither their cost nor a kill mid-check can starve the queue.
     """
+    now = now or datetime.now(timezone.utc)
     conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
     conn.execute("PRAGMA journal_mode=WAL")
+    if not dry_run:
+        from store import ensure_label_columns
+        ensure_label_columns(conn)
+    book_attempts = _has_attempt_columns(conn)
 
     if run_id_filter:
         cur = conn.execute("SELECT * FROM runs WHERE run_id=?", (run_id_filter,))
+        cols = [d[0] for d in cur.description]
+        runs = [dict(zip(cols, row)) for row in cur.fetchall()]
     else:
-        clauses = []
-        params: list = []
-        if since_days is not None:
-            clauses.append("started >= datetime('now', ?)")
-            params.append(f"-{int(since_days)} days")
-        if unlabeled_only:
-            clauses.append("outcome IS NULL")
-        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-        cur = conn.execute(f"SELECT * FROM runs {where} ORDER BY started ASC", params)
+        runs = select_label_queue(
+            conn, since_days=since_days, unlabeled_only=unlabeled_only,
+            now=now, ignore_backoff=ignore_backoff,
+        )
 
-    cols = [d[0] for d in cur.description]
-    runs = [dict(zip(cols, row)) for row in cur.fetchall()]
+    orca_days = _orca_scan_days(runs, now)
+    t0 = time.monotonic()
+    n_labeled = n_none = n_parked = done = 0
+
+    # Cheap first: a run whose verdict needs the pickaxe check (minutes of
+    # `git log -S`) is set aside and taken after every other run, so a few of
+    # them at the head of the queue cannot eat the whole pass. A single-run
+    # lookup (--run-id) is never set aside.
+    deferred: list[dict] = []
+    order = itertools.chain(((run, False) for run in runs), ((run, True) for run in deferred))
+    second_pass_announced = False
 
     results = []
-    for run in runs:
+    for run, second_pass in order:
+        if budget_seconds is not None and time.monotonic() - t0 >= budget_seconds:
+            print(f"[label] budget {budget_seconds:.0f}s spent after {done}/{len(runs)} "
+                  f"runs; the rest stay queued for the next pass", flush=True)
+            break
         run_id = run["run_id"]
+        if second_pass and not second_pass_announced:
+            second_pass_announced = True
+            print(f"[label] {done}/{len(runs)} runs done; {len(deferred)} more need the "
+                  f"slow pickaxe check", flush=True)
 
         # PART A enrichment for pre-live runs
         if not dry_run:
@@ -1120,7 +1440,21 @@ def backfill(
 
         # Compute label
         # B5 fix: None = insufficient signal → leave outcome as null
-        label_result = compute_label(run, run_events, verbose=verbose, conn=conn)
+        if second_pass and book_attempts and run.get("outcome") is None:
+            # Booked BEFORE the slow check: a pass killed mid-run (the nightly
+            # step has a hard timeout) must still count the attempt, or one
+            # run too slow for any pass would be retried first, every night.
+            # Only for a run with no label: a labeled run re-checked by a full
+            # pass must never be parked on a claim.
+            record_label_attempt(conn, run, labeled=False, now=now,
+                                 max_attempts=max_attempts, dry_run=dry_run)
+        try:
+            label_result = compute_label(run, run_events, verbose=verbose, conn=conn,
+                                         orca_since_days=orca_days,
+                                         defer_pickaxe=not (run_id_filter or second_pass))
+        except _PickaxeDeferred:
+            deferred.append(run)
+            continue
         if label_result is None:
             outcome, source = None, "behavior_inference"
         else:
@@ -1136,6 +1470,7 @@ def backfill(
                 f"→ outcome={outcome} source={source}"
             )
 
+        ends_unlabeled = False
         if outcome is not None:
             changed = apply_label(conn, run_id, outcome, source,
                                   extra_features=signals, dry_run=dry_run)
@@ -1160,6 +1495,7 @@ def backfill(
                     existing_history[-1].get("source", "behavior_inference")
                     if existing_history else "behavior_inference"
                 )
+                ends_unlabeled = existing_outcome is None
                 if existing_outcome is not None and _source_tier(existing_source) == 1:
                     # Existing label was inferred and new inference says null → clear it
                     if not dry_run:
@@ -1168,12 +1504,26 @@ def backfill(
                             (run_id,),
                         )
                     changed = True
+                    ends_unlabeled = True
                 if signals and not dry_run:
                     existing_features.update(signals)
                     conn.execute(
                         "UPDATE runs SET features=? WHERE run_id=?",
                         (json.dumps(existing_features), run_id),
                     )
+
+        state = None
+        if book_attempts and (outcome is not None or ends_unlabeled):
+            state = record_label_attempt(
+                conn, run, labeled=outcome is not None, now=now,
+                max_attempts=max_attempts, dry_run=dry_run,
+            )
+        if outcome is not None:
+            n_labeled += 1
+        elif state == STATE_UNATTRIBUTABLE:
+            n_parked += 1
+        else:
+            n_none += 1
 
         results.append({
             "run_id": run_id,
@@ -1186,7 +1536,14 @@ def backfill(
             "changed": changed,
             "event_count": run.get("event_count", 0),
             "close_reason": run.get("close_reason"),
+            "label_state": state,
         })
+
+        done += 1
+        if progress_every and done % progress_every == 0:
+            print(f"[label] {done}/{len(runs)} runs {time.monotonic() - t0:.0f}s "
+                  f"labeled={n_labeled} pending={n_none} unattributable={n_parked}",
+                  flush=True)
 
     conn.close()
     return results
@@ -1243,22 +1600,65 @@ def _label_source(run_row: dict) -> str:
     return "behavior_inference"
 
 
+#: A run reverify already looked at (confirmed, flipped, or no explicit signal
+#: yet) is not looked at again for this many days. Without it a confirmed
+#: verdict leaves no trace (apply_label writes nothing when the outcome is
+#: unchanged), so every rerun repeats every gh/git lookup of the one before.
+REVERIFY_COOLDOWN_DAYS = 7
+
+
+def _reverify_stamp(run: dict) -> Optional[dict]:
+    raw = run.get("features")
+    try:
+        feats = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except (json.JSONDecodeError, TypeError):
+        return None
+    stamp = feats.get("reverify") if isinstance(feats, dict) else None
+    return stamp if isinstance(stamp, dict) else None
+
+
+def _reverify_is_fresh(run: dict, now: datetime, cooldown_days: float) -> bool:
+    if cooldown_days <= 0:
+        return False
+    stamp = _reverify_stamp(run)
+    at = _parse_ts(stamp.get("at")) if stamp else None
+    return at is not None and now - at < timedelta(days=cooldown_days)
+
+
+def _stamp_reverify(conn: sqlite3.Connection, run_id: str, status: str, now: datetime) -> None:
+    row = conn.execute("SELECT features FROM runs WHERE run_id=?", (run_id,)).fetchone()
+    try:
+        feats = json.loads(row[0] or "{}") if row else {}
+    except (json.JSONDecodeError, TypeError):
+        feats = {}
+    feats["reverify"] = {"at": _fmt_ts(now), "status": status}
+    conn.execute("UPDATE runs SET features=? WHERE run_id=?", (json.dumps(feats), run_id))
+
+
 def select_reverify_candidates(
     conn: sqlite3.Connection,
     since_days: Optional[int] = None,
     outcomes: tuple = REVERIFY_OUTCOMES,
+    *,
+    now: Optional[datetime] = None,
+    cooldown_days: float = 0,
 ) -> list[dict]:
-    """Select runs eligible for git re-verification.
+    """Select runs eligible for git re-verification, newest first.
 
     Eligible: outcome IN `outcomes` (default abandoned/clean), git_branch is
     set and is not a trunk ref (main/master/HEAD), the run's CURRENT label
     source is 'behavior_inference' (see _label_source), and — when
-    `since_days` is given — `started` falls within that window.
+    `since_days` is given — `started` falls within that window. A positive
+    `cooldown_days` additionally drops runs a previous reverify pass stamped
+    (features.reverify.at) within that many days; the default 0 keeps the
+    selection a pure read of label state, which the false-abandon audit needs
+    (dropping confirmed runs would bias its sample).
 
     since_days bounds the pass the same way label.py's own --since-days does:
     without it, a growing run history means an unbounded, ever-slower scan
     (every candidate shells out to `gh pr view` + local git).
     """
+    now = now or datetime.now(timezone.utc)
     clauses = ["outcome IS NOT NULL", "git_branch IS NOT NULL",
                "git_branch NOT IN ('HEAD', 'main', 'master')"]
     params: list = []
@@ -1268,14 +1668,16 @@ def select_reverify_candidates(
     params.extend(outcomes)
 
     if since_days is not None:
-        clauses.append("started >= datetime('now', ?)")
-        params.append(f"-{int(since_days)} days")
+        clauses.append("started >= ?")
+        params.append(_fmt_ts(now - timedelta(days=int(since_days))))
 
     where = "WHERE " + " AND ".join(clauses)
-    cur = conn.execute(f"SELECT * FROM runs {where} ORDER BY started ASC", params)
+    cur = conn.execute(f"SELECT * FROM runs {where} ORDER BY started DESC", params)
     cols = [d[0] for d in cur.description]
     rows = [dict(zip(cols, row)) for row in cur.fetchall()]
-    return [r for r in rows if _label_source(r) not in _EXPLICIT_SOURCES]
+    return [r for r in rows
+            if _label_source(r) not in _EXPLICIT_SOURCES
+            and not _reverify_is_fresh(r, now, cooldown_days)]
 
 
 def _run_has_commit_from_features(run: dict) -> Optional[bool]:
@@ -1297,7 +1699,7 @@ def _run_has_commit_from_features(run: dict) -> Optional[bool]:
 
 
 def reverify_run(
-    run: dict, *, verify_discards: bool = True,
+    run: dict, *, verify_discards: bool = True, orca_since_days: Optional[int] = None,
 ) -> Optional[tuple[str, str]]:
     """Re-run ONLY the explicit precedence tiers (PR state, then git ancestry)
     for a run whose current label is inferred.
@@ -1340,11 +1742,12 @@ def reverify_run(
                 run_has_commit=run_has_commit,
             )
 
-    orca_result = label_from_orca_worker_done(run)
+    orca_result = label_from_orca_worker_done(run, since_days=orca_since_days)
 
     return _prefer_higher_tier(git_result, orca_result)
 
 
+@_with_pass_memo
 def reverify_labels(
     db_path: Path,
     since_days: Optional[int] = None,
@@ -1353,6 +1756,11 @@ def reverify_labels(
     outcomes: tuple = REVERIFY_OUTCOMES,
     verify_discards: bool = True,
     run_id_filter: Optional[str] = None,
+    *,
+    cooldown_days: float = REVERIFY_COOLDOWN_DAYS,
+    progress_every: int = PROGRESS_EVERY,
+    budget_seconds: Optional[float] = None,
+    now: Optional[datetime] = None,
 ) -> list[dict]:
     """Re-verify inferred abandoned/clean labels against git ground truth.
 
@@ -1372,50 +1780,186 @@ def reverify_labels(
     dry_run (default True, read-only): compute everything, write nothing.
     Only `dry_run=False` (CLI: --apply) persists any change.
     """
+    now = now or datetime.now(timezone.utc)
     conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
     conn.execute("PRAGMA journal_mode=WAL")
 
     if run_id_filter:
-        candidates = [r for r in select_reverify_candidates(conn, since_days, outcomes)
+        # An explicit single-run lookup always executes in full.
+        candidates = [r for r in select_reverify_candidates(conn, since_days, outcomes, now=now)
                       if r["run_id"] == run_id_filter]
     else:
-        candidates = select_reverify_candidates(conn, since_days, outcomes)
+        candidates = select_reverify_candidates(
+            conn, since_days, outcomes, now=now, cooldown_days=cooldown_days)
+
+    orca_days = _orca_scan_days(candidates, now)
+    t0 = time.monotonic()
+    counts = {"flip": 0, "confirmed": 0, "no_explicit_signal": 0}
 
     results = []
-    for run in candidates:
+    for idx, run in enumerate(candidates, start=1):
+        if budget_seconds is not None and time.monotonic() - t0 >= budget_seconds:
+            print(f"[reverify] budget {budget_seconds:.0f}s spent after {idx - 1}/"
+                  f"{len(candidates)} candidates; a rerun skips the {idx - 1} already "
+                  f"stamped", flush=True)
+            break
         run_id = run["run_id"]
         old_outcome = run.get("outcome")
 
-        reverified = reverify_run(run, verify_discards=verify_discards)
+        reverified = reverify_run(run, verify_discards=verify_discards,
+                                  orca_since_days=orca_days)
         if reverified is None:
+            if not dry_run:
+                _stamp_reverify(conn, run_id, "no_explicit_signal", now)
+            counts["no_explicit_signal"] += 1
             results.append({
                 "run_id": run_id, "project": run.get("project"),
                 "git_branch": run.get("git_branch"),
                 "old_outcome": old_outcome, "new_outcome": None, "new_source": None,
                 "would_flip": False, "written": False, "status": "no_explicit_signal",
             })
-            continue
+        else:
+            new_outcome, new_source = reverified
+            would_flip = new_outcome != old_outcome
+            status = "flip" if would_flip else "confirmed"
+            changed = apply_label(
+                conn, run_id, new_outcome, new_source, dry_run=dry_run,
+                extra_features={"reverify": {"at": _fmt_ts(now), "status": status}},
+            )
+            written = bool(changed and not dry_run)
+            counts[status] += 1
 
-        new_outcome, new_source = reverified
-        would_flip = new_outcome != old_outcome
-        changed = apply_label(conn, run_id, new_outcome, new_source, dry_run=dry_run)
-        written = bool(changed and not dry_run)
+            if verbose:
+                print(f"  [reverify] run={run_id[:12]} branch={run.get('git_branch')} "
+                      f"{old_outcome} -> {new_outcome} (source={new_source}) "
+                      f"would_flip={would_flip} written={written}")
 
-        if verbose:
-            print(f"  [reverify] run={run_id[:12]} branch={run.get('git_branch')} "
-                  f"{old_outcome} -> {new_outcome} (source={new_source}) "
-                  f"would_flip={would_flip} written={written}")
+            results.append({
+                "run_id": run_id, "project": run.get("project"),
+                "git_branch": run.get("git_branch"),
+                "old_outcome": old_outcome, "new_outcome": new_outcome,
+                "new_source": new_source,
+                "would_flip": would_flip, "written": written,
+                "status": status,
+            })
 
-        results.append({
-            "run_id": run_id, "project": run.get("project"),
-            "git_branch": run.get("git_branch"),
-            "old_outcome": old_outcome, "new_outcome": new_outcome, "new_source": new_source,
-            "would_flip": would_flip, "written": written,
-            "status": "flip" if would_flip else "confirmed",
-        })
+        if progress_every and idx % progress_every == 0:
+            print(f"[reverify] {idx}/{len(candidates)} {time.monotonic() - t0:.0f}s "
+                  f"flip={counts['flip']} confirmed={counts['confirmed']} "
+                  f"no_signal={counts['no_explicit_signal']}", flush=True)
 
     conn.close()
     return results
+
+
+# ── Retroactive session rollup (#60) ──────────────────────────────────────────
+#
+# compute_label's fresh path turns an inferred 'abandoned' into "no label" when
+# a sibling segment of the same run_key committed/landed (an idle-timeout
+# split of one logical run). Labels written BEFORE that rule existed are
+# frozen: reverify only re-checks explicit sources. rollup_labels re-applies
+# the same rule (_session_has_landed_sibling) to those frozen abandons.
+
+def rollup_labels(
+    db_path: Path,
+    since_days: Optional[int] = None,
+    dry_run: bool = True,
+    undo_path: Optional[Path] = None,
+    progress_every: int = PROGRESS_EVERY,
+    now: Optional[datetime] = None,
+) -> list[dict]:
+    """Clear behavior_inference 'abandoned' labels whose run_key has a landed sibling.
+
+    Candidates: outcome='abandoned', label source behavior_inference, non-empty
+    run_key. A flip clears outcome/labeled_at (as the B5 retroactive clear
+    does), keeps label_history intact, records features.rollup, and parks the
+    run (label_state='rolled_up', not 'unattributable') so the nightly queue
+    does not recompute a verdict that is already known. Explicit labels are
+    never touched.
+
+    dry_run (default True): compute and report, write nothing. A real apply
+    needs undo_path: the pre-image of every flipped row is appended there as
+    JSON lines BEFORE the row is changed, so a bad batch can be restored.
+    """
+    if not dry_run and undo_path is None:
+        raise ValueError("rollup_labels(dry_run=False) requires undo_path")
+    now = now or datetime.now(timezone.utc)
+    conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
+    conn.execute("PRAGMA journal_mode=WAL")
+    if not dry_run:
+        from store import ensure_label_columns
+        ensure_label_columns(conn)
+
+    clauses = ["outcome = 'abandoned'", "run_key IS NOT NULL", "run_key != ''"]
+    params: list = []
+    if since_days is not None:
+        clauses.append("started >= ?")
+        params.append(_fmt_ts(now - timedelta(days=int(since_days))))
+    cur = conn.execute(
+        f"SELECT * FROM runs WHERE {' AND '.join(clauses)} ORDER BY started DESC", params)
+    cols = [d[0] for d in cur.description]
+    candidates = [r for r in (dict(zip(cols, row)) for row in cur.fetchall())
+                  if _label_source(r) not in _EXPLICIT_SOURCES]
+
+    undo = open(undo_path, "a", encoding="utf-8") if (undo_path and not dry_run) else None
+    results = []
+    t0 = time.monotonic()
+    try:
+        for idx, run in enumerate(candidates, start=1):
+            flip = _session_has_landed_sibling(conn, run)
+            written = False
+            if flip and not dry_run:
+                undo.write(json.dumps({
+                    k: run.get(k) for k in
+                    ("run_id", "outcome", "labeled_at", "label_version", "label_history",
+                     "features", "label_attempts", "last_attempt_at", "label_state")
+                }) + "\n")
+                undo.flush()
+                try:
+                    feats = json.loads(run.get("features") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    feats = {}
+                feats["rollup"] = {"at": _fmt_ts(now), "reason": "landed_sibling_on_run_key"}
+                conn.execute(
+                    "UPDATE runs SET outcome=NULL, labeled_at=NULL, features=?, "
+                    "label_attempts=?, last_attempt_at=?, label_state=? WHERE run_id=?",
+                    (json.dumps(feats), int(run.get("label_attempts") or 0) + 1,
+                     _fmt_ts(now), STATE_ROLLED_UP, run["run_id"]),
+                )
+                written = True
+            results.append({
+                "run_id": run["run_id"], "project": run.get("project"),
+                "agent_kind": run.get("agent_kind"), "run_key": run.get("run_key"),
+                "git_branch": run.get("git_branch"), "started": run.get("started"),
+                "event_count": run.get("event_count"),
+                "would_flip": flip, "written": written,
+                "status": "flip" if flip else "kept",
+            })
+            if progress_every and idx % progress_every == 0:
+                print(f"[rollup] {idx}/{len(candidates)} {time.monotonic() - t0:.0f}s "
+                      f"flip={sum(1 for r in results if r['would_flip'])}", flush=True)
+    finally:
+        if undo:
+            undo.close()
+        conn.close()
+    return results
+
+
+def print_rollup_report(results: list[dict], sample: int = 10) -> None:
+    flips = [r for r in results if r["would_flip"]]
+    by_proj: dict[str, int] = {}
+    for r in flips:
+        key = f"{r.get('project')}/{r.get('agent_kind')}"
+        by_proj[key] = by_proj.get(key, 0) + 1
+    print(f"Rollup candidates: {len(results)}  flip={len(flips)}  "
+          f"kept={len(results) - len(flips)}  written={sum(1 for r in results if r['written'])}")
+    for k, v in sorted(by_proj.items(), key=lambda kv: -kv[1]):
+        print(f"  {k:48s} {v}")
+    if flips and sample:
+        print(f"\nFirst {min(sample, len(flips))} flips (hand-check run_key siblings):")
+        for r in flips[:sample]:
+            print(f"  {r['run_id']}  run_key={r['run_key']}  project={r['project']}  "
+                  f"events={r['event_count']}  started={r['started']}")
 
 
 def false_abandon_rate(
@@ -1560,15 +2104,45 @@ def main() -> int:
                         help="Only consider runs started in the last N days "
                              "(bounds cost against a growing run history)")
     parser.add_argument("--unlabeled-only", action="store_true",
-                        help="Skip runs that already carry a non-null outcome "
-                             "(true incremental pass for nightly automation)")
+                        help="Incremental queue for nightly automation: only runs with no "
+                             "outcome that were never attempted or are past their backoff "
+                             "window (1, 2, 4 days), newest first; a run that fails "
+                             "--max-attempts times is parked as label_state=unattributable "
+                             "and, if it still has a branch/bead/rollout to look up, "
+                             f"retried every {LABEL_REVISIT_DAYS:g} days while inside "
+                             "--since-days")
+    parser.add_argument("--ignore-backoff", action="store_true",
+                        help="With --unlabeled-only: also retry runs that are not yet due "
+                             "or are parked (unattributable or rolled_up)")
+    parser.add_argument("--max-attempts", type=int, default=LABEL_MAX_ATTEMPTS,
+                        help="Failed attempts before a run is parked as unattributable "
+                             f"(default {LABEL_MAX_ATTEMPTS})")
+    parser.add_argument("--progress-every", type=int, default=PROGRESS_EVERY, metavar="N",
+                        help="Print a progress line every N runs (0 = off)")
+    parser.add_argument("--budget-seconds", type=float, default=None, metavar="S",
+                        help="Stop cleanly after S seconds of work; the remaining queue is "
+                             "picked up by the next pass")
+    parser.add_argument("--reverify-cooldown-days", type=float, default=REVERIFY_COOLDOWN_DAYS,
+                        metavar="N",
+                        help="With --reverify-days: skip runs an earlier reverify pass "
+                             f"already looked at within N days (default {REVERIFY_COOLDOWN_DAYS}; "
+                             "0 re-checks everything)")
+    parser.add_argument("--rollup-days", type=int, default=None, metavar="N",
+                        help="Retroactively apply the run_key segment rollup to "
+                             "behavior_inference 'abandoned' labels started in the last N days "
+                             "(#60): clear the label when a sibling segment landed. Dry-run "
+                             "unless --apply (which also needs --undo-file).")
+    parser.add_argument("--undo-file", type=Path, default=None,
+                        help="With --rollup-days --apply: JSONL file that receives each "
+                             "flipped row's pre-image before it is changed")
     parser.add_argument("--reverify-days", type=int, default=None, metavar="N",
                         help="Re-verify inferred abandoned/clean labels with a non-trunk "
                              "git_branch, started in the last N days, against the explicit "
                              "git/PR tiers (nervous-bus-33). Read-only unless --apply is also "
                              "given. Mutually exclusive with a normal backfill pass.")
     parser.add_argument("--apply", action="store_true",
-                        help="With --reverify-days: actually write flips (default is dry-run).")
+                        help="With --reverify-days or --rollup-days: actually write "
+                             "(default is dry-run).")
     parser.add_argument("--false-abandon-rate", action="store_true",
                         help="Measure the false-abandon rate over a seeded sample of "
                              "behavior_inference 'abandoned' runs with a git branch. "
@@ -1589,6 +2163,23 @@ def main() -> int:
         print(json.dumps(report, indent=2))
         return 0
 
+    if args.rollup_days is not None:
+        if args.apply and args.undo_file is None:
+            parser.error("--rollup-days --apply requires --undo-file")
+        results = rollup_labels(
+            db_path=args.db_path,
+            since_days=args.rollup_days,
+            dry_run=not args.apply,
+            undo_path=args.undo_file,
+            progress_every=args.progress_every,
+        )
+        print_rollup_report(results)
+        mode = "" if args.apply else "[DRY-RUN] "
+        n_flip = sum(1 for r in results if r["would_flip"])
+        print(f"\n{mode}Rollup checked {len(results)} abandoned labels; {n_flip} flip"
+              f"{' (written)' if args.apply else ''}.")
+        return 0
+
     if args.reverify_days is not None:
         results = reverify_labels(
             db_path=args.db_path,
@@ -1596,6 +2187,9 @@ def main() -> int:
             dry_run=not args.apply,
             verbose=args.verbose,
             run_id_filter=args.run_id,
+            cooldown_days=args.reverify_cooldown_days,
+            progress_every=args.progress_every,
+            budget_seconds=args.budget_seconds,
         )
         print_reverify_report(results)
         mode = "" if args.apply else "[DRY-RUN] "
@@ -1611,13 +2205,19 @@ def main() -> int:
         verbose=args.verbose,
         since_days=args.since_days,
         unlabeled_only=args.unlabeled_only,
+        ignore_backoff=args.ignore_backoff,
+        max_attempts=args.max_attempts,
+        progress_every=args.progress_every,
+        budget_seconds=args.budget_seconds,
     )
 
     print_report(results)
 
     changed = sum(1 for r in results if r.get("changed"))
+    parked = sum(1 for r in results if r.get("label_state") == STATE_UNATTRIBUTABLE)
     mode = "[DRY-RUN] " if args.dry_run else ""
-    print(f"\n{mode}Labeled {len(results)} runs; {changed} changed.")
+    print(f"\n{mode}Labeled {len(results)} runs; {changed} changed; "
+          f"{parked} parked as unattributable.")
 
     return 0
 
