@@ -7,7 +7,9 @@
 # Usage:
 #   nervous publish <channel> '<json-payload>'
 #   echo '<json>' | nervous publish <channel>
-#   nervous publish tengine.session.frame --subject silo_racing_X '{"fps":47.3}'
+#   nervous publish --subject silo_racing_X tengine.session.frame '{"fps":47.3}'
+#   nervous publish --maxlen 2000 --max-bytes 4096 loom.lifecycle.started.v1 '{"id":"01J"}'
+#                                           # flags go BEFORE the channel
 #   nervous tail tengine.session            # subscribe (requires plugin running)
 #   nervous schemas                         # list known channels (repo + user-home)
 #   nervous schemas --cluster autobench     # filter by taxonomy cluster
@@ -39,6 +41,29 @@
 #                    publish prints a machine-readable degradation marker on
 #                    stdout (delivery=file-only validation=skipped ...) and a
 #                    one-time stderr warning, but still exits 0.
+#
+# Stream size limits. Streams are capped by entry COUNT (MAXLEN), but an
+# entry's cost is its size: 10,000 entries of 60 KB is 600 MB for one channel,
+# and a production Valkey died of exactly that. So publishes are also bounded
+# in bytes. Payloads are NOTIFICATIONS (ids + the minimal facts a consumer needs
+# to decide whether to fetch), not documents.
+#   --maxlen N       approximate MAXLEN of nbus:<channel> for this publish
+#                    (positive integer; default 10000)
+#   --max-bytes N    refuse an envelope larger than N bytes (0 = no limit;
+#                    default 16384)
+#   NERVOUS_TYPED_MAXLEN       default for --maxlen
+#   NERVOUS_FANOUT_MAXLEN      approximate MAXLEN of nbus:all (default 50000)
+#   NERVOUS_MAX_PAYLOAD_BYTES  default for --max-bytes
+#   NERVOUS_OVERSIZE_POLICY    reject (default) | warn. reject writes NOTHING of
+#                    the oversize envelope to debug.jsonl or Redis (redis-mirror
+#                    would otherwise replay it), emits a bus.dead_letter event
+#                    with failure_reason=payload_too_large, and exits 5. warn
+#                    prints a stderr warning and publishes anyway.
+# A flag beats its env var, which beats the default. Invalid env values are
+# ignored with a warning; invalid flag values exit 2.
+#
+# Exit codes: 0 ok, 2 usage / allowlist / schema violation, 4 strict validation
+# unavailable, 5 payload over its byte limit.
 
 set -euo pipefail
 
@@ -67,6 +92,93 @@ cmd_help() {
     exit 0
 }
 
+# Resolve one integer limit: an explicit value (already validated by the flag
+# parser) wins, then the env value, then the default. An env value that is not
+# an integer >= min is ignored with a warning rather than aborting a publish.
+#   _nbus_limit_int <min> <explicit> <env value> <default> <env name>
+_nbus_limit_int() {
+    local min="$1" explicit="$2" envval="$3" default="$4" envname="$5"
+    if [[ -n "$explicit" ]]; then
+        printf '%s' "$explicit"
+        return 0
+    fi
+    if [[ -n "$envval" ]]; then
+        if [[ "$envval" =~ ^[0-9]{1,15}$ ]] && (( 10#$envval >= min )); then
+            printf '%s' "$(( 10#$envval ))"
+            return 0
+        fi
+        echo "nervous: WARNING: ignoring ${envname}='${envval}' (want an integer >= ${min}); using ${default}" >&2
+    fi
+    printf '%s' "$default"
+}
+
+# Append a bus.dead_letter envelope to debug.jsonl and deliver it to Redis.
+#   _nbus_emit_dead_letter <source> <data-json>
+_nbus_emit_dead_letter() {
+    local dl_source="$1" dl_data="$2" dl_id dl_time dl_envelope dl_log
+    dl_id="$(ulid)"
+    dl_time="$(iso_now)"
+    dl_envelope=$(printf '{"specversion":"1.0","id":"%s","source":%s,"type":"bus.dead_letter","time":"%s","datacontenttype":"application/json","data":%s}' \
+        "$dl_id" \
+        "$(printf '%s' "$dl_source" | jq -R .)" \
+        "$dl_time" \
+        "$dl_data")
+    dl_log="${NERVOUS_DEBUG_LOG:-$HOME/.cache/nervous-bus/debug.jsonl}"
+    mkdir -p "$(dirname "$dl_log")"
+    printf '%s\n' "$dl_envelope" >> "$dl_log"
+    _nbus_redis_xadd "$dl_envelope"
+}
+
+# Byte-bounded publish guard (issue #27). MAXLEN bounds entry COUNT; this
+# bounds entry SIZE, so a producer that starts publishing full snapshots is
+# caught at publish time instead of when the broker dies.
+#   _nbus_payload_guard <envelope> <channel> <max bytes; 0 = unlimited>
+# Returns 0 when the envelope may be published, 5 when it was refused. On
+# refusal NOTHING of the original is written to debug.jsonl or Redis (the
+# redis-mirror replays debug.jsonl, so writing it there would defeat the
+# guard); a small bus.dead_letter event is written instead.
+_nbus_payload_guard() {
+    local envelope="$1" channel="$2" limit="$3" size policy dl_data
+    [[ "$limit" == "0" ]] && return 0
+    # wc -c counts BYTES. ${#envelope} counts characters under a UTF-8 locale,
+    # which would let multibyte payloads past the limit.
+    size="$(printf '%s' "$envelope" | wc -c)"
+    size=$(( size ))
+    (( size <= limit )) && return 0
+
+    policy="${NERVOUS_OVERSIZE_POLICY:-reject}"
+    case "$policy" in
+        reject) ;;
+        warn)
+            echo "nervous: WARNING: payload for ${channel} is ${size} bytes, over the ${limit} byte limit; publishing anyway (NERVOUS_OVERSIZE_POLICY=warn)" >&2
+            return 0 ;;
+        *)
+            echo "nervous: WARNING: unknown NERVOUS_OVERSIZE_POLICY='${policy}', using reject" >&2 ;;
+    esac
+
+    echo "[nbus size] payload for ${channel} is ${size} bytes, over the ${limit} byte limit; refused. Publish ids and minimal facts, not documents (or raise --max-bytes / NERVOUS_MAX_PAYLOAD_BYTES)." >&2
+    # The envelope goes to python on stdin: it can exceed what fits in one argv.
+    dl_data="$(printf '%s' "$envelope" | "${NERVOUS_PYTHON:-python3}" -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    src = json.loads(raw).get("source", "")
+except Exception:
+    src = ""
+print(json.dumps({
+    "failure_reason": "payload_too_large",
+    "original_type": sys.argv[1],
+    "original_source": src if isinstance(src, str) else "",
+    "original_payload_excerpt": raw[:500],
+    "payload_bytes": int(sys.argv[2]),
+    "limit_bytes": int(sys.argv[3]),
+}))' "$channel" "$size" "$limit" 2>/dev/null)" || dl_data=""
+    if [[ -n "$dl_data" ]]; then
+        _nbus_emit_dead_letter "${NERVOUS_SOURCE:-/$(basename "$PWD")}" "$dl_data"
+    fi
+    return 5
+}
+
 # Write a CloudEvents envelope to Redis Streams (nbus:<channel> + nbus:all).
 #
 # The envelope has already been schema-validated by cmd_publish at this point;
@@ -82,11 +194,17 @@ cmd_help() {
 # silent no-op. Pin the interpreter with $NERVOUS_PYTHON. Fail-soft: if Redis is
 # unreachable the event is still durable in debug.jsonl and the mirror delivers
 # it once Redis returns.
+#
+# $2 / $3 (optional) are the approximate MAXLEN of nbus:<channel> and nbus:all;
+# unset falls back to NERVOUS_TYPED_MAXLEN / NERVOUS_FANOUT_MAXLEN, then to
+# 10000 / 50000.
 _nbus_redis_xadd() {
-    local raw_json="$1"
+    local raw_json="$1" typed_maxlen fanout_maxlen
     [[ "${NERVOUS_NO_REDIS:-0}" == "1" ]] && return 0
-    if _nbus_xadd_python "$raw_json"; then return 0; fi
-    if _nbus_xadd_rediscli "$raw_json"; then return 0; fi
+    typed_maxlen="$(_nbus_limit_int 1 "${2:-}" "${NERVOUS_TYPED_MAXLEN:-}" 10000 NERVOUS_TYPED_MAXLEN)"
+    fanout_maxlen="$(_nbus_limit_int 1 "${3:-}" "${NERVOUS_FANOUT_MAXLEN:-}" 50000 NERVOUS_FANOUT_MAXLEN)"
+    if _nbus_xadd_python "$raw_json" "$typed_maxlen" "$fanout_maxlen"; then return 0; fi
+    if _nbus_xadd_rediscli "$raw_json" "$typed_maxlen" "$fanout_maxlen"; then return 0; fi
     # Neither path reached Redis. The event is still durable in debug.jsonl, but
     # do NOT fail silently — surface it so service-context delivery gaps are
     # visible (the root of the gzsv/bt0a "exit 0 on silent loss" bug). Producers
@@ -101,11 +219,13 @@ _nbus_redis_xadd() {
 # non-zero on any failure (missing redis module, unreachable Redis) so the
 # caller falls back to redis-cli.
 _nbus_xadd_python() {
-    "${NERVOUS_PYTHON:-python3}" - "$1" <<'PYEOF' 2>/dev/null
+    "${NERVOUS_PYTHON:-python3}" - "$1" "$2" "$3" <<'PYEOF' 2>/dev/null
 import sys, os, json
 try:
     import redis as _r
     raw = sys.argv[1]
+    typed_maxlen = int(sys.argv[2])
+    fanout_maxlen = int(sys.argv[3])
     env = json.loads(raw)
     ch = env.get('type', '')
     if not ch:
@@ -152,8 +272,8 @@ return 1
         f'nbus:{ch}',
         'nbus:all',
         600,
-        10000,
-        50000,
+        typed_maxlen,
+        fanout_maxlen,
         *flat_fields,
     )
     sys.exit(0)
@@ -172,7 +292,7 @@ PYEOF
 # path's atomic idempotent-publication semantics.
 _nbus_xadd_rediscli() {
     command -v redis-cli >/dev/null 2>&1 || return 1
-    local raw="$1" url ch src ts id parsed
+    local raw="$1" typed_maxlen="$2" fanout_maxlen="$3" url ch src ts id parsed
     url="${NERVOUS_REDIS_URL:-redis://localhost:6379}"
     parsed="$("${NERVOUS_PYTHON:-python3}" - "$raw" 2>/dev/null <<'PYEOF'
 import sys, json
@@ -214,7 +334,7 @@ return 1
 "
     redis-cli -u "$url" --raw EVAL "$script" 3 \
         "$dedup_key" "nbus:$ch" "nbus:all" \
-        600 10000 50000 \
+        600 "$typed_maxlen" "$fanout_maxlen" \
         _raw "$raw" type "$ch" source "$src" timestamp "$ts" event_id "$id" \
         >/dev/null 2>&1 || return 1
     return 0
@@ -224,15 +344,26 @@ cmd_publish() {
     # Parse flags before positional args so Go can call:  nervous publish --json
     # (stdin = complete CloudEvents envelope, no channel arg needed).
     # Or: nervous publish <channel> [--subject S] <payload>
-    local subject="" pass_through=false
+    local subject="" pass_through=false flag_maxlen="" flag_max_bytes=""
     while [[ $# -gt 0 && "$1" == --* ]]; do
         case "$1" in
             --subject) subject="$2"; shift 2 ;;
             --json)    pass_through=true; shift ;;
+            --maxlen)
+                [[ "${2:-}" =~ ^[1-9][0-9]{0,14}$ ]] || { echo "nervous publish: --maxlen needs a positive integer" >&2; return 2; }
+                flag_maxlen="$2"; shift 2 ;;
+            --max-bytes)
+                [[ "${2:-}" =~ ^[0-9]{1,15}$ ]] || { echo "nervous publish: --max-bytes needs a non-negative integer (0 = no limit)" >&2; return 2; }
+                flag_max_bytes="$((10#$2))"; shift 2 ;;
             --)        shift; break ;;
             --*)       echo "unknown flag: $1" >&2; return 2 ;;
         esac
     done
+
+    # Stream limits for this publish: flag > env > default (see header).
+    local maxlen max_bytes
+    maxlen="$(_nbus_limit_int 1 "$flag_maxlen" "${NERVOUS_TYPED_MAXLEN:-}" 10000 NERVOUS_TYPED_MAXLEN)"
+    max_bytes="$(_nbus_limit_int 0 "$flag_max_bytes" "${NERVOUS_MAX_PAYLOAD_BYTES:-}" 16384 NERVOUS_MAX_PAYLOAD_BYTES)"
 
     # Determine channel from args or parsed payload. For --json we MUST read
     # stdin exactly once (a second `cat` later would get an empty string, since
@@ -331,6 +462,7 @@ PYEOF
             echo "nervous publish --json: failed to parse event type from payload" >&2
             return 2
         fi
+        _nbus_payload_guard "$payload" "$event_channel" "$max_bytes" || return $?
         local _log_max=524288000
         if [[ -f "$log" ]]; then
             local _log_size
@@ -338,7 +470,7 @@ PYEOF
             if (( _log_size > _log_max )); then mv -f "$log" "${log}.1" 2>/dev/null || true; fi
         fi
         printf '%s\n' "$payload" >> "$log"
-        _nbus_redis_xadd "$payload"
+        _nbus_redis_xadd "$payload" "$maxlen"
         if [[ -n "${ZELLIJ:-}" ]] && command -v zellij >/dev/null 2>&1 && [[ "${NERVOUS_NO_ZELLIJ:-0}" != "1" ]]; then
             # Fire-and-forget: zellij pipe is best-effort legacy compat. File-tail + Redis
             # Streams are the primary subscriber paths; don't pay the 1s timeout tax inline.
@@ -376,6 +508,11 @@ PYEOF
         "$payload")
     local log="${NERVOUS_DEBUG_LOG:-$HOME/.cache/nervous-bus/debug.jsonl}"
     mkdir -p "$(dirname "$log")"
+
+    # ── Byte-bounded payload guard (before validation: cheap, and it keeps a
+    # huge document away from the jsonschema subprocess). Refusal writes only a
+    # dead letter, never the original.
+    _nbus_payload_guard "$envelope" "$channel" "$max_bytes" || return $?
 
     # ── Schema validation ────────────────────────────────────────────────────────
     # Skip validation when NBUS_SKIP_VALIDATION=1 (high-frequency pre-validated publishers).
@@ -446,16 +583,7 @@ except Exception as e:
                     'original_payload_excerpt': sys.argv[4],
                 }))" "$channel" "$source" "$_detail" "$_excerpt" 2>/dev/null)
                 if [[ -n "$_dl_payload" ]]; then
-                    local _dl_id; _dl_id="$(ulid)"
-                    local _dl_time; _dl_time="$(iso_now)"
-                    local _dl_envelope
-                    _dl_envelope=$(printf '{"specversion":"1.0","id":"%s","source":%s,"type":"bus.dead_letter","time":"%s","datacontenttype":"application/json","data":%s}' \
-                        "$_dl_id" \
-                        "$(printf '%s' "$source" | jq -R .)" \
-                        "$_dl_time" \
-                        "$_dl_payload")
-                    printf '%s\n' "$_dl_envelope" >> "$log"
-                    NBUS_SKIP_VALIDATION=1 _nbus_redis_xadd "$_dl_envelope"
+                    _nbus_emit_dead_letter "$source" "$_dl_payload"
                 fi
                 echo "[nbus schema] validation failed for $channel: $_detail" >&2
                 return 2
@@ -505,7 +633,7 @@ except Exception as e:
     fi
     printf '%s\n' "$envelope" >> "$log"
     # Also write directly to Redis Streams — eliminates the file→mirror→Redis hop.
-    _nbus_redis_xadd "$envelope"
+    _nbus_redis_xadd "$envelope" "$maxlen"
 
     # If we're in a real zellij session AND the socket is reachable, also pipe
     # to the plugin — fire-and-forget so a stalled/missing plugin doesn't block.
