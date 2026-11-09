@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 _TRANSCRIPTS = str(Path(__file__).resolve().parent.parent / "transcripts")
 if _TRANSCRIPTS not in sys.path:
     sys.path.append(_TRANSCRIPTS)
-from project import project_of as _resolve_project  # noqa: E402
+from project import project_of as _resolve_project, repo_of as _resolve_repo  # noqa: E402
 
 from label import _source_tier  # noqa: E402
 from detectors.dispatch_lineage import DEFAULT_COHORT_WINDOW_S, _epoch  # noqa: E402
@@ -150,11 +150,12 @@ def sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
 
 
-def project_from_cwd(cwd: str) -> str:
+def project_from_cwd(cwd: str, transcript: Optional[str] = None) -> str:
     """Project for a cwd via the shared resolver; 'unknown' when it cannot tell.
     A fork agent's .claude/worktrees/agent-<id> checkout belongs to the repo that
-    holds it, never to its own slug."""
-    return _resolve_project(cwd) or "unknown"
+    holds it, never to its own slug; ``transcript`` lets the session that launched a
+    subagent name the repo when the agent's own worktree sits under a lane name."""
+    return _resolve_project(cwd, transcript) or "unknown"
 
 
 def _read_lines(path: Path, limit: int) -> Iterator[dict]:
@@ -480,7 +481,7 @@ def extract(args_ns: argparse.Namespace) -> dict:
             for b in src:
                 if since and b["ts"] and b["ts"][:19] < since:
                     continue
-                project = b.get("project") or (project_from_cwd(b["cwd"]) if b["cwd"] else "unknown")
+                project = b.get("project") or project_from_cwd(b["cwd"], b.get("transcript") or None)
                 run = None
                 for kind, key in b["join"]:
                     if key and (run := runs["idx"][kind].get(key)):
@@ -832,7 +833,8 @@ def diff_stat(row: dict, repo_hint: Optional[str] = None) -> Optional[str]:
             repos.append(str(HOME / "projects" / cand))
     wt = row.get("run_worktree") or row.get("cwd") or ""
     if "/worktrees/" in wt:
-        repos.append(str(HOME / "projects" / project_from_cwd(wt)))
+        # a checkout to look in, not a label: a cron lane's repo, not its auto-<family>
+        repos.append(str(HOME / "projects" / (_resolve_repo(wt) or "unknown")))
     for branch in (row.get("run_branch"), row.get("git_branch")):
         for repo in dict.fromkeys(repos):
             if branch and Path(repo).is_dir() and _git(["rev-parse", "--verify", branch], repo):

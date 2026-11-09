@@ -114,7 +114,28 @@ def test_project_is_the_repo_for_an_isolated_lane_cwd(tmp_path):
     _mk_run(tmp_path, "-home-eric-data2-worktrees-nervous-bus-wf-1", "s", "wf_lane-1", [
         {"id": "l1", "prompt": "p", "cwd": "/home/eric/data2/worktrees/nervous-bus/wf_3998f149-2b7-2"},
         {"id": "l2", "prompt": "p", "cwd": "/home/eric/projects/tengine/.claude/worktrees/agent-a3f67d389e54ce3f8"},
-        {"id": "l3", "prompt": "p", "cwd": "/work"},
     ])
     by = {r.agent_id: r.project for r in wd.scan(tmp_path)}
-    assert by == {"l1": "nervous-bus", "l2": "tengine", "l3": "unknown"}
+    assert by == {"l1": "nervous-bus", "l2": "tengine"}
+
+
+def test_lane_named_worktree_takes_the_repo_of_the_session_that_launched_the_workflow(tmp_path, monkeypatch):
+    import re
+    from project import cache_clear
+    home = tmp_path / "home"
+    for sub in ("projects", "data2/worktrees", "data2/orca/biz-worthy"):
+        (home / sub).mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("NBUS_PROJECT_ROOTS", os.pathsep.join(
+        str(home / p) for p in ("projects", "data2/worktrees", "data2/orca")))
+    cache_clear()
+    launch = re.sub(r"[^A-Za-z0-9]", "-", str(home / "data2/orca/biz-worthy/edge-and-analysis"))
+    _mk_run(tmp_path / "claude", launch, "s", "wf_lane-2", [
+        {"id": "l1", "prompt": "p", "cwd": str(home / "data2/worktrees/edge-and-analysis/agent-a0c9920357f5a3a62")},
+        {"id": "l2", "prompt": "p", "cwd": "/work"},
+    ])
+    _mk_run(tmp_path / "claude", "-no-such-launch-directory", "s", "wf_lane-3", [
+        {"id": "l3", "prompt": "p", "cwd": "/work"},
+    ])
+    by = {r.agent_id: r.project for r in wd.scan(tmp_path / "claude")}
+    assert by == {"l1": "biz-worthy", "l2": "biz-worthy", "l3": "unknown"}

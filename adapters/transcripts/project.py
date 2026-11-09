@@ -237,12 +237,20 @@ def _container_repo(container: str, home: str) -> Optional[str]:
     return next(iter(seen), None)
 
 
-@functools.lru_cache(maxsize=1 << 16)
-def _resolve(cwd: str, root_list: tuple, home: str, alias: tuple) -> Optional[str]:
+def _cron_family(cwd: str, alias: tuple) -> Optional[str]:
     for seg in reversed(cwd.split("/")):
         m = _CRON_RE.match(seg)
         if m:
             return _finish(m.group(1), alias)
+    return None
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def _resolve(cwd: str, root_list: tuple, home: str, alias: tuple, cron: bool = True) -> Optional[str]:
+    if cron:
+        family = _cron_family(cwd, alias)
+        if family:
+            return family
     if _is_misc(cwd, home, root_list):
         return MISC
     name = None
@@ -252,14 +260,64 @@ def _resolve(cwd: str, root_list: tuple, home: str, alias: tuple) -> Optional[st
     return _finish(name or _git_project(cwd, home) or _generic_layout(cwd), alias)
 
 
-def project_of(cwd) -> Optional[str]:
-    """Project name for a working directory, or None when it cannot be told."""
+def _clean(cwd) -> Optional[str]:
     if not isinstance(cwd, str):
         return None
     cwd = cwd.strip()
-    if not cwd.startswith("/"):
-        return None
-    return _resolve(os.path.normpath(cwd), roots(), _home(), aliases())
+    return os.path.normpath(cwd) if cwd.startswith("/") else None
+
+
+def _is_checkout(name: str, root_list: tuple, home: str) -> bool:
+    """True when name is itself a checkout under some root (not just a lane's name)."""
+    for r in root_list:
+        path = os.path.join(r, name)
+        hit = _git_repo(path, home)
+        if hit and hit[1] == path:
+            return True
+    return False
+
+
+def project_of_transcript(path) -> Optional[str]:
+    """Project a Claude transcript's session was launched in, from the project-dir
+    component of its path ('.../-home-me-data2-orca-app-to-market-wardr/<session>/...').
+    None when the path has no such component or the launch dir was scratch/home."""
+    for part in str(path).split("/"):
+        if len(part) > 1 and part.startswith("-"):
+            name = project_of_dirname(part)
+            return None if name == MISC else name
+    return None
+
+
+def project_of(cwd, transcript=None) -> Optional[str]:
+    """Project name for a working directory, or None when it cannot be told.
+
+    transcript, when given, is the path of the Claude transcript the cwd came from. A
+    subagent's own cwd is often a worktree under a lane-named directory
+    (data2/worktrees/<lane>/agent-<id>) whose repo is only recoverable from the session
+    that launched it, so the launch directory answers whenever the cwd's own answer is
+    not itself a checkout. A cwd that names a real checkout (a cross-repo dispatch) and
+    a cron family keep their own answer.
+    """
+    path = _clean(cwd)
+    home, root_list, alias = _home(), roots(), aliases()
+    own = _resolve(path, root_list, home, alias) if path else None
+    if transcript is None:
+        return own
+    launch = project_of_transcript(transcript)
+    if not launch or own == launch:
+        return own
+    if own is None or own == MISC:
+        return launch
+    if _cron_family(path, alias) or _is_checkout(own, root_list, home):
+        return own
+    return launch
+
+
+def repo_of(cwd) -> Optional[str]:
+    """The repository directory name for a cwd: project_of without the cron-family rule,
+    for callers that go looking for the checkout on disk."""
+    path = _clean(cwd)
+    return _resolve(path, roots(), _home(), aliases(), False) if path else None
 
 
 def _munge(s: str) -> str:

@@ -50,9 +50,11 @@ def _projects_root() -> Path:
                                Path.home() / ".claude" / "projects"))
 
 
-def _project_from_cwd(cwd: str) -> str:
-    """Project slug for an agent cwd via the shared resolver; 'unknown' when it cannot tell."""
-    return _resolve_project(cwd) or "unknown"
+def _project_from_cwd(cwd: str, transcript: Optional[str] = None) -> str:
+    """Project slug for an agent cwd via the shared resolver; 'unknown' when it cannot tell.
+    ``transcript`` is the agent transcript: the session that launched a workflow names the
+    repo when the agent's worktree sits under a lane-named directory."""
+    return _resolve_project(cwd, transcript) or "unknown"
 
 
 @dataclass
@@ -150,7 +152,7 @@ def record_from_transcript(wf_run_id: str, transcript: Path,
         parent_session_id=line0.get("sessionId", ""),
         cwd=line0.get("cwd", ""),
         git_branch=line0.get("gitBranch", ""),
-        project=_project_from_cwd(line0.get("cwd", "")),
+        project=_project_from_cwd(line0.get("cwd", ""), str(transcript)),
     )
 
 

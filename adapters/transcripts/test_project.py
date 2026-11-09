@@ -242,3 +242,66 @@ def test_dirname_and_cwd_agree_for_the_same_directory(home):
     for rel in ("projects/kb", "data2/orca/biz-worthy"):
         d = home / rel
         assert project.project_of_dirname(_munged(d)) == project.project_of(str(d))
+
+
+# ── the launching session names the repo for a lane-named worktree ──────────────────
+
+def _transcript(home, launch_dir):
+    return str(home / ".claude/projects" / _munged(launch_dir) / "sess-1/subagents/agent-ab12cd34ef56.jsonl")
+
+
+def test_project_of_transcript_reads_the_launch_directory(home):
+    (home / "data2/orca/biz-worthy").mkdir()
+    t = _transcript(home, home / "data2/orca/biz-worthy/edge-and-analysis")
+    assert project.project_of_transcript(t) == "biz-worthy"
+    assert project.project_of_transcript(str(home / "elsewhere/plain.jsonl")) is None
+    assert project.project_of_transcript(_transcript(home, home / "data2/claude-tmp/x")) is None
+
+
+def test_lane_named_worktree_takes_the_repo_of_the_session_that_launched_it(home):
+    (home / "data2/orca/biz-worthy").mkdir()
+    cwd = str(home / "data2/worktrees/edge-and-analysis/agent-a0c9920357f5a3a62")
+    t = _transcript(home, home / "data2/orca/biz-worthy/edge-and-analysis")
+    assert project.project_of(cwd) == "edge-and-analysis"
+    assert project.project_of(cwd, t) == "biz-worthy"
+
+
+def test_transcript_does_not_override_a_cwd_that_is_a_real_checkout(home):
+    (home / "data2/orca/biz-worthy").mkdir()
+    _repo(home / "projects/other-repo")
+    t = _transcript(home, home / "data2/orca/biz-worthy")
+    assert project.project_of(str(home / "projects/other-repo/src"), t) == "other-repo"
+
+
+def test_transcript_does_not_override_a_cron_family(home):
+    (home / "data2/orca/tachyonac-engine").mkdir()
+    cwd = str(home / "data2/worktrees/tachyonac-engine/auto-oxsynth-mmx-sweep-run-5-20260919T1000")
+    t = _transcript(home, home / "data2/orca/tachyonac-engine")
+    assert project.project_of(cwd, t) == "auto-oxsynth-mmx-sweep"
+
+
+@pytest.mark.parametrize("cwd", ["", None, "/work", "{home}", "relative/dir"])
+def test_unplaceable_cwd_falls_to_the_launch_directory(home, cwd):
+    (home / "data2/orca/biz-worthy").mkdir()
+    t = _transcript(home, home / "data2/orca/biz-worthy")
+    assert project.project_of(cwd.format(home=home) if cwd else cwd, t) == "biz-worthy"
+    assert project.project_of(cwd.format(home=home) if cwd else cwd) in (None, project.MISC)
+
+
+def test_a_transcript_with_no_launch_directory_changes_nothing(home):
+    cwd = str(home / "projects/kb/src")
+    assert project.project_of(cwd, str(home / "somewhere/plain.jsonl")) == "kb"
+
+
+# ── repo_of: the checkout to look in, never a cron family ──────────────────────────
+
+def test_repo_of_names_the_repo_where_project_of_names_the_cron_family(home):
+    cwd = str(home / "data2/worktrees/tachyonac-engine/auto-oxsynth-mmx-sweep-run-5-20260919T1000")
+    assert project.project_of(cwd) == "auto-oxsynth-mmx-sweep"
+    assert project.repo_of(cwd) == "tachyonac-engine"
+
+
+def test_repo_of_agrees_with_project_of_off_the_cron_path(home):
+    for rel in ("projects/kb/src", "data2/worktrees/kb/agent-ab12cd34ef56", "data2/orca/app-to-market/wardr"):
+        assert project.repo_of(str(home / rel)) == project.project_of(str(home / rel))
+    assert project.repo_of("") is None and project.repo_of(None) is None

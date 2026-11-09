@@ -197,9 +197,11 @@ def time_class(tool: str, raw_cmd: Optional[str] = None) -> str:
     return "other"
 
 
-def project_of(cwd: Optional[str]) -> Optional[str]:
-    """Project for a session cwd; None when the shared resolver cannot tell."""
-    return _resolve_project(cwd)
+def project_of(cwd: Optional[str], transcript: Optional[str] = None) -> Optional[str]:
+    """Project for a session cwd; None when the shared resolver cannot tell. ``transcript``
+    (a subagent's transcript path) lets the launching session name the repo when the
+    agent's worktree sits under a lane-named directory."""
+    return _resolve_project(cwd, transcript)
 
 
 def _iter_transcripts(root: Path) -> Iterator[tuple[str, Path]]:
@@ -410,7 +412,8 @@ def ingest_file(conn: sqlite3.Connection, key: str, source: str, path: Path) -> 
         "  agent_id=COALESCE(agent_id, excluded.agent_id),"
         "  cwd=COALESCE(cwd, excluded.cwd),"
         "  project=COALESCE(project, excluded.project)",
-        (key, source, project_of(meta.get("worktreePath") or sess["cwd"]), sess["session_id"],
+        (key, source, project_of(meta.get("worktreePath") or sess["cwd"],
+                                 key.partition(":")[2] if is_sub else None), sess["session_id"],
          sess["agent_id"], meta.get("agentType"), meta.get("model"), meta.get("description"),
          int(is_sub), sess["cwd"], sess["first"], sess["last"]))
     conn.execute(
