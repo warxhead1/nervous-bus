@@ -34,6 +34,23 @@ type Config struct {
 	// Consumer is this replica's unique consumer identity within Group.
 	// Defaults to os.Hostname() if empty.
 	Consumer string
+
+	// Limits bounds each channel a Publisher writes, keyed by channel name or
+	// by a glob in the same grammar as Subscriber.On ("*" one segment, "#"
+	// any suffix; "#" alone is the catch-all default). Resolution per field:
+	// exact channel, then matching globs longest first, then the SDK
+	// defaults (typed stream MAXLEN ~10,000; 16 KiB per envelope). Read once
+	// by NewPublisher. Subscribers ignore it.
+	Limits map[string]Limits
+
+	// FanoutMaxLen is the approximate MAXLEN of the nbus:all fanout stream.
+	// 0 uses the default (50,000).
+	FanoutMaxLen int64
+
+	// OversizePolicy selects what a Publisher does with an envelope over its
+	// byte limit. The zero value, OversizeReject, refuses it and writes a
+	// bus.dead_letter event; OversizeWarn logs and publishes anyway.
+	OversizePolicy OversizePolicy
 }
 
 // streamOrDefault returns cfg.Stream, falling back to the canonical fanout

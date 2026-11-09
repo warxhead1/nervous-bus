@@ -55,13 +55,63 @@ repo root — every schema's `required` set is exactly these fields):
 Publishing writes the full envelope JSON to the `_raw` field of two Redis
 Streams:
 
-- `nbus:<channel>` (approx maxlen 10,000) — the typed stream, for consumers
-  filtering on one channel.
-- `nbus:all` (approx maxlen 50,000) — the canonical fanout stream every
-  consumer-group subscriber reads by default.
+- `nbus:<channel>` (approx maxlen 10,000 by default) — the typed stream, for
+  consumers filtering on one channel.
+- `nbus:all` (approx maxlen 50,000 by default) — the canonical fanout stream
+  every consumer-group subscriber reads by default.
 
 Helper fields (`type`, `source`, `timestamp`, `event_id`) are also written
 alongside `_raw` so tooling can filter/sort without decoding JSON first.
+
+### Streams are count-capped, so payloads must be notifications
+
+`MAXLEN` bounds the number of entries in a stream, **not its bytes**. Every
+entry is held in Redis memory, and the full envelope is stored twice (typed
+stream and `nbus:all`). A channel publishing 60 KB entries holds about 600 MB
+at its 10,000-entry cap; a production Valkey was killed by two such channels
+(2.5 GB of streams) before `maxmemory` was ever reached.
+
+So a payload is a **notification**: ids plus the minimal facts a consumer needs
+to decide whether to fetch the rest. It is not a document. Never publish a full
+snapshot, bundle, transcript, or file body; publish its id (and a summary) and
+let consumers read the source of truth.
+
+The Publisher enforces this. An envelope larger than its byte limit (16 KiB
+serialized by default) is **refused**: nothing is written to `nbus:<channel>`
+or `nbus:all`, a `bus.dead_letter` event with `failure_reason:
+"payload_too_large"` (plus `payload_bytes` / `limit_bytes`) is written instead,
+and `PublishSync` returns a `*nbus.PayloadTooLargeError`
+(`errors.Is(err, nbus.ErrPayloadTooLarge)`). `Publish` is fire-and-forget, so
+it logs a warning instead of returning the error. Set
+`Config.OversizePolicy = nbus.OversizeWarn` to log and publish anyway.
+
+### Per-channel limits
+
+```go
+pub := nbus.NewPublisher(rdb, nbus.Config{
+    Source: "/my-service",
+    Limits: map[string]nbus.Limits{
+        "loom.lifecycle.*":      {MaxLen: 2_000},      // typed stream cap
+        "bus.pattern.bundle.v1": {MaxBytes: 4 << 10},  // stricter byte limit
+        "legacy.snapshot.v1":    {MaxBytes: -1},       // disable the byte check
+        "#":                     {MaxLen: 5_000},      // catch-all default
+    },
+    FanoutMaxLen: 100_000, // nbus:all cap (default 50,000)
+}, logger)
+
+// Per call; beats Config.Limits.
+pub.PublishSync(ctx, "bus.notify.v1", payload, nbus.WithMaxLen(500), nbus.WithMaxBytes(2048))
+```
+
+`Limits` keys are exact channel names or globs in the same grammar as
+`Subscriber.On` (`*` one segment, `#` any suffix; `#` alone matches every
+channel). Each field resolves independently: per-call option, then the exact
+channel entry, then matching globs from longest (most specific) to shortest,
+then the defaults. A zero field falls through to the next candidate. `Limits`
+is read once, by `NewPublisher`.
+
+Redis trims approximately (`MAXLEN ~`), so a stream may briefly hold slightly
+more than `MaxLen` entries.
 
 ## Publishing
 
@@ -161,10 +211,14 @@ non-racing nature of PEL recovery:
 |---|---|
 | `nbus.Envelope` | CloudEvents-lite envelope struct (`Decode` unmarshals `Data`) |
 | `nbus.NewEnvelope(source, channel, data)` | Build an envelope with a fresh ULID id + RFC3339 UTC time |
-| `nbus.Config` | `{Stream, Source, Group, Consumer}` — shared publisher/subscriber config |
+| `nbus.Config` | `{Stream, Source, Group, Consumer, Limits, FanoutMaxLen, OversizePolicy}` — shared publisher/subscriber config |
+| `nbus.Limits` | `{MaxLen, MaxBytes}` per-channel stream cap and byte limit (`Config.Limits`) |
+| `nbus.OversizeReject` / `nbus.OversizeWarn` | `Config.OversizePolicy`: refuse an over-limit envelope (default) or log and publish |
+| `nbus.ErrPayloadTooLarge` / `*nbus.PayloadTooLargeError` | Returned by `PublishSync` when an envelope is refused for size |
+| `nbus.WithMaxLen(n)` / `nbus.WithMaxBytes(n)` | Per-call overrides of the resolved `Limits` |
 | `nbus.Publisher` / `nbus.NewPublisher(rdb, cfg, logger)` | XADD to `nbus:<channel>` + `nbus:all` |
-| `(*Publisher) Publish(channel, data)` | Fire-and-forget publish |
-| `(*Publisher) PublishSync(ctx, channel, data) error` | Blocking publish |
+| `(*Publisher) Publish(channel, data, opts...)` | Fire-and-forget publish |
+| `(*Publisher) PublishSync(ctx, channel, data, opts...) error` | Blocking publish |
 | `nbus.Subscriber` / `nbus.NewSubscriber(rdb, cfg, logger)` | Consumer-group reader |
 | `(*Subscriber) On(pattern, handler)` | Register a glob-pattern handler |
 | `(*Subscriber) Run(ctx)` | Blocking XREADGROUP + periodic XAUTOCLAIM reap loop |
