@@ -323,8 +323,11 @@ timer:
 
 1. `label.py --since-days 30 --unlabeled-only` — incremental outcome labeling.
    `--unlabeled-only` means a settled outcome (landed/reverted/abandoned/clean/
-   thrashed) is never re-verified; only runs still sitting at `outcome=NULL` get
-   another attempt (their PR may have merged, their bead may have closed since).
+   thrashed) is never re-verified. Only runs still at `outcome=NULL` get another
+   attempt, backed off 1, 2 and 4 days, and are parked as
+   `label_state=unattributable` after 4 misses. A parked run that still has a
+   branch, bead or codex rollout to look up is revisited every 7 days while it is
+   inside `--since-days`; a run with none of those stays parked.
    `--since-days` bounds cost against an ever-growing run history. A first pass
    against a mostly-unlabeled DB may not finish inside the timeout — that's fine,
    `apply_label` autocommits per-row, so the next night resumes where this one

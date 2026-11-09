@@ -14,9 +14,10 @@ it, and a bad night never wedges the timer.
 
   1. label.py         --since-days LABEL_SINCE_DAYS --unlabeled-only
      Incremental outcome labeling. --unlabeled-only means settled outcomes
-     (landed/reverted/abandoned/clean/thrashed) are never re-verified — only
-     runs still sitting at outcome=NULL get another attempt (a PR may have
-     merged, a bead may have closed). --since-days bounds cost against a
+     (landed/reverted/abandoned/clean/thrashed) are never re-verified. Runs at
+     outcome=NULL are retried with a 1/2/4-day backoff and parked after 4
+     misses; a parked run with a branch, bead or rollout still to look up is
+     revisited every 7 days. --since-days bounds cost against a
      growing run history. First run against a mostly-unlabeled DB may not
      finish inside the timeout; that's fine — progress commits per-row
      (autocommit), so the next night picks up where this one left off.

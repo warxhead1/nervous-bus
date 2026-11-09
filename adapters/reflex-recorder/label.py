@@ -314,8 +314,8 @@ def label_from_bead(bead_id: str, worktree_path: Optional[str]) -> Optional[tupl
 
 
 #: Verdicts already computed in the CURRENT pass, keyed by what the lookup
-#: depends on. A branch is shared by many runs (851 distinct branches back 1,627
-#: queued runs), and each lookup is a gh call or a history-wide git pickaxe.
+#: depends on. Many runs share one branch, and each lookup is a gh call or a
+#: history-wide git pickaxe.
 #: None outside a pass, so direct callers always get a live answer.
 _PASS_MEMO: Optional[dict] = None
 
