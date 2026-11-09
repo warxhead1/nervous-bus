@@ -378,6 +378,11 @@ class BacktestTests(unittest.TestCase):
         out = self.run_backtest("--seed-dash-value", "ugrep")
         self.assertIn("rewrites=1 prevented=0 false=1", out)
 
+    def test_output_that_quotes_a_rejection_is_not_counted_as_one(self):
+        self.write_session(os.path.join(self.tmp, "claude"), [
+            ("cat notes.txt", self.BAD.format("zzz", "zzz").split("\n", 1)[1], False)])
+        self.assertIn("dash_value: failures=0", self.run_backtest())
+
     def test_a_rejection_hidden_by_a_pipe_still_counts_as_prevented(self):
         self.write_session(os.path.join(self.tmp, "claude"), [
             ("printf x | ugrep -E '->|zzz' | head", self.BAD.format("zzz", "zzz").split("\n", 1)[1], False)])

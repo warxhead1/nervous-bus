@@ -47,6 +47,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "transcripts"))
 import core   # noqa: E402
 import errclass  # noqa: E402
+import segment  # noqa: E402
 import store  # noqa: E402
 import transcripts  # noqa: E402
 
@@ -85,9 +86,13 @@ for tc in transcripts.iter_calls(a.agent, cutoff - (86400 if a.strict_window els
     t0 = time.perf_counter()
     r = core.plan(db, cfg, cmd, cwd)
     t_plan += time.perf_counter() - t0
-    # A rejection counts whether or not the call's exit status carried it: `grep ... | head` ends 0.
-    rejected_words = ([x.token for x in errclass.classify(tc.output) if x.kind == "dash_value"]
-                      if tc.output and not tc.harness else [])
+    # A rejection counts whether or not the call's exit status carried it (`grep ... | head` ends 0),
+    # but only when it belongs to a word in this command: output that quotes one is not a failure.
+    rejected_words = []
+    if tc.output and not tc.harness:
+        for x in errclass.classify(tc.output):
+            if x.kind == "dash_value" and core.attribute(x, segment.parse(cmd), db, cwd) is not None:
+                rejected_words.append(x.token)
     if rejected_words:
         dash["failures"] += 1
         dash["masked"] += not tc.is_error
