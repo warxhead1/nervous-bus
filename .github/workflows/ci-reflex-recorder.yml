@@ -1,0 +1,65 @@
+name: Reflex Recorder
+
+# The session-mining stack (recorder, labeler, detectors, synthesis, token
+# ledger, tier2 analyst) plus the transcript layer and the pattern watchdog.
+# Nothing in any other workflow runs these tests.
+#
+# GitHub-hosted on purpose, like ci-portable.yml: the suites touch run stores,
+# sqlite files and git repos, and a clean runner proves they do not depend on
+# anything in ~/.cache or ~/.claude of the self-hosted box.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'adapters/reflex-recorder/**'
+      - 'adapters/transcripts/**'
+      - 'adapters/pattern-watchdog/**'
+      - 'schemas/**'
+      - '.github/workflows/ci-reflex-recorder.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'adapters/reflex-recorder/**'
+      - 'adapters/transcripts/**'
+      - 'adapters/pattern-watchdog/**'
+      - 'schemas/**'
+      - '.github/workflows/ci-reflex-recorder.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-reflex-recorder-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  reflex-recorder:
+    name: reflex-recorder (py${{ matrix.python }})
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # redis: recorder.py imports it at module level. jsonschema: the synthesis
+      # tests validate emitted payloads against schemas/*.json. httpx is not
+      # installed: the tier2 tests inject a fake one.
+      - name: Install test dependencies
+        run: python -m pip install --quiet pytest redis jsonschema
+
+      # Collects tests/ and tier2/ (analyst + trajectory profile).
+      - name: reflex-recorder suite
+        working-directory: adapters/reflex-recorder
+        run: python -m pytest -q -p no:cacheprovider
+
+      - name: transcripts + pattern-watchdog suites
+        run: python -m pytest -q -p no:cacheprovider adapters/transcripts adapters/pattern-watchdog
