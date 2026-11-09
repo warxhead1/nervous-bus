@@ -773,8 +773,11 @@ def build(conn: sqlite3.Connection, days: int = 7, roots=None) -> dict:
     out["tool_time"] = tool_time(conn, since)
     all_lanes = lanes(conn, since, per_session=by_session)
     out["lanes"] = all_lanes[:15]
-    view["top_lanes"] = sorted(all_lanes, key=lambda r: -r["turns"])[:15]
-    out["requests"] = view
+    # Like by_source, the section appears only when the ledger has something to
+    # say: a window with no recorded tool calls has no request shape to rank.
+    if view["unbatched_reads"]["calls"]:
+        view["top_lanes"] = sorted(all_lanes, key=lambda r: -r["turns"])[:15]
+        out["requests"] = view
 
     # Agent parity: only when a non-Claude-format source is in the window, so a
     # claude/mmx-only ledger renders exactly as before.

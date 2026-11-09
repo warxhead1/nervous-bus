@@ -189,6 +189,15 @@ def test_digest_ranks_requests_and_stays_sanitized(tmp_path):
         assert leak not in blob
 
 
+def test_a_window_without_recorded_tool_calls_has_no_request_section(tmp_path):
+    conn, roots = _ledger(tmp_path)
+    conn.execute("DELETE FROM tool_calls")
+    rep = tr.build(conn, days=1, roots=roots)
+    assert "requests" not in rep
+    assert "## Requests" not in tr.to_markdown(rep)
+    assert {"unbatched_reads", "denied_calls"} <= {c["id"] for c in rep["candidates"]}
+
+
 def test_build_finds_reruns_in_requests(tmp_path):
     L = []
     L += _turn(1, 0, _use("t1", "Bash", command="cargo test -p x"))
