@@ -718,6 +718,21 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(r["command"], "fakecli list --limit 5")         # the other correction still lands
         self.assertIn("boom", open(os.path.join(err_dir, "errors.log")).read())
 
+    def test_a_crash_learning_a_pipe_hidden_rejection_fails_open(self):
+        import core
+        from unittest import mock
+        self.execute("fakecli list --limt 5")
+        db = sqlite3.connect(os.path.join(self.env["ARGSHAPE_STATE_DIR"], "argshape.db"), isolation_level=None)
+        err_dir = os.path.join(self.tmp, "errs")
+        ev = {"tool_input": {"command": "printf x | ugrep -E '->|a' | head"}, "cwd": self.tmp, "session_id": "s9",
+              "tool_response": {"stdout": "", "stderr": "ugrep: invalid option ->|a\n"}}
+        with mock.patch.object(core.store, "STATE_DIR", err_dir), \
+                mock.patch.object(core, "_learn_masked_dash_values", side_effect=RuntimeError("boom")):
+            notes = core.on_success(db, {"mode": "correct"}, ev)
+        self.assertEqual(notes, [])
+        with open(os.path.join(err_dir, "errors.log")) as f:
+            self.assertIn("boom", f.read())
+
     def test_hook_exits_zero_and_silent_when_the_state_is_unreadable(self):
         self.execute("fakecli list --limt 5")
         with open(os.path.join(self.env["ARGSHAPE_STATE_DIR"], "argshape.db"), "wb") as f:
