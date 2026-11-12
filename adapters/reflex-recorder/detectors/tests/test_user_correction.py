@@ -132,6 +132,10 @@ class TestMatchThemes(unittest.TestCase):
         themes = match_themes("Why did you drop the --verbose flag from the build command")
         self.assertNotIn("over_explained_output", themes)
 
+    def test_over_explained_output_ignores_leftover_file_complaint(self):
+        themes = match_themes("Why did you leave those log files, they don't need to be there")
+        self.assertNotIn("over_explained_output", themes)
+
     def test_multiple_themes_can_fire_together(self):
         themes = match_themes(
             "Why did you use sudo again, don't touch root access without asking"

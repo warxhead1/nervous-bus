@@ -343,8 +343,7 @@ THEME_KEYWORDS: dict[str, re.Pattern] = {
         r"\bover[\s-]?expla\w+\b|\btoo\s+(?:much\s+text|wordy|verbose|many\s+words)\b|"
         r"\bwall\s+of\s+text\b|\b(?:subtitle|byline|caption|tagline)s?\s+(?:on|under|across)\s+"
         r"(?:every|each|all)\w*\b|\binformation\s+overload\b|\btext\s+everywhere\b|"
-        r"\btell\w*\s*,?\s+not\s+show\w*\b|\bneedless\s+words\b|"
-        r"\bdon'?t\s+need\s+to\s+be\s+(?:there|said)\b",
+        r"\btell\w*\s*,?\s+not\s+show\w*\b|\bneedless\s+words\b",
         re.IGNORECASE,
     ),
 }
