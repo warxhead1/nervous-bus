@@ -338,6 +338,15 @@ THEME_KEYWORDS: dict[str, re.Pattern] = {
         r"\bdon'?t\s+ask\s+me\b|\bstop\s+asking\b",
         re.IGNORECASE,
     ),
+    "over_explained_output": re.compile(
+        # Bare "verbose" is a CLI flag; require the complaint phrasing.
+        r"\bover[\s-]?expla\w+\b|\btoo\s+(?:much\s+text|wordy|verbose|many\s+words)\b|"
+        r"\bwall\s+of\s+text\b|\b(?:subtitle|byline|caption|tagline)s?\s+(?:on|under|across)\s+"
+        r"(?:every|each|all)\w*\b|\binformation\s+overload\b|\btext\s+everywhere\b|"
+        r"\btell\w*\s*,?\s+not\s+show\w*\b|\bneedless\s+words\b|"
+        r"\bdon'?t\s+need\s+to\s+be\s+(?:there|said)\b",
+        re.IGNORECASE,
+    ),
 }
 
 THEMES: tuple[str, ...] = tuple(THEME_KEYWORDS.keys())
