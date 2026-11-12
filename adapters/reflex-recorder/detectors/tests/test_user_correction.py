@@ -124,6 +124,14 @@ class TestMatchThemes(unittest.TestCase):
         themes = match_themes("STOP using a band-aid fix here, find the root cause")
         self.assertIn("band_aid_fix", themes)
 
+    def test_over_explained_output_fires_on_ui_copy_complaint(self):
+        themes = match_themes("Why did you put subtitles on every card, you keep over-explaining")
+        self.assertIn("over_explained_output", themes)
+
+    def test_over_explained_output_ignores_verbose_flag(self):
+        themes = match_themes("Why did you drop the --verbose flag from the build command")
+        self.assertNotIn("over_explained_output", themes)
+
     def test_multiple_themes_can_fire_together(self):
         themes = match_themes(
             "Why did you use sudo again, don't touch root access without asking"
