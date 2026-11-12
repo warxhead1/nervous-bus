@@ -53,6 +53,12 @@ HEADER_RE = re.compile(
 BULLET_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.*)$")
 STRETCH_RE = re.compile(r"\{\{([^{}|]*)\|([^{}]*)\}\}")
 NOTHING_RE = re.compile(r"^(nothing|none|n/a|—)(\W|$)", re.I)
+TRAILING_LINK_RE = re.compile(r" <hearth://[^\s<>]+>$")
+INLINE_LINK_RE = re.compile(r"<?(hearth://[^\s<>)\]]+)>?")
+DECISION_ID_RE = re.compile(r"\b((?:dec|src)-[A-Za-z0-9][A-Za-z0-9_-]*)")
+PROSE_PATH_RE = re.compile(r"hearth\s*(?:→|->)", re.I)
+PROSE_PATH_HINT = ("needs-you: name the exact tap path or file a decision; "
+                   "project slugs are not screens")
 
 BLOCK_REASON = (
     "This turn used tools but the reply has no 'Needs you' block. End the reply with "
@@ -68,6 +74,38 @@ def unstretch(text: str) -> str:
     while prev != text:
         prev, text = text, STRETCH_RE.sub(r"\2", text)
     return text
+
+
+def link_item(item: str) -> str:
+    """C5: an item ends with ` <hearth://...>`. An inline hearth:// URL moves to the
+    end; a bare decision id (dec-/src-) gets /decisions/{id}. Prose is left alone."""
+    if TRAILING_LINK_RE.search(item):
+        return item
+    m = INLINE_LINK_RE.search(item)
+    if m:
+        url = m.group(1).rstrip(".,;:")
+        rest = INLINE_LINK_RE.sub("", item)
+        rest = re.sub(r"\s{2,}", " ", rest).strip()
+        return f"{rest} <{url}>"
+    m = DECISION_ID_RE.search(item)
+    if m:
+        return f"{item} <hearth://decisions/{m.group(1).rstrip('-_')}>"
+    return item
+
+
+def prose_path_hint(session_id: str, items: list[str]) -> None:
+    """Once per session, stderr only: an item says 'Hearth -> ...' with no link."""
+    if not any(PROSE_PATH_RE.search(i) and "hearth://" not in i for i in items):
+        return
+    marker = HOME / "hinted" / session_id
+    if marker.exists():
+        return
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("1")
+    except OSError:
+        pass
+    print(PROSE_PATH_HINT, file=sys.stderr)
 
 
 def extract(reply: str) -> list[str] | None:
@@ -89,7 +127,7 @@ def extract(reply: str) -> list[str] | None:
             items.append(m.group(1).strip())
         elif line.strip():
             break
-    return [i for i in items if not NOTHING_RE.match(i)]
+    return [link_item(i) for i in items if not NOTHING_RE.match(i)]
 
 
 CACHE_TAIL_BYTES = 1 << 20
@@ -380,6 +418,7 @@ def turn_end(data: dict, session_id: str, transcript: str) -> dict | None:
     }
     write_entry(entry)
     publish(entry)
+    prose_path_hint(session_id, entry["items"])
     log("recorded", data, items=len(entry["items"]))
     return None
 
@@ -417,6 +456,43 @@ def cmd_list(include_acked: bool) -> int:
     return 0
 
 
+def hearth_ack(session_id: str) -> bool:
+    """POST /api/attention/{id}/ack?via=cli. Auth as tools/agent_review.py does:
+    HEARTH_API_TOKEN verbatim, else a loopback POST /api/auth/local-token. Never
+    prints the token. True only when hearth answered 2xx."""
+    import ssl
+    import urllib.request
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    bases = [b for b in (os.environ.get("HEARTH_API_URL"),
+                         "http://localhost:8420", "https://localhost:8421") if b]
+
+    def call(base, path, body, token=None):
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(base.rstrip("/") + path, json.dumps(body).encode(),
+                                     headers, method="POST")
+        with urllib.request.urlopen(req, timeout=5, context=ctx) as r:
+            return r.status, r.read()
+
+    for base in bases:
+        try:
+            token = os.environ.get("HEARTH_API_TOKEN")
+            if not token:
+                _, raw = call(base, "/api/auth/local-token", {"subject": "needs-you-cli"})
+                token = json.loads(raw).get("access_token")
+            if not token:
+                continue
+            status, _ = call(base, f"/api/attention/{session_id}/ack?via=cli", {}, token)
+            if 200 <= status < 300:
+                return True
+        except Exception:  # unreachable, 403, bad JSON: try the next base
+            continue
+    return False
+
+
 def cmd_ack(which: str) -> int:
     entries = load()
     targets = entries if which == "all" else []
@@ -429,7 +505,11 @@ def cmd_ack(which: str) -> int:
     for e in targets:
         e["acked"] = True
         write_entry(e)
+    failed = [e for e in targets if not hearth_ack(e["session_id"])]
     print(f"acked {len(targets)}")
+    if failed:
+        print(f"hearth unreachable or refused: phone row not cleared for {len(failed)} "
+              "session(s); local ack kept")
     return 0
 
 

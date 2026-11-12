@@ -131,10 +131,31 @@ class Hook(unittest.TestCase):
 
     def test_ack(self):
         self.run_hook(user("go"), tool_use(), tool_result(), text("**Needs you:**\n- x"))
-        with redirect_stdout(io.StringIO()):
+        with redirect_stdout(io.StringIO()), \
+                mock.patch.object(ny, "hearth_ack", return_value=True) as ha:
             self.assertEqual(ny.cmd_ack("1"), 0)
+        ha.assert_called_once_with("s1")
         self.assertEqual(ny.load(), [])
         self.assertEqual(len(ny.load(include_acked=True)), 1)
+
+    def test_ack_unreachable_keeps_local_flip_and_says_so(self):
+        self.run_hook(user("go"), tool_use(), tool_result(), text("**Needs you:**\n- x"))
+        out = io.StringIO()
+        with redirect_stdout(out), mock.patch.object(ny, "hearth_ack", return_value=False):
+            self.assertEqual(ny.cmd_ack("all"), 0)
+        self.assertEqual(ny.load(), [])
+        self.assertIn("phone row not cleared", out.getvalue())
+
+    def test_hook_links_decision_id_and_hints_once(self):
+        err = io.StringIO()
+        with mock.patch.object(sys, "stderr", err):
+            self.run_hook(user("go"), tool_use(), tool_result(),
+                          text("**Needs you:**\n- pick on src-lab-7\n- Hearth -> xmas-mixtape"))
+            self.run_hook(user("go"), tool_use(), tool_result(),
+                          text("**Needs you:**\n- Hearth → xmas-mixtape"))
+        self.assertEqual(ny.load()[0]["items"], ["Hearth → xmas-mixtape"])
+        self.assertEqual(err.getvalue().count("name the exact tap path"), 1)
+
 
     def test_headless_runs_are_ignored(self):
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}):
@@ -202,6 +223,65 @@ class Hook(unittest.TestCase):
         with mock.patch.dict(os.environ, {"NEEDS_YOU_DISABLE": "1"}), \
                 mock.patch.object(sys, "stdin", io.StringIO("{bad json")):
             self.assertEqual(ny.main(["hook"]), 0)
+
+
+class LinkItem(unittest.TestCase):
+    def test_decision_id_gets_link(self):
+        self.assertEqual(ny.link_item("answer dec-abc123 please"),
+                         "answer dec-abc123 please <hearth://decisions/dec-abc123>")
+        self.assertEqual(ny.link_item("src-lab-9."),
+                         "src-lab-9. <hearth://decisions/src-lab-9>")
+
+    def test_existing_trailing_link_untouched(self):
+        i = "pick dec-1 <hearth://artifacts/a1>"
+        self.assertEqual(ny.link_item(i), i)
+
+    def test_inline_url_moves_to_end(self):
+        self.assertEqual(ny.link_item("open hearth://artifacts/a1 and pick"),
+                         "open and pick <hearth://artifacts/a1>")
+        self.assertEqual(ny.link_item("open <hearth://artifacts/a1> now, dec-5"),
+                         "open now, dec-5 <hearth://artifacts/a1>")
+
+    def test_plain_and_prose_untouched(self):
+        self.assertEqual(ny.link_item("merge PR #5"), "merge PR #5")
+        self.assertEqual(ny.link_item("Hearth → xmas-mixtape"), "Hearth → xmas-mixtape")
+
+    def test_extract_applies_links(self):
+        self.assertEqual(ny.extract("**Needs you:**\n- decide dec-9"),
+                         ["decide dec-9 <hearth://decisions/dec-9>"])
+
+
+class HearthAck(unittest.TestCase):
+    class Resp:
+        def __init__(self, status, body=b"{}"):
+            self.status, self._b = status, body
+
+        def read(self):
+            return self._b
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def test_posts_ack_via_cli_with_local_token(self):
+        calls = []
+
+        def fake(req, timeout=None, context=None):
+            calls.append((req.full_url, req.get_header("Authorization")))
+            if req.full_url.endswith("/api/auth/local-token"):
+                return self.Resp(200, b'{"access_token":"T"}')
+            return self.Resp(200)
+        with mock.patch("urllib.request.urlopen", fake), \
+                mock.patch.dict(os.environ, {"HEARTH_API_TOKEN": ""}):
+            self.assertTrue(ny.hearth_ack("s9"))
+        self.assertTrue(calls[-1][0].endswith("/api/attention/s9/ack?via=cli"))
+        self.assertEqual(calls[-1][1], "Bearer T")
+
+    def test_unreachable_is_false(self):
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("down")):
+            self.assertFalse(ny.hearth_ack("s9"))
 
 
 class Schema(unittest.TestCase):
