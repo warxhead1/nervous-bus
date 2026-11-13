@@ -1,3 +1,4 @@
+import os
 # adapters/pattern-bundler/test_bundler.py
 import math, sys, time, unittest
 from pathlib import Path
@@ -271,3 +272,29 @@ class TestFingerprintDensityGate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPublishCli(unittest.TestCase):
+    def test_publish_runs_the_repository_cli_without_help_from_path(self):
+        import bundler
+        calls = []
+
+        class Done:
+            returncode, stderr = 0, ""
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return Done()
+
+        real_run, real_path = bundler.subprocess.run, os.environ.get("PATH", "")
+        bundler.subprocess.run = fake_run
+        os.environ["PATH"] = "/nonexistent"
+        try:
+            bundler._publish({"k": 1})
+        finally:
+            bundler.subprocess.run = real_run
+            os.environ["PATH"] = real_path
+        cli = calls[0][0]
+        self.assertTrue(os.path.isfile(cli), cli)
+        self.assertTrue(os.access(cli, os.X_OK), cli)
+        self.assertEqual(calls[0][1:3], ["publish", "bus.pattern.bundle.v1"])
