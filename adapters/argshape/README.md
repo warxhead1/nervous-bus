@@ -81,6 +81,28 @@ ARGSHAPE_MODE=off                   # env kill switch
   failure or an opt-out, and those are half or more, all corrections drop to
   advice for 24h (`argshape breaker reset` to close it).
 
+## Verify output piped to a reader (`set -o pipefail`)
+
+`cargo test 2>&1 | tail -20` exits with `tail`'s status, so a failing run reads as success and no
+`is_error` hook fires. A **static** rule (no learning, `pipefail.py`, verify classes from `verifyclass.py`,
+a port of claude-hook-fast `classifyVerify`) prepends `set -o pipefail; ` through `updatedInput`.
+It rewrites only when all of these hold:
+
+- the last `&&`/`||` chain of the line holds a pipeline whose first stage is a verify command
+  (`cargo|go|make|npm|pytest|tsc|...`, also behind `timeout`, `env`, `hearth-vault exec --`);
+- every multi-stage pipeline on the line starts with a verify command, since pipefail is line-wide;
+- every consumer reads all its input: `tail`, `tee`, `wc`, `sort`, `cat`, `grep`/`rg` without
+  `-q -m -l -L -r`, `--files`, or a file operand (`command grep` counts as `grep`). `head`, `sed ...q`,
+  `awk ... exit`, `jq`, `xargs` and any other consumer leave the line alone: the producer would die of
+  SIGPIPE (141) and a green run would read red;
+- nothing sets or reads `pipefail`/`PIPESTATUS`/`pipestatus`, no `|| true`, no `# argshape:off`, no
+  `;`/newline/`&` after the verify pipeline (`cmd | tail; echo $?` is left alone), no `$(... | ...)`, `<(...)`,
+  `(...) | x` or `{ ...; } | x`.
+
+Active only in `correct` mode; `argshape mode off|advise|observe --bin pipefail` or `ARGSHAPE_MODE=off` turn it off.
+`python3 backtest_pipefail.py --days 30 --out <scratch dir>` replays recorded calls and prints the rewrite
+count, the count by consumer shape, and how each recorded result relates to a failure marker.
+
 ## SQL
 
 Any word that reads as a statement (`select ...`, `with ...`), passed via

@@ -7,6 +7,8 @@ as success to the agent and to every is_error-keyed hook. Prepending
 Only done when the rewrite cannot turn a green run red:
   * the line's last command list holds a pipeline whose FIRST stage is a
     verify-class command (verifyclass.classify);
+  * every multi-stage pipeline on the line starts with a verify command
+    (`set -o pipefail` is line-wide, so it would also change `git commit | tail`);
   * EVERY pipe stage after a first stage, in every pipeline on the line,
     reads all of its input (tail, tee, wc, sort, cat, grep/rg without
     -q/-m/-l and without a file operand). `set -o pipefail` is line-wide, so
@@ -41,6 +43,16 @@ def _stage_words(words):
     while ws and not ws[0].dynamic and segment.ASSIGN_RE.match(ws[0].value):
         ws.pop(0)
     return ws
+
+
+def _verify_class(words) -> str:
+    """Verify class of a first stage, looking through `hearth-vault exec -- `, `timeout`, `env` and the like."""
+    seg = segment.Segment()
+    seg.words = list(words)
+    segment._unwrap(seg)
+    if "xargs" in seg.via or "watch" in seg.via:
+        return ""
+    return verifyclass.classify(seg.words) or verifyclass.classify(words)
 
 
 def _long_forbidden(name: str, forbidden) -> bool:
@@ -125,6 +137,8 @@ def _consumer_ok(words) -> bool:
     ws = list(words)
     while ws and not ws[0].dynamic and segment.ASSIGN_RE.match(ws[0].value):
         ws.pop(0)
+    if len(ws) > 1 and ws[0].value in ("command", "builtin"):
+        ws.pop(0)               # `command grep` bypasses the shell's grep function
     if not ws or ws[0].dynamic:
         return False
     name = os.path.basename(ws[0].value)
@@ -225,10 +239,10 @@ def rewrite(command: str) -> str | None:
             return None
         if not all(_consumer_ok(s) for s in st[1:]):
             return None
-        if verifyclass.classify(first):
+        if _verify_class(first):
             verified = verified or in_final
-        elif in_final:
-            return None         # a non-verify pipe shares the final && / || chain
+        else:
+            return None         # a non-verify pipe: line-wide pipefail would change its status too
     if not verified:
         return None
     if not any(len(st) > 1 for st, _ in final):

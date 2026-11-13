@@ -1008,6 +1008,12 @@ class PipefailTests(unittest.TestCase):
                   "ruff check .", "FOO=1 make check", "cmake --build build", "swift test"):
             self.assertRewritten(f"{v} 2>&1 | tail -5")
 
+    def test_wrappers_are_looked_through(self):
+        self.assertRewritten("hearth-vault exec --prefix a/ --redact -- go test ./... 2>&1 | tail -8")
+        self.assertRewritten("cargo test 2>&1 | command grep -a -E 'x|y'")
+        self.assertLeft("cargo test 2>&1 | command head -3")
+        self.assertLeft("hearth-vault exec --prefix a/ -- ls | tail")
+
     def test_multi_pipe_and_prefixes(self):
         self.assertRewritten("cargo test 2>&1 | grep -v ok | tail -20")
         self.assertRewritten("cargo test 2>&1 | grep -v ok | tee x | wc -l")
@@ -1028,8 +1034,9 @@ class PipefailTests(unittest.TestCase):
     def test_line_wide_pipefail_must_be_safe_for_every_pipe(self):
         self.assertLeft("ls | head -3; cargo test | tail")
         self.assertLeft("ls | head -3 && cargo test | tail")
-        self.assertLeft("ls | wc -l && cargo test | tail")           # non-verify pipe in the final chain
-        self.assertRewritten("ls | wc -l; cargo test | tail")        # earlier list, safe consumer
+        self.assertLeft("ls | wc -l && cargo test | tail")           # non-verify pipe: pipefail is line-wide
+        self.assertLeft("ls | wc -l; cargo test | tail")
+        self.assertRewritten("cargo test | tail -3; cargo build | tail -3")
         self.assertLeft("cargo test | tail && ls | head")
 
     def test_unplaceable_shapes_are_left_alone(self):
