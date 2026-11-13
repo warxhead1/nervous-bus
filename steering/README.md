@@ -15,6 +15,20 @@ claude plugin install human-attention@nervous-bus
 | `keep-moving` | No stalling on a wait, no rerunning what cannot change. Ships a skill and a hook that blocks the third identical build or test run when nothing changed. |
 | `model-tiering` | Dispatch only when it pays, and name the model. Ships a skill and a hook that blocks a dispatch with no model. |
 
+## How a rule reaches the agent
+
+Measured with `steering/tools/trigger-eval` (20 should-trigger prompts, clean
+config, one run each): a skill was loaded for 3 of 20, even with a prompt-time
+cue naming it. A description is matched against the task, so a rule about how
+to work is rarely loaded when it applies. So each plugin delivers its rule
+three ways, strongest first:
+
+1. **A guard hook** that reports or blocks at the moment of the action.
+2. **A cue hook** (`hooks/cue` + `cues.json`) that puts the rule in context when the prompt calls for it.
+3. **The skill**, as the full method for when it is loaded.
+
+Do not rely on the skill alone for anything that must hold.
+
 ## Adding one
 
 A ruling belongs here when it reads correctly to someone who has never seen the
@@ -25,6 +39,8 @@ steering/<name>/
   .claude-plugin/plugin.json
   skills/<name>/SKILL.md      the method
   hooks/hooks.json            the check, wired with ${CLAUDE_PLUGIN_ROOT}
+  hooks/cue, cues.json        the rule, said when the prompt calls for it
+  evals/trigger.json          prompts the skill should and should not load for
   tests/                      pytest; collected by ci-portable
 ```
 

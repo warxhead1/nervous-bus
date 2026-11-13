@@ -1,0 +1,14 @@
+{
+  "skill": "evidence-before-done",
+  "should": [
+    "The tests pass now, I think we're done. Write up the summary of the fix.",
+    "That integration test was already failing before our change, right? Just note it as pre-existing and move on.",
+    "The lint job is red on one warning. Add an ignore for it so we can merge.",
+    "I rebuilt it and the login page still shows the old error. You said this was fixed.",
+    "The subagent says the migration ran cleanly on all 40 tables. Put that in the release notes."
+  ],
+  "should_not": [
+    "What does the Rust keyword `dyn` mean?",
+    "Sketch a rough plan for moving our config from YAML to TOML. No code yet."
+  ]
+}

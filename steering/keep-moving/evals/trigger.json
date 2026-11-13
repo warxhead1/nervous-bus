@@ -1,0 +1,14 @@
+{
+  "skill": "keep-moving",
+  "should": [
+    "Why did you stop? The deploy is still running, but there are four other open bugs.",
+    "You've run that same test three times now and it fails the same way every time.",
+    "The build takes twenty minutes. Kick it off, and tell me what you'll do in the meantime.",
+    "I already said go ahead with the refactor. Why are you asking me again?",
+    "CI is queued behind other jobs. What now?"
+  ],
+  "should_not": [
+    "Rename the variable `cnt` to `count` in utils.py.",
+    "Explain how a B-tree splits a full node."
+  ]
+}

@@ -1,0 +1,8 @@
+[
+  {"pattern": "\\bwhy (did|do|are|have) you (stop\\w*|paus\\w*|wait\\w*|sitting|delay\\w*|stall\\w*|idle)\\b|\\byou keep (stopping|pausing|waiting|delaying|stalling)\\b|\\bwhat now\\b|\\b(is|are) (queued|still running|still building|blocked)\\b|\\bin the meantime\\b|\\bwhile (it|that|we) (runs?|builds?|wait\\w*|deploys?)\\b|\\btakes? (\\w+ )?(minutes|hours)\\b",
+   "say": "[keep-moving] A wait is never the only thing happening: name the independent work that can run now and start it. One blocked item does not block the rest. Any status carries the clock: elapsed, the cap, what happens at the cap. Load the keep-moving skill."},
+  {"pattern": "\\b(i )?already (said|told you|approved|answered|confirmed)\\b|\\bwhy are you asking\\b|\\bstop asking\\b|\\bjust do it\\b|\\bgo ahead\\b|\\bi (said|told you) (to )?(go|yes|do it|proceed)\\b",
+   "say": "[keep-moving] If the user asked for the outcome, the steps toward it are approved. Ask only when the choice is theirs: money, scope, policy, or something hard to undo. Do not hand back a step you can do. Load the keep-moving skill."},
+  {"pattern": "\\b(same|that) (test|command|build|thing|job) (again|over and over|\\w+ times)\\b|\\b(ran|run|running) (it|that|this) (again|\\w+ times|over and over|repeatedly)\\b|\\bfails? the same way\\b|\\bstop (re)?running\\b|\\bgoing in circles\\b|\\bin a loop\\b",
+   "say": "[keep-moving] Running the same command with nothing changed gives the same result. Read the output you have or read the code, write down what each attempt showed, then change the idea. Load the keep-moving skill."}
+]
