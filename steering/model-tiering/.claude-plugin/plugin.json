@@ -1,6 +1,6 @@
 {
   "name": "model-tiering",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Every subagent dispatch names its model, chosen by what would catch a wrong answer",
   "author": { "name": "warxhead1" },
   "repository": "https://github.com/warxhead1/nervous-bus",

@@ -5,6 +5,8 @@ A skill description is matched against the task, so a rule about HOW to work is
 rarely loaded when it applies. This prints the rule at the moment the prompt
 calls for it. Cues live in cues.json next to this file:
     [{"pattern": "<regex, case-insensitive>", "say": "<text added to context>"}]
+Text the harness wrote (task notifications, reminders, command output, a
+continued-session summary) is not the user asking, so it is not matched.
 Kill switch: STEERING_CUES_DISABLE=1.
 """
 import json
@@ -13,12 +15,22 @@ import re
 import sys
 from pathlib import Path
 
+WRAPPED = re.compile(r"<(task-notification|system-reminder|local-command-[a-z]+|command-[a-z]+|bash-[a-z]+)>.*?</\1>", re.S)
+NOT_THE_USER = ("[SYSTEM NOTIFICATION", "This session is being continued from a previous conversation")
+
+
+def spoken(prompt):
+    """The part of the prompt a person typed."""
+    if prompt.lstrip().startswith(NOT_THE_USER):
+        return ""
+    return WRAPPED.sub("", prompt)
+
 
 def main():
     if os.environ.get("STEERING_CUES_DISABLE") == "1":
         return 0
     try:
-        prompt = json.load(sys.stdin).get("prompt") or ""
+        prompt = spoken(json.load(sys.stdin).get("prompt") or "")
         cues = json.loads(Path(__file__).with_name("cues.json").read_text())
     except Exception:
         return 0
