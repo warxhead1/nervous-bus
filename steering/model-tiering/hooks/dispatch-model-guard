@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""PreToolUse hook (Agent|Task): a subagent dispatch must name its model.
+
+A dispatch with no `model` inherits the session model, so a fan-out from a
+top-tier session silently runs every agent at top-tier cost. Exit 2 blocks the
+call and shows the message to the agent. Kill switch: MODEL_TIERING_DISABLE=1.
+MODEL_TIERING_ALLOW_TYPES is a comma list of subagent types that pin their own
+model in their definition and may omit it.
+"""
+import json
+import os
+import sys
+
+
+def main():
+    if os.environ.get("MODEL_TIERING_DISABLE") == "1":
+        return 0
+    try:
+        ev = json.load(sys.stdin)
+        ti = ev.get("tool_input") or {}
+    except Exception:
+        return 0
+    if ev.get("tool_name") not in ("Agent", "Task") or ti.get("model"):
+        return 0
+    kind = ti.get("subagent_type") or ""
+    allow = {t.strip() for t in os.environ.get("MODEL_TIERING_ALLOW_TYPES", "").split(",") if t.strip()}
+    if kind == "fork" or kind in allow:
+        return 0
+    print(
+        "This dispatch names no model, so it inherits the session's. Set `model` and retry. "
+        "Ask: if this agent is subtly wrong, what finds out? A test, compiler, or diff: "
+        "use a small model. Nothing mechanical: use the top tier, or do it yourself.",
+        file=sys.stderr,
+    )
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,12 +1,29 @@
 {
   "name": "nervous-bus",
   "description": "Steering for coding agents: rulings that cost real incidents to learn, each packaged with the check that enforces it",
-  "owner": { "name": "warxhead1" },
+  "owner": {
+    "name": "warxhead1"
+  },
   "plugins": [
     {
       "name": "human-attention",
       "source": "./steering/human-attention",
       "description": "Build for human attention: few words on screen, the design carries the meaning. Skill, copy audit, and a hook that reports the copy an edit adds."
+    },
+    {
+      "name": "evidence-before-done",
+      "source": "./steering/evidence-before-done",
+      "description": "Done means finished and shown. Skill, and a hook that reports stubs and suppressions an edit adds."
+    },
+    {
+      "name": "keep-moving",
+      "source": "./steering/keep-moving",
+      "description": "Do not stall and do not spin. Skill, and a hook that blocks the third identical build or test run when nothing changed."
+    },
+    {
+      "name": "model-tiering",
+      "source": "./steering/model-tiering",
+      "description": "Every dispatch names its model, chosen by what would catch a wrong answer. Skill, and a hook that blocks a dispatch with no model."
     }
   ]
 }

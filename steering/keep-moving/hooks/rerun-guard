@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Hook for PreToolUse(Bash) and PostToolUse(Write|Edit|MultiEdit).
+
+Blocks the third identical build/test/run command in a session when no file
+was edited in between: the result cannot change, so read the last output or
+the code. The next attempt passes. Kill switch: RERUN_GUARD_DISABLE=1.
+"""
+import hashlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+RUNNER = re.compile(
+    r"(?:^|[\s;&|(])(?:cargo\s+(?:test|build|run|check|bench|nextest)|pytest|python3?\s+-m\s+pytest|go\s+(?:test|build|run)|"
+    r"(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|lint|typecheck)|npx\s+(?:vitest|jest|playwright|tsc)|"
+    r"make(?:\s|$)|ctest|cmake\s+--build|\./gradlew|gradle\s|mvn\s|dotnet\s+(?:test|build)|swift\s+(?:test|build)|tox|nox)")
+CHANGES = re.compile(
+    r"\bgit\s+(?:-C\s+\S+\s+)?(?:fetch|pull|checkout|switch|merge|rebase|apply|restore|cherry-pick|reset|am)\b|"
+    r"\bsed\s+-i|\bpatch\b|\btee\b|(?<![0-9&])>>?\s*[^&\s]|\b(?:mv|cp|rm|touch|ln)\s|<<")
+DETACHED = re.compile(r"\b(?:setsid|nohup)\b|&\s*(?:disown|$)")
+LIMIT = 3
+
+
+def core(command):
+    """The run itself: drop output filters, redirections, a leading cd and a timeout wrapper."""
+    cmd = " ".join(command.split())
+    cmd = re.split(r"\s\|\s", cmd)[0]
+    cmd = re.sub(r"\s\d?>&?\d?\s*\S*", "", cmd)
+    cmd = re.sub(r"^(?:cd\s+\S+\s*(?:&&|;)\s*)+", "", cmd)
+    cmd = re.sub(r"\btimeout\s+\S+\s+", "", cmd)
+    return cmd.strip()
+
+
+def state_file(session):
+    base = Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")) / "rerun-guard"
+    base.mkdir(parents=True, exist_ok=True)
+    return base / f"{re.sub(r'[^A-Za-z0-9_-]', '_', session)[:80]}.json"
+
+
+def main():
+    if os.environ.get("RERUN_GUARD_DISABLE") == "1":
+        return 0
+    try:
+        ev = json.load(sys.stdin)
+        sf = state_file(ev.get("session_id") or "nosession")
+        try:
+            st = json.loads(sf.read_text())
+        except Exception:
+            st = {}
+        if ev.get("tool_name") != "Bash":
+            if st:
+                sf.write_text("{}")
+            return 0
+        raw = (ev.get("tool_input") or {}).get("command", "")
+        if ev.get("hook_event_name") == "PostToolUse":
+            return 0
+        if CHANGES.search(raw):  # the tree or the inputs may have changed: start counting again
+            if st:
+                sf.write_text("{}")
+            return 0
+        cmd = core(raw)
+        if not cmd or DETACHED.search(raw) or not RUNNER.search(cmd):
+            return 0
+        key = hashlib.sha1(cmd.encode()).hexdigest()[:16]
+        st[key] = st.get(key, 0) + 1
+        hit = st[key] >= LIMIT
+        if hit:
+            st[key] = 0
+        sf.write_text(json.dumps(st))
+    except Exception:
+        return 0
+    if not hit:
+        return 0
+    print(f"rerun-guard: this exact command has run {LIMIT} times this session with no file edited in between, "
+          "so its result cannot have changed. Read the last output, or read the code, and state what you expect "
+          "to differ before running it again. (Waiting on something external? Poll its artifact, not the build.)",
+          file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,9 @@
+{
+  "name": "keep-moving",
+  "version": "0.1.0",
+  "description": "Do not stall, and do not spin: work the next thing, and never rerun what cannot change",
+  "author": { "name": "warxhead1" },
+  "repository": "https://github.com/warxhead1/nervous-bus",
+  "license": "MIT",
+  "keywords": ["steering", "hooks"]
+}
