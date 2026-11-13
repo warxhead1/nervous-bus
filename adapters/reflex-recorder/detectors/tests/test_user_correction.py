@@ -136,6 +136,14 @@ class TestMatchThemes(unittest.TestCase):
         themes = match_themes("Why did you leave those log files, they don't need to be there")
         self.assertNotIn("over_explained_output", themes)
 
+    def test_idle_dispatch_fires_on_stalling_complaints(self):
+        for text in (
+            "Why do you keep stopping work because a sweep is running?",
+            "why are you waiting, the device rebooted",
+            "you keep pausing instead of working the other issues",
+        ):
+            self.assertIn("idle_dispatch", match_themes(text), text)
+
     def test_multiple_themes_can_fire_together(self):
         themes = match_themes(
             "Why did you use sudo again, don't touch root access without asking"
