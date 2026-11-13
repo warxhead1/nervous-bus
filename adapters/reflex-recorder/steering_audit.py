@@ -566,6 +566,7 @@ def _last_audit(out_dir: Path) -> str | None:
 
 
 def main() -> int:
+    import steering_verdicts  # imports this module; deferred to avoid a cycle
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--days", type=int, default=7)
     ap.add_argument("--out-dir", type=Path, default=STEERING_DIGEST_DIR)
@@ -580,8 +581,14 @@ def main() -> int:
         a.out_dir.mkdir(parents=True, exist_ok=True)
         day = rep["generated_at"][:10]
         for name in ("latest", day):
-            (a.out_dir / f"{name}.json").write_text(json.dumps(rep, indent=2) + "\n")
-            (a.out_dir / f"{name}.md").write_text(md)
+            steering_verdicts.atomic_write(a.out_dir / f"{name}.json", json.dumps(rep, indent=2) + "\n")
+            steering_verdicts.atomic_write(a.out_dir / f"{name}.md", md)
+        # Deterministic verdicts ride the same daily run. Non-fatal: a missing
+        # runs.db or rules tree must not take the digest down with it.
+        try:
+            steering_verdicts.run(out_dir=a.out_dir)
+        except Exception as exc:
+            print(f"steering-audit: verdicts skipped: {exc}", file=sys.stderr)
     if a.json:
         print(json.dumps(rep, indent=2))
     elif a.md:

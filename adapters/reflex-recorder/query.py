@@ -1490,6 +1490,26 @@ def cmd_remediation(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
     print(_fmt_table(rows))
 
 
+def cmd_steering_verdicts(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
+    """Print the latest verdicts file; --refresh recomputes from this DB (no write)."""
+    import steering_audit
+    import steering_verdicts
+
+    if args.refresh:
+        rep = steering_verdicts.build(
+            conn, Path(args.tree) if args.tree else DEFAULT_RULES_TREE,
+            steering_audit.STEERING_DIGEST_DIR, steering_audit.CLAUDE_HOME)
+    else:
+        path = steering_audit.STEERING_DIGEST_DIR / "verdicts-latest.json"
+        try:
+            rep = json.loads(path.read_text())
+        except (OSError, ValueError) as exc:
+            print(f"error: no readable verdicts at {path} ({exc}); run steering_verdicts.py "
+                  f"or pass --refresh", file=sys.stderr)
+            return
+    print(json.dumps(rep, indent=2) if args.json else steering_verdicts.to_markdown(rep))
+
+
 # ── Argument parser ───────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1614,6 +1634,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp_rem.add_argument("--project", "-p", help="Filter by project")
     sp_rem.add_argument("--json", "-j", action="store_true", help="JSON output")
 
+    # steering-verdicts — keep/cut/promote/unmeasurable per rule + budget + judge gate
+    sp_sv = sub.add_parser("steering-verdicts", help="Per-rule steering verdicts from the daily deterministic run")
+    sp_sv.add_argument("--tree", help="Rules tree for --refresh (default ~/.claude/memory-global)")
+    sp_sv.add_argument("--refresh", action="store_true", help="Recompute from the DB instead of reading the file")
+    sp_sv.add_argument("--json", "-j", action="store_true", help="JSON output")
+
     return p
 
 
@@ -1645,6 +1671,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             "skills": cmd_skills,
             "dispatch": cmd_dispatch,
             "remediation": cmd_remediation,
+            "steering-verdicts": cmd_steering_verdicts,
         }
         handler = dispatch.get(args.command)
         if handler is None:
