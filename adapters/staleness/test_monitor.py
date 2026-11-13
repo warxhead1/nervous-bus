@@ -157,5 +157,31 @@ class StalenessMonitorTest(unittest.TestCase):
         self.assertEqual(published.count("test.staleness.cooldown"), 1)
 
 
+
+class TestDormantSection(unittest.TestCase):
+    """Pure rendering: no Redis needed."""
+
+    @staticmethod
+    def _stale(channel, days, now):
+        return {"channel": channel, "verdict": "stale", "last_event_at": now - days * 86400,
+                "observed_gap_seconds": days * 86400, "expected_gap_seconds": 1800,
+                "p95_gap_seconds": 60, "baseline_sample_size": 40}
+
+    def test_long_silent_channels_are_listed_apart_from_recent_breaks(self):
+        now = 1_800_000_000.0
+        report = monitor.render_report(
+            [self._stale("recent.break", 2, now), self._stale("long.gone", 120, now)], generated_at=now)
+        stale_part, dormant_part = report.split("## DORMANT")
+        self.assertIn("recent.break", stale_part.split("## STALE")[1])
+        self.assertNotIn("long.gone", stale_part)
+        self.assertIn("long.gone", dormant_part.split("## OK")[0])
+        self.assertIn("stale=1 dormant=1", report)
+
+    def test_no_dormant_section_when_every_break_is_recent(self):
+        now = 1_800_000_000.0
+        report = monitor.render_report([self._stale("recent.break", 2, now)], generated_at=now)
+        self.assertNotIn("DORMANT", report)
+
+
 if __name__ == "__main__":
     unittest.main()
