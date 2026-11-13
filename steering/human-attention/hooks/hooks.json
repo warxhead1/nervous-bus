@@ -1,0 +1,23 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "cat \"${CLAUDE_PLUGIN_ROOT}\"/hooks/ruling.md" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/skills/human-attention/scripts/copy-audit-hook",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

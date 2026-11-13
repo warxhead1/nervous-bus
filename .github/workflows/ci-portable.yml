@@ -10,6 +10,8 @@ on:
       - 'adapters/transcripts/**'
       - 'adapters/argshape/**'
       - 'adapters/needs-you/**'
+      - 'steering/**'
+      - '.claude-plugin/**'
       - '.github/workflows/ci-portable.yml'
   pull_request:
     branches: [main]
@@ -20,6 +22,8 @@ on:
       - 'adapters/transcripts/**'
       - 'adapters/argshape/**'
       - 'adapters/needs-you/**'
+      - 'steering/**'
+      - '.claude-plugin/**'
       - '.github/workflows/ci-portable.yml'
 
 permissions:
@@ -60,4 +64,4 @@ jobs:
         run: python tools/setup.py install --bin-dir "${{ runner.temp }}/nbus-bin" --dry-run
 
       - name: Portable test suites
-        run: python -m pytest -q -p no:cacheprovider adapters/transcripts tools/test_setup.py
+        run: python -m pytest -q -p no:cacheprovider adapters/transcripts tools/test_setup.py steering

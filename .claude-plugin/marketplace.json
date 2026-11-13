@@ -1,0 +1,12 @@
+{
+  "name": "nervous-bus",
+  "description": "Steering for coding agents: rulings that cost real incidents to learn, each packaged with the check that enforces it",
+  "owner": { "name": "warxhead1" },
+  "plugins": [
+    {
+      "name": "human-attention",
+      "source": "./steering/human-attention",
+      "description": "Build for human attention: few words on screen, the design carries the meaning. Skill, copy audit, and a hook that reports the copy an edit adds."
+    }
+  ]
+}

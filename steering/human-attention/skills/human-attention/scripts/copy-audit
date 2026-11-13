@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""copy-audit: list the text a person will see in UI source, and count the usual excess.
+
+  copy-audit <file-or-dir>... [--json] [--max-words N] [--max-pairs N]
+
+Reads markup text and user-facing string props from .html .htm .vue .svelte .jsx
+.tsx, and canvas fillText literals from those plus .js .ts. Static and approximate. Exit 1 only
+when a --max-* limit is given and exceeded.
+"""
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+EXTS = {".html", ".htm", ".vue", ".svelte", ".jsx", ".tsx", ".js", ".ts"}
+SKIP_DIRS = {"node_modules", ".git", "dist", "build", ".next", "target", "vendor", "coverage"}
+VOID = {"br", "img", "input", "hr", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
+SILENT = {"script", "style", "svg", "head", "template", "noscript", "code", "pre"}
+HEADING = re.compile(r"^(h[1-6]|\w*(Title|Heading|Header))$")
+SUB_TAG = re.compile(r"(Description|Subtitle|Subheading|Caption|HelperText|Hint)$")
+A11Y_REQUIRED = re.compile(r"^(Alert)?(Dialog|Sheet|Drawer)Description$")  # Radix needs these
+SUB_CLASS = re.compile(r"subtitle|subhead|description|caption|helper|hint|tagline|muted|text-(?:gray|slate|zinc|neutral|stone)-[4-6]00")
+SUB_MIN_WORDS = 3  # shorter is a label, not a description
+VISIBLE_ATTR = re.compile(r"""(?<![\w-])(placeholder|title|label|description|subtitle|helperText|caption|tooltip|hint)\s*=\s*(?:"([^"]*)"|'([^']*)'|\{\s*["'`]([^"'`]*)["'`]\s*\})""")
+CLASS_ATTR = re.compile(r"""\bclass(?:Name)?\s*=\s*(?:"([^"]*)"|'([^']*)'|\{[^}]*?["'`]([^"'`]*)["'`])""")
+FILL_TEXT = re.compile(r"""\b(?:fillText|strokeText)\s*\(\s*(["'`])((?:(?!\1).)*)\1""")
+STOCK = re.compile(
+    r"welcome to|all-in-one|seamless|effortless|powerful|supercharge|unleash|unlock|elevate|empower|"
+    r"cutting-edge|next-generation|revolutioni[sz]e|at your fingertips|take control of|get started by|"
+    r"not just\b.{0,40}\bbut|manage your\b|here you can|this (?:page|section|screen) (?:lets|allows|shows)|"
+    r"easily\b|simply\b|in one place",
+    re.IGNORECASE,
+)
+LONG_WORDS = 12
+
+
+def words(s):
+    return len(re.findall(r"[A-Za-z0-9][\w'’-]*", s))
+
+
+def clean(text):
+    text = re.sub(r"\{\s*[\"'`]([^\"'`]*)[\"'`]\s*\}", r"\1", text)  # {"literal"}
+    while re.search(r"\{[^{}]*\}", text):
+        text = re.sub(r"\{[^{}]*\}", " ", text)  # {expr}
+    text = re.sub(r"\{.*$|^.*\}", " ", text, flags=re.S)  # half an expression split by a tag
+    text = re.sub(r"&[a-z]+;|&#\d+;", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def tokens(src, jsx):
+    """Yield ('text', str, line) and ('open'|'close'|'self', name, attrs, line)."""
+    i, n, last = 0, len(src), 0
+    while i < n:
+        j = src.find("<", i)
+        if j < 0:
+            break
+        nxt = src[j + 1 : j + 2]
+        prev = src[j - 1 : j] if j else ""
+        is_tag = nxt == "/" or (nxt == ">" and jsx) or (
+            nxt.isalpha() and not (jsx and (prev.isalnum() or (prev and prev in "_)]")))
+        )
+        if not is_tag:
+            i = j + 1
+            continue
+        k, depth, quote = j + 1, 0, ""
+        while k < n:
+            c = src[k]
+            if quote:
+                if c == quote:
+                    quote = ""
+            elif c in "\"'`":
+                quote = c
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+            elif c == ">" and depth <= 0 and src[k - 1] != "=":
+                break
+            k += 1
+        if k >= n:
+            break
+        yield ("text", src[last:j], src.count("\n", 0, last) + 1)
+        body = src[j + 1 : k]
+        line = src.count("\n", 0, j) + 1
+        m = re.match(r"/?\s*([A-Za-z][\w.:-]*)?", body)
+        name = (m.group(1) or "") if m else ""
+        if body.startswith("/"):
+            yield ("close", name, "", line)
+        elif body.rstrip().endswith("/") or name.lower() in VOID:
+            yield ("self", name, body, line)
+        else:
+            yield ("open", name, body, line)
+        i = last = k + 1
+    if not jsx:
+        yield ("text", src[last:], src.count("\n", 0, last) + 1)
+
+
+def audit_file(path):
+    return audit_text(path.read_text(errors="replace"), path.suffix)
+
+
+def audit_text(src, ext):
+    jsx = ext in {".jsx", ".tsx", ".js", ".ts"}
+    src = re.sub(r"<!--.*?-->|<![^>]*>", " ", src, flags=re.S)
+    if jsx:
+        src = re.sub(r"\{/\*.*?\*/\}", " ", src, flags=re.S)
+    strings, pairs, slots = [], 0, 0
+    stack = []  # (name, silent)
+    last_el = None  # kind of the previous text-bearing element at this point: 'heading' | 'other'
+    pending = None  # element being read: [name, attrs, line, text]
+
+    def add(text, line, kind):
+        text = clean(text)
+        if words(text) and re.search(r"[A-Za-z]{2}", text):
+            strings.append({"text": text, "line": line, "words": words(text), "kind": kind})
+            return True
+        return False
+
+    for tok in tokens(src, jsx) if ext not in {".js", ".ts"} else ():
+        if tok[0] == "text":
+            if jsx and not stack:
+                continue
+            if any(s for _, s in stack):
+                continue
+            if pending is not None:
+                pending[3] += " " + tok[1]
+            else:
+                add(tok[1], tok[2], "text")
+            continue
+        kind, name, attrs, line = tok
+        if kind in ("open", "self"):
+            for m in VISIBLE_ATTR.finditer(attrs):
+                add(next(g for g in m.groups()[1:] if g is not None), line, m.group(1))
+        if kind == "open":
+            if pending is not None and clean(pending[3]):
+                flush(pending, add)
+            stack.append((name, name.lower() in SILENT or any(s for _, s in stack)))
+            pending = [name, attrs, line, ""]
+        elif kind == "close":
+            if pending is not None:
+                cls = " ".join(g for m in CLASS_ATTR.finditer(pending[1]) for g in m.groups() if g)
+                is_head = bool(HEADING.match(pending[0]))
+                is_sub = bool(SUB_TAG.search(pending[0]) or SUB_CLASS.search(cls)) and not is_head and not A11Y_REQUIRED.match(pending[0])
+                is_sub = is_sub and words(clean(pending[3])) >= SUB_MIN_WORDS
+                silent = any(s for _, s in stack)
+                if not silent and add(pending[3], pending[2], "heading" if is_head else "sub" if is_sub else "text"):
+                    if is_sub:
+                        slots += 1
+                        if last_el == "heading":
+                            pairs += 1
+                    last_el = "heading" if is_head else "other"
+                pending = None
+            while stack:
+                if stack.pop()[0] == name:
+                    break
+    for m in FILL_TEXT.finditer(src):
+        add(m.group(2), src.count("\n", 0, m.start()) + 1, "canvas")
+    return strings, pairs, slots
+
+
+def flush(pending, add):
+    add(pending[3], pending[2], "text")
+    pending[3] = ""
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("paths", nargs="+")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--max-words", type=int)
+    ap.add_argument("--max-pairs", type=int)
+    a = ap.parse_args()
+
+    files = []
+    for p in map(Path, a.paths):
+        if p.is_dir():
+            files += [f for f in sorted(p.rglob("*")) if f.suffix in EXTS and f.is_file()
+                      and not SKIP_DIRS & set(f.parts) and ".test." not in f.name and ".spec." not in f.name]
+        elif p.is_file():
+            files.append(p)
+        else:
+            sys.exit(f"copy-audit: no such path: {p}")
+
+    report, total = [], {"strings": 0, "words": 0, "heading_subtitle_pairs": 0, "description_slots": 0, "long": 0, "stock": 0}
+    for f in files:
+        strings, pairs, slots = audit_file(f)
+        if not strings:
+            continue
+        for s in strings:
+            s["long"] = s["words"] > LONG_WORDS
+            s["stock"] = bool(STOCK.search(s["text"]))
+        row = {"file": str(f), "strings": len(strings), "words": sum(s["words"] for s in strings),
+               "heading_subtitle_pairs": pairs, "description_slots": slots,
+               "long": sum(s["long"] for s in strings), "stock": sum(s["stock"] for s in strings), "items": strings}
+        report.append(row)
+        for k in total:
+            total[k] += row[k]
+
+    if a.json:
+        json.dump({"total": total, "files": report}, sys.stdout, indent=1)
+        print()
+    else:
+        for row in report:
+            print(f"\n{row['file']}  {row['strings']} strings, {row['words']} words, "
+                  f"{row['heading_subtitle_pairs']} heading+subtitle, {row['description_slots']} description slots")
+            for s in row["items"]:
+                flag = ("S" if s["kind"] == "sub" else " ") + ("L" if s["long"] else " ") + ("P" if s["stock"] else " ")
+                print(f"  {flag} {s['line']:>5}  {s['text'][:110]}")
+        print(f"\nTOTAL  {total['strings']} strings  {total['words']} words  "
+              f"{total['heading_subtitle_pairs']} heading+subtitle  {total['description_slots']} description slots  "
+              f"{total['long']} long  {total['stock']} stock phrases")
+        print("flags: S subtitle/description slot, L over 12 words, P stock phrase")
+
+    over = (a.max_words is not None and total["words"] > a.max_words) or (
+        a.max_pairs is not None and total["heading_subtitle_pairs"] > a.max_pairs)
+    sys.exit(1 if over else 0)
+
+
+if __name__ == "__main__":
+    main()

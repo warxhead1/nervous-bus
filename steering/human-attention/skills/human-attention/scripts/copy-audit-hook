@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""PostToolUse hook (Write|Edit|MultiEdit): report the copy an edit ADDED to a UI file.
+
+Scores the difference between the file before and after the edit, so existing
+copy is never blamed on the edit that happened to touch its file. Documents
+(no interactive element) are judged only on heading+subtitle pairs and
+description slots; their prose is the point. Exit 2 puts stderr in front of the
+agent; the write itself stands. Kill switch: COPY_AUDIT_DISABLE=1.
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+UI = {".html", ".htm", ".vue", ".svelte", ".jsx", ".tsx"}
+STATE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "copy-audit-hook"
+INTERACTIVE = re.compile(r"<(?:button|input|select|textarea|canvas|form)\b|<(?:Button|Input|Select|Switch|Slider)\b|\bon(?:Click|Change|Submit)\s*=|\bonclick\s*=", re.I)
+# Added by one edit. Words and long strings count only on an interactive surface.
+ADDED = {"heading_subtitle_pairs": 2, "description_slots": 2, "stock": 1, "long": 1, "words": 40}
+SURFACE_ONLY = {"stock", "long", "words"}
+
+
+def load_audit():
+    path = str(Path(__file__).resolve().with_name("copy-audit"))
+    loader = importlib.machinery.SourceFileLoader("copy_audit", path)
+    spec = importlib.util.spec_from_loader("copy_audit", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def counts(mod, src, ext):
+    strings, pairs, slots = mod.audit_text(src, ext)
+    return {
+        "strings": len(strings),
+        "words": sum(s["words"] for s in strings),
+        "heading_subtitle_pairs": pairs,
+        "description_slots": slots,
+        "long": sum(s["words"] > mod.LONG_WORDS for s in strings),
+        "stock": sum(bool(mod.STOCK.search(s["text"])) for s in strings),
+    }, strings
+
+
+def before_text(ev, path, now):
+    """The file as it was before this tool call, or None when that cannot be known."""
+    tool, ti = ev.get("tool_name"), ev.get("tool_input", {})
+    edits = ti.get("edits") if tool == "MultiEdit" else [ti] if tool == "Edit" else None
+    if edits:
+        src = now
+        for e in reversed(edits):
+            new, old = e.get("new_string", ""), e.get("old_string", "")
+            if not new or new not in src:
+                return None
+            src = src.replace(new, old) if e.get("replace_all") else src.replace(new, old, 1)
+        return src
+    try:
+        top = subprocess.run(["git", "-C", str(path.parent), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=3)
+        if top.returncode:
+            return ""
+        rel = path.resolve().relative_to(Path(top.stdout.strip()).resolve())
+        show = subprocess.run(["git", "-C", top.stdout.strip(), "show", f"HEAD:{rel}"],
+                              capture_output=True, text=True, timeout=3)
+        return show.stdout if show.returncode == 0 else ""
+    except Exception:
+        return None
+
+
+def main():
+    if os.environ.get("COPY_AUDIT_DISABLE") == "1":
+        return 0
+    try:
+        ev = json.load(sys.stdin)
+        path = Path(ev["tool_input"]["file_path"])
+        if path.suffix not in UI or not path.is_file() or path.stat().st_size > 400_000:
+            return 0
+        mod = load_audit()
+        src = path.read_text(errors="replace")
+        now, strings = counts(mod, src, path.suffix)
+    except Exception:
+        return 0
+
+    state_file = STATE / f"{ev.get('session_id', 'nosession')}.json"
+    try:
+        seen = json.loads(state_file.read_text())
+    except Exception:
+        seen = {}
+    before = seen.get(str(path))
+    old_texts = set()
+    if before is None:
+        prior = before_text(ev, path, src)
+        if prior is None:
+            before = now  # unknown history: blame nothing
+        else:
+            before, old = counts(mod, prior, path.suffix)
+            old_texts = {s["text"] for s in old}
+    seen[str(path)] = now
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(json.dumps(seen))
+    except OSError:
+        pass
+
+    surface = bool(INTERACTIVE.search(src))
+    added = {k: now[k] - before.get(k, 0) for k in ADDED}
+    hit = [k for k, floor in ADDED.items() if added[k] >= floor and (surface or k not in SURFACE_ONLY)]
+    if not hit:
+        return 0
+
+    print(
+        f"copy-audit {path.name}: this edit added {added['words']} visible words "
+        f"({added['heading_subtitle_pairs']} heading+subtitle pairs, {added['description_slots']} description slots, "
+        f"{added['long']} long strings, {added['stock']} stock phrases). File now shows {now['strings']} strings, {now['words']} words.",
+        file=sys.stderr,
+    )
+    new = [s for s in strings if s["text"] not in old_texts]
+    flagged = [s for s in new if s["kind"] == "sub" or s["words"] > mod.LONG_WORDS or mod.STOCK.search(s["text"])]
+    for s in (flagged or sorted(new, key=lambda s: -s["words"]))[:8]:
+        print(f"  line {s['line']}: {s['text'][:90]}", file=sys.stderr)
+    print(
+        "A person reads one thing at a time. For each line: would a first-time user miss it? "
+        "Can the design say it instead? Cut or redesign, or keep it if it is an error, a "
+        "confirmation, or something the user asked for. Method: human-attention skill.",
+        file=sys.stderr,
+    )
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

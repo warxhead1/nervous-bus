@@ -1,0 +1,9 @@
+{
+  "name": "human-attention",
+  "version": "0.1.0",
+  "description": "Build for human attention: few words on screen, the design carries the meaning",
+  "author": { "name": "warxhead1" },
+  "repository": "https://github.com/warxhead1/nervous-bus",
+  "license": "MIT",
+  "keywords": ["ui", "copy", "steering", "hooks"]
+}
