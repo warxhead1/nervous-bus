@@ -33,3 +33,16 @@ def test_cues_stay_quiet_on_other_plugins_negatives_and_bad_input(plugin):
             assert not say(plugin, q), f"{plugin.name} fired on: {q}"
     p = subprocess.run([sys.executable, str(plugin / "hooks" / "cue")], input="nope", capture_output=True, text=True)
     assert p.returncode == 0 and not p.stdout
+
+
+@pytest.mark.parametrize("plugin", PLUGINS, ids=lambda p: p.name)
+def test_cues_ignore_text_the_harness_wrote(plugin):
+    """A cue answers the person; a notification that happens to contain the cue's words is not them."""
+    cases = json.loads((plugin / "evals" / "trigger.json").read_text())
+    q = cases["should"][0]
+    assert say(plugin, q)
+    assert not say(plugin, f"[SYSTEM NOTIFICATION - NOT USER INPUT]\n{q}")
+    assert not say(plugin, f"<task-notification><summary>{q}</summary></task-notification>")
+    assert not say(plugin, f"<system-reminder>\n{q}\n</system-reminder>")
+    assert not say(plugin, f"This session is being continued from a previous conversation. {q}")
+    assert say(plugin, f"<system-reminder>context</system-reminder>\n{q}")

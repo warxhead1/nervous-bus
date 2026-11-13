@@ -1,6 +1,6 @@
 {
   "name": "falsify-your-gate",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A test, gate, or detector counts only after you have watched it fail on the bad case",
   "author": { "name": "warxhead1" },
   "repository": "https://github.com/warxhead1/nervous-bus",

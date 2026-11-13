@@ -1,6 +1,6 @@
 {
   "name": "remediation-ladder",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Fix the cause at the highest rung: eliminate, then automate, and only then write a rule",
   "author": { "name": "warxhead1" },
   "repository": "https://github.com/warxhead1/nervous-bus",

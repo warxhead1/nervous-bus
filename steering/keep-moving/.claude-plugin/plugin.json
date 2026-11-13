@@ -1,6 +1,6 @@
 {
   "name": "keep-moving",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Do not stall, and do not spin: work the next thing, and never rerun what cannot change",
   "author": { "name": "warxhead1" },
   "repository": "https://github.com/warxhead1/nervous-bus",
