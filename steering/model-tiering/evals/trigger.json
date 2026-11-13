@@ -1,0 +1,14 @@
+{
+  "skill": "model-tiering",
+  "should": [
+    "Fan out agents to audit every package in this monorepo for dead code.",
+    "Spin up a planner, a builder, a reviewer and a tester as subagents to build the booking page.",
+    "We keep hitting the usage limit. How should we be splitting work across models?",
+    "Write a workflow script that reviews each changed file with its own agent.",
+    "Delegate the landing page copy to a subagent while you do the backend."
+  ],
+  "should_not": [
+    "Fix the off-by-one in the pagination helper.",
+    "What is the difference between a mutex and a semaphore?"
+  ]
+}

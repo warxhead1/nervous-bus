@@ -1,0 +1,10 @@
+[
+ {
+  "pattern": "\\bsub-?agents?\\b|\\bfan[- ]?out\\b|\\bswarm\\b|\\bmulti-?agent\\b|\\bteam of agents\\b|\\bworkflow script\\b|\\b(launch|run|use|spin up|dispatch|start|send) (a |an |\\d+ |some |more |several |a few |a bunch of )?(\\w+ )?(agents?|workflows?)\\b|\\bdelegat\\w*\\b.*\\bagents?\\b|\\b(its|their) own agent\\b|\\bagents? (to|for each|per)\\b",
+  "say": "[model-tiering] Before dispatching: one agent with the right skill usually matches a team at lower cost. Dispatch only for parallel work in throwaway contexts, reading that would flood yours, or a second opinion. Set `model` on every dispatch by what would catch a wrong answer: a test or diff means a small model; nothing mechanical means the top model or yourself. Load the model-tiering skill."
+ },
+ {
+  "pattern": "\\b(usage|rate|token|request|weekly|5h) limits?\\b|\\b(too|so) many agents\\b|\\bwhich model\\b|\\b(across|between) models\\b|\\bmodel (tier\\w*|choice|selection)\\b",
+  "say": "[model-tiering] Pick the model by what would catch a wrong answer: a test, compiler, or diff you will read means a small model; nothing mechanical (design, copy, pricing, final review) means the top model. State the plan in one line before more than three agents. Load the model-tiering skill."
+ }
+]

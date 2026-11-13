@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Measure how often each steering skill is loaded for the prompts it should catch.
+
+Reads steering/<plugin>/evals/trigger.json:
+    {"skill": "<name>", "should": ["prompt", ...], "should_not": ["prompt", ...]}
+Runs each prompt headless (`claude -p`, two turns, only the Skill tool allowed),
+looks for a Skill tool call naming the skill, and prints trigger and
+false-trigger rates. Every run is a real model request: start with --runs 1.
+Run it under a clean --config-dir: measured here, a config whose always-loaded
+rules already cover a skill loads that skill 0 times in 14.
+
+    steering/tools/trigger-eval [--plugins a,b] [--runs N] [--model M] [--jobs J] [--json out.json]
+"""
+import argparse
+import concurrent.futures as cf
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_cases(only):
+    cases = []
+    for f in sorted(ROOT.glob("*/evals/trigger.json")):
+        d = json.loads(f.read_text())
+        if only and d["skill"] not in only:
+            continue
+        cases += [(d["skill"], True, q) for q in d.get("should", [])]
+        cases += [(d["skill"], False, q) for q in d.get("should_not", [])]
+    return cases
+
+
+def skills_called(stream):
+    called = set()
+    for line in stream.splitlines():
+        try:
+            o = json.loads(line)
+        except ValueError:
+            continue
+        if o.get("type") != "assistant":
+            continue
+        for c in o.get("message", {}).get("content") or []:
+            if c.get("type") == "tool_use" and c.get("name") == "Skill":
+                called.add(str((c.get("input") or {}).get("skill", "")).split(":")[-1])
+    return called
+
+
+def run_one(args, prompt, plugin_dirs, cwd):
+    cmd = [args.claude, "-p", prompt, "--model", args.model, "--max-turns", "2",
+           "--output-format", "stream-json", "--verbose", "--allowedTools", "Skill"]
+    for d in plugin_dirs:
+        cmd += ["--plugin-dir", str(d)]
+    try:
+        env = dict(os.environ)
+        if args.config_dir:
+            env["CLAUDE_CONFIG_DIR"] = args.config_dir
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout, cwd=cwd,
+                           stdin=subprocess.DEVNULL, env=env)
+        return skills_called(p.stdout)
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--plugins", default="", help="comma list of skill names; default all with evals")
+    ap.add_argument("--runs", type=int, default=1)
+    ap.add_argument("--model", default="sonnet")
+    ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--timeout", type=int, default=180)
+    ap.add_argument("--claude", default=os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude")
+    ap.add_argument("--no-plugin-dir", action="store_true", help="skills are already installed; do not pass --plugin-dir")
+    ap.add_argument("--config-dir", help="CLAUDE_CONFIG_DIR to run under. Use a clean one (credentials only): "
+                    "a home config that already states these rules hides whether the skill loads")
+    ap.add_argument("--json", dest="out")
+    args = ap.parse_args()
+    only = {s for s in args.plugins.split(",") if s}
+    cases = load_cases(only)
+    if not cases:
+        sys.exit("no cases found")
+    dirs = [] if args.no_plugin_dir else [f.parents[1] for f in sorted(ROOT.glob("*/evals/trigger.json"))]
+    cwd = tempfile.mkdtemp(prefix="trigger-eval-")
+    jobs = [(skill, want, q, r) for skill, want, q in cases for r in range(args.runs)]
+    rows = []
+    with cf.ThreadPoolExecutor(args.jobs) as ex:
+        futs = {ex.submit(run_one, args, q, dirs, cwd): (skill, want, q) for skill, want, q, _ in jobs}
+        for fut in cf.as_completed(futs):
+            skill, want, q = futs[fut]
+            called = fut.result()
+            rows.append({"skill": skill, "should": want, "prompt": q,
+                         "called": sorted(called) if called is not None else None,
+                         "hit": None if called is None else skill in called})
+            print("." if called is not None else "T", end="", file=sys.stderr, flush=True)
+    print(file=sys.stderr)
+    print(f"{'skill':24} trigger        false-trigger  timeouts")
+    for skill in sorted({r["skill"] for r in rows}):
+        pos = [r for r in rows if r["skill"] == skill and r["should"] and r["hit"] is not None]
+        neg = [r for r in rows if r["skill"] == skill and not r["should"] and r["hit"] is not None]
+        to = sum(r["hit"] is None for r in rows if r["skill"] == skill)
+        rate = lambda L: f"{sum(r['hit'] for r in L)}/{len(L)}" if L else "-"
+        print(f"{skill:24} {rate(pos):14} {rate(neg):14} {to}")
+    for r in sorted(rows, key=lambda r: (r["skill"], r["should"])):
+        if r["hit"] is not None and r["hit"] != r["should"]:
+            print(f"  MISS {r['skill']} ({'should' if r['should'] else 'should not'}; called {r['called']}): {r['prompt'][:90]}")
+    if args.out:
+        Path(args.out).write_text(json.dumps(rows, indent=1))
+
+
+if __name__ == "__main__":
+    main()

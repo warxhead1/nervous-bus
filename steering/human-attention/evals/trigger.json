@@ -1,0 +1,14 @@
+{
+  "skill": "human-attention",
+  "should": [
+    "Build a settings page for the app with sections for profile, alerts and billing.",
+    "Make a small browser puzzle game with a tutorial for new players.",
+    "This dashboard feels cluttered, there's a caption under everything. Clean it up.",
+    "Write the onboarding flow for first-time users of the mobile app.",
+    "Brief a subagent to build the landing page hero and pricing cards."
+  ],
+  "should_not": [
+    "Explain in detail how our retry backoff works. I want to understand it.",
+    "Add an index on orders(created_at) and write the migration."
+  ]
+}

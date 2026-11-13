@@ -1,0 +1,18 @@
+[
+ {
+  "pattern": "\\b(we'?re|i think we'?re|looks?|is it|are we) (all )?(done|finished|fixed|good to go|ready)\\b|\\b(tests?|build|ci|checks?) (now )?(pass(es|ing)?|(is|are) green)\\b|\\bwrite (up )?(the|a) (summary|report|release notes?)\\b|\\bput that in the\\b|\\b(says?|said|reports?|reported) (it|that|the)\\b.*\\b(ran|works?|passed|clean(ly)?|done)\\b",
+  "say": "[evidence-before-done] A claim of done, fixed, or passing needs what you observed this turn: run the real thing, read its output, then say what you ran and what it showed. Check a subagent's specific claim before repeating it. Load the evidence-before-done skill."
+ },
+ {
+  "pattern": "\\bpre-?existing\\b|\\b(already|was) (failing|broken|red)\\b|\\bnot (ours|mine|related)\\b|\\bflak(y|e)\\b",
+  "say": "[evidence-before-done] \"Pre-existing\" is a claim to disprove: show the failure on the base commit, or treat it as yours and fix it. Load the evidence-before-done skill."
+ },
+ {
+  "pattern": "\\b(add|use) an? (ignore|skip|suppress\\w*|allow|noqa|exception)\\b|\\b(skip|disable|silence|suppress|ignore|comment out) (the|that|this|it)\\b.*\\b(test|lint|warning|check|error|hook)\\b|--no-verify|\\bjust (stub|mock|hardcode)\\b",
+  "say": "[evidence-before-done] A skipped test, a suppression, or a stub hides the problem. Fix the cause. If one has to stay, report it with the reason and do not call the work done. Load the evidence-before-done skill."
+ },
+ {
+  "pattern": "\\bstill (shows?|fails?|broken|not working|doesn'?t work|crash\\w*|the same)\\b|\\byou said (this|it|that) (was|is) (fixed|done|working)\\b|\\b(not|isn'?t|doesn'?t) (working|fixed)\\b",
+  "say": "[evidence-before-done] The user ran it and it failed. Look at the failure path they describe; do not explain why it should have worked. Reproduce it before changing anything. Load the evidence-before-done skill."
+ }
+]
