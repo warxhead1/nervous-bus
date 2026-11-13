@@ -324,7 +324,10 @@ def iter_event_dispatches(runs_db: Path, skip_ids: set) -> Iterator[dict]:
                 continue
             ev = {"seq": 0, "tool_name": data.get("tool_name", ""), "ts": data.get("ts", ""),
                   "tool_summary": data.get("tool_summary", ""),
-                  "tool_response_summary": data.get("tool_response_summary", "")}
+                  "tool_response_summary": data.get("tool_response_summary", ""),
+                  "tool_use_id": data.get("tool_use_id", ""),
+                  "transcript_path": data.get("transcript_path", ""),
+                  "session_id": data.get("session_id", "")}
             for d in parse_dispatches([ev]):
                 sid = data.get("session_id") or ""
                 d.prompt = d.prompt or _truncated_prompt(ev["tool_summary"])

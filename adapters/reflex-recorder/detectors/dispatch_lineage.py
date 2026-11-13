@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from detectors import verify_fields
+from detectors import transcript_dispatch, verify_fields
 from detectors._truncated_json import string_field
 from detectors.edit_build_fail_revert import (
     BUILD_KEYWORDS,
@@ -113,6 +113,12 @@ class Dispatch:
     isolation: str
     description: str
     cohort_id: int = -1
+    tool_use_id: str = ""
+    # Where child_agent_id / prompt came from: "summary" (pre-2026-10-03 capture),
+    # "envelope" (child events' parent_tool_use_id -> subagent_id), "transcript",
+    # or "" when unrecovered.
+    child_source: str = ""
+    prompt_source: str = ""
 
 
 def _epoch(ts: str) -> Optional[float]:
@@ -132,19 +138,81 @@ def _epoch(ts: str) -> Optional[float]:
     return dt.timestamp()
 
 
-def parse_dispatches(events: list[dict]) -> list[Dispatch]:
+# Extra envelope fields carried through the loaders. Since claude-hook-fast
+# 1e51287/1301413 (2026-10-03) the dispatch summary has no prompt/agentId, and the
+# lineage lives on these instead: the Agent event's `tool_use_id`, and each child
+# event's `parent_tool_use_id` + `subagent_id`.
+_LINEAGE_FIELDS = ("tool_use_id", "parent_tool_use_id", "subagent_id",
+                   "transcript_path", "session_id")
+
+
+def _event_row(seq: int, ts: str, data: dict) -> dict:
+    row = {
+        "seq": seq,
+        "tool_name": data.get("tool_name", ""),
+        "cwd": data.get("cwd", ""),
+        "tool_summary": data.get("tool_summary", ""),
+        "tool_response_summary": data.get("tool_response_summary", ""),
+        "project": data.get("project", ""),
+        "ts": ts,
+    }
+    for k in _LINEAGE_FIELDS:
+        row[k] = data.get(k, "") or ""
+    return row
+
+
+def child_index(events: list[dict]) -> dict[str, str]:
+    """parent tool_use_id -> child subagent_id, from child envelopes in `events`."""
+    idx: dict[str, str] = {}
+    for ev in events:
+        parent = ev.get("parent_tool_use_id") or ""
+        sub = ev.get("subagent_id") or ""
+        if parent and sub:
+            idx.setdefault(parent, sub)
+    return idx
+
+
+def parse_dispatches(
+    events: list[dict],
+    use_transcripts: bool = True,
+    transcript_roots=None,
+) -> list[Dispatch]:
     """Extract all Agent/Task dispatches from a run's event dicts.
 
-    `events` is the per-run list produced by load_run_events() (below) or any
-    equivalent list of dicts with keys: seq, tool_name, tool_summary,
-    tool_response_summary, ts.
+    `events` is the list produced by load_run_events()/load_session_events() or
+    any equivalent list of dicts with keys: seq, tool_name, tool_summary,
+    tool_response_summary, ts (lineage keys optional).
+
+    child_agent_id resolves summary `agentId` -> child envelopes
+    (parent_tool_use_id -> subagent_id, present in `events`) -> transcript.
+    prompt/isolation resolve summary -> transcript. Per-run event lists usually
+    miss the child envelopes (they land in sibling runs of the same session), so
+    use load_session_events for the envelope join.
     """
     out: list[Dispatch] = []
+    kids = child_index(events)
     for ev in events:
         if ev.get("tool_name") not in DISPATCH_TOOLS:
             continue
         raw_ts = ev.get("tool_summary", "") or ""
         raw_rs = ev.get("tool_response_summary", "") or ""
+        tuid = ev.get("tool_use_id", "") or ""
+        child = _summary_field(raw_rs, "agentId")
+        prompt = _summary_field(raw_ts, "prompt")
+        isolation = _summary_field(raw_ts, "isolation")
+        child_src = "summary" if child else ""
+        prompt_src = "summary" if prompt else ""
+        if not child and tuid and kids.get(tuid):
+            child, child_src = kids[tuid], "envelope"
+        if use_transcripts and tuid and (not child or not prompt or not isolation):
+            rec = transcript_dispatch.lookup(
+                ev.get("transcript_path", ""), ev.get("session_id", ""), tuid,
+                roots=transcript_roots)
+            if not child and rec.get("agentId"):
+                child, child_src = rec["agentId"], "transcript"
+            if not prompt and rec.get("prompt"):
+                prompt, prompt_src = rec["prompt"], "transcript"
+            isolation = isolation or rec.get("isolation", "")
         # Truncation-tolerant: these fields precede the long prompt, so regex
         # recovers them even when the bounded JSON is cut and json.loads fails.
         out.append(
@@ -152,13 +220,16 @@ def parse_dispatches(events: list[dict]) -> list[Dispatch]:
                 seq=ev.get("seq", 0),
                 ts=ev.get("ts", "") or "",
                 tool_name=ev.get("tool_name", ""),
-                child_agent_id=_summary_field(raw_rs, "agentId"),
-                prompt=_summary_field(raw_ts, "prompt"),
+                child_agent_id=child,
+                prompt=prompt,
                 model=_summary_field(raw_ts, "model"),
                 name=_summary_field(raw_ts, "name"),
-                isolation=_summary_field(raw_ts, "isolation"),
+                isolation=isolation,
                 description=(_summary_field(raw_ts, "description")
                             or _summary_field(raw_rs, "description")),
+                tool_use_id=tuid,
+                child_source=child_src,
+                prompt_source=prompt_src,
             )
         )
     return out
@@ -368,15 +439,7 @@ def load_run_events(conn, run_id: str) -> list[dict]:
         except (json.JSONDecodeError, ValueError):
             continue
         data = raw.get("data", {})
-        out.append({
-            "seq": seq,
-            "tool_name": data.get("tool_name", ""),
-            "cwd": data.get("cwd", ""),
-            "tool_summary": data.get("tool_summary", ""),
-            "tool_response_summary": data.get("tool_response_summary", ""),
-            "project": data.get("project", ""),
-            "ts": data.get("ts", "") or raw.get("time", ""),
-        })
+        out.append(_event_row(seq, data.get("ts", "") or raw.get("time", ""), data))
     return out
 
 
@@ -430,15 +493,7 @@ def load_session_events(conn, run_ids: list[str]) -> list[dict]:
         except (json.JSONDecodeError, ValueError):
             continue
         data = raw.get("data", {})
-        out.append({
-            "seq": i,
-            "tool_name": data.get("tool_name", ""),
-            "cwd": data.get("cwd", ""),
-            "tool_summary": data.get("tool_summary", ""),
-            "tool_response_summary": data.get("tool_response_summary", ""),
-            "project": data.get("project", ""),
-            "ts": data.get("ts", "") or raw.get("time", "") or event_ts,
-        })
+        out.append(_event_row(i, data.get("ts", "") or raw.get("time", "") or event_ts, data))
     return out
 
 
