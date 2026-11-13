@@ -138,11 +138,15 @@ class TestMatchThemes(unittest.TestCase):
 
     def test_idle_dispatch_fires_on_stalling_complaints(self):
         for text in (
-            "Why do you keep stopping work because a sweep is running?",
-            "why are you waiting, the device rebooted",
-            "you keep pausing instead of working the other issues",
+            "The build is still going, so why do you keep stopping?",
+            "why are you waiting, the service is back up",
+            "you keep pausing when there is other work to pick up",
         ):
             self.assertIn("idle_dispatch", match_themes(text), text)
+
+    def test_idle_dispatch_ignores_a_program_that_keeps_waiting(self):
+        themes = match_themes("Why did you let the tests keep waiting on the socket")
+        self.assertNotIn("idle_dispatch", themes)
 
     def test_multiple_themes_can_fire_together(self):
         themes = match_themes(
