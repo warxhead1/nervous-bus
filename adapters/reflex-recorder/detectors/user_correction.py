@@ -266,7 +266,10 @@ THEME_KEYWORDS: dict[str, re.Pattern] = {
         r"\bidle\s+(?:wait\w*|dispatch\w*)\b|\b(?:wait\w*|dispatch\w*)\s+idle\b|"
         r"\bsat\s+(?:there|for)\b|\bwaiting\s+for\s+nothing\b|"
         r"\bnothing\s+(?:is\s+)?happening\b|\bno\s+progress\b|\bstill\s+waiting\b|"
-        r"\bidle\s+waiting\b|\bforce\s+a\s+cron\s+tick\b",
+        r"\bidle\s+waiting\b|\bforce\s+a\s+cron\s+tick\b|"
+        r"\bkeep\s+(?:stopping|pausing|waiting|delaying|stalling)\b|"
+        r"\bwhy\s+are\s+you\s+(?:waiting|sitting|delaying|stalling)\b|"
+        r"\bstop\s+(?:pausing|delaying|stalling)\b",
         re.IGNORECASE,
     ),
     "band_aid_fix": re.compile(
