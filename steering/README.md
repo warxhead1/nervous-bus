@@ -11,6 +11,9 @@ claude plugin install human-attention@nervous-bus
 | plugin | what it does |
 |---|---|
 | `human-attention` | Few words on screen; the design carries the meaning. Ships a skill, a copy audit, a hook that reports the copy an edit adds to a UI file, and a session-start ruling. |
+| `evidence-before-done` | A claim of done carries what was observed. Ships a skill and a hook that reports stubs and suppressions an edit adds. |
+| `keep-moving` | No stalling on a wait, no rerunning what cannot change. Ships a skill and a hook that blocks the third identical build or test run when nothing changed. |
+| `model-tiering` | Dispatch only when it pays, and name the model. Ships a skill and a hook that blocks a dispatch with no model. |
 
 ## Adding one
 

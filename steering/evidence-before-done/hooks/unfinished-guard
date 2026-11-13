@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""PostToolUse hook (Write|Edit|MultiEdit): report stubs and suppressions an edit ADDED.
+
+Counts markers in the text this edit introduced, minus what it replaced, so
+old markers are never blamed on the edit that touched their file. Exit 2 puts
+the report in front of the agent; the write stands. Kill switch:
+UNFINISHED_GUARD_DISABLE=1.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+CODE = {".py", ".rs", ".go", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".java", ".kt", ".swift", ".c", ".h",
+        ".cc", ".cpp", ".hpp", ".cs", ".rb", ".php", ".sh", ".bash", ".zsh", ".lua", ".vue", ".svelte"}
+STUB = re.compile(
+    r"\btodo!\(|\bunimplemented!\(|\braise NotImplementedError\b|(?:#|//|/\*|--|<!--)\s*(?:TODO|FIXME|XXX|HACK)\b|"
+    r"(?:#|//|/\*|--)[^\n]*\b(?:for now|in a real implementation|not yet implemented|stubbed out|"
+    r"simplified (?:version|implementation)|placeholder (?:implementation|logic|value|until|for))\b")
+SUPPRESS = re.compile(
+    r"#!?\[allow\(|eslint-disable|@ts-ignore|@ts-expect-error|@ts-nocheck|#\s*noqa\b|#\s*type:\s*ignore|"
+    r"pytest\.mark\.(?:skip|xfail)\b(?!if)|\b(?:it|test|describe)\.skip\(|\bxit\(|#\[ignore\]|//\s*nolint|"
+    r"@Suppress(?:Warnings)?\b|@Disabled\b|--no-verify\b|\bexcept\s*(?:Exception)?\s*:\s*pass\b")
+
+
+def find(text):
+    out = []
+    for n, line in enumerate(text.splitlines(), 1):
+        for kind, pat in (("stub", STUB), ("suppression", SUPPRESS)):
+            if pat.search(line):
+                out.append((kind, n, line.strip()[:110]))
+    return out
+
+
+def head_text(path):
+    try:
+        top = subprocess.run(["git", "-C", str(path.parent), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=3)
+        if top.returncode:
+            return ""
+        rel = path.resolve().relative_to(Path(top.stdout.strip()).resolve())
+        show = subprocess.run(["git", "-C", top.stdout.strip(), "show", f"HEAD:{rel.as_posix()}"],
+                              capture_output=True, text=True, timeout=3)
+        return show.stdout if show.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def main():
+    if os.environ.get("UNFINISHED_GUARD_DISABLE") == "1":
+        return 0
+    try:
+        ev = json.load(sys.stdin)
+        tool, ti = ev.get("tool_name"), ev.get("tool_input") or {}
+        path = Path(ti["file_path"])
+        if path.suffix not in CODE:
+            return 0
+        if tool == "Write":
+            new, old = ti.get("content", ""), head_text(path)
+        else:
+            edits = ti.get("edits") if tool == "MultiEdit" else [ti]
+            new = "\n".join(e.get("new_string", "") for e in edits)
+            old = "\n".join(e.get("old_string", "") for e in edits)
+    except Exception:
+        return 0
+    had = {}
+    for kind, _, line in find(old):
+        had[(kind, line)] = had.get((kind, line), 0) + 1
+    added = []
+    for kind, n, line in find(new):
+        if had.get((kind, line), 0) > 0:
+            had[(kind, line)] -= 1
+        else:
+            added.append((kind, n, line))
+    if not added:
+        return 0
+    stubs = sum(k == "stub" for k, _, _ in added)
+    print(f"unfinished-guard {path.name}: this edit added {stubs} stub marker(s) and "
+          f"{len(added) - stubs} suppression(s).", file=sys.stderr)
+    for kind, _, line in added[:8]:
+        print(f"  {kind}: {line}", file=sys.stderr)
+    print("A stub is unfinished work and a suppression hides a failure. Write the real code or fix the "
+          "cause now. If one must stay, say so in your report with the reason; do not call the work done.",
+          file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
