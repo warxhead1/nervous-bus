@@ -32,6 +32,22 @@ three ways, strongest first:
 
 Do not rely on the skill alone for anything that must hold.
 
+## Does a plugin change behaviour
+
+`evals/<case>/` under a plugin holds behaviour cases for `claude plugin eval`:
+a scaffold script builds a small project with a trap in it, and graders read
+the files the agent leaves behind. Each case runs with and without the plugin.
+
+```bash
+claude plugin eval steering/remediation-ladder --scaffold \
+  --allow-tools Bash Write Edit --no-publish --model sonnet
+```
+
+`--no-publish` keeps the report on your machine. The eval sandbox cannot run
+`git`, so a trap must not need it. One case exists so far
+(`remediation-ladder/evals/blocked-release`); it has been run once per arm,
+which shows the harness works and nothing more.
+
 ## Adding one
 
 A ruling belongs here when it reads correctly to someone who has never seen the
