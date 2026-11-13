@@ -30,6 +30,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
+import pipefail  # noqa: E402
 import segment   # noqa: E402
 import store     # noqa: E402
 
@@ -135,42 +136,55 @@ def _worth_planning(db, command: str) -> bool:
         db.execute("SELECT 1 FROM shapes UNION SELECT 1 FROM rejects WHERE kind='column' LIMIT 1").fetchone())
 
 
+def _pipefail(cfg, command: str):
+    """The static verify-pipe rewrite, or None. Needs no learned state."""
+    if store.effective_mode(cfg, "pipefail") != "correct":
+        return None
+    return pipefail.rewrite(command)
+
+
 def _pre(ev, cfg, tool_input, command) -> int:
     if cfg.get("mode") == "observe":
         return 0
     db = store.connect(create=False)
-    if db is None:
-        return 0
-    with db:
-        session = ev.get("session_id") or ""
-        if segment.has_optout(command):
-            undone = _core().register_optout(db, session)
+    session = ev.get("session_id") or ""
+    if segment.has_optout(command):
+        if db is not None:
+            with db:
+                undone = _core().register_optout(db, session)
             if undone:
                 what = ", ".join(f"`{f['bad']}` -> `{f['good']}`" for f in undone)
                 _out("PreToolUse", additionalContext=f"argshape: opt-out noted; demoted {what} to advice-only.")
-            return 0
-        if not _worth_planning(db, command):
-            return 0
-        core = _core()
-        result = core.plan(db, cfg, command, ev.get("cwd") or os.getcwd())
-        if result["command"] != command:
-            core.record_applied(db, session, ev.get("tool_use_id") or "", command,
-                                result["command"], result["applied"])
-            for a in result["applied"]:
-                if a["kind"] not in core.BUS_KINDS:
-                    continue
-                core.emit({"event": "correction", "bin": a.get("label", ""), "kind": a["kind"],
-                           "bad": a["bad"], "good": a.get("render") or a["good"], "source": a["source"],
-                           "session_id": session})
-            ctx = ("argshape corrected this command before it ran (learned from earlier rejections): "
-                   + "; ".join(result["notes"])
-                   + ". Ran: " + result["command"][:400]
-                   + "\nIf a correction is wrong, rerun your original with `# argshape:off` appended;"
-                     " that demotes it.")
-            _out("PreToolUse", updatedInput={**tool_input, "command": result["command"]},
-                 additionalContext=ctx[:1500])
-        elif result["notes"]:
-            _out("PreToolUse", additionalContext="argshape: " + " | ".join(result["notes"])[:1200])
+        return 0
+    result = {"command": command, "notes": [], "applied": []}
+    if db is not None:
+        with db:
+            if _worth_planning(db, command):
+                core = _core()
+                result = core.plan(db, cfg, command, ev.get("cwd") or os.getcwd())
+                if result["command"] != command:
+                    core.record_applied(db, session, ev.get("tool_use_id") or "", command,
+                                        result["command"], result["applied"])
+                    for a in result["applied"]:
+                        if a["kind"] not in core.BUS_KINDS:
+                            continue
+                        core.emit({"event": "correction", "bin": a.get("label", ""), "kind": a["kind"],
+                                   "bad": a["bad"], "good": a.get("render") or a["good"], "source": a["source"],
+                                   "session_id": session})
+    final = result["command"]
+    piped = _pipefail(cfg, final)
+    notes = list(result["notes"])
+    if piped is not None:
+        final = piped
+        notes.append("verify output is piped, so its exit status was hidden: prepended `set -o pipefail;`")
+    if final != command:
+        ctx = ("argshape corrected this command before it ran: " + "; ".join(notes)
+               + ". Ran: " + final[:400]
+               + "\nIf a correction is wrong, rerun your original with `# argshape:off` appended;"
+                 " that demotes it.")
+        _out("PreToolUse", updatedInput={**tool_input, "command": final}, additionalContext=ctx[:1500])
+    elif notes:
+        _out("PreToolUse", additionalContext="argshape: " + " | ".join(notes)[:1200])
     return 0
 
 

@@ -429,7 +429,7 @@ class BacktestTests(unittest.TestCase):
         self.assertIn("failures=1 (masked_by_pipe=1) rewrites=1 prevented=1 false=0", out)
 
 
-class EndToEnd(unittest.TestCase):
+class HookHarness(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="argshape-test-")
         self.bin = os.path.join(self.tmp, "bin")
@@ -475,6 +475,9 @@ class EndToEnd(unittest.TestCase):
             post = self.hook("fail", ran, session, tid, error=f"Exit code {rc}\n{out}{err}")
         return pre, ran, rc, post
 
+
+
+class EndToEnd(HookHarness):
     def cli_cmd(self, *args):
         return [sys.executable, os.path.join(HERE, "argshape.py"), *args]
 
@@ -947,6 +950,197 @@ class EndToEnd(unittest.TestCase):
         shapes = subprocess.run(self.cli_cmd("shapes"), capture_output=True, text=True, env=self.env).stdout
         self.assertIn("colon/lower", shapes)
         self.assertNotIn("ee:01", shapes)                          # shapes only, never values
+
+
+class PipefailTests(unittest.TestCase):
+    """Static rewrite: verify command piped into a reader gets `set -o pipefail;`."""
+
+    def rw(self, cmd):
+        import pipefail
+        return pipefail.rewrite(cmd)
+
+    def assertRewritten(self, cmd):
+        self.assertEqual(self.rw(cmd), "set -o pipefail; " + cmd, cmd)
+
+    def assertLeft(self, cmd):
+        self.assertIsNone(self.rw(cmd), cmd)
+
+    def test_each_full_reading_consumer_is_rewritten(self):
+        for tail in ("tail -20", "tail -n +3", "tee out.log", "tee -a out.log", "wc -l", "sort -u", "cat",
+                     "grep FAIL", "grep -v ok", "grep -E 'a|b'", "grep -c x", "grep -n -i x", "rg FAIL",
+                     "rg -n x", "egrep x", "grep -e a -e b", "tail -5 | wc -l", "tail -n 5"):
+            self.assertRewritten(f"cargo test 2>&1 | {tail}")
+
+    def test_early_exit_consumers_are_left_alone(self):
+        for tail in ("head", "head -5", "grep -q x", "grep -m1 x", "grep -m 1 x", "grep -l x", "grep -qE x",
+                     "grep -lv x", "grep --quiet x", "grep --max-count=1 x", "grep --max=1 x",
+                     "grep -L x", "rg -q x", "rg -l x", "rg -m1 x", "rg --files-with-matches x",
+                     "sed -n 1p", "sed 5q", "awk 'NR==1{exit}'", "sort -c", "less", "jq .", "xargs echo",
+                     "tail -5 | head -1", "grep x | head"):
+            self.assertLeft(f"cargo test 2>&1 | {tail}")
+
+    def test_consumers_that_ignore_stdin_are_left_alone(self):
+        for tail in ("grep x file.txt", "grep -e x file.txt", "grep -r x", "rg x src", "tail file.log",
+                     "wc -l file", "cat file", "sort file"):
+            self.assertLeft(f"cargo test 2>&1 | {tail}")
+
+    def test_pipefail_or_pipestatus_already_present(self):
+        self.assertLeft("set -o pipefail; cargo test | tail")
+        self.assertLeft("set -euo pipefail\ncargo test | tail")
+        self.assertLeft("cargo test | tail; echo ${PIPESTATUS[0]}")
+        self.assertLeft("cargo test | tail; echo ${pipestatus[1]}")
+
+    def test_opt_out_and_masking(self):
+        self.assertLeft("cargo test | tail # argshape:off")
+        self.assertLeft("cargo test | tail || true")
+        self.assertLeft("cargo test | tail || :")
+        self.assertLeft("cargo test | tail || exit 0")
+
+    def test_first_segment_must_be_a_verify_command(self):
+        self.assertLeft("ls -la | tail")
+        self.assertLeft("cat x | tail -1")
+        self.assertLeft("cargo install foo | tail")
+        self.assertLeft("cargo test")                      # no pipe at all
+        self.assertLeft("cargo test > out.log 2>&1")
+        for v in ("go test ./... -count=1", "go vet ./...", "npm run build", "npm test", "pnpm run lint",
+                  "make -C sub test", "python3 -m pytest -x", "pytest -q", "tsc --noEmit", "uv run pytest",
+                  "timeout 600 cargo nextest run", "RUST_LOG=x cargo clippy", "bash scripts/run-tests.sh",
+                  "ruff check .", "FOO=1 make check", "cmake --build build", "swift test"):
+            self.assertRewritten(f"{v} 2>&1 | tail -5")
+
+    def test_multi_pipe_and_prefixes(self):
+        self.assertRewritten("cargo test 2>&1 | grep -v ok | tail -20")
+        self.assertRewritten("cargo test 2>&1 | grep -v ok | tee x | wc -l")
+        self.assertLeft("cargo test 2>&1 | grep -v ok | head")
+        self.assertRewritten("cd sub && cargo test 2>&1 | tail")
+        self.assertRewritten("cd sub; cargo test 2>&1 | tail")
+        self.assertRewritten("(cd sub && cargo test 2>&1 | tail)")
+        self.assertRewritten("cargo build 2>&1 | tail -3 && cargo test 2>&1 | tail -3")
+        self.assertRewritten("cargo test 2>&1 | tail -3 && echo ok")
+        self.assertRewritten("cargo test 2>&1 | tail -3 || echo FAILED")
+        self.assertRewritten("cargo test |& tail")
+
+    def test_follow_up_after_semicolon_is_left_alone(self):
+        self.assertLeft("cargo test | tail; echo $?")
+        self.assertLeft("cargo test | tail\necho done")
+        self.assertLeft("cargo test | tail &")
+
+    def test_line_wide_pipefail_must_be_safe_for_every_pipe(self):
+        self.assertLeft("ls | head -3; cargo test | tail")
+        self.assertLeft("ls | head -3 && cargo test | tail")
+        self.assertLeft("ls | wc -l && cargo test | tail")           # non-verify pipe in the final chain
+        self.assertRewritten("ls | wc -l; cargo test | tail")        # earlier list, safe consumer
+        self.assertLeft("cargo test | tail && ls | head")
+
+    def test_unplaceable_shapes_are_left_alone(self):
+        self.assertLeft("(cargo test) | tail")
+        self.assertLeft("{ cargo test; } | tail")
+        self.assertLeft("for x in a; do cargo test; done | tail")
+        self.assertLeft("cargo test | tee >(cat)")
+        self.assertLeft("cargo test $(ls | head -1) | tail")
+        self.assertLeft("cargo test | tail | ")
+        self.assertLeft("")
+
+    def test_pipeline_in_loop_body(self):
+        self.assertRewritten("for d in a b; do (cd $d && cargo test 2>&1 | tail -2); done")
+        self.assertLeft("if cargo test 2>&1 | tail -2; then echo ok; fi")      # status is the branch's, not the verify's
+
+    SHAPES = ("{v} 2>&1 | tail -3", "{v} 2>&1 | tee {t}/o.log | tail -3", "{v} 2>&1 | wc -l",
+              "{v} 2>&1 | grep -v zzz | sort", "{v} 2>&1 | cat")
+
+    def shells(self):
+        return [s for s in ("/bin/bash", "/usr/bin/zsh") if os.path.exists(s)]
+
+    def run_shell(self, shell, cmd, tmp):
+        return subprocess.run([shell, "-c", cmd], capture_output=True, text=True, cwd=tmp)
+
+    def fake(self, tmp, name, body):
+        path = os.path.join(tmp, name)
+        with open(path, "w") as f:
+            f.write("#!/bin/sh\n" + body + "\n")
+        os.chmod(path, 0o755)
+
+    def test_real_shells_exit_status_follows_the_verify(self):
+        tmp = tempfile.mkdtemp(prefix="argshape-pf-")
+        try:
+            self.fake(tmp, "cargo", "echo out; exit 1")
+            self.fake(tmp, "pytest", "echo out; exit 0")
+            for shell in self.shells():
+                for shape in self.SHAPES:
+                    raw_f = f"PATH={tmp}:$PATH; " + shape.format(v="cargo test", t=tmp)
+                    raw_p = f"PATH={tmp}:$PATH; " + shape.format(v="pytest -q", t=tmp)
+                    fixed_f, fixed_p = self.rw(raw_f), self.rw(raw_p)
+                    self.assertTrue(fixed_f and fixed_p, shape)
+                    self.assertEqual(self.run_shell(shell, raw_f, tmp).returncode, 0, (shell, shape, "masked before"))
+                    self.assertNotEqual(self.run_shell(shell, fixed_f, tmp).returncode, 0, (shell, shape))
+                    self.assertEqual(self.run_shell(shell, fixed_p, tmp).returncode, 0, (shell, shape, "green stays green"))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_real_shells_and_or_follow_ups_print_the_true_verdict(self):
+        tmp = tempfile.mkdtemp(prefix="argshape-pf-")
+        try:
+            self.fake(tmp, "cargo", "echo out; exit 1")
+            self.fake(tmp, "pytest", "echo out; exit 0")
+            for shell in self.shells():
+                ok = f"PATH={tmp}:$PATH; pytest -q 2>&1 | tail -3 && echo GREEN || echo RED"
+                bad = f"PATH={tmp}:$PATH; cargo test 2>&1 | tail -3 && echo GREEN || echo RED"
+                self.assertIn("GREEN", self.run_shell(shell, bad, tmp).stdout)       # the lie
+                self.assertIn("RED", self.run_shell(shell, self.rw(bad), tmp).stdout)
+                self.assertIn("GREEN", self.run_shell(shell, self.rw(ok), tmp).stdout)
+                self.assertNotIn("RED", self.run_shell(shell, self.rw(ok), tmp).stdout)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_big_output_with_a_full_reading_consumer_stays_green(self):
+        tmp = tempfile.mkdtemp(prefix="argshape-pf-")
+        try:
+            self.fake(tmp, "pytest", "yes line | head -200000\nexit 0")
+            for shell in self.shells():
+                for consumer in ("tail -1", "wc -l", "grep -c line", "sort -u", "tee /dev/null | tail -1"):
+                    cmd = self.rw(f"PATH={tmp}:$PATH; pytest -q | {consumer}")
+                    self.assertTrue(cmd)
+                    self.assertEqual(self.run_shell(shell, cmd, tmp).returncode, 0, (shell, consumer))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class PipefailHookTests(HookHarness):
+    def test_hook_rewrites_without_a_permission_decision_and_without_state(self):
+        out = self.hook("pre", "cargo test 2>&1 | tail -5")
+        self.assertEqual(out["updatedInput"]["command"], "set -o pipefail; cargo test 2>&1 | tail -5")
+        self.assertEqual(out["updatedInput"]["description"], "d")
+        self.assertNotIn("permissionDecision", out)
+
+    def test_hook_leaves_alone_head_optout_and_non_verify(self):
+        self.assertIsNone(self.hook("pre", "cargo test 2>&1 | head -5"))
+        self.assertIsNone(self.hook("pre", "cargo test 2>&1 | tail -5 # argshape:off"))
+        self.assertIsNone(self.hook("pre", "ls | tail -5"))
+
+    def test_hook_honours_modes_and_kill_switch(self):
+        cmd = "cargo test 2>&1 | tail -5"
+        self.env["ARGSHAPE_MODE"] = "off"
+        self.assertIsNone(self.hook("pre", cmd))
+        self.env.pop("ARGSHAPE_MODE")
+        for mode in ("observe", "advise"):
+            with open(self.env["ARGSHAPE_CONFIG"], "w") as f:
+                json.dump({"mode": mode}, f)
+            self.assertIsNone(self.hook("pre", cmd), mode)
+        with open(self.env["ARGSHAPE_CONFIG"], "w") as f:
+            json.dump({"mode": "correct", "bins": {"pipefail": "off"}}, f)
+        self.assertIsNone(self.hook("pre", cmd))
+
+    def test_failing_verify_exits_nonzero_through_the_hook(self):
+        for name, body in (("cargo", "echo boom; exit 101"), ("pytest", "echo fine; exit 0")):
+            path = os.path.join(self.bin, name)
+            with open(path, "w") as f:
+                f.write("#!/bin/sh\n" + body + "\n")
+            os.chmod(path, 0o755)
+        pre = self.hook("pre", "cargo test 2>&1 | tail -5")
+        self.assertEqual(self.run_cmd(pre["updatedInput"]["command"])[0], 101)
+        pre = self.hook("pre", "pytest -q 2>&1 | tail -5")
+        rc, out, _ = self.run_cmd(pre["updatedInput"]["command"])
+        self.assertEqual((rc, out.strip()), (0, "fine"))
 
 
 if __name__ == "__main__":
