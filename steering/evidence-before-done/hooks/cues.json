@@ -14,5 +14,9 @@
  {
   "pattern": "\\bstill (shows?|fails?|broken|not working|doesn'?t work|crash\\w*|the same)\\b|\\byou said (this|it|that) (was|is) (fixed|done|working)\\b|\\b(not|isn'?t|doesn'?t) (working|fixed)\\b",
   "say": "[evidence-before-done] The user ran it and it failed. Look at the failure path they describe; do not explain why it should have worked. Reproduce it before changing anything. Load the evidence-before-done skill."
+ },
+ {
+  "pattern": "\\b(looks?|looking) (off|wrong|bad|broken|weird|ugly|generic|cheap|like (ai )?slop)\\b|\\b(layout|spacing|alignment|styling|css|font|colou?rs?) (is|are|looks?) \\w+|\\b(redesign|restyle|polish|make it (look|feel)|tweak the (ui|layout|design|styles?))\\b|\\bscreenshot\\b|\\b(page|screen|component|modal|landing|dashboard|ui) (looks?|renders?|shows?)\\b",
+  "say": "[evidence-before-done] Tests do not see a screen. After a visual change, run the real build, take a screenshot, read it, and say what you saw against what was asked. If you cannot look, report the result as unseen. Load the evidence-before-done skill."
  }
 ]

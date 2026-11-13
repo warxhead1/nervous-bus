@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""PreToolUse hook (Agent|Task): an agent that edits files gets its own worktree.
+
+Two agents in one checkout overwrite each other, and a commit takes whatever is
+in the tree at that path. Exit 2 blocks a dispatch whose prompt asks for edits
+and sets no isolation. A prompt that says READ-ONLY passes, and so do agent
+types that only read (by list, or named for it: review, research, audit). Kill switch: ISOLATED_DISPATCH_DISABLE=1.
+ISOLATED_DISPATCH_READONLY_TYPES is a comma list of extra read-only types.
+"""
+import json
+import os
+import re
+import sys
+
+READONLY_TYPES = {"Explore", "Plan", "claude-code-guide", "statusline-setup"}
+READER_NAME = re.compile(r"report|research|review|audit|explor|plan|read", re.I)
+EDITS = re.compile(
+    r"\b(edit|fix|implement|refactor|rewrite|modify|patch|migrate|rename|bump|"
+    r"add (a |an |the )?(test|function|file|field|endpoint|flag|handler|check)|"
+    r"write (a |an |the )?(code|file|test|script|patch|function|handler)|"
+    r"create (a |an |the )?(file|branch|pr|pull request)|"
+    r"commit|push|open (a |the )?(pr|pull request)|apply (the|these|this))\b", re.I)
+DECLARED_READONLY = re.compile(r"\bread[- ]only\b|\b(do not|don't|never|no) (edit|modify|write|change)\w* (to )?(any |the |source |code |repo )*(file|code|anything|source)", re.I)
+
+
+def main():
+    if os.environ.get("ISOLATED_DISPATCH_DISABLE") == "1":
+        return 0
+    try:
+        ev = json.load(sys.stdin)
+        ti = ev.get("tool_input") or {}
+    except Exception:
+        return 0
+    if ev.get("tool_name") not in ("Agent", "Task") or ti.get("isolation"):
+        return 0
+    extra = {t.strip() for t in os.environ.get("ISOLATED_DISPATCH_READONLY_TYPES", "").split(",") if t.strip()}
+    kind = ti.get("subagent_type") or ""
+    if kind in READONLY_TYPES | extra or READER_NAME.search(kind):
+        return 0
+    prompt = ti.get("prompt") or ""
+    if not isinstance(prompt, str) or DECLARED_READONLY.search(prompt) or not EDITS.search(prompt):
+        return 0
+    print(
+        "This dispatch asks an agent to change files in the checkout you are using. "
+        'Set `isolation: "worktree"` and retry, then merge its branch yourself. '
+        "If the agent only reads, say READ-ONLY in its prompt.",
+        file=sys.stderr,
+    )
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

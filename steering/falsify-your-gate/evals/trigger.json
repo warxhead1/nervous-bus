@@ -1,0 +1,14 @@
+{
+  "skill": "falsify-your-gate",
+  "should": [
+    "Add a regression test for the off-by-one in the pagination helper.",
+    "CI was green the whole time. Why did this pass when the feature is plainly broken?",
+    "Write a detector that flags sessions where the agent loops.",
+    "The new lint rule has a lot of false positives on the old modules.",
+    "Would the test have caught it if the parser returned an empty list?"
+  ],
+  "should_not": [
+    "Summarise the last five commits on this branch.",
+    "Convert this YAML file to TOML."
+  ]
+}

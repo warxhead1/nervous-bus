@@ -13,7 +13,7 @@
     {
       "name": "evidence-before-done",
       "source": "./steering/evidence-before-done",
-      "description": "Done means finished and shown. Skill, and a hook that reports stubs and suppressions an edit adds."
+      "description": "Done means finished and shown. Skill, a hook that reports stubs and suppressions an edit adds, and a hook that sends the agent back once if it changed a screen and never looked at it."
     },
     {
       "name": "keep-moving",
@@ -24,6 +24,21 @@
       "name": "model-tiering",
       "source": "./steering/model-tiering",
       "description": "Every dispatch names its model, chosen by what would catch a wrong answer. Skill, and a hook that blocks a dispatch with no model."
+    },
+    {
+      "name": "isolated-dispatch",
+      "source": "./steering/isolated-dispatch",
+      "description": "Every agent that edits gets its own worktree; nobody's uncommitted work is hidden. Skill, a hook that blocks an editing dispatch with no isolation, and a hook that blocks a bare git stash or pop."
+    },
+    {
+      "name": "remediation-ladder",
+      "source": "./steering/remediation-ladder",
+      "description": "Fix the cause at the highest rung: eliminate, automate, then inform. Skill, and a hook that blocks a command that skips a check instead of passing it."
+    },
+    {
+      "name": "falsify-your-gate",
+      "source": "./steering/falsify-your-gate",
+      "description": "A test, gate, or detector counts only after you have watched it fail. Skill, and a hook that reports a test an edit adds that cannot fail."
     }
   ]
 }

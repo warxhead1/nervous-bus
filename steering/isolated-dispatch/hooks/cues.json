@@ -1,0 +1,6 @@
+[
+  {"pattern": "\\bworktrees?\\b|\\b(in parallel|at the same time|concurrently)\\b.*\\b(agents?|sessions?|edit\\w*|fix\\w*)\\b|\\b(agents?|sessions?)\\b.*\\b(in parallel|at the same time|concurrently)\\b|\\b(overwrote|overwritten|clobber\\w*|stomped)\\b|\\bsame (file|checkout|branch|tree)\\b",
+   "say": "[isolated-dispatch] Every agent that edits files gets its own worktree and its own branch; never two agents on one file. Check the tree is clean and the tests are green before dispatching. Each agent pushes its branch after its first commit; you do the merges. Load the isolated-dispatch skill."},
+  {"pattern": "\\bstash\\w*\\b|\\b(dirty|uncommitted|unstaged|untracked)\\b|\\b(lost|wiped|reverted|threw away|discarded) (my |the |our |all )?(work|changes|edits|commits?|files?)\\b|\\bwhere did (my|the|our) (work|changes|edits|files?) go\\b|\\bnot (my|your) changes\\b",
+   "say": "[isolated-dispatch] Changes in the tree that you did not make are someone's work. Read them (`git diff`, `git log`) before anything else; never stash, reset, or check out over them. Name the branch you are on before a commit, merge or push. Load the isolated-dispatch skill."}
+]

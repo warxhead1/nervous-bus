@@ -11,9 +11,12 @@ claude plugin install human-attention@nervous-bus
 | plugin | what it does |
 |---|---|
 | `human-attention` | Few words on screen; the design carries the meaning. Ships a skill, a copy audit, a hook that reports the copy an edit adds to a UI file, and a session-start ruling. |
-| `evidence-before-done` | A claim of done carries what was observed. Ships a skill and a hook that reports stubs and suppressions an edit adds. |
+| `evidence-before-done` | A claim of done carries what was observed. Ships a skill, a rubric for judging a screen, a hook that reports stubs and suppressions an edit adds, and a hook that sends the agent back once if it changed a UI file and never looked at the result. |
 | `keep-moving` | No stalling on a wait, no rerunning what cannot change. Ships a skill and a hook that blocks the third identical build or test run when nothing changed. |
 | `model-tiering` | Dispatch only when it pays, and name the model. Ships a skill and a hook that blocks a dispatch with no model. |
+| `isolated-dispatch` | Every agent that edits gets its own worktree; uncommitted work that is not yours is read, never hidden. Ships a skill, a hook that blocks an editing dispatch with no isolation, and a hook that blocks a bare `git stash`, `pop`, `drop`, or `clear`. |
+| `remediation-ladder` | Fix the cause at the highest rung: eliminate, automate, then inform. Ships a skill and a hook that blocks a command that skips a check (`--no-verify`, `HUSKY=0`, a guard's kill switch set inline). |
+| `falsify-your-gate` | A check counts only after you have seen it fail. Ships a skill and a hook that reports a test an edit adds that cannot fail. |
 
 ## How a rule reaches the agent
 
@@ -43,6 +46,10 @@ steering/<name>/
   evals/trigger.json          prompts the skill should and should not load for
   tests/                      pytest; collected by ci-portable
 ```
+
+Replay a new guard over real sessions before shipping it, and read a sample of
+what it would have blocked. Bump `version` in `plugin.json` on every change:
+installs are cached by version.
 
 List it in `.claude-plugin/marketplace.json` at the repo root, then run
 `claude plugin validate .` and `python -m pytest steering`.

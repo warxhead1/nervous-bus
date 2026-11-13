@@ -1,0 +1,9 @@
+{
+  "name": "isolated-dispatch",
+  "version": "0.1.0",
+  "description": "Every agent that edits gets its own worktree, and nobody's uncommitted work is hidden or overwritten",
+  "author": { "name": "warxhead1" },
+  "repository": "https://github.com/warxhead1/nervous-bus",
+  "license": "MIT",
+  "keywords": ["steering", "hooks", "git", "worktree"]
+}
