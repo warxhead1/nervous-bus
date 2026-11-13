@@ -51,6 +51,8 @@ from typing import Dict, List, Optional, Tuple
 import redis
 
 DEFAULT_REDIS_URL = os.environ.get("NERVOUS_REDIS_URL", "redis://localhost:6379")
+# A stale channel silent this long is reported as dormant, apart from recent breaks.
+DORMANT_AFTER_DAYS = float(os.environ.get("NERVOUS_STALENESS_DORMANT_DAYS", "30"))
 CACHE_DIR = Path(os.environ.get("NERVOUS_STALENESS_CACHE", str(Path.home() / ".cache" / "nervous-bus" / "staleness")))
 BASELINE_FILE = CACHE_DIR / "baselines.json"
 REPORT_FILE = CACHE_DIR / "report.md"
@@ -284,9 +286,20 @@ def publish_stale_event(result: dict, *, dry_run: bool = False) -> bool:
         return False
 
 
+def is_dormant(result: dict) -> bool:
+    """A stale channel silent for longer than DORMANT_AFTER_DAYS.
+
+    It broke long ago and is not news; listing it with channels that went
+    quiet this week hides the ones worth a look.
+    """
+    return result["observed_gap_seconds"] > DORMANT_AFTER_DAYS * 86400
+
+
 def render_report(results: List[dict], *, generated_at: Optional[float] = None) -> str:
     generated_at = generated_at if generated_at is not None else time.time()
-    stale = [r for r in results if r["verdict"] == "stale"]
+    all_stale = [r for r in results if r["verdict"] == "stale"]
+    dormant = [r for r in all_stale if is_dormant(r)]
+    stale = [r for r in all_stale if not is_dormant(r)]
     ok = [r for r in results if r["verdict"] == "ok"]
     sparse = [r for r in results if r["verdict"] in ("sparse", "empty")]
 
@@ -294,7 +307,8 @@ def render_report(results: List[dict], *, generated_at: Optional[float] = None) 
         "# nervous-bus channel staleness report",
         "",
         f"Generated: {iso(generated_at)}",
-        f"Channels observed: {len(results)}  (stale={len(stale)} ok={len(ok)} sparse/empty={len(sparse)})",
+        f"Channels observed: {len(results)}  (stale={len(stale)} dormant={len(dormant)} "
+        f"ok={len(ok)} sparse/empty={len(sparse)})",
         "",
     ]
 
@@ -313,12 +327,21 @@ def render_report(results: List[dict], *, generated_at: Optional[float] = None) 
         lines.append("")
         lines.append("| channel | last event | observed gap | expected gap | baseline n |")
         lines.append("|---|---|---|---|---|")
-        for r in sorted(stale, key=lambda r: -r["observed_gap_seconds"]):
+        for r in sorted(stale, key=lambda r: r["observed_gap_seconds"]):
             lines.append(
                 f"| {r['channel']} | {fmt_age(r['last_event_at'])} | "
                 f"{r['observed_gap_seconds']/3600:.1f}h | {r['expected_gap_seconds']/3600:.1f}h | "
                 f"{r['baseline_sample_size']} |"
             )
+        lines.append("")
+
+    if dormant:
+        lines.append(f"## DORMANT — silent over {DORMANT_AFTER_DAYS:g} days (retire the producer or revive it)")
+        lines.append("")
+        lines.append("| channel | last event |")
+        lines.append("|---|---|")
+        for r in sorted(dormant, key=lambda r: r["observed_gap_seconds"]):
+            lines.append(f"| {r['channel']} | {fmt_age(r['last_event_at'])} |")
         lines.append("")
 
     lines.append("## OK")
@@ -431,10 +454,11 @@ def main() -> int:
         report_path=args.report_file,
     )
 
-    stale = [r for r in results if r["verdict"] == "stale"]
+    all_stale = [r for r in results if r["verdict"] == "stale"]
+    stale = [r for r in all_stale if not is_dormant(r)]
     sys.stderr.write(
         f"[staleness] evaluated {len(results)} channels: "
-        f"stale={len(stale)} report={args.report_file}\n"
+        f"stale={len(stale)} dormant={len(all_stale) - len(stale)} report={args.report_file}\n"
     )
     for r in stale:
         sys.stderr.write(
