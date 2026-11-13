@@ -17,7 +17,12 @@ import sys
 from pathlib import Path
 
 UI = {".html", ".htm", ".vue", ".svelte", ".jsx", ".tsx"}
-STATE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "copy-audit-hook"
+
+
+def state_dir():
+    base = os.environ.get("XDG_CACHE_HOME")
+    return (Path(base) if base else Path.home() / ".cache") / "copy-audit-hook"
+
 INTERACTIVE = re.compile(r"<(?:button|input|select|textarea|canvas|form)\b|<(?:Button|Input|Select|Switch|Slider)\b|\bon(?:Click|Change|Submit)\s*=|\bonclick\s*=", re.I)
 # Added by one edit. Words and long strings count only on an interactive surface.
 ADDED = {"heading_subtitle_pairs": 2, "description_slots": 2, "stock": 1, "long": 1, "words": 40}
@@ -84,8 +89,8 @@ def main():
     except Exception:
         return 0
 
-    state_file = STATE / f"{ev.get('session_id', 'nosession')}.json"
     try:
+        state_file = state_dir() / f"{ev.get('session_id', 'nosession')}.json"
         seen = json.loads(state_file.read_text())
     except Exception:
         seen = {}
@@ -100,9 +105,9 @@ def main():
             old_texts = {s["text"] for s in old}
     seen[str(path)] = now
     try:
-        STATE.mkdir(parents=True, exist_ok=True)
+        state_file.parent.mkdir(parents=True, exist_ok=True)
         state_file.write_text(json.dumps(seen))
-    except OSError:
+    except Exception:
         pass
 
     surface = bool(INTERACTIVE.search(src))

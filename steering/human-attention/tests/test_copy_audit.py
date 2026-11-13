@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -72,7 +73,7 @@ REPORT = """<!doctype html><html><body><h1>Quarterly findings</h1>
 
 
 def hook(tmp_path, event):
-    env = {"XDG_CACHE_HOME": str(tmp_path / "cache"), "PATH": "/usr/bin:/bin"}
+    env = {**os.environ, "XDG_CACHE_HOME": str(tmp_path / "cache")}
     return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(event), capture_output=True, text=True, env=env)
 
 
