@@ -155,12 +155,19 @@ def _save_offset(path: Path, sid: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(sid)
 
+def _nervous_cli() -> str:
+    """The publish CLI from this repository, so a unit's PATH cannot hide it."""
+    here = Path(__file__).resolve().parents[2] / "sdk" / "shell" / "nervous"
+    return str(here) if here.is_file() else "nervous"
+
 def _publish(bundle: dict) -> None:
     try:
-        subprocess.run(
-            ["nervous", "publish", "bus.pattern.bundle.v1", json.dumps(bundle)],
-            capture_output=True, timeout=5,
+        p = subprocess.run(
+            [_nervous_cli(), "publish", "bus.pattern.bundle.v1", json.dumps(bundle)],
+            capture_output=True, text=True, timeout=5,
         )
+        if p.returncode != 0:
+            sys.stderr.write(f"bundler publish: exit {p.returncode}: {p.stderr.strip()[:200]}\n")
     except Exception as e:
         sys.stderr.write(f"bundler publish: {e}\n")
 
