@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""PostToolUse hook (Write|Edit|MultiEdit): report a test that cannot fail.
+
+Two kinds, both counted as what the edit ADDS:
+  tautology  an assertion that is true whatever the code does
+             (`assert True`, `expect(true).toBe(true)`, `assert_eq!(x, x)`)
+  no-assert  a Python test function that asserts nothing
+Exit 2 shows the report to the agent; the edit has already happened.
+Kill switch: VACUOUS_TEST_GUARD_DISABLE=1.
+"""
+import ast
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+TEST_FILE = re.compile(r"(^|/)(test_[^/]*\.py|[^/]*_test\.(py|go)|[^/]*\.(test|spec)\.[cm]?[jt]sx?|conftest\.py)$|(^|/)tests?/[^/]*\.rs$")
+LIT = r"(?:true|false|True|False|\d+|\"[^\"]*\"|'[^']*')"
+TAUTOLOGY = [re.compile(p) for p in (
+    r"^\s*assert\s+(True|1|not False)\s*(,.*)?$",
+    r"^\s*assert\s+(" + LIT + r"|\w+)\s*==\s*\1\s*(,.*)?$",
+    r"\bassert(True|IsNotNone)?\(\s*True\s*\)|\bassertFalse\(\s*False\s*\)",
+    r"\bassert(Equal|Equals|Is)\(\s*(" + LIT + r"|\w+)\s*,\s*\2\s*\)",
+    r"\bexpect\(\s*(" + LIT + r"|\w+)\s*\)\.(toBe|toEqual|toStrictEqual)\(\s*\1\s*\)",
+    r"\bexpect\(\s*true\s*\)\.toBeTruthy\(\)|\bexpect\(\s*false\s*\)\.toBeFalsy\(\)",
+    r"\bassert(\.ok)?\(\s*true\s*\)",
+    r"\bassert!\(\s*true\s*\)|\bassert_eq!\(\s*(" + LIT + r"|\w+)\s*,\s*\1\s*\)",
+    r"\b(assert|require)\.True\(\s*t\s*,\s*true\s*\)|\b(assert|require)\.Equal\(\s*t\s*,\s*(" + LIT + r"|\w+)\s*,\s*\2\s*\)",
+)]
+ASSERTING = re.compile(r"assert|expect|raises|warns|should|verify|check|fail|must|require|validate|equal|compare|snapshot|approx|match", re.I)
+
+
+def tautologies(text):
+    return [line.strip()[:120] for line in text.splitlines() if any(p.search(line) for p in TAUTOLOGY)]
+
+
+def _asserts(node, helpers):
+    for n in ast.walk(node):
+        if isinstance(n, (ast.Assert, ast.Raise)):
+            return True
+        if isinstance(n, ast.Call):
+            f = n.func
+            name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+            if ASSERTING.search(name) or name in helpers:
+                return True
+    return False
+
+
+def no_assert_tests(source):
+    """Names of test functions that assert nothing; None if the file does not parse."""
+    try:
+        tree = ast.parse(source)
+    except Exception:
+        return None
+    funcs = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    helpers = {f.name for f in funcs if not f.name.startswith("test") and _asserts(f, set())}
+    out = set()
+    for f in funcs:
+        if not f.name.startswith("test_"):
+            continue
+        deco = " ".join(ast.unparse(d) for d in f.decorator_list)
+        if re.search(r"skip|xfail|fixture", deco):
+            continue
+        args = {a.arg for a in f.args.args}
+        if not _asserts(f, helpers | {a for a in args if ASSERTING.search(a)}):
+            out.add(f.name)
+    return out
+
+
+def head_text(path):
+    try:
+        top = subprocess.run(["git", "-C", str(path.parent), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=3).stdout.strip()
+        rel = path.resolve().relative_to(Path(top).resolve())
+        p = subprocess.run(["git", "-C", top, "show", f"HEAD:{rel}"], capture_output=True, text=True, timeout=3)
+        return p.stdout if p.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def main():
+    if os.environ.get("VACUOUS_TEST_GUARD_DISABLE") == "1":
+        return 0
+    try:
+        ev = json.load(sys.stdin)
+        tool, ti = ev.get("tool_name"), ev.get("tool_input") or {}
+        path = Path(ti.get("file_path") or "")
+        if tool not in ("Write", "Edit", "MultiEdit") or not TEST_FILE.search(path.as_posix()):
+            return 0
+        now = path.read_text(errors="replace") if path.is_file() else ti.get("content", "")
+        if tool == "Write":
+            new, old, before = ti.get("content", ""), head_text(path), head_text(path)
+        else:
+            edits = ti.get("edits") if tool == "MultiEdit" else [ti]
+            new = "\n".join(e.get("new_string", "") for e in edits)
+            old = "\n".join(e.get("old_string", "") for e in edits)
+            before = now
+            for e in reversed(edits):
+                if e.get("new_string"):
+                    before = before.replace(e["new_string"], e.get("old_string", ""), -1 if e.get("replace_all") else 1)
+    except Exception:
+        return 0
+    had = {}
+    for line in tautologies(old):
+        had[line] = had.get(line, 0) + 1
+    added = []
+    for line in tautologies(new):
+        if had.get(line, 0) > 0:
+            had[line] -= 1
+        else:
+            added.append("always true: " + line)
+    if path.suffix == ".py":
+        after_set, before_set = no_assert_tests(now), no_assert_tests(before)
+        if after_set:
+            added += [f"asserts nothing: {n}" for n in sorted(after_set - (before_set or set()))]
+    if not added:
+        return 0
+    print(f"vacuous-test-guard {path.name}: this edit added {len(added)} test(s) that cannot fail.", file=sys.stderr)
+    for line in added[:8]:
+        print("  " + line, file=sys.stderr)
+    print("A test that cannot go red proves nothing. Assert on what the code produced, then break the code "
+          "once and watch the test fail before you count it.", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

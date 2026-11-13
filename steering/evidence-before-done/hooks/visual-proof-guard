@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Stop hook: if this session changed what a person sees and never looked, say so once.
+
+Reads the session transcript. When the latest edit to a UI file comes after the
+latest look at a rendered result (a screenshot tool, an image file read, a
+browser or simulator command), exit 2 sends the agent back with one message.
+It fires once per edit: the agent may look, or say plainly that it did not.
+Never fires while a Stop hook is already continuing the turn.
+Kill switch: VISUAL_PROOF_DISABLE=1. State: $XDG_CACHE_HOME/visual-proof/.
+"""
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+UI_FILE = re.compile(r"\.(tsx|jsx|vue|svelte|astro|html?|css|scss|sass|less|styl|xib|storyboard|qml|xaml)$", re.I)
+NOT_UI = re.compile(r"(^|/)(tests?|__tests__|node_modules|dist|build|coverage)/|\.(test|spec|stories)\.[jt]sx?$", re.I)
+IMAGE = re.compile(r"\.(png|jpe?g|webp|gif|bmp|avif)$", re.I)
+LOOK_TOOL = re.compile(r"screenshot|playwright|puppeteer|chrome|browser|computer|simulator|preview", re.I)
+LOOK_CMD = re.compile(r"screenshot|playwright|puppeteer|cypress|screencap|simctl\s+io|--headless|\bscrot\b|\bgrim\b|"
+                      r"import\s+-window|capture-pane|chromium|\bmaestro\b", re.I)
+
+
+def scan(transcript):
+    """(index of last UI edit, its file name, index of last look); -1 when absent."""
+    edit = look = -1
+    name = ""
+    with open(transcript, errors="replace") as f:
+        for i, line in enumerate(f):
+            if '"tool_use"' not in line:
+                continue
+            try:
+                content = (json.loads(line).get("message") or {}).get("content") or []
+            except Exception:
+                continue
+            for c in content:
+                if not isinstance(c, dict) or c.get("type") != "tool_use":
+                    continue
+                tool, ti = c.get("name") or "", c.get("input") or {}
+                path = str(ti.get("file_path") or "")
+                if tool in ("Write", "Edit", "MultiEdit"):
+                    if UI_FILE.search(path) and not NOT_UI.search(path):
+                        edit, name = i, Path(path).name
+                elif tool == "Read":
+                    if IMAGE.search(path):
+                        look = i
+                elif tool == "Bash":
+                    if LOOK_CMD.search(str(ti.get("command") or "")):
+                        look = i
+                elif LOOK_TOOL.search(tool):
+                    look = i
+    return edit, name, look
+
+
+def main():
+    if os.environ.get("VISUAL_PROOF_DISABLE") == "1":
+        return 0
+    try:
+        ev = json.load(sys.stdin)
+        if ev.get("stop_hook_active"):
+            return 0
+        edit, name, look = scan(ev["transcript_path"])
+        if edit < 0 or look > edit:
+            return 0
+        root = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "visual-proof"
+        state = root / (re.sub(r"[^\w.-]", "_", str(ev.get("session_id") or "session")) + ".txt")
+        if state.is_file() and state.read_text().strip() == str(edit):
+            return 0
+        root.mkdir(parents=True, exist_ok=True)
+        state.write_text(str(edit))
+    except Exception:
+        return 0
+    print(
+        f"You changed what a person sees ({name}) and have not looked at it since. Run the real build, take a "
+        "screenshot, read it, and say what you saw against what was asked. If you cannot look, say plainly "
+        "that the result is unseen; do not call it done.",
+        file=sys.stderr,
+    )
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

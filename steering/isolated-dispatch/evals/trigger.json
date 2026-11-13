@@ -1,0 +1,14 @@
+{
+  "skill": "isolated-dispatch",
+  "should": [
+    "Fix these four bugs in parallel, one agent each. They all touch the api package.",
+    "There are uncommitted changes in the tree that I don't recognise. Clean it up so we can start.",
+    "The second agent overwrote what the first one did in handlers.go. How do we stop that?",
+    "Set up a worktree for the migration work so it doesn't collide with my session.",
+    "Just stash whatever is there and switch to the release branch."
+  ],
+  "should_not": [
+    "What does the HTTP 409 status code mean?",
+    "Write a regex that matches an ISO 8601 date."
+  ]
+}

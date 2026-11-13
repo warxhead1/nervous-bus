@@ -6,7 +6,8 @@ description: >
   closing a task, committing, or relaying what a subagent said it did; when a
   test fails and the cause looks "pre-existing"; when tempted to skip a test,
   silence a warning, or leave a stub; and when the user says something still
-  does not work. Don't use for plans or estimates, which claim nothing yet.
+  does not work; and after changing anything a person looks at. Don't use for
+  plans or estimates, which claim nothing yet.
 ---
 
 # Evidence before done
@@ -22,6 +23,14 @@ description: >
 3. Say what you ran and what it showed. If a step was skipped, say that.
 
 "It should work" means you have not checked. Say "not verified" instead.
+
+## When a person will look at it
+
+Tests do not see a screen. After changing a page, a component, a style, or a
+layout: run the real build, take a screenshot, read it, and say what you saw
+against what was asked. Judge it with [visual-rubric.md](visual-rubric.md),
+from the screenshot and the code together. If you cannot look, report it as
+unseen.
 
 ## When the user says it still fails
 
@@ -43,5 +52,7 @@ They ran it. Look at the failure path. Do not explain why it should have worked.
   Fix the cause. If one has to stay, report it with the reason.
 - Fix every instance of a bug, not the one you were shown.
 
-The hook reports stub markers and suppressions an edit adds. Off:
-`UNFINISHED_GUARD_DISABLE=1`.
+Two hooks: one reports stub markers and suppressions an edit adds (off:
+`UNFINISHED_GUARD_DISABLE=1`); one sends you back once if you changed a UI file
+and end the turn without having looked at the result (off:
+`VISUAL_PROOF_DISABLE=1`).

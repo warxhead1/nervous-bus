@@ -1,6 +1,6 @@
 {
   "name": "evidence-before-done",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Done means finished and shown: no stubs, no suppressed failures, no unverified claims",
   "author": { "name": "warxhead1" },
   "repository": "https://github.com/warxhead1/nervous-bus",

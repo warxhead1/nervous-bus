@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""PreToolUse hook (Bash): a check is passed, not skipped.
+
+Blocks a command that turns a check off instead of satisfying it: git hooks
+skipped with --no-verify (or `commit -n`), HUSKY=0, pre-commit's SKIP=, a
+guard's own kill switch set inline, and test skips passed to a build. Exit 2
+shows the message to the agent. Kill switch: BYPASS_GUARD_DISABLE=1 in the
+environment the hook runs in; setting it inside the command does nothing.
+"""
+import json
+import os
+import re
+import sys
+
+QUOTED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?^\s*\2\s*$", re.S | re.M)
+GIT = re.compile(r"\bgit\b(?:\s+-[cC]\s+\S+|\s+--\S+)*\s+(commit|push|merge|rebase|am|cherry-pick|revert)\b([^;&|\n]*)")
+ENV = re.compile(
+    r"(?:^|[\s;&|(])(HUSKY=0|SKIP=[\w,.-]+(?=\s+(?:git|pre-commit)\b)|PRE_COMMIT_ALLOW_NO_CONFIG=1|"
+    r"[A-Z][A-Z0-9_]*(?:GUARD|HOOKS?|GATE|LINT|VERIFY)[A-Z0-9_]*_(?:DISABLE|DISABLED|SKIP|OFF|BYPASS)=(?:1|true|yes|on)|"
+    r"(?:SKIP|NO)_(?:TESTS?|LINT|HOOKS?|VERIFY|CHECKS?|GATES?)=(?:1|true|yes|on))(?=\s|$)")
+FLAG = re.compile(r"(?:^|\s)(-DskipTests\b|-Dmaven\.test\.skip(?:=true)?\b|--skip-tests?\b|--no-lint\b|--no-typecheck\b)")
+
+
+def find(command):
+    text = QUOTED.sub("''", HEREDOC.sub("", command))
+    for m in GIT.finditer(text):
+        args = m.group(2).split()
+        if "--no-verify" in args:
+            return "--no-verify"
+        if m.group(1) == "commit" and any(re.fullmatch(r"-[a-zA-Z]*n[a-zA-Z]*", a) for a in args):
+            return "commit -n"
+    m = ENV.search(text) or FLAG.search(text)
+    return m.group(1) if m else None
+
+
+def main():
+    if os.environ.get("BYPASS_GUARD_DISABLE") == "1":
+        return 0
+    try:
+        ev = json.load(sys.stdin)
+        command = (ev.get("tool_input") or {}).get("command") or ""
+    except Exception:
+        return 0
+    if ev.get("tool_name") != "Bash" or not isinstance(command, str):
+        return 0
+    hit = find(command)
+    if not hit:
+        return 0
+    print(
+        f"`{hit}` skips a check instead of passing it. Read why the check fails and fix that. "
+        "If the check is wrong, fix the check. If only the user can waive it, ask them and say what it guards.",
+        file=sys.stderr,
+    )
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

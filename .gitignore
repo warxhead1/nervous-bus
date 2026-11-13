@@ -150,3 +150,6 @@ schemas/tengine.diag.*.json
 # hearth.market.state.* — bridges tachyonos signals into hearth; raw_signal
 #   field can carry private tachyonos payload.
 schemas/hearth.market.state.*.json
+
+# plugin eval output
+steering/*/evals/results/

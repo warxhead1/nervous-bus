@@ -1,0 +1,14 @@
+{
+  "skill": "remediation-ladder",
+  "should": [
+    "The deploy script failed on the lockfile again. That's the third time this month.",
+    "The lint hook is blocking my commit. Just skip the hook and push it.",
+    "This keeps happening. How do we prevent it for good?",
+    "The integration test times out in CI. Raise the timeout so it passes.",
+    "Is that a real fix or a band-aid?"
+  ],
+  "should_not": [
+    "Translate this error message into Spanish.",
+    "What is the difference between a mutex and a semaphore?"
+  ]
+}
