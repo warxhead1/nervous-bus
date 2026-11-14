@@ -176,6 +176,19 @@ def test_verify_discarded_landed_false_when_truly_gone(repo: Path):
     assert go.verify_discarded_landed(str(repo), "worktree-agent-gone") is False
 
 
+def test_verify_discarded_landed_ignores_history_before_the_fork(repo: Path):
+    """A line main added and removed BEFORE the branch forked is not the
+    branch's work landing. Only main's commits after the merge base count."""
+    line = "const resurrected_helper_value = compute_resurrected_thing(7);"
+    _commit(repo, "old.txt", line + "\n", "feat: old helper")
+    _commit(repo, "old.txt", "\n", "chore: drop old helper")
+    _new_branch(repo, "worktree-agent-revive")
+    _run(repo, "switch", "-q", "worktree-agent-revive")
+    _commit(repo, "revive.txt", line + "\n", "feat: bring the helper back")
+    _run(repo, "switch", "-q", "main")
+    assert go.verify_discarded_landed(str(repo), "worktree-agent-revive") is False
+
+
 def _orphan_branch(repo: Path) -> None:
     _new_branch(repo, "worktree-agent-slow")
     _run(repo, "switch", "-q", "worktree-agent-slow")

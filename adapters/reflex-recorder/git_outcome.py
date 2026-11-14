@@ -411,7 +411,9 @@ def verify_discarded_landed(repo: str, branch: str, main_ref: str = "main") -> O
     not evidence of absence — cannot decide, leave the medium-confidence verdict).
 
     The probes are independent read-only `git log -S` calls, so they run in
-    parallel: the wall cost is about one probe instead of the sum.
+    parallel: the wall cost is about one probe instead of the sum. Each probe
+    scans only `mb..main`: the branch's code cannot have landed before the
+    branch forked.
 
     This follows the CODE, so it survives rebase, squash, and reword that defeat
     commit-identity checks.  Slower than the ancestry classifier (history-wide
@@ -425,8 +427,8 @@ def verify_discarded_landed(repo: str, branch: str, main_ref: str = "main") -> O
     if not probes:
         return None
     def probe(line: str) -> Optional[str]:
-        return _git(repo, "log", main_ref, f"--max-count={_PICKAXE_DEPTH}", "-S", line,
-                    "--oneline", timeout=40)
+        return _git(repo, "log", f"{mb}..{main_ref}", f"--max-count={_PICKAXE_DEPTH}",
+                    "-S", line, "--oneline", timeout=40)
 
     with ThreadPoolExecutor(max_workers=len(probes)) as pool:
         outs = list(pool.map(probe, probes))
