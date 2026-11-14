@@ -160,10 +160,26 @@ def _nervous_cli() -> str:
     here = Path(__file__).resolve().parents[2] / "sdk" / "shell" / "nervous"
     return str(here) if here.is_file() else "nervous"
 
+_NOTIFY_KEYS = ("bundle_id", "channel", "source_stream", "event_count",
+                "low_interest", "window_start", "window_end")
+_NOTIFY_STATS = ("rate_per_min", "error_rate", "baseline_deviation", "baseline_n")
+
+
+def _notification(bundle: dict) -> dict:
+    """The bus payload for a bundle: ids and summary facts only.
+
+    The full bundle stays in nbus:bundles; consumers fetch it by bundle_id.
+    """
+    note = {k: bundle[k] for k in _NOTIFY_KEYS if k in bundle}
+    stats = bundle.get("stats", {})
+    note["stats"] = {k: stats[k] for k in _NOTIFY_STATS if k in stats}
+    return note
+
+
 def _publish(bundle: dict) -> None:
     try:
         p = subprocess.run(
-            [_nervous_cli(), "publish", "bus.pattern.bundle.v1", json.dumps(bundle)],
+            [_nervous_cli(), "publish", "bus.pattern.bundle.v1", json.dumps(_notification(bundle))],
             capture_output=True, text=True, timeout=5,
         )
         if p.returncode != 0:

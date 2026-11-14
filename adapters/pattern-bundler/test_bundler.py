@@ -298,3 +298,47 @@ class TestPublishCli(unittest.TestCase):
         self.assertTrue(os.path.isfile(cli), cli)
         self.assertTrue(os.access(cli, os.X_OK), cli)
         self.assertEqual(calls[0][1:3], ["publish", "bus.pattern.bundle.v1"])
+
+
+class TestPublishNotification(unittest.TestCase):
+    def _bundle(self, n_samples: int) -> dict:
+        return {
+            "bundle_id": "01TEST", "source_stream": "bus", "channel": "x.y.v1",
+            "window_start": "2026-11-14T00:00:00Z", "window_end": "2026-11-14T00:05:00Z",
+            "event_count": n_samples, "low_interest": False,
+            "sample_events": ["e" * 2000] * n_samples,
+            "error_events": ["boom " * 400] * 20,
+            "transient_context": [], "pattern_dist": [{"fp": "f", "count": 1, "rate_per_100": 1.0}],
+            "peer_snapshot": {"a": 1},
+            "stats": {"rate_per_min": 1.5, "error_rate": 0.1, "baseline_deviation": 3.2,
+                      "baseline_n": 120, "field_stats": {"k": {"top_values": {"v" * 500: 3}}}},
+        }
+
+    def test_published_payload_is_small_and_valid_against_the_schema(self):
+        import json
+        import bundler
+        import jsonschema
+        captured = []
+
+        class Done:
+            returncode, stderr = 0, ""
+
+        def fake_run(cmd, **kw):
+            captured.append(cmd)
+            return Done()
+
+        real_run = bundler.subprocess.run
+        bundler.subprocess.run = fake_run
+        try:
+            bundler._publish(self._bundle(20))
+        finally:
+            bundler.subprocess.run = real_run
+        raw = captured[0][3]
+        self.assertLess(len(raw.encode()), 1024)
+        payload = json.loads(raw)
+        self.assertEqual(payload["bundle_id"], "01TEST")
+        self.assertEqual(payload["stats"]["baseline_deviation"], 3.2)
+        self.assertNotIn("sample_events", payload)
+        self.assertNotIn("field_stats", payload["stats"])
+        schema_path = Path(__file__).parents[2] / "schemas" / "bus.pattern.bundle.v1.json"
+        jsonschema.Draft202012Validator(json.loads(schema_path.read_text())).validate(payload)
