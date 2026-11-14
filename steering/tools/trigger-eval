@@ -13,9 +13,11 @@ rules already cover a skill loads that skill 0 times in 14.
 
 Any skill, not just steering ones: --cases <file|dir> reads the same shape (one object
 or a list) from elsewhere, e.g. tools/trigger_cases/. Each skill is found under
---skill-root (default ~/.claude/skills) and linked into the run's own .claude/skills,
-so only the skills under test are loaded. --dry-run prints the plan and the request
-count and calls nothing.
+--skill-root (default ~/.claude/skills) and linked into the run's own .claude/skills.
+Pair it with a clean --config-dir: without one the home config and every skill
+installed there load too, and a miss cannot be told from a skill that was never
+offered. --streams DIR keeps each run's raw stream so that can be checked.
+--dry-run prints the plan and the request count and calls nothing.
 """
 import argparse
 import concurrent.futures as cf
@@ -80,7 +82,7 @@ def skills_called(stream):
     return called
 
 
-def run_one(args, prompt, plugin_dirs, cwd):
+def run_one(args, prompt, plugin_dirs, cwd, tag=""):
     cmd = [args.claude, "-p", prompt, "--model", args.model, "--max-turns", "2",
            "--output-format", "stream-json", "--verbose", "--allowedTools", "Skill"]
     for d in plugin_dirs:
@@ -91,6 +93,9 @@ def run_one(args, prompt, plugin_dirs, cwd):
             env["CLAUDE_CONFIG_DIR"] = args.config_dir
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout, cwd=cwd,
                            stdin=subprocess.DEVNULL, env=env)
+        if args.streams:
+            Path(args.streams).mkdir(parents=True, exist_ok=True)
+            (Path(args.streams) / f"{tag}.jsonl").write_text(p.stdout)
         return skills_called(p.stdout)
     except subprocess.TimeoutExpired:
         return None
@@ -112,6 +117,7 @@ def main():
     ap.add_argument("--skill-root", action="append", help="where --cases skills live (repeatable; default ~/.claude/skills)")
     ap.add_argument("--limit", type=int, default=0, help="run only the first N prompts (a smoke run)")
     ap.add_argument("--dry-run", action="store_true", help="print the plan and request count; call nothing")
+    ap.add_argument("--streams", help="dir to keep each run's raw stream-json in")
     args = ap.parse_args()
     only = {s for s in args.plugins.split(",") if s}
     cases = load_cases(only, args.cases)
@@ -138,7 +144,8 @@ def main():
         return
     rows = []
     with cf.ThreadPoolExecutor(args.jobs) as ex:
-        futs = {ex.submit(run_one, args, q, dirs, cwd): (skill, want, q) for skill, want, q, _ in jobs}
+        futs = {ex.submit(run_one, args, q, dirs, cwd, f"{skill}-{'pos' if want else 'neg'}-{i:03d}-r{r}"):
+                (skill, want, q) for i, (skill, want, q, r) in enumerate(jobs)}
         for fut in cf.as_completed(futs):
             skill, want, q = futs[fut]
             called = fut.result()
