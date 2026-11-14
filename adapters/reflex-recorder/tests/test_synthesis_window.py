@@ -243,3 +243,20 @@ class TestSingleDetectorInvocation:
             f"re-ran every detector via a second bare .detect() call to "
             f"rebuild sig_to_candidate)"
         )
+
+
+class TestProgressLines:
+    def test_one_timed_line_per_stage_and_detector(self):
+        conn = _make_conn()
+        lines: list[str] = []
+        syn.run_synthesis(conn, window_days=30, dry_run=True, progress=lines.append)
+        assert "stitch" in lines[0]
+        assert "score 0 issues" in lines[-1]
+        named = [ln.split("detector ", 1)[1] for ln in lines if " detector " in ln]
+        assert named == [c.DETECTOR_NAME for c in syn.DETECTOR_CLASSES]
+        for ln in lines:
+            assert float(ln.split("s ", 1)[0]) >= 0.0
+
+    def test_silent_without_a_progress_callback(self, capsys):
+        syn.run_synthesis(_make_conn(), window_days=30, dry_run=True)
+        assert capsys.readouterr().err == ""
