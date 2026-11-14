@@ -5,6 +5,9 @@
 #   kind           "activity": publishes only when there is work, so silence is normal
 #                  "retired":  the producer is gone on purpose
 #   min_gap_hours  the stale threshold is at least this many hours
+#
+# Add a rule only when the producer's code or its own logs show why it is quiet.
+# A channel with no such evidence stays stale until someone looks.
 
 # hearth-loom sidecars emit health only while a build or lint is running.
 [[channel]]
@@ -15,7 +18,7 @@ kind = "activity"
 match = "hearth-linter.*"
 kind = "activity"
 
-# hearth-loom dispatch: one event per bead step, nothing when no bead is in flight.
+# hearth-loom dispatch: one event per bead step, nothing when no bead is dispatched.
 [[channel]]
 match = "bus.bead.lifecycle.v1"
 kind = "activity"
@@ -24,64 +27,9 @@ kind = "activity"
 match = "loom.shared-session.v1"
 kind = "activity"
 
-# kb edits made by a person or a bulk apply.
-[[channel]]
-match = "kb.entry.updated.v1"
-kind = "activity"
-
-[[channel]]
-match = "kb.entry.archived.v1"
-kind = "activity"
-
-[[channel]]
-match = "kb.entry.unarchived.v1"
-kind = "activity"
-
-[[channel]]
-match = "kb.entry.moved.v1"
-kind = "activity"
-
-[[channel]]
-match = "kb.entry.deleted.v1"
-kind = "activity"
-
-[[channel]]
-match = "kb.entry.vetted.v1"
-kind = "activity"
-
-[[channel]]
-match = "kb.entry.superseded.v1"
-kind = "activity"
-
-[[channel]]
-match = "kb.related.*"
-kind = "activity"
-
-[[channel]]
-match = "kb.attachment.*"
-kind = "activity"
-
-[[channel]]
-match = "kb.bulk.applied.v1"
-kind = "activity"
-
-# memory graph writes from the everos watch pilot.
+# memory graph writes from everos-watch: one event per EverOS memory file change.
 [[channel]]
 match = "memory.node.*"
-kind = "activity"
-
-# deer-flow runs started by hand.
-[[channel]]
-match = "deer-flow.claim.verified.v1"
-kind = "activity"
-
-[[channel]]
-match = "deer-flow.stack-tuner.stage.*"
-kind = "activity"
-
-# progress from gamedev agent sessions.
-[[channel]]
-match = "bus.gamedev.progress.v2"
 kind = "activity"
 
 # hearth ember insights arrive in batches hours apart.
