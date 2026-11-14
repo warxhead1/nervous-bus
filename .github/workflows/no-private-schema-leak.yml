@@ -21,13 +21,9 @@ concurrency:
 jobs:
   check-private-leak:
     name: check-private-leak
-    if: github.actor != 'dependabot[bot]'
-    runs-on: [self-hosted, linux, nervous-bus]
+    # Needs nothing from our machine, so it runs on a hosted runner and does not queue.
+    runs-on: ubuntu-latest
     steps:
-      - name: Configure PATH
-        run: echo "$HOME/.pyenv/shims" >> $GITHUB_PATH
       - uses: actions/checkout@v7
-        with:
-          clean: false
       - name: Fail if private schemas are tracked
         run: python3 tools/check_private_schema_leak.py

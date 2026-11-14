@@ -23,7 +23,8 @@ concurrency:
 jobs:
   scan-producers:
     name: scan-producers
-    if: github.actor != 'dependabot[bot]'
+    # A fork's pull request never runs on our own machine. tools/check_self_hosted_guard.py enforces this.
+    if: github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, linux, nervous-bus]
     steps:
       - name: Configure PATH and project dirs
