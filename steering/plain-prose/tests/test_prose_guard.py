@@ -147,6 +147,8 @@ def test_a_heavy_commit_message_is_sent_back_once_then_runs(tmp_path):
     cmd = heredoc("git add -A && git commit -q -F -", BODY)
     rc, err = bash(tmp_path, cmd)
     assert rc == 2 and "did not run" in err and "semicolon" in err
+    shown = [l for l in err.splitlines() if l.startswith("  line ")]
+    assert len(shown) == len(set(shown))                  # a line with two semicolons is shown once
     assert bash(tmp_path, cmd)[0] == 0                    # the same text again: the writer chose it
     assert bash(tmp_path, cmd)[0] == 2                    # a later heavy message is a new report
 
