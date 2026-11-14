@@ -1,0 +1,20 @@
+[Unit]
+Description=nervous-bus codegraph-sync (debounced sync of opted-in codegraph indexes)
+
+[Service]
+Type=oneshot
+# Batch work: build.slice is the box's batch slice (CPUWeight=30). The unit
+# also carries its own low weight, nice and idle IO, so a sync never competes
+# with a game, a stream or an interactive service.
+Slice=build.slice
+CPUWeight=10
+IOWeight=10
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=15min
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=%h/.cache/nervous-bus
+ExecStart=/usr/bin/python3 %h/projects/nervous-bus/adapters/codegraph-sync/sync.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nervous-codegraph-sync
