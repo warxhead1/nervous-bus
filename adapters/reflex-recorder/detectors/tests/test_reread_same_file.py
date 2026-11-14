@@ -13,6 +13,8 @@ Covers:
     and raw_json envelope fallback all work.
   - Path normalization: worktree-slug paths collapse to the same anchor.
   - Cross-run aggregation: two runs firing on the same file share one signature.
+  - Bash reads: sed -n slices and plain cat count, Read and Bash add up, and
+    pipelines, heredocs, redirects and sed -i do not count.
 """
 from __future__ import annotations
 
@@ -625,6 +627,122 @@ class TestWorktreePathDedup(unittest.TestCase):
         # No worktree slug in signature
         self.assertNotIn("wf_abc", sig)
         self.assertNotIn("wf_xyz", sig)
+
+
+# ── Tests: Bash sed slices and cat count as reads ────────────────────────────
+
+_BASH_FILE = "/home/eric/projects/proj/store.py"
+
+
+def _bash_event_json(command: str, cwd: str | None = None, cut: int | None = None) -> str:
+    summary = json.dumps({"command": command, "description": "x"})
+    if cut is not None:
+        summary = summary[:cut]
+    data = {
+        "agent_kind": "host_claude_code",
+        "session_id": "test-session",
+        "project": "proj",
+        "tool_name": "Bash",
+        "tool_summary": summary,
+        "event": "tool_call",
+        "ts": _now_utc(),
+    }
+    if cwd:
+        data["cwd"] = cwd
+    return json.dumps({"specversion": "1.0", "id": "b", "type": "bus.agent.activity.v1", "data": data})
+
+
+def _insert_bash(conn, run_id, commands, start_seq=100, **kw):
+    for i, cmd in enumerate(commands):
+        conn.execute(
+            "INSERT INTO run_events (run_id, seq, event_ts, event_type, raw_json) VALUES (?, ?, ?, ?, ?)",
+            (run_id, start_seq + i, _now_utc(), "bus.agent.activity.v1", _bash_event_json(cmd, **kw)),
+        )
+
+
+class TestBashReads(unittest.TestCase):
+    def setUp(self):
+        self.conn = _make_db()
+        _insert_run(self.conn, "run-bash", "proj")
+
+    def _fire(self):
+        return RereadSameFileDetector(self.conn).run()
+
+    def test_sed_slices_alone_trip_threshold(self):
+        _insert_bash(self.conn, "run-bash", [f"sed -n '{n},{n + 40}p' {_BASH_FILE}" for n in range(1, 100, 10)][: REREAD_THRESHOLD + 1])
+        cands = self._fire()
+        self.assertEqual(len(cands), 1)
+        self.assertEqual(cands[0].signature, "proj:reread_same_file:store.py")
+        self.assertEqual(cands[0].occurrences, REREAD_THRESHOLD + 1)
+
+    def test_plain_cat_counts(self):
+        _insert_bash(self.conn, "run-bash", [f"cat {_BASH_FILE}"] * (REREAD_THRESHOLD + 1))
+        self.assertEqual(len(self._fire()), 1)
+
+    def test_at_threshold_does_not_fire(self):
+        _insert_bash(self.conn, "run-bash", [f"cat {_BASH_FILE}"] * REREAD_THRESHOLD)
+        self.assertEqual(self._fire(), [])
+
+    def test_read_and_bash_add_up(self):
+        _insert_read_events(self.conn, "run-bash", "proj", _BASH_FILE, count=2)
+        _insert_bash(self.conn, "run-bash", [f"sed -n '1,9p' {_BASH_FILE}", f"cat {_BASH_FILE}"])
+        cands = self._fire()
+        self.assertEqual(len(cands), 1)
+        self.assertEqual(cands[0].occurrences, 4)
+
+    def test_non_reads_do_not_count(self):
+        cmds = [
+            f"cat {_BASH_FILE} | grep foo",
+            f"sed -n '1,9p' {_BASH_FILE} | head -3",
+            f"cat > {_BASH_FILE}",
+            f"cat >> {_BASH_FILE} <<'EOF'\nhello\nEOF",
+            f"cat <<EOF > {_BASH_FILE}\nsed -n '1,2p' {_BASH_FILE}\nEOF",
+            f"sed -i 's/a/b/' {_BASH_FILE}",
+            f"sed -n '1,9p' {_BASH_FILE} > out.txt",
+            "sed -n '1,9p'",
+            "cat",
+        ]
+        _insert_bash(self.conn, "run-bash", cmds * 2)
+        self.assertEqual(self._fire(), [])
+
+    def test_slices_of_one_file_in_one_command_count_once(self):
+        cmd = f"sed -n '1,5p' {_BASH_FILE}; sed -n '9,12p' {_BASH_FILE} && sed -n '20,30p' {_BASH_FILE}\nsed -n '40,50p' {_BASH_FILE}"
+        _insert_bash(self.conn, "run-bash", [cmd] * REREAD_THRESHOLD)
+        self.assertEqual(self._fire(), [])
+        _insert_bash(self.conn, "run-bash", [cmd], start_seq=200)
+        cands = self._fire()
+        self.assertEqual(len(cands), 1)
+        self.assertEqual(cands[0].occurrences, REREAD_THRESHOLD + 1)
+
+    def test_two_files_in_one_command_each_count(self):
+        other = "/home/eric/projects/proj/other.py"
+        _insert_bash(self.conn, "run-bash", [f"sed -n '1,5p' {_BASH_FILE}; sed -n '1,5p' {other}"] * (REREAD_THRESHOLD + 1))
+        sigs = sorted(c.signature for c in self._fire())
+        self.assertEqual(sigs, ["proj:reread_same_file:other.py", "proj:reread_same_file:store.py"])
+
+    def test_cat_of_two_files_counts_each(self):
+        other = "/home/eric/projects/proj/other.py"
+        _insert_bash(self.conn, "run-bash", [f"cat {_BASH_FILE} {other}"] * (REREAD_THRESHOLD + 1))
+        self.assertEqual(len(self._fire()), 2)
+
+    def test_relative_path_joins_cwd_and_matches_absolute(self):
+        _insert_bash(self.conn, "run-bash", ["cat store.py"] * 2, cwd="/home/eric/projects/proj")
+        _insert_read_events(self.conn, "run-bash", "proj", _BASH_FILE, count=2)
+        self.assertEqual(len(self._fire()), 1)
+
+    def test_truncated_command_drops_its_cut_last_statement(self):
+        full = f"sed -n '1,5p' {_BASH_FILE}; sed -n '1,5p' {_BASH_FILE}.long.name"
+        summary_cut = len(json.dumps({"command": full})) - 8
+        _insert_bash(self.conn, "run-bash", [full] * (REREAD_THRESHOLD + 1), cut=summary_cut)
+        cands = self._fire()
+        self.assertEqual([c.signature for c in cands], ["proj:reread_same_file:store.py"])
+
+    def test_since_ts_path_also_counts_bash(self):
+        _insert_bash(self.conn, "run-bash", [f"cat {_BASH_FILE}"] * (REREAD_THRESHOLD + 1))
+        self.conn.execute("ALTER TABLE runs ADD COLUMN started TEXT")
+        self.conn.execute("UPDATE runs SET started = '2026-01-01T00:00:00Z' WHERE run_id = 'run-bash'")
+        det = RereadSameFileDetector(self.conn)
+        self.assertEqual(len(det.detect(self.conn, since_ts="2025-01-01T00:00:00Z")), 1)
 
 
 if __name__ == "__main__":

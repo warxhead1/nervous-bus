@@ -1,7 +1,8 @@
 """detectors/reread_same_file.py — Tier-1 reread-same-file detector.
 
-Detects context churn: within a single run, the same file path is Read more
-than a threshold number of times.  Chronic re-reading of a file signals that
+Detects context churn: within a single run, the same file path is read more
+than a threshold number of times.  A read is a Read tool call, a Bash
+`sed -n 'A,Bp' FILE` slice, or a plain Bash `cat FILE`.  Chronic re-reading of a file signals that
 the agent lacks a persistent memory/summary of that file's key facts, so it
 reconstructs context by re-reading on every turn.
 
@@ -11,12 +12,20 @@ Algorithm
    rule does not apply; it fires on behaviour shape over all stored — i.e.
    closed — runs, labeled or not):
 
-   a. Query run_events for tool_name = 'Read' events.
-   b. Extract the file_path from data.tool_summary (JSON {"file_path": "..."})
-      or, when tool_summary is truncated/absent, from a regex scan of the
-      raw_json payload.
-   c. Count occurrences of each unique (run_id, normalized_path).
-   d. If count > REREAD_THRESHOLD: emit a PatternCandidate.
+   a. Query run_events for tool_name = 'Read' and tool_name = 'Bash' events.
+   b. For a Read, extract the file_path from data.tool_summary
+      (JSON {"file_path": "..."}) or, when tool_summary is truncated/absent,
+      from a regex scan of the raw_json payload.
+   c. For a Bash call, read data.tool_summary.command.  Split it into
+      statements at `;`, `&&`, `||`, `&` and newlines.  A statement counts
+      only when it is `sed -n 'A,Bp' FILE...` or `cat FILE...` with no pipe,
+      redirect or heredoc.  `sed -i` and sed without a file never count.
+      The tool_summary command is cut at a fixed length.  When it is cut, the
+      last statement is dropped because its file name may be cut too.
+   d. A relative Bash path is joined to data.cwd when there is one.
+      Several slices of one file in one Bash call count as one read.
+   e. Count occurrences of each unique (run_id, normalized_path).
+   f. If count > REREAD_THRESHOLD: emit a PatternCandidate.
 
 2. Aggregate across runs: if the same file is re-read excessively in N≥1 runs,
    the cross-run recurrence dedup (base.find_or_create_issue) tracks the durable
@@ -65,11 +74,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sqlite3
 from collections import defaultdict
 from typing import Optional
 
 from detectors.base import BaseDetector, PatternCandidate
+from detectors._truncated_json import string_field
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -84,6 +95,18 @@ REREAD_THRESHOLD: int = 3
 #: write operations, not context-reconstruction reads).
 _READ_TOOL_NAMES: frozenset[str] = frozenset({"Read"})
 
+#: Bash events are scanned too: `sed -n 'A,Bp' FILE` and `cat FILE` read files.
+_BASH_TOOL_NAME = "Bash"
+_SCANNED_TOOL_NAMES: frozenset[str] = _READ_TOOL_NAMES | {_BASH_TOOL_NAME}
+
+# A sed script that prints one line range: 5p, 5,20p, 5,$p, $p.
+_SED_RANGE_RE = re.compile(r"^(\d+|\$)(,(\d+|\$))?p$")
+
+# Statement separators.  A pipe is deliberately not one: a piped statement is
+# ordinary shell use and is dropped whole.
+_STATEMENT_SEPARATORS = frozenset({";", ";;", "&&", "||", "&", "\n"})
+_DROP_STATEMENT_TOKENS = frozenset({"|", "|&", ">", ">>", ">|", "&>", "&>>", "<", "<<", "<<-", "<<<"})
+
 # Regex to extract file_path from a possibly-truncated JSON string such as
 #   {"file_path": "/absolute/path/to/file.py", "offset": 0, ...}
 # The value is captured up to the first closing quote (handles truncation).
@@ -91,7 +114,7 @@ _FILE_PATH_RE = re.compile(r'"file_path"\s*:\s*"([^"]+)"')
 
 # Automate-rung remediation template
 _REMEDIATION_TEMPLATE = (
-    "Automate-rung: file '{path}' was Read {count} times in run '{run_id}' "
+    "Automate-rung: file '{path}' was read {count} times in run '{run_id}' "
     "(project '{project}').  Root cause: agent re-reads the file to reconstruct "
     "context that is not cached elsewhere.  Fix: append a summary of '{path}' "
     "key facts to CLAUDE.md or create a memory/skill entry so the agent's initial "
@@ -151,6 +174,112 @@ def _extract_file_path(tool_summary: Optional[str], raw_json: Optional[str]) -> 
     return None
 
 
+def _statements(command: str) -> list[list[str]]:
+    """Split a Bash command into statements of shell tokens.
+
+    Unquoted newlines become statement breaks.  Everything after the line that
+    opens a heredoc is dropped so the heredoc body is never read as commands.
+    Returns [] when the command cannot be tokenised.
+    """
+    lines, quote, esc, buf, i = [], "", False, [], 0
+    while i < len(command):
+        ch = command[i]
+        if esc:
+            esc = False
+        elif ch == "\\" and quote != "'":
+            esc = True
+        elif quote:
+            if ch == quote:
+                quote = ""
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "\n":
+            lines.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        elif command.startswith("<<", i) and not command.startswith("<<<", i):
+            rest = command[i:].split("\n", 1)[0]
+            buf.append(rest)
+            break
+        buf.append(ch)
+        i += 1
+    lines.append("".join(buf))
+
+    out: list[list[str]] = []
+    for line in lines:
+        lex = shlex.shlex(line, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        try:
+            tokens = list(lex)
+        except ValueError:
+            continue
+        cur: list[str] = []
+        for tok in tokens:
+            if tok in _STATEMENT_SEPARATORS:
+                out.append(cur)
+                cur = []
+            else:
+                cur.append(tok)
+        out.append(cur)
+    return [st for st in out if st]
+
+
+def _is_file_arg(tok: str) -> bool:
+    return bool(tok) and not tok.startswith("-") and not any(c in tok for c in "*?[]$`~{}")
+
+
+def _statement_files(tokens: list[str]) -> list[str]:
+    """Files read by one statement shaped `sed -n 'A,Bp' FILE...` or `cat FILE...`."""
+    if not tokens or any(t in _DROP_STATEMENT_TOKENS or t.startswith((">", "<")) for t in tokens):
+        return []
+    if tokens[0] == "cat":
+        args = tokens[1:]
+        files = [a for a in args if not a.startswith("-")]
+        return files if files and all(_is_file_arg(f) for f in files) else []
+    if tokens[0] == "sed" and len(tokens) >= 4 and tokens[1] == "-n" and _SED_RANGE_RE.match(tokens[2]):
+        files = tokens[3:]
+        return files if all(_is_file_arg(f) for f in files) else []
+    return []
+
+
+def _bash_read_paths(command: str, truncated: bool = False, cwd: Optional[str] = None) -> list[str]:
+    """Distinct files one Bash command reads through sed slices or cat.
+
+    truncated: the command text was cut, so its last statement is dropped.
+    Relative paths are joined to cwd when given, else used as written.
+    """
+    stmts = _statements(command)
+    if truncated and stmts:
+        stmts = stmts[:-1]
+    seen: dict[str, None] = {}
+    for st in stmts:
+        for f in _statement_files(st):
+            if cwd and not os.path.isabs(f):
+                f = os.path.join(cwd, f)
+            seen[f] = None
+    return list(seen)
+
+
+def _extract_bash_command(tool_summary: Optional[str], raw_json: Optional[str]) -> tuple[str, bool]:
+    """Return (command, truncated) for a Bash event; ("", False) when absent."""
+    if tool_summary:
+        try:
+            ts = json.loads(tool_summary)
+            if isinstance(ts, dict):
+                return str(ts.get("command") or ""), False
+        except (json.JSONDecodeError, ValueError):
+            pass
+        cmd = string_field(tool_summary, "command", partial=True)
+        if cmd:
+            return cmd, True
+    if raw_json:
+        cmd = string_field(raw_json, "command", partial=True)
+        if cmd:
+            return cmd, True
+    return "", False
+
+
 def _normalize_path(file_path: str) -> str:
     """Normalize a file path to a stable anchor.
 
@@ -189,7 +318,7 @@ class RereadSameFileDetector(BaseDetector):
     def detect(
         self, conn: sqlite3.Connection, since_ts: Optional[str] = None
     ) -> list[PatternCandidate]:
-        """Scan run_events for runs where the same file is Read > REREAD_THRESHOLD times.
+        """Scan run_events for runs where the same file is read > REREAD_THRESHOLD times.
 
         Parameters
         ----------
@@ -215,7 +344,7 @@ class RereadSameFileDetector(BaseDetector):
         # idx_run_events_seq`, i.e. still a full run_events scan). Selecting
         # windowed run_ids from `runs` first (idx_runs_started) and then
         # filtering run_events by `run_id IN (...)` bounds the scan.
-        read_tool_placeholders = ",".join("?" * len(_READ_TOOL_NAMES))
+        read_tool_placeholders = ",".join("?" * len(_SCANNED_TOOL_NAMES))
         if since_ts:
             run_rows = conn.execute(
                 "SELECT run_id, project FROM runs WHERE started >= ?", (since_ts,)
@@ -228,32 +357,36 @@ class RereadSameFileDetector(BaseDetector):
             cur = conn.execute(
                 f"""
                 SELECT run_id,
+                       json_extract(raw_json, '$.data.tool_name') AS tool_name,
                        json_extract(raw_json, '$.data.tool_summary') AS tool_summary,
+                       json_extract(raw_json, '$.data.cwd') AS cwd,
                        raw_json
                 FROM run_events
                 WHERE json_extract(raw_json, '$.data.tool_name') IN ({read_tool_placeholders})
                   AND run_id IN ({run_id_placeholders})
                 ORDER BY run_id, seq
                 """,
-                list(_READ_TOOL_NAMES) + run_ids,
+                list(_SCANNED_TOOL_NAMES) + run_ids,
             )
             rows = [
-                (run_id, project_by_run.get(run_id), tool_summary, raw_json)
-                for run_id, tool_summary, raw_json in cur.fetchall()
+                (run_id, project_by_run.get(run_id), tool_name, tool_summary, cwd, raw_json)
+                for run_id, tool_name, tool_summary, cwd, raw_json in cur.fetchall()
             ]
         else:
             cur = conn.execute(
                 """
                 SELECT re.run_id,
                        r.project,
+                       json_extract(re.raw_json, '$.data.tool_name') AS tool_name,
                        json_extract(re.raw_json, '$.data.tool_summary') AS tool_summary,
+                       json_extract(re.raw_json, '$.data.cwd') AS cwd,
                        re.raw_json
                 FROM run_events AS re
                 JOIN runs AS r USING (run_id)
                 WHERE json_extract(re.raw_json, '$.data.tool_name') IN ({placeholders})
                 ORDER BY re.run_id, re.seq
                 """.format(placeholders=read_tool_placeholders),
-                tuple(_READ_TOOL_NAMES),
+                tuple(_SCANNED_TOOL_NAMES),
             )
             rows = cur.fetchall()
 
@@ -269,15 +402,22 @@ class RereadSameFileDetector(BaseDetector):
             lambda: {"project": "", "raw_paths": [], "count": 0}
         ))
 
-        for run_id, project, tool_summary, raw_json in rows:
-            raw_path = _extract_file_path(tool_summary, raw_json)
-            if not raw_path:
-                continue
-            norm = _normalize_path(raw_path)
-            entry = per_run[run_id][norm]
-            entry["project"] = project or ""
-            entry["raw_paths"].append(raw_path)
-            entry["count"] += 1
+        for run_id, project, tool_name, tool_summary, cwd, raw_json in rows:
+            if tool_name == _BASH_TOOL_NAME:
+                command, truncated = _extract_bash_command(tool_summary, raw_json)
+                raw_paths = _bash_read_paths(command, truncated, cwd) if command else []
+            else:
+                raw_path = _extract_file_path(tool_summary, raw_json)
+                raw_paths = [raw_path] if raw_path else []
+            # One event reads a normalized file once, however many slices it holds.
+            by_norm: dict[str, str] = {}
+            for raw_path in raw_paths:
+                by_norm.setdefault(_normalize_path(raw_path), raw_path)
+            for norm, raw_path in by_norm.items():
+                entry = per_run[run_id][norm]
+                entry["project"] = project or ""
+                entry["raw_paths"].append(raw_path)
+                entry["count"] += 1
 
         # Now find (norm_path, project) combinations that fired in one or more runs.
         # Group by (project, norm_path) to enable cross-run dedup via signature.
