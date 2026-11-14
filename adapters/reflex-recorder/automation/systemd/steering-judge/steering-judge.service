@@ -1,0 +1,11 @@
+# Install: copy both files into ~/.config/systemd/user/, then
+#   systemctl --user daemon-reload && systemctl --user enable --now steering-judge.timer
+[Unit]
+Description=Launch the steering judge when it is due (at most once a week)
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:%h/.pyenv/shims:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/reflex-recorder/automation/steering_judge_launch.py
+TimeoutStartSec=3300
+Nice=10

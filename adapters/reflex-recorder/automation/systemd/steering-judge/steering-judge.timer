@@ -1,0 +1,9 @@
+[Unit]
+Description=Nightly check for the steering judge
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target
