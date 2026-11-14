@@ -313,6 +313,19 @@ class TestSubagentTranscripts(unittest.TestCase):
             self.assertEqual((Path(dst_root) / rel).read_bytes(),
                              (Path(src_root) / rel).read_bytes())
 
+    def test_workflow_lane_files_and_meta_mirrored(self):
+        with tempfile.TemporaryDirectory() as src_root, tempfile.TemporaryDirectory() as dst_root:
+            wf = Path(src_root) / "-home-eric-p" / "sess-1" / "subagents" / "workflows" / "wf_1"
+            _write_jsonl(wf / "agent-w1.jsonl", 2)
+            (wf / "agent-w1.meta.json").write_text('{"agentType": "haiku-grunt"}')
+            stats = ts.sync_once(src_root=src_root, dst_root=dst_root)
+            self.assertEqual(stats["files_new"], 1)
+            rel = Path("-home-eric-p/sess-1/subagents/workflows/wf_1")
+            self.assertEqual((Path(dst_root) / rel / "agent-w1.jsonl").read_bytes(),
+                             (wf / "agent-w1.jsonl").read_bytes())
+            self.assertEqual((Path(dst_root) / rel / "agent-w1.meta.json").read_text(),
+                             '{"agentType": "haiku-grunt"}')
+
     def test_subagent_meta_mirrored(self):
         with tempfile.TemporaryDirectory() as src_root, tempfile.TemporaryDirectory() as dst_root:
             sub = Path(src_root) / "-home-eric-p" / "sess-1" / "subagents"

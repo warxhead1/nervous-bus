@@ -28,6 +28,11 @@ import tempfile
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+_TRANSCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "transcripts")
+if _TRANSCRIPTS not in sys.path:
+    sys.path.append(_TRANSCRIPTS)
+from claude_layout import project_dir_files  # noqa: E402
+
 DEFAULT_SRC: str = os.path.expanduser("~/.claude/projects")
 DEFAULT_DST: str = os.path.expanduser("~/.cache/nervous-bus/reflex/transcripts")
 MMX_SRC: str = os.path.expanduser("~/.mmx/projects")
@@ -113,20 +118,9 @@ def _list_src_dirs(src_root: str) -> Tuple[List[str], List[str]]:
 
 def _iter_jsonl(src_dir: str) -> List[str]:
     """Sorted ``*.jsonl`` paths directly under src_dir, plus subagent
-    transcripts at ``<session>/subagents/*.jsonl`` (where Claude Code writes
-    every Agent-tool child; they hold the subagents' per-request usage)."""
-    try:
-        names = os.listdir(src_dir)
-    except OSError:
-        return []
-    paths = [os.path.join(src_dir, n) for n in names if n.endswith(".jsonl")]
-    for n in names:
-        sub = os.path.join(src_dir, n, "subagents")
-        try:
-            paths.extend(os.path.join(sub, m) for m in os.listdir(sub) if m.endswith(".jsonl"))
-        except OSError:
-            continue
-    return sorted(paths)
+    transcripts at any depth under ``<session>/subagents/`` (Agent-tool
+    children and workflow lanes; they hold the subagents' per-request usage)."""
+    return project_dir_files(src_dir)
 
 
 # ── file-level mirror ─────────────────────────────────────────────────────────

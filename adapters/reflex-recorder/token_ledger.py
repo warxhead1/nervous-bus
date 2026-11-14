@@ -51,6 +51,7 @@ _TRANSCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 if _TRANSCRIPTS not in sys.path:
     sys.path.append(_TRANSCRIPTS)
 from project import project_of as _resolve_project  # noqa: E402
+from claude_layout import session_files as _session_files  # noqa: E402
 
 HOME = Path.home()
 DEFAULT_DB = HOME / ".cache" / "nervous-bus" / "reflex" / "tokens.db"
@@ -205,32 +206,9 @@ def project_of(cwd: Optional[str], transcript: Optional[str] = None) -> Optional
 
 
 def _iter_transcripts(root: Path) -> Iterator[tuple[str, Path]]:
-    """(relpath, path) for <dir>/*.jsonl and <dir>/<session>/subagents/*.jsonl."""
-    try:
-        dirs = sorted(os.scandir(root), key=lambda e: e.name)
-    except OSError:
-        return
-    for d in dirs:
-        if not d.is_dir():
-            continue
-        try:
-            names = os.listdir(d.path)
-        except OSError:
-            continue
-        for n in sorted(names):
-            p = os.path.join(d.path, n)
-            if n.endswith(".jsonl"):
-                yield os.path.relpath(p, root), Path(p)
-            else:
-                sub = os.path.join(p, "subagents")
-                try:
-                    subs = sorted(os.listdir(sub))
-                except OSError:
-                    continue
-                for m in subs:
-                    if m.endswith(".jsonl"):
-                        q = os.path.join(sub, m)
-                        yield os.path.relpath(q, root), Path(q)
+    """(relpath, path) for <dir>/*.jsonl and every <dir>/<session>/subagents/**/*.jsonl."""
+    for rel, path in _session_files(str(root)):
+        yield rel, Path(path)
 
 
 def discover(roots=ROOTS) -> dict[str, tuple[str, Path]]:

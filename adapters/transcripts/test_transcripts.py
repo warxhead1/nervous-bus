@@ -61,6 +61,17 @@ class Sources(unittest.TestCase):
         self.assertTrue(by_cmd["git status"].harness)    # output lost
         self.assertTrue(all(c.shell and c.cwd == "/w" for c in by_cmd.values()))
 
+    def test_claude_workflow_lane_is_a_subagent_session(self):
+        proj = os.path.join(self.tmp, ".claude", "projects", "-w")
+        write_jsonl(os.path.join(proj, "s1.jsonl"), claude_pair(1, "ls", "a", False))
+        write_jsonl(os.path.join(proj, "s1", "subagents", "workflows", "wf_1", "agent-w1.jsonl"),
+                    claude_pair(2, "make test", "ok", False, sid="s1"))
+        refs = {os.path.basename(r.path): r for r in transcripts.SOURCES["claude"].sessions()}
+        self.assertEqual(set(refs), {"s1.jsonl", "agent-w1.jsonl"})
+        self.assertTrue(refs["agent-w1.jsonl"].extra["subagent"])
+        self.assertFalse(refs["s1.jsonl"].extra["subagent"])
+        self.assertEqual({c.command for c in self.calls("claude")}, {"ls", "make test"})
+
     def test_codex_modern_command_execution_wins(self):
         path = os.path.join(self.tmp, ".codex", "sessions", "2026", "10", "31", "rollout-x.jsonl")
         write_jsonl(path, [

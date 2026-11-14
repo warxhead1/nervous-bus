@@ -89,6 +89,23 @@ class TestLedger(unittest.TestCase):
             self.assertEqual(s, ("sonnet-worker", 1))
             self.assertEqual(c.execute("SELECT DISTINCT project FROM sessions").fetchall(), [("proj",)])
 
+    def test_workflow_lane_transcript_is_ingested_as_a_subagent(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "projects"
+            (root / "-home-eric-p").mkdir(parents=True)
+            (root / "-home-eric-p" / "s1.jsonl").write_text(
+                _asst("m1", "2026-10-01T00:00:01Z", _usage(cc=10), []) + "\n")
+            lane = root / "-home-eric-p" / "s1" / "subagents" / "workflows" / "wf_1" / "agent-w.jsonl"
+            lane.parent.mkdir(parents=True)
+            lane.write_text(_asst("m2", "2026-10-01T00:00:02Z", _usage(cc=20), []) + "\n"
+                            + _asst("m3", "2026-10-01T00:00:03Z", _usage(cr=30), []) + "\n")
+            (lane.parent / "agent-w.meta.json").write_text(json.dumps({"agentType": "haiku-grunt"}))
+            db = Path(td) / "tokens.db"
+            self.assertEqual(tl.run(db, (("claude", root),))["requests_added"], 3)
+            c = sqlite3.connect(db)
+            row = c.execute("SELECT agent_type, is_subagent FROM sessions WHERE key LIKE '%/workflows/%'").fetchone()
+            self.assertEqual(row, ("haiku-grunt", 1))
+
     def test_archive_copy_without_meta_is_attributed_from_live_dir(self):
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)
