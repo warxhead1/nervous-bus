@@ -73,5 +73,55 @@ class TestPublish(unittest.TestCase):
             self._run(_report())
 
 
+class FakeRun:
+    def __init__(self, state):
+        self.state, self.calls = state, []
+
+    def __call__(self, argv, **kw):
+        self.calls.append(argv[:3])
+        out = {("gh", "issue", "view"): self.state,
+               ("gh", "issue", "create"): "https://github.com/o/r/issues/9",
+               ("bd", "create", argv[2]): '{"id": "nb-1"}'}.get(tuple(argv[:3]), "")
+        return pub.subprocess.CompletedProcess(argv, 0, out, "")
+
+
+class TestOpenIssueIsUpdated(unittest.TestCase):
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.dir = Path(self.td.name)
+        (self.dir / "latest.json").write_text(json.dumps(DIGEST))
+        (self.dir / "latest.md").write_text("by_idle_gap:\n    " + ROW + "\n")
+        (self.dir / "proposals.jsonl").write_text(json.dumps(
+            {"title": "older wording", "candidate_id": "cache_rewrites", "filed": "2026-01-01",
+             "issue": "https://github.com/o/r/issues/4"}) + "\n")
+        (self.dir / "r.md").write_text(_report())
+        self.real_run = pub.subprocess.run
+
+    def tearDown(self):
+        pub.subprocess.run = self.real_run
+        self.td.cleanup()
+
+    def _publish(self, state):
+        fake = FakeRun(state)
+        pub.subprocess.run = fake
+        rec = pub.publish(self.dir / "r.md", self.dir, "o/r", dry_run=False)
+        ledger = [json.loads(x) for x in (self.dir / "proposals.jsonl").read_text().splitlines()]
+        return rec, [c[:3] for c in fake.calls], ledger
+
+    def test_open_issue_gets_a_comment_and_no_new_issue_or_bead(self):
+        rec, calls, ledger = self._publish("OPEN")
+        self.assertEqual(rec["updated_issue"], "https://github.com/o/r/issues/4")
+        self.assertIn(["gh", "issue", "comment"], calls)
+        self.assertNotIn(["gh", "issue", "create"], calls)
+        self.assertFalse(any(c[0] == "bd" for c in calls))
+        self.assertEqual(ledger[-1]["updated_issue"], "https://github.com/o/r/issues/4")
+
+    def test_closed_issue_files_a_new_one(self):
+        rec, calls, _ = self._publish("CLOSED")
+        self.assertEqual(rec["issue"], "https://github.com/o/r/issues/9")
+        self.assertNotIn(["gh", "issue", "comment"], calls)
+        self.assertTrue(any(c[0] == "bd" for c in calls))
+
+
 if __name__ == "__main__":
     unittest.main()
