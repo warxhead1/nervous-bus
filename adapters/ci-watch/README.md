@@ -195,3 +195,14 @@ that checkout isn't present in the running environment.
   expressions is out of scope for a static read. Only the literal `if: false`
   case (the one actually observed in the wild, on hearth) is called out by
   name.
+
+## Sweep: cancel runs nobody is waiting for
+
+`sweep.py` cancels the queued and running `pull_request` runs of a closed PR, and of a commit the PR has moved past. A merged PR otherwise leaves its runs in front of `main` on a single self-hosted runner. It never touches push, schedule or manual runs. A roster entry with `"sweep": false` is skipped.
+
+```bash
+python3 sweep.py --dry-run     # print what would be cancelled
+cp systemd/ci-sweep.* ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user enable --now ci-sweep.timer
+```
+
+The timer runs it every 5 minutes. One pass over the 15 roster repos takes about 20 seconds and about 30 API calls.
