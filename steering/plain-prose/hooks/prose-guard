@@ -181,7 +181,7 @@ def report(where, found, advice):
                                                  ("semicolon(s)", found["semicolon"]), ("dash(es) joining clauses", found["dash"])) if v]
     print(f"plain-prose {where} {', '.join(parts)}.", file=sys.stderr)
     worst = found["tell"] + sorted(long, key=lambda x: -int(x[1].split()[0])) + found["semicolon"] + found["dash"]
-    for line, note, excerpt in worst[:6]:
+    for line, note, excerpt in list(dict.fromkeys(worst))[:6]:          # a line with two semicolons is shown once
         print(f"  line {line} ({note}): {excerpt[:90]}", file=sys.stderr)
     print(
         "One idea per sentence. Split at the semicolon, the dash or the second \"and\", and name who acts. "
