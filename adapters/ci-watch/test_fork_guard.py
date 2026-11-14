@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-HOOK = Path(__file__).resolve().parent / "fork_guard.py"
+HOOK = Path(__file__).resolve().parent / "fork_guard.sh"
 OURS = {"id": 1, "full_name": "warxhead1/nervous-bus"}
 FORK = {"id": 2, "full_name": "stranger/nervous-bus"}
 

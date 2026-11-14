@@ -213,10 +213,10 @@ The timer runs it every 5 minutes. One pass over the 15 roster repos takes about
 
 The workflow `if:` guard and the fork approval setting both live in GitHub. This hook lives on the host, so a pull request cannot remove it.
 
-Install it on the runner of every public repository. The hook is a copy at a fixed host path, never a link into a checkout.
+Install it on the runner of every public repository. The hook is a copy at a fixed host path, never a link into a checkout. The runner accepts a hook only when its path ends in `.sh`, so `fork_guard.sh` is the entry and it runs `fork_guard.py` beside it. A hook path that is missing or has another ending fails every job in "Set up runner".
 
 ```bash
-install -D -m 755 fork_guard.py ~/.local/share/nervous-bus/runner-hooks/fork-guard
+install -D -m 755 -t ~/.local/share/nervous-bus/runner-hooks fork_guard.sh fork_guard.py
 install -D -m 644 systemd/fork-guard.conf ~/.config/systemd/user/actions-runner-<name>.service.d/60-fork-guard.conf
 systemctl --user daemon-reload && systemctl --user restart actions-runner-<name>.service   # only when the runner is idle
 ```
