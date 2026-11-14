@@ -190,7 +190,8 @@ CREATE TABLE runs (
     host_conversation_id TEXT,
     outcome TEXT,
     label_history TEXT NOT NULL DEFAULT '[]',
-    features TEXT NOT NULL DEFAULT '{}'
+    features TEXT NOT NULL DEFAULT '{}',
+    started TEXT
 )
 """
 
@@ -201,12 +202,13 @@ def _make_conn(rows: list[dict]) -> sqlite3.Connection:
     for r in rows:
         conn.execute(
             "INSERT INTO runs (run_id, run_key, session_id, host_conversation_id, "
-            "outcome, label_history, features) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "outcome, label_history, features, started) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 r["run_id"], r.get("run_key"), r.get("session_id"),
                 r.get("host_conversation_id"), r.get("outcome"),
                 json.dumps(r.get("label_history", [])),
                 json.dumps(r.get("features", {})),
+                r.get("started"),
             ),
         )
     return conn
@@ -249,6 +251,31 @@ class TestSessionHasLandedSibling(unittest.TestCase):
              "features": {"has_resolving_commit": True}},
         ])
         run = {"run_id": "self", "run_key": "key-4"}
+        self.assertTrue(_session_has_landed_sibling(conn, run))
+
+    def test_landed_sibling_days_away_does_not_count(self):
+        """A long-lived pane shares one run_key for days. A landing three
+        days after this fragment says nothing about the fragment (#139)."""
+        conn = _make_conn([
+            {"run_id": "self", "run_key": "key-w", "outcome": "abandoned",
+             "started": "2026-11-01T10:00:00Z"},
+            {"run_id": "sib", "run_key": "key-w", "outcome": "landed",
+             "started": "2026-11-04T10:00:00Z"},
+        ])
+        run = {"run_id": "self", "run_key": "key-w", "started": "2026-11-01T10:00:00Z"}
+        self.assertFalse(_session_has_landed_sibling(conn, run))
+
+    def test_landed_sibling_hours_away_counts(self):
+        conn = _make_conn([
+            {"run_id": "self", "run_key": "key-h", "outcome": "abandoned",
+             "started": "2026-11-01T10:00:00Z"},
+            {"run_id": "far", "run_key": "key-h", "outcome": "landed",
+             "started": "2026-11-05T10:00:00Z"},
+            {"run_id": "near", "run_key": "key-h", "outcome": None,
+             "started": "2026-11-01T07:00:00Z",
+             "features": {"has_resolving_commit": True}},
+        ])
+        run = {"run_id": "self", "run_key": "key-h", "started": "2026-11-01T10:00:00Z"}
         self.assertTrue(_session_has_landed_sibling(conn, run))
 
     def test_no_siblings_returns_false(self):

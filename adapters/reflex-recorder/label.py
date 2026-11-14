@@ -943,9 +943,15 @@ def _prefer_higher_tier(
     return b if _source_tier(b[1]) > _source_tier(a[1]) else a
 
 
+#: A sibling segment counts only if it started within this window of the run.
+#: A long-lived lead pane can share one run_key for days, and a landing two
+#: days later says nothing about whether this fragment was abandoned.
+SIBLING_WINDOW = timedelta(hours=24)
+
+
 def _session_has_landed_sibling(conn: sqlite3.Connection, run: dict) -> bool:
-    """True if some OTHER run sharing this run's run_key committed, pushed,
-    or landed.
+    """True if some OTHER run sharing this run's run_key, started within
+    SIBLING_WINDOW of it, committed, pushed, or landed.
 
     Keyed on run_key, NOT session_id/host_conversation_id: those two are
     shared by a parent host session and every subagent/workflow shard it
@@ -969,14 +975,18 @@ def _session_has_landed_sibling(conn: sqlite3.Connection, run: dict) -> bool:
     if not run_key:
         return False
 
-    query = "SELECT outcome, label_history, features FROM runs WHERE run_key = ?"
+    query = "SELECT outcome, label_history, features, started FROM runs WHERE run_key = ?"
     params: list = [run_key]
     if run_id:
         query += " AND run_id != ?"
         params.append(run_id)
 
+    run_start = _parse_ts(run.get("started"))
     cur = conn.execute(query, params)
-    for sib_outcome, sib_history_json, sib_features_json in cur.fetchall():
+    for sib_outcome, sib_history_json, sib_features_json, sib_started in cur.fetchall():
+        sib_start = _parse_ts(sib_started)
+        if run_start and sib_start and abs(sib_start - run_start) > SIBLING_WINDOW:
+            continue
         if sib_outcome == "landed":
             return True
         try:
