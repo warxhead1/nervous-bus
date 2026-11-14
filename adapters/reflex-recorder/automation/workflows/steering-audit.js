@@ -167,7 +167,7 @@ const PROPOSALS = {
 
 phase('Judge')
 const judged = await agent(
-  `You are deciding which changes to our agent steering are worth making. You get three inputs.
+  `You are deciding which changes to our agent steering are worth making. You get four inputs.
 
 1. The deterministic digest (${DIGEST_DIR}/latest.md; read it). Its findings are limits READ from
    the fetched docs, and its tables show what each steering file costs: lines, tokens, and loads
@@ -176,6 +176,11 @@ const judged = await agent(
 ${JSON.stringify(nativeFindings, null, 1)}
 3. Practices from fetched guidance that our steering does not follow (gap/conflict/obsolete):
 ${JSON.stringify(rows, null, 1)}
+4. The rule verdicts (${DIGEST_DIR}/verdicts-latest.md; read it). cut_candidate = a rule whose
+   measured target did not fall after it changed. promote_candidate = an inform rule whose target
+   still recurs, so the next rung is the proposal. "Promotion candidates" = project memories in two
+   projects that read like one ruling: propose moving it to global only if global steering does
+   not already say it.
 
 Doc failure patterns vs what we measure here (detector hits, correction themes, rules that claim
 them): ${JSON.stringify(g.crosswalk || [])}

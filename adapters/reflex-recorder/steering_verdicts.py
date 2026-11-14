@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -149,6 +150,55 @@ def budget_finding(claude_home: Path, budget_toml: Path) -> dict:
             "raised_because": b.get("raised_because")}
 
 
+# ------------------------------------------------------------- promotion
+
+#: A pair of project memories counts as one ruling found twice when their
+#: description + filename terms overlap at least this much (Jaccard).
+PROMOTE_MIN_OVERLAP = 0.2
+PROMOTE_LIMIT = 15
+_STOPWORDS = frozenset(
+    "the a an and or of to in on for is are be was it this that with as at by "
+    "from not never always use when do does feedback project reference user".split())
+_TERM_RE = re.compile(r"[a-z][a-z0-9]{2,}")
+_DESC_RE = re.compile(r"^description:\s*(.+)$", re.M)
+
+
+def _memory_terms(path: Path) -> set[str]:
+    try:
+        head = path.read_text(errors="replace")[:4000]
+    except OSError:
+        return set()
+    m = _DESC_RE.search(head)
+    text = f"{m.group(1) if m else ''} {path.stem.replace('_', ' ').replace('-', ' ')}"
+    return {t for t in _TERM_RE.findall(text.lower()) if t not in _STOPWORDS}
+
+
+def promotion_candidates(projects_dir: Path, min_overlap: float = PROMOTE_MIN_OVERLAP,
+                         limit: int = PROMOTE_LIMIT) -> list[dict]:
+    """Project memories in two different projects that read like the same
+    ruling. ROUTING.md: promote a project ruling to global when a second
+    project rediscovers it. Lexical overlap finds the pairs; the judge decides
+    whether they are one ruling and whether global steering already says it."""
+    docs = []
+    for path in sorted(projects_dir.glob("*/memory/*.md")):
+        if path.name in ("MEMORY.md", "ARCHIVE.md"):
+            continue
+        terms = _memory_terms(path)
+        if len(terms) >= 4:
+            docs.append((path.parent.parent.name, path.name, terms))
+    pairs = []
+    for i, (pa, fa, ta) in enumerate(docs):
+        for pb, fb, tb in docs[i + 1:]:
+            if pa == pb:
+                continue
+            score = len(ta & tb) / len(ta | tb)
+            if score >= min_overlap:
+                pairs.append({"score": round(score, 2), "projects": [pa, pb],
+                              "files": [fa, fb], "shared": sorted(ta & tb)[:8]})
+    pairs.sort(key=lambda p: (-p["score"], p["files"]))
+    return pairs[:limit]
+
+
 # -------------------------------------------------------------- judge gate
 
 def judge_due(digest_dir: Path, chain_tokens: int | None, now: datetime) -> dict:
@@ -219,6 +269,7 @@ def build(conn: sqlite3.Connection, tree: Path, digest_dir: Path, claude_home: P
         "correlational": True,
         "counts": counts, "verdicts": verdicts, "budget": budget,
         "judge": judge_due(digest_dir, budget.get("est_tokens"), now),
+        "promotion": promotion_candidates(claude_home / "projects"),
         "digest_health": digest_health(digest_dir, now),
     }
 
@@ -242,7 +293,14 @@ def to_markdown(rep: dict) -> str:
     lines += ["", "## Judge", "",
               f"due: {j['due']} ({', '.join(j['reasons']) or 'no trigger'}); last audit "
               f"{j['last_audit']}, age {j['age_days']} d, chain growth {j['chain_growth']}",
-              "", "## Digest health", "",
+              "", "## Promotion candidates", "",
+              "Project memories in two projects that read like one ruling.", ""]
+    for p in rep.get("promotion", []):
+        lines.append(f"- {p['score']}: {p['projects'][0]}/{p['files'][0]} ~ "
+                     f"{p['projects'][1]}/{p['files'][1]} ({', '.join(p['shared'])})")
+    if not rep.get("promotion"):
+        lines.append("none")
+    lines += ["", "## Digest health", "",
               f"zero-byte digests: {', '.join(h['zero_byte']) or 'none'}; "
               f"days without a digest (last {DIGEST_HEALTH_DAYS}): "
               f"{', '.join(h['missing_recent_days']) or 'none'}", ""]

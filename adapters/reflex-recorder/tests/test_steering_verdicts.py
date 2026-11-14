@@ -238,3 +238,34 @@ def test_cli_subcommand_prints_written_file_and_errors_when_absent(env, tmp_path
     sv.write(_build(env, tmp_path), digest)
     assert query.main(["--db", str(db), "steering-verdicts", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["verdicts"]["recurs"]["verdict"] == "promote_candidate"
+
+
+def _memory(projects: Path, project: str, name: str, description: str) -> None:
+    d = projects / project / "memory"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(f"---\nname: {name}\ndescription: {description}\n---\nbody\n")
+
+
+def test_promotion_pairs_one_ruling_across_two_projects_only(tmp_path):
+    projects = tmp_path / "projects"
+    rule = "agent worktrees branch from origin main and merge ff-only before editing files"
+    _memory(projects, "proj-a", "feedback_worktree_base.md", rule)
+    _memory(projects, "proj-b", "feedback_worktree_base_branch.md", rule + " again")
+    _memory(projects, "proj-a", "feedback_worktree_base_dup.md", rule)
+    _memory(projects, "proj-c", "project_shader_cache.md", "shader cache warms on boot with vulkan pipelines")
+    _memory(projects, "proj-c", "MEMORY.md", rule)
+    pairs = sv.promotion_candidates(projects)
+    assert {tuple(p["projects"]) for p in pairs} == {("proj-a", "proj-b")}
+    assert {p["files"][1] for p in pairs} == {"feedback_worktree_base_branch.md"}
+    assert all(p["score"] >= sv.PROMOTE_MIN_OVERLAP for p in pairs)
+    assert "feedback" not in pairs[0]["shared"] and "agent" in pairs[0]["shared"]
+
+
+def test_promotion_candidates_reach_the_report_and_table(env, tmp_path):
+    projects = tmp_path / "claude" / "projects"
+    rule = "never run sudo without asking the operator first on this host"
+    _memory(projects, "proj-a", "feedback_sudo.md", rule)
+    _memory(projects, "proj-b", "feedback_sudo_ask.md", rule)
+    rep = _build(env, tmp_path)
+    assert rep["promotion"][0]["files"] == ["feedback_sudo.md", "feedback_sudo_ask.md"]
+    assert "proj-a/feedback_sudo.md ~ proj-b/feedback_sudo_ask.md" in sv.to_markdown(rep)
