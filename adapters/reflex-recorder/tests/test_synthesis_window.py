@@ -2,7 +2,7 @@
 
 Covers:
 1. A detector given since_ts reads 0 rows for a run started before the
-   window (worktree_leak + repeated_question — a runs-driven query and a
+   window (worktree_leak + reread_same_file — a runs-driven query and a
    run_events-driven query, the two SQL shapes present across the built-in
    detectors).
 2. BaseDetector._call_detect() introspection: a detector whose detect() does
@@ -13,6 +13,7 @@ Covers:
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
@@ -29,7 +30,7 @@ for _p in (_REC_DIR, _TESTS_DIR):
 import synthesis as syn
 from detectors.base import BaseDetector, PatternCandidate, ensure_detector_schema
 from detectors.worktree_leak import WorktreeLeakDetector
-from detectors.repeated_question import RepeatedQuestionDetector
+from detectors.reread_same_file import REREAD_THRESHOLD, RereadSameFileDetector
 
 from test_synthesis import _make_conn, _insert_run  # noqa: E402 (shared fixture helpers)
 
@@ -140,32 +141,28 @@ class TestWorktreeLeakWindow:
         )
 
 
-class TestRepeatedQuestionWindow:
+class TestRereadSameFileWindow:
     """run_events-driven detector (two-step run_id-scoped query)."""
 
     def test_since_ts_excludes_events_outside_window(self):
         conn = _make_conn()
         old_ts = _days_ago(90)
-        recent_ts = _days_ago(1)
-        # Same question class asked in two OLD runs -> would fire unbounded.
-        for i in range(2):
-            rid = f"old-q-{i}"
-            _insert_run(
-                conn, rid, project="proj", started=old_ts, ended=old_ts,
-                close_reason="idle_timeout",
-            )
+        rid = "old-reads"
+        _insert_run(conn, rid, project="proj", started=old_ts, ended=old_ts,
+                    close_reason="idle_timeout")
+        summary = json.dumps({"file_path": "/repo/src/main.rs"})
+        for seq in range(REREAD_THRESHOLD + 2):
             _insert_event(
-                conn, rid, "permission_requested",
-                '{"data": {"tool_summary": "Continue with the deploy?"}}',
+                conn, rid, "bus.agent.activity.v1",
+                json.dumps({"data": {"tool_name": "Read", "tool_summary": summary}}),
+                seq=seq,
             )
 
-        recent_cutoff = _days_ago(30)
-        detector = RepeatedQuestionDetector(conn)
-
+        detector = RereadSameFileDetector(conn)
         unbounded = detector.detect(conn, since_ts=None)
-        windowed = detector.detect(conn, since_ts=recent_cutoff)
+        windowed = detector.detect(conn, since_ts=_days_ago(30))
 
-        assert len(unbounded) >= 1, "sanity: unbounded scan sees the repeated question"
+        assert len(unbounded) >= 1, "sanity: unbounded scan sees the rereads"
         assert windowed == [], "windowed scan must not see events entirely outside it"
 
 

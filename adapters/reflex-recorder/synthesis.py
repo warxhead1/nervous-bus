@@ -62,7 +62,6 @@ from detectors.base import (
 )
 from detectors.worktree_leak import WorktreeLeakDetector
 from detectors.rebuild_cache_miss import RebuildCacheMissDetector
-from detectors.repeated_question import RepeatedQuestionDetector
 from detectors.edit_build_fail_revert import EditBuildFailRevertDetector
 from detectors.reread_same_file import RereadSameFileDetector
 from detectors.red_baseline_dispatch import RedBaselineDispatchDetector
@@ -74,7 +73,6 @@ from detectors.param_sweep_thrash import ParamSweepThrashDetector
 from detectors.gate_bound_loosened import GateBoundLoosenedDetector
 from detectors.foreground_wait import ForegroundWaitDetector
 from detectors.guard_denial import GuardDenialDetector
-from detectors.kb_recall_gap import KbRecallGapDetector
 from detectors.failure_taxonomy import FailureTaxonomyDetector
 from detectors.skill_opportunity import SkillOpportunityDetector
 from detectors.user_correction import UserCorrectionDetector
@@ -154,7 +152,7 @@ CLASSIFIER_MIN_CONFIRMED_FAILURES: int = 5
 
 # Detector registry — explicit import list (small + auditable).
 # Built-in detectors shipped with the public engine:
-#   - generic tier (project-agnostic): worktree_leak, reread_same_file, repeated_question
+#   - generic tier (project-agnostic): worktree_leak, reread_same_file
 #   - rust/cargo ecosystem tier (any worktree-based Rust project): rebuild_cache_miss,
 #     edit_build_fail_revert — these key on `cargo` alone, NOT any single project.
 # Project-SPECIFIC detectors are contributed by private adapters in
@@ -162,7 +160,6 @@ CLASSIFIER_MIN_CONFIRMED_FAILURES: int = 5
 _BUILTIN_DETECTOR_CLASSES: list[type[BaseDetector]] = [
     WorktreeLeakDetector,
     RebuildCacheMissDetector,
-    RepeatedQuestionDetector,
     EditBuildFailRevertDetector,
     RereadSameFileDetector,
     RedBaselineDispatchDetector,
@@ -181,10 +178,6 @@ _BUILTIN_DETECTOR_CLASSES: list[type[BaseDetector]] = [
     # them doesn't matter, only "before FailureTaxonomyDetector" matters.
     UserCorrectionDetector,
     SkillOpportunityDetector,
-    # KbRecallGapDetector MUST come after RepeatedQuestionDetector (it reads
-    # repeated_question's detector_hits rows from THIS SAME synthesis pass —
-    # see its module docstring) and before FailureTaxonomyDetector (below).
-    KbRecallGapDetector,
     # FailureTaxonomyDetector MUST stay last: it reads detector_hits recorded by
     # every detector above it in THIS SAME synthesis pass (see its module
     # docstring). Appending a new built-in detector after this line would make
@@ -1609,7 +1602,6 @@ def run_synthesis(
         _DETECTOR_RUNGS = {
             "rebuild_cache_miss": "eliminate",
             "worktree_leak": "automate",
-            "repeated_question": "automate",
             "reread_same_file": "automate",
             "edit_build_fail_revert": "inform",
             "file_reads_to_finding": "inform",

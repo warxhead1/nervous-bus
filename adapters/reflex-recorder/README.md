@@ -9,7 +9,7 @@ and emits `bus.agent.run.closed.v1` on each run close.
 This directory is the **generic Reflexarc engine** and is PUBLIC. It ships:
 - the pipeline (`recorder`/`segment`/`enrich`/`store`/`query`),
 - outcome attribution (`label`/`git_outcome`),
-- **generic** detectors (`worktree_leak`, `reread_same_file`, `repeated_question`,
+- **generic** detectors (`worktree_leak`, `reread_same_file`,
   `file_reads_to_finding`) and **rust-ecosystem** detectors (`rebuild_cache_miss`,
   `edit_build_fail_revert` — they key on `cargo` alone, not any one project),
 - **orchestration-quality** detectors (`red_baseline_dispatch`,
@@ -164,6 +164,13 @@ adapters/reflex-recorder/
     test_segment.py    # 28 unit tests for segmentation logic
     test_query.py      # 69 unit tests for query layer
 ```
+
+Retired detectors (their old `detector_hits` rows stay in runs.db):
+
+| detector | retired | why |
+|---|---|---|
+| `repeated_question` | 2026-11 (#147) | Every AskUserQuestion collapsed into one sanitized class per project. 0 true positives in 20 hits. A rebuild would key on the transcript's `questions[].question`. |
+| `kb_recall_gap` | 2026-11 (#147) | It needs `kb.*` events, which run_events has not held since 2026-09-24, and it only scored runs `repeated_question` flagged. |
 
 ## Skill & dispatch usage
 
