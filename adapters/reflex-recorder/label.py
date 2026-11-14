@@ -209,17 +209,15 @@ def _gh_work_dir(worktree_path: Optional[str], repo_root: Optional[str]) -> Opti
 
 
 def _pick_pr(prs: list[dict]) -> Optional[dict]:
-    """One branch can carry several PRs. A merge wins, then an open PR, then
-    the most recently closed one."""
+    """One branch can carry several PRs. Pick the one `gh pr view <branch>`
+    would: an open PR, else the most recently created one. The list path and
+    the view path then give one branch the same verdict."""
     if not prs:
         return None
     for p in prs:
-        if (p.get("state") or "").upper() == "MERGED" or p.get("mergedAt"):
-            return p
-    for p in prs:
         if (p.get("state") or "").upper() == "OPEN":
             return p
-    return max(prs, key=lambda p: p.get("closedAt") or "")
+    return max(prs, key=lambda p: p.get("createdAt") or "")
 
 
 def _gh_pr_index(work_dir: str) -> Optional[tuple[dict, bool]]:
@@ -227,7 +225,7 @@ def _gh_pr_index(work_dir: str) -> Optional[tuple[dict, bool]]:
     complete). complete is False when the list hit _PR_LIST_LIMIT."""
     out = _run_cmd_cwd(
         ["gh", "pr", "list", "--state", "all", "--limit", str(_PR_LIST_LIMIT),
-         "--json", "headRefName,state,mergedAt,closedAt"],
+         "--json", "headRefName,state,mergedAt,closedAt,createdAt"],
         cwd=work_dir,
         timeout=60,
     )

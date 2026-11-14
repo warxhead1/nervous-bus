@@ -70,15 +70,26 @@ class PrListTests(unittest.TestCase):
         self.assertEqual(got, ("landed", "pr_merge"))
         self.assertEqual(gh.count("view"), 1)
 
-    def test_merged_pr_wins_over_a_later_closed_one(self):
-        gh = FakeGh([
-            {"headRefName": "a", "state": "CLOSED", "closedAt": "2026-11-05T00:00:00Z"},
-            {"headRefName": "a", "state": "MERGED", "mergedAt": "2026-11-01T00:00:00Z"},
-        ])
+    def test_picks_the_pr_gh_pr_view_would(self):
+        """gh pr view <branch> returns an open PR, else the newest one. The
+        list path must agree, or one branch gets two verdicts."""
+        newest_closed = [
+            {"headRefName": "a", "state": "MERGED", "createdAt": "2026-11-01T00:00:00Z",
+             "mergedAt": "2026-11-01T01:00:00Z"},
+            {"headRefName": "a", "state": "CLOSED", "createdAt": "2026-11-05T00:00:00Z"},
+        ]
+        open_and_merged = [
+            {"headRefName": "b", "state": "MERGED", "createdAt": "2026-11-01T00:00:00Z",
+             "mergedAt": "2026-11-01T01:00:00Z"},
+            {"headRefName": "b", "state": "OPEN", "createdAt": "2026-10-01T00:00:00Z"},
+        ]
+        gh = FakeGh(newest_closed + open_and_merged)
         with patch.object(label, "_run_cmd_cwd", side_effect=gh), \
                 patch.object(label, "_git_has_revert", return_value=False):
-            got = in_pass(lambda: label.label_from_pr("a", None, self.repo))
-        self.assertEqual(got, ("landed", "pr_merge"))
+            got = in_pass(lambda: [label.label_from_pr("a", None, self.repo),
+                                   label.label_from_pr("b", None, self.repo)])
+        self.assertEqual(got, [("abandoned", "pr_closed_unmerged"), None],
+                         "an open PR keeps the branch in flight")
 
     def test_reaped_worktree_asks_the_run_repo(self):
         gh = FakeGh([], view=None)
