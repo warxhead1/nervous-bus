@@ -23,6 +23,10 @@ Verdicts (first match wins):
   keep               a measured improvement, or no completed window to judge yet
                      (`window_open` / `no_change_point`).
 
+The report also lists successes: each completed window where a rule's target
+hit rate fell by SUCCESS_MIN_DROP or more of its before rate. The nightly
+digest shows them next to the open struggles.
+
 Correlational, like `remediation`: other changes in the same window confound it.
 A candidate is a prompt for the judge (automation/workflows/steering-audit.js),
 never an edit.
@@ -128,6 +132,31 @@ def rule_verdict(rule: dict, rows: list[dict], ever: dict[str, int],
     zero = all(not r["before_per_100"] and not r["after_per_100"] for r in usable)
     return {**base, "verdict": "cut_candidate",
             "reason": "zero_before_after" if zero else "no_effect", "evidence": ev}
+
+
+SUCCESS_MIN_DROP = 0.25
+
+
+def successes(rows: list[dict], min_drop: float = SUCCESS_MIN_DROP) -> list[dict]:
+    """Completed before/after windows where the target's hit rate fell by at
+    least `min_drop` of its before rate. One entry per rule and target, from
+    its newest such change. Newest change first."""
+    out = []
+    seen = set()
+    for r in sorted(rows, key=lambda r: r["at"], reverse=True):
+        if (r["rule"], r["target"]) in seen:
+            continue
+        before, after = r["before_per_100"], r["after_per_100"]
+        if not r["window_complete"] or not before or after is None:
+            continue
+        drop = (before - after) / before
+        if drop >= min_drop:
+            seen.add((r["rule"], r["target"]))
+            out.append({"rule": r["rule"], "target": r["target"], "commit": r["commit"],
+                        "at": r["at"], "before_per_100": before, "after_per_100": after,
+                        "drop": round(drop, 2)})
+    out.sort(key=lambda s: (s["at"], s["rule"], s["target"]), reverse=True)
+    return out
 
 
 # ------------------------------------------------------------------ budget
@@ -268,10 +297,16 @@ def build(conn: sqlite3.Connection, tree: Path, digest_dir: Path, claude_home: P
         "window_days": window_days, "recent_days": recent_days,
         "correlational": True,
         "counts": counts, "verdicts": verdicts, "budget": budget,
+        "successes": successes([r for r in rows if r["rule"] in rules]),
         "judge": judge_due(digest_dir, budget.get("est_tokens"), now),
         "promotion": promotion_candidates(claude_home / "projects"),
         "digest_health": digest_health(digest_dir, now),
     }
+
+
+def success_lines(items: list[dict]) -> list[str]:
+    return [f"- {s['rule']} ({s['target']}): {s['before_per_100']} -> {s['after_per_100']} "
+            f"per 100 runs after {s['commit']} on {s['at'][:10]}" for s in items]
 
 
 def to_markdown(rep: dict) -> str:
@@ -283,6 +318,8 @@ def to_markdown(rep: dict) -> str:
     for rid, v in sorted(rep["verdicts"].items(), key=lambda kv: (order[kv[1]["verdict"]], kv[0])):
         lines.append(f"| {rid} | {v['rung']} | {v['verdict']} | {v['reason']} | "
                      f"{', '.join(v['targets']) or '-'} |")
+    lines += ["", "## Successes", ""]
+    lines += success_lines(rep.get("successes", [])) or ["none"]
     lines += ["", "## Budget", ""]
     if b["status"] == "unmeasurable":
         lines.append(f"unmeasurable: {b['reason']}")
