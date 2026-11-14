@@ -18,7 +18,8 @@ Order of resolution for project_of(cwd):
      name is the answer when git cannot say (deleted, not a repo)
   4. anywhere else, git on the cwd itself when it exists (cached, bounded timeout)
   5. generic layout: .claude/worktrees, */worktrees/<project>/<name>,
-     <project>.worktrees/..., agent-<id> / wt-* basename -> parent directory
+     <project>.worktrees/..., agent-<id> / wt-* basename -> parent directory,
+     then */projects/<project>/... (a session captured on another machine)
 None means "cannot tell". Callers keep their own sentinel for it; the basename of an
 unrecognised path is never invented.
 
@@ -164,6 +165,12 @@ def _generic_layout(path: str) -> Optional[str]:
                 return name
     if len(parts) >= 2 and _LANE_RE.match(parts[-1]):
         return _usable(parts[-2])
+    # another machine's projects dir (/Users/u/projects/foo): its child is the project
+    for i, seg in enumerate(parts[:-1]):
+        if seg == "projects":
+            name = _usable(parts[i + 1])
+            if name:
+                return name
     return None
 
 
