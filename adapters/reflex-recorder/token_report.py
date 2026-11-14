@@ -863,6 +863,27 @@ def attach_prior_proposals(rep: dict, proposals: Path) -> None:
     rep["prior_proposals"] = rows[-20:]
 
 
+CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
+# Settings and env knobs a token-audit proposal may want to change. Only these
+# names are read, so no other settings value (or env secret) reaches the digest.
+SETTING_KNOBS = ("autoCompactWindow", "promptCacheTtl", "subagentPromptCacheTtl")
+ENV_KNOBS = ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+             "CLAUDE_CODE_PROMPT_CACHE_TTL", "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL")
+
+
+def attach_effective_settings(rep: dict, settings: Path = CLAUDE_SETTINGS) -> None:
+    """The compaction and cache TTL knobs already set in settings.json, so a
+    proposal states how it interacts with them instead of re-proposing them."""
+    try:
+        data = json.loads(settings.read_text())
+    except (OSError, ValueError):
+        return
+    env = data.get("env") if isinstance(data.get("env"), dict) else {}
+    found = {k: data[k] for k in SETTING_KNOBS if k in data}
+    found.update({f"env.{k}": env[k] for k in ENV_KNOBS if k in env})
+    rep["effective_settings"] = found
+
+
 def to_markdown(rep: dict) -> str:
     lines = [f"# Token waste digest — last {rep['window_days']}d (since {rep['since']}Z)", "",
              f"Total {rep['total_iet']:,} input-equivalent tokens. {rep['weights']}", "",
@@ -875,6 +896,10 @@ def to_markdown(rep: dict) -> str:
                      f"{t['hit_ratio']} | {t['iet']:,} |")
     if rep.get("requests"):
         lines += [""] + requests_md(rep["requests"])
+    if "effective_settings" in rep:
+        lines += ["", "## Effective settings (~/.claude/settings.json)", ""]
+        lines += [f"- {k} = {json.dumps(v)}" for k, v in rep["effective_settings"].items()] \
+            or ["- none of the compaction or cache TTL knobs is set"]
     lines += ["", "## Waste candidates (ranked)", ""]
     for i, c in enumerate(rep["candidates"], 1):
         req = f", {c['requests']:,} requests" if "requests" in c else ""
@@ -1024,6 +1049,7 @@ def main() -> int:
         return 0
     rep = build(conn, a.days)
     attach_prior_proposals(rep, a.proposals)
+    attach_effective_settings(rep)
     text = to_markdown(rep) if a.md else json.dumps(rep, indent=1)
     if a.out:
         a.out.parent.mkdir(parents=True, exist_ok=True)

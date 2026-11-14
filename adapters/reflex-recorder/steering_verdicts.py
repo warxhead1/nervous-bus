@@ -23,6 +23,10 @@ Verdicts (first match wins):
   keep               a measured improvement, or no completed window to judge yet
                      (`window_open` / `no_change_point`).
 
+The report also lists successes: each completed window where a rule's target
+hit rate fell by SUCCESS_MIN_DROP or more of its before rate. The nightly
+digest shows them next to the open struggles.
+
 Correlational, like `remediation`: other changes in the same window confound it.
 A candidate is a prompt for the judge (automation/workflows/steering-audit.js),
 never an edit.
@@ -35,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -129,6 +134,31 @@ def rule_verdict(rule: dict, rows: list[dict], ever: dict[str, int],
             "reason": "zero_before_after" if zero else "no_effect", "evidence": ev}
 
 
+SUCCESS_MIN_DROP = 0.25
+
+
+def successes(rows: list[dict], min_drop: float = SUCCESS_MIN_DROP) -> list[dict]:
+    """Completed before/after windows where the target's hit rate fell by at
+    least `min_drop` of its before rate. One entry per rule and target, from
+    its newest such change. Newest change first."""
+    out = []
+    seen = set()
+    for r in sorted(rows, key=lambda r: r["at"], reverse=True):
+        if (r["rule"], r["target"]) in seen:
+            continue
+        before, after = r["before_per_100"], r["after_per_100"]
+        if not r["window_complete"] or not before or after is None:
+            continue
+        drop = (before - after) / before
+        if drop >= min_drop:
+            seen.add((r["rule"], r["target"]))
+            out.append({"rule": r["rule"], "target": r["target"], "commit": r["commit"],
+                        "at": r["at"], "before_per_100": before, "after_per_100": after,
+                        "drop": round(drop, 2)})
+    out.sort(key=lambda s: (s["at"], s["rule"], s["target"]), reverse=True)
+    return out
+
+
 # ------------------------------------------------------------------ budget
 
 def budget_finding(claude_home: Path, budget_toml: Path) -> dict:
@@ -147,6 +177,55 @@ def budget_finding(claude_home: Path, budget_toml: Path) -> dict:
             "pct_of_ceiling": round(100 * chain["est_tokens"] / ceiling, 1),
             "status": "over" if chain["est_tokens"] > ceiling else "within",
             "raised_because": b.get("raised_because")}
+
+
+# ------------------------------------------------------------- promotion
+
+#: A pair of project memories counts as one ruling found twice when their
+#: description + filename terms overlap at least this much (Jaccard).
+PROMOTE_MIN_OVERLAP = 0.2
+PROMOTE_LIMIT = 15
+_STOPWORDS = frozenset(
+    "the a an and or of to in on for is are be was it this that with as at by "
+    "from not never always use when do does feedback project reference user".split())
+_TERM_RE = re.compile(r"[a-z][a-z0-9]{2,}")
+_DESC_RE = re.compile(r"^description:\s*(.+)$", re.M)
+
+
+def _memory_terms(path: Path) -> set[str]:
+    try:
+        head = path.read_text(errors="replace")[:4000]
+    except OSError:
+        return set()
+    m = _DESC_RE.search(head)
+    text = f"{m.group(1) if m else ''} {path.stem.replace('_', ' ').replace('-', ' ')}"
+    return {t for t in _TERM_RE.findall(text.lower()) if t not in _STOPWORDS}
+
+
+def promotion_candidates(projects_dir: Path, min_overlap: float = PROMOTE_MIN_OVERLAP,
+                         limit: int = PROMOTE_LIMIT) -> list[dict]:
+    """Project memories in two different projects that read like the same
+    ruling. ROUTING.md: promote a project ruling to global when a second
+    project rediscovers it. Lexical overlap finds the pairs; the judge decides
+    whether they are one ruling and whether global steering already says it."""
+    docs = []
+    for path in sorted(projects_dir.glob("*/memory/*.md")):
+        if path.name in ("MEMORY.md", "ARCHIVE.md"):
+            continue
+        terms = _memory_terms(path)
+        if len(terms) >= 4:
+            docs.append((path.parent.parent.name, path.name, terms))
+    pairs = []
+    for i, (pa, fa, ta) in enumerate(docs):
+        for pb, fb, tb in docs[i + 1:]:
+            if pa == pb:
+                continue
+            score = len(ta & tb) / len(ta | tb)
+            if score >= min_overlap:
+                pairs.append({"score": round(score, 2), "projects": [pa, pb],
+                              "files": [fa, fb], "shared": sorted(ta & tb)[:8]})
+    pairs.sort(key=lambda p: (-p["score"], p["files"]))
+    return pairs[:limit]
 
 
 # -------------------------------------------------------------- judge gate
@@ -218,9 +297,16 @@ def build(conn: sqlite3.Connection, tree: Path, digest_dir: Path, claude_home: P
         "window_days": window_days, "recent_days": recent_days,
         "correlational": True,
         "counts": counts, "verdicts": verdicts, "budget": budget,
+        "successes": successes([r for r in rows if r["rule"] in rules]),
         "judge": judge_due(digest_dir, budget.get("est_tokens"), now),
+        "promotion": promotion_candidates(claude_home / "projects"),
         "digest_health": digest_health(digest_dir, now),
     }
+
+
+def success_lines(items: list[dict]) -> list[str]:
+    return [f"- {s['rule']} ({s['target']}): {s['before_per_100']} -> {s['after_per_100']} "
+            f"per 100 runs after {s['commit']} on {s['at'][:10]}" for s in items]
 
 
 def to_markdown(rep: dict) -> str:
@@ -232,6 +318,8 @@ def to_markdown(rep: dict) -> str:
     for rid, v in sorted(rep["verdicts"].items(), key=lambda kv: (order[kv[1]["verdict"]], kv[0])):
         lines.append(f"| {rid} | {v['rung']} | {v['verdict']} | {v['reason']} | "
                      f"{', '.join(v['targets']) or '-'} |")
+    lines += ["", "## Successes", ""]
+    lines += success_lines(rep.get("successes", [])) or ["none"]
     lines += ["", "## Budget", ""]
     if b["status"] == "unmeasurable":
         lines.append(f"unmeasurable: {b['reason']}")
@@ -242,7 +330,14 @@ def to_markdown(rep: dict) -> str:
     lines += ["", "## Judge", "",
               f"due: {j['due']} ({', '.join(j['reasons']) or 'no trigger'}); last audit "
               f"{j['last_audit']}, age {j['age_days']} d, chain growth {j['chain_growth']}",
-              "", "## Digest health", "",
+              "", "## Promotion candidates", "",
+              "Project memories in two projects that read like one ruling.", ""]
+    for p in rep.get("promotion", []):
+        lines.append(f"- {p['score']}: {p['projects'][0]}/{p['files'][0]} ~ "
+                     f"{p['projects'][1]}/{p['files'][1]} ({', '.join(p['shared'])})")
+    if not rep.get("promotion"):
+        lines.append("none")
+    lines += ["", "## Digest health", "",
               f"zero-byte digests: {', '.join(h['zero_byte']) or 'none'}; "
               f"days without a digest (last {DIGEST_HEALTH_DAYS}): "
               f"{', '.join(h['missing_recent_days']) or 'none'}", ""]

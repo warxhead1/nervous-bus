@@ -23,8 +23,12 @@ inside [started, ended]):
      - isMeta is not true (isMeta=True lines are hook-injected context,
        e.g. tool-result stand-ins — NOT something the human typed)
      - isCompactSummary is not true (auto-generated context-carry text)
-     - message.content is a *string* (list content is a tool_result blob
-       the harness attached to a synthetic "user" turn, not a human message)
+     - message.content is a *string*, or a list of only text/image blocks
+       (a pasted image with a message). A list with a tool_result block is
+       the harness's synthetic "user" turn, not a human message.
+     - "[Request interrupted by user ...]" is not a turn. It marks the next
+       genuine turn, which also records the `interrupted` signature.
+   A turn with a correction cue and no theme records `unthemed`.
    Measured against a live transcript 2026-09-26: 1228 user-typed rows,
    1214 non-meta, of which 58 have string content — the rest are tool_result
    lists. That is the population this detector scans.
@@ -338,7 +342,10 @@ THEME_KEYWORDS: dict[str, re.Pattern] = {
     ),
     "ask_operator_for_automatable": re.compile(
         r"\bwhy\s+are\s+you\s+asking\s+me\b|\bjust\s+do\s+it\b|\bautomate\s+this\b|"
-        r"\bdon'?t\s+ask\s+me\b|\bstop\s+asking\b",
+        r"\bdon'?t\s+ask\s+me\b|\bstop\s+asking\b|"
+        r"\bmy\s+go[\s-]?ahead\b|\bwhy\s+do\s+you\s+need\s+(?:my|me)\b|"
+        r"\byou\s+don'?t\s+need\s+(?:my\s+)?(?:permission|approval|sign[\s-]?off)\b|"
+        r"\bstop\s+asking\s+(?:for\s+)?(?:permission|approval)\b",
         re.IGNORECASE,
     ),
     "over_explained_output": re.compile(
@@ -378,7 +385,51 @@ def match_themes(text: str) -> list[str]:
     return themes
 
 
+#: Agent kinds whose "user" turns are written by an orchestrator or a recipe,
+#: never typed by a person. A sandboxed MiniMax lane's prompt is its mission.
+_NO_HUMAN_KINDS = frozenset({"claude-code-minimax"})
+
+#: Signature for a turn with a correction cue that matches no theme. It keeps
+#: the classifier's miss rate visible, and its turns are where new themes
+#: come from.
+UNTHEMED = "unthemed"
+#: Signature for the first human turn after the user interrupted the agent.
+#: An interrupt is a correction whatever the words after it say.
+INTERRUPTED = "interrupted"
+
+
+def classify_turn(text: str, after_interrupt: bool = False) -> list[str]:
+    """Signatures for one genuine human turn: its themes, or UNTHEMED when it
+    carries a correction cue and no theme, plus INTERRUPTED when it follows an
+    interrupt."""
+    sigs = match_themes(text)
+    if not sigs and _has_correction_cue(text[:_MATCH_CHAR_CAP]):
+        sigs = [UNTHEMED]
+    if after_interrupt:
+        sigs.append(INTERRUPTED)
+    return sigs
+
+
 # ── Claude Code transcript source ───────────────────────────────────────────
+
+_INTERRUPT_MARKER_RE = re.compile(r"^\s*\[Request interrupted by user\b")
+
+
+def _typed_text(content) -> Optional[str]:
+    """Text the human typed, or None. A string is typed text. A list counts only
+    when it holds nothing but text and image blocks (a pasted image with a
+    message). Any tool_result block makes it a harness turn."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list) or not content:
+        return None
+    parts = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") not in ("text", "image"):
+            return None
+        if block.get("type") == "text" and isinstance(block.get("text"), str):
+            parts.append(block["text"])
+    return "\n".join(parts) if parts else None
 
 def _index_claude_transcripts(root: Path) -> dict[str, Path]:
     """Map session_id -> transcript path, one pass over the archive tree.
@@ -395,12 +446,14 @@ def _index_claude_transcripts(root: Path) -> dict[str, Path]:
     return index
 
 
-def _iter_claude_turns(path: Path) -> Iterator[tuple[float, str]]:
-    """Yield (unix_ts, genuine_stripped_text) for each real human turn in a
-    Claude Code transcript file. Skips isMeta / isCompactSummary / list-content
-    rows and rows that strip down to nothing. Never raises — a corrupt line is
-    skipped, not fatal to the whole file.
+def _iter_claude_turns(path: Path) -> Iterator[tuple[float, str, bool]]:
+    """Yield (unix_ts, genuine_stripped_text, after_interrupt) for each real
+    human turn in a Claude Code transcript file. Skips isMeta /
+    isCompactSummary / tool_result rows and rows that strip down to nothing.
+    An interrupt marker is not a turn: it flags the next turn instead. Never
+    raises — a corrupt line is skipped, not fatal to the whole file.
     """
+    pending_interrupt = False
     try:
         fh = open(path, "r", encoding="utf-8", errors="replace")
     except OSError:
@@ -421,8 +474,11 @@ def _iter_claude_turns(path: Path) -> Iterator[tuple[float, str]]:
             message = obj.get("message")
             if not isinstance(message, dict):
                 continue
-            content = message.get("content")
-            if not isinstance(content, str):
+            content = _typed_text(message.get("content"))
+            if content is None:
+                continue
+            if _INTERRUPT_MARKER_RE.match(content):
+                pending_interrupt = True
                 continue
             stripped = _strip_envelope(content)
             if not stripped:
@@ -431,7 +487,8 @@ def _iter_claude_turns(path: Path) -> Iterator[tuple[float, str]]:
             ts = _parse_iso_ts(ts_raw) if isinstance(ts_raw, str) else None
             if ts is None:
                 continue
-            yield ts, stripped
+            yield ts, stripped, pending_interrupt
+            pending_interrupt = False
 
 
 def _parse_iso_ts(value: str) -> Optional[float]:
@@ -524,7 +581,7 @@ class UserCorrectionDetector(BaseDetector):
         for run_id, project, agent_kind, session_id, started, ended in rows:
             st = _iso_to_epoch(started)
             en = _iso_to_epoch(ended)
-            if st is None or en is None:
+            if st is None or en is None or agent_kind in _NO_HUMAN_KINDS:
                 continue
             by_session.setdefault(session_id, []).append((run_id, project, st, en))
             if agent_kind == "codex-cli":
@@ -535,15 +592,15 @@ class UserCorrectionDetector(BaseDetector):
         # project -> theme -> set(run_id)
         hits: dict[str, dict[str, set[str]]] = {}
 
-        def _record(session_id: str, ts: float, text: str) -> None:
+        def _record(session_id: str, ts: float, text: str,
+                    after_interrupt: bool = False) -> None:
             candidates_for_session = by_session.get(session_id)
             if not candidates_for_session:
                 return
             run_id, project = _resolve_run(candidates_for_session, ts)
             if run_id is None:
                 return
-            themes = match_themes(text)
-            for theme in themes:
+            for theme in classify_turn(text, after_interrupt):
                 hits.setdefault(project, {}).setdefault(theme, set()).add(run_id)
 
         if claude_sessions:
@@ -552,8 +609,8 @@ class UserCorrectionDetector(BaseDetector):
                 path = index.get(session_id)
                 if path is None:
                     continue
-                for ts, text in _iter_claude_turns(path):
-                    _record(session_id, ts, text)
+                for ts, text, after_interrupt in _iter_claude_turns(path):
+                    _record(session_id, ts, text, after_interrupt)
 
         if codex_sessions and self.codex_history_path.is_file():
             for session_id, ts, text in _iter_codex_turns(

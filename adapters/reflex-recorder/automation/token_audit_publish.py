@@ -11,10 +11,12 @@ is the one deterministic gate between that report and the work queue:
      appear verbatim in the digest markdown;
   3. refuse duplicates: same title ever, or same candidate_id within
      CANDIDATE_COOLDOWN_DAYS (its effect is not readable yet);
-  4. file a bead (nervous-bus .beads, label token-efficiency) and, with
+  4. when an earlier issue for the same candidate is still open, comment the
+     new number and proposal on it instead of filing again (no new bead);
+  5. otherwise file a bead (nervous-bus .beads, label token-efficiency) and, with
      --gh-repo, a GitHub issue (default: the PRIVATE claude-hook-fast repo,
      never the public nervous-bus repo);
-  5. append the proposal + the candidate's IET at filing to proposals.jsonl,
+  6. append the proposal + the candidate's IET at filing to proposals.jsonl,
      which token_report.py reads back to show whether the fix moved the number.
 
 Rejections are written next to the report as <report>.rejected.txt and exit 2.
@@ -109,6 +111,23 @@ def _body(prop: dict, cand: dict, report: Path) -> str:
             f"**Evidence (digest rows):**\n{ev}\n\n**Verify after landing:** {prop['verify']}\n")
 
 
+def _issue_open(url: str) -> bool:
+    out = subprocess.run(["gh", "issue", "view", url, "--json", "state", "-q", ".state"],
+                         capture_output=True, text=True, timeout=60)
+    if out.returncode != 0:
+        raise RuntimeError(f"gh issue view failed: {out.stderr.strip()[:300]}")
+    return out.stdout.strip() == "OPEN"
+
+
+def open_prior_issue(prior: list[dict], cid: str, is_open=_issue_open) -> str | None:
+    """The newest issue filed for this candidate that is still open."""
+    for pp in reversed(prior):
+        url = pp.get("issue") or pp.get("updated_issue")
+        if pp.get("candidate_id") == cid and url and is_open(url):
+            return url
+    return None
+
+
 def publish(report_path: Path, digest_dir: Path, gh_repo: str | None, dry_run: bool) -> dict:
     report = report_path.read_text()
     digest = json.loads((digest_dir / "latest.json").read_text())
@@ -131,6 +150,18 @@ def publish(report_path: Path, digest_dir: Path, gh_repo: str | None, dry_run: b
            "report": str(report_path)}
     if dry_run:
         rec["dry_run"] = True
+        return rec
+    existing = open_prior_issue(prior, prop["candidate_id"]) if gh_repo else None
+    if existing:
+        note = (f"The daily token-audit proposed this candidate again on {rec['filed']}. "
+                f"Its IET is now {cand['iet']:,}. This issue still needs a decision.\n\n" + body)
+        out = subprocess.run(["gh", "issue", "comment", existing, "--body", note],
+                             capture_output=True, text=True, timeout=60)
+        if out.returncode != 0:
+            raise RuntimeError(f"gh issue comment failed: {out.stderr.strip()[:300]}")
+        rec["updated_issue"] = existing
+        with open(ledger, "a") as f:
+            f.write(json.dumps(rec) + "\n")
         return rec
     if gh_repo:
         out = subprocess.run(["gh", "issue", "create", "-R", gh_repo, "--title", title, "--body", body],

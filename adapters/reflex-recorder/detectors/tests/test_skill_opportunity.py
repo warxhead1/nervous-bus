@@ -31,7 +31,11 @@ _ADAPTER_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_ADAPTER_ROOT))
 
 from detectors.base import ensure_detector_schema
-from detectors.skill_opportunity import SkillOpportunityDetector, load_skill_map
+from detectors.skill_opportunity import (
+    SkillOpportunityDetector,
+    command_segments,
+    load_skill_map,
+)
 
 
 _SCHEMA = """
@@ -40,7 +44,8 @@ CREATE TABLE IF NOT EXISTS runs (
     project    TEXT NOT NULL,
     started    TEXT NOT NULL,
     ended      TEXT NOT NULL,
-    features   TEXT NOT NULL DEFAULT '{}'
+    features   TEXT NOT NULL DEFAULT '{}',
+    run_key    TEXT
 );
 CREATE TABLE IF NOT EXISTS run_events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,10 +81,11 @@ def _make_db() -> sqlite3.Connection:
 
 
 def _insert_run(conn, run_id, project, started="2026-09-20T00:00:00Z",
-                 ended="2026-09-20T01:00:00Z", features=None):
+                 ended="2026-09-20T01:00:00Z", features=None, run_key=None):
     conn.execute(
-        "INSERT INTO runs (run_id, project, started, ended, features) VALUES (?,?,?,?,?)",
-        (run_id, project, started, ended, json.dumps(features or {})),
+        "INSERT INTO runs (run_id, project, started, ended, features, run_key) "
+        "VALUES (?,?,?,?,?,?)",
+        (run_id, project, started, ended, json.dumps(features or {}), run_key),
     )
 
 
@@ -225,3 +231,51 @@ class TestSkillOpportunityDetector(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestInvocationNotMention(unittest.TestCase):
+    """#148: a pattern counts only at command position, never in a path."""
+
+    def setUp(self):
+        self.conn = _make_db()
+        tmp = tempfile.NamedTemporaryFile(suffix=".toml", delete=False, mode="w")
+        tmp.write(_SKILL_MAP_TOML)
+        tmp.close()
+        self.det = SkillOpportunityDetector(self.conn)
+        self.det.skill_map_path = Path(tmp.name)
+
+    def _fired(self):
+        return {c.signature for c in self.det.run()}
+
+    def test_repo_path_is_not_an_invocation(self):
+        _insert_run(self.conn, "r1", "p")
+        _insert_bash_event(self.conn, "r1", 1, "cd ~/projects/hearth-loom && git status")
+        _insert_bash_event(self.conn, "r1", 2, "ls /srv/hearth-loom/logs | grep bd")
+        self.assertEqual(self._fired(), set())
+
+    def test_invocation_by_path_or_after_a_pipe_counts(self):
+        _insert_run(self.conn, "r1", "p")
+        _insert_bash_event(self.conn, "r1", 1, "FOO=1 ~/.local/bin/hearth-loom status")
+        _insert_bash_event(self.conn, "r1", 2, "cd repo && bd show x-12")
+        self.assertEqual(self._fired(), {"hearth-loom-dispatch", "beads"})
+
+    def test_skill_loaded_in_an_earlier_segment_is_not_a_bypass(self):
+        _insert_run(self.conn, "seg1", "p", run_key="k1",
+                    features={"skills": {"beads": {"mechanism": "skill_tool"}}})
+        _insert_run(self.conn, "seg2", "p", run_key="k1")
+        _insert_bash_event(self.conn, "seg2", 1, "bd create 'x'")
+        self.assertEqual(self._fired(), set())
+
+    def test_segments_drop_wrappers_and_env(self):
+        self.assertEqual(command_segments("A=1 timeout 60 /opt/bin/mmx run && echo ok"),
+                         ["mmx run", "echo ok"])
+
+    def test_verb_only_summary_counts_each_word_as_a_command(self):
+        _insert_run(self.conn, "r1", "p")
+        _insert_bash_event(self.conn, "r1", 1, "cd hearth-loom tail")
+        self.assertEqual(self._fired(), {"hearth-loom-dispatch"})
+
+    def test_a_longer_command_word_is_not_the_mapped_cli(self):
+        _insert_run(self.conn, "r1", "p")
+        _insert_bash_event(self.conn, "r1", 1, "./scripts/hearth-loom-db.sh -At < q.sql")
+        self.assertEqual(self._fired(), set())

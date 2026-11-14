@@ -33,6 +33,7 @@ sys.path.insert(0, str(_ADAPTER_ROOT))
 from detectors.base import ensure_detector_schema
 from detectors.user_correction import (
     UserCorrectionDetector,
+    classify_turn,
     match_themes,
     _strip_envelope,
 )
@@ -155,6 +156,27 @@ class TestMatchThemes(unittest.TestCase):
         self.assertIn("sudo", themes)
 
 
+class TestClassifyTurn(unittest.TestCase):
+    def test_cue_without_theme_is_unthemed(self):
+        self.assertEqual(classify_turn("That's not what I asked for, read the spec again"),
+                         ["unthemed"])
+
+    def test_themed_turn_is_not_also_unthemed(self):
+        self.assertEqual(classify_turn("Why did you use sudo for that"), ["sudo"])
+
+    def test_no_cue_is_nothing(self):
+        self.assertEqual(classify_turn("Please add a chart to the dashboard"), [])
+
+    def test_turn_after_an_interrupt_counts_whatever_it_says(self):
+        self.assertEqual(classify_turn("use the other file", after_interrupt=True),
+                         ["interrupted"])
+
+    def test_asking_for_a_go_ahead_is_ask_operator(self):
+        for text in ("why do you need my go ahead, just run it",
+                     "Why are you asking again, you don't need my permission"):
+            self.assertIn("ask_operator_for_automatable", classify_turn(text), text)
+
+
 class TestDetectorClaudeSource(unittest.TestCase):
     def setUp(self):
         self.conn = _make_db()
@@ -191,6 +213,34 @@ class TestDetectorClaudeSource(unittest.TestCase):
         self.assertEqual(cand.run_ids, ["run-1"])
         # Signature must be the bare theme — no project prefix, no run_id.
         self.assertEqual(cand.signature, "destructive_op")
+
+    def test_interrupt_marks_the_next_turn_and_image_turns_are_read(self):
+        _insert_run(
+            self.conn, "run-1", "synthetic", "claude-code", "sess-1",
+            "2026-09-20T00:00:00Z", "2026-09-20T01:00:00Z",
+        )
+        _write_transcript(self.transcript_root, "sess-1", [
+            _user_line([{"type": "text", "text": "[Request interrupted by user for tool use]"}],
+                       "2026-09-20T00:10:00Z"),
+            _user_line("no, edit the config file instead", "2026-09-20T00:10:30Z"),
+            _user_line([{"type": "image", "source": {}},
+                        {"type": "text", "text": "That's not what I asked, look at the screenshot"}],
+                       "2026-09-20T00:20:00Z"),
+        ])
+        by_sig = {c.signature: c for c in self._detector().run()}
+        self.assertEqual(set(by_sig), {"interrupted", "unthemed"})
+        self.assertEqual(by_sig["interrupted"].run_ids, ["run-1"])
+
+    def test_orchestrated_minimax_prompts_are_not_human_turns(self):
+        _insert_run(
+            self.conn, "run-1", "synthetic", "claude-code-minimax", "sess-1",
+            "2026-09-20T00:00:00Z", "2026-09-20T01:00:00Z",
+        )
+        _write_transcript(self.transcript_root, "sess-1", [
+            _user_line("You are the nightly audit. Why did you stop? Never do that again.",
+                       "2026-09-20T00:10:00Z"),
+        ])
+        self.assertEqual(self._detector().run(), [])
 
     def test_no_matching_turns_yields_no_candidates(self):
         _insert_run(

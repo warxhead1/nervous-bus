@@ -238,3 +238,64 @@ def test_cli_subcommand_prints_written_file_and_errors_when_absent(env, tmp_path
     sv.write(_build(env, tmp_path), digest)
     assert query.main(["--db", str(db), "steering-verdicts", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["verdicts"]["recurs"]["verdict"] == "promote_candidate"
+
+
+def _row(before, after, complete=True, at="2026-08-15T00:00:00Z", rule="r", target="det"):
+    return {"rule": rule, "target": target, "commit": "abc", "at": at,
+            "before_per_100": before, "after_per_100": after, "window_complete": complete}
+
+
+def test_successes_keep_only_completed_windows_that_fell_enough():
+    rows = [_row(4.0, 1.0, target="big_drop"), _row(4.0, 3.5, target="small_drop"),
+            _row(4.0, 0.0, complete=False, target="open"), _row(0.0, 0.0, target="zero"),
+            _row(None, 1.0, target="no_before"), _row(2.0, 0.0, at="2026-09-01T00:00:00Z",
+                                                       target="newer")]
+    got = sv.successes(rows)
+    assert [s["target"] for s in got] == ["newer", "big_drop"]
+    assert got[1]["drop"] == 0.75
+    twice = [_row(6.0, 1.0, at="2026-08-15T00:00:00Z"), _row(6.0, 1.0, at="2026-08-15T00:01:00Z")]
+    assert [s["at"] for s in sv.successes(twice)] == ["2026-08-15T00:01:00Z"]
+
+
+def test_successes_reach_report_table_and_nightly_digest(env, tmp_path):
+    import nightly_analysis
+
+    rep = _build(env, tmp_path)
+    assert [s["rule"] for s in rep["successes"]] == ["works"]
+    assert "- works (det_works):" in sv.to_markdown(rep)
+    sv.write(rep, tmp_path / "digest")
+    section = nightly_analysis.render_successes_section(tmp_path / "digest" / "verdicts-latest.json")
+    assert any(line.startswith("- works (det_works):") for line in section)
+    missing = nightly_analysis.render_successes_section(tmp_path / "nope.json")
+    assert missing[2].startswith("- unavailable")
+
+
+def _memory(projects: Path, project: str, name: str, description: str) -> None:
+    d = projects / project / "memory"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(f"---\nname: {name}\ndescription: {description}\n---\nbody\n")
+
+
+def test_promotion_pairs_one_ruling_across_two_projects_only(tmp_path):
+    projects = tmp_path / "projects"
+    rule = "agent worktrees branch from origin main and merge ff-only before editing files"
+    _memory(projects, "proj-a", "feedback_worktree_base.md", rule)
+    _memory(projects, "proj-b", "feedback_worktree_base_branch.md", rule + " again")
+    _memory(projects, "proj-a", "feedback_worktree_base_dup.md", rule)
+    _memory(projects, "proj-c", "project_shader_cache.md", "shader cache warms on boot with vulkan pipelines")
+    _memory(projects, "proj-c", "MEMORY.md", rule)
+    pairs = sv.promotion_candidates(projects)
+    assert {tuple(p["projects"]) for p in pairs} == {("proj-a", "proj-b")}
+    assert {p["files"][1] for p in pairs} == {"feedback_worktree_base_branch.md"}
+    assert all(p["score"] >= sv.PROMOTE_MIN_OVERLAP for p in pairs)
+    assert "feedback" not in pairs[0]["shared"] and "agent" in pairs[0]["shared"]
+
+
+def test_promotion_candidates_reach_the_report_and_table(env, tmp_path):
+    projects = tmp_path / "claude" / "projects"
+    rule = "never run sudo without asking the operator first on this host"
+    _memory(projects, "proj-a", "feedback_sudo.md", rule)
+    _memory(projects, "proj-b", "feedback_sudo_ask.md", rule)
+    rep = _build(env, tmp_path)
+    assert rep["promotion"][0]["files"] == ["feedback_sudo.md", "feedback_sudo_ask.md"]
+    assert "proj-a/feedback_sudo.md ~ proj-b/feedback_sudo_ask.md" in sv.to_markdown(rep)

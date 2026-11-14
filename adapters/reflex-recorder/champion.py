@@ -1125,7 +1125,7 @@ BLIND_TERMS = [
 SCORABLE = ["red_baseline_dispatch", "unverified_completion", "inherited_rationalization",
             "rebuild_cache_miss", "skill_opportunity", "reread_same_file", "worktree_leak"]
 # Stratum quotas (sum 100). Strata the contract names but the corpus has no explicit-labelled hits
-# for (directive_ground_truth_mismatch, kb_recall_gap, user_correction) are reported, not padded.
+# for (directive_ground_truth_mismatch, user_correction) are reported, not padded.
 QUOTAS = {"red_baseline_dispatch": 5, "unverified_completion": 25, "inherited_rationalization": 20,
           "rebuild_cache_miss": 12, "skill_opportunity": 8, "reread_same_file": 20, "worktree_leak": 10}
 
@@ -1432,7 +1432,7 @@ def select_sample(rows: list[dict], n: int, seed: int) -> tuple[list[dict], dict
             "detectors": ds, "outcome": r.get("outcome"), "project": r.get("project")}
            for (r, ds), det in picked[:n]]
     return out, {"seed": seed, "eligible_total": len(elig), "strata": comp,
-                 "absent_strata": ["directive_ground_truth_mismatch", "kb_recall_gap", "user_correction"],
+                 "absent_strata": ["directive_ground_truth_mismatch", "user_correction"],
                  "freq": dict(freq)}
 
 

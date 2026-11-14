@@ -261,12 +261,14 @@ class GateBoundLoosenedDetector(BaseDetector):
     DETECTOR_NAME = "gate_bound_loosened"
     # Overridable in tests: transcript roots to resolve run -> transcript.
     transcript_roots: Optional[list[Path]] = None
+    # Live checks (live_check.py) scope a pass to these runs.
+    run_ids: Optional[list[str]] = None
 
     def detect(self, conn: sqlite3.Connection,
                since_ts: Optional[str] = None) -> list[PatternCandidate]:
         cache = StepCache()
         out: list[PatternCandidate] = []
-        for ref in run_refs(conn, since_ts=since_ts, roots=self.transcript_roots,
+        for ref in run_refs(conn, since_ts=since_ts, run_ids=self.run_ids, roots=self.transcript_roots,
                             min_events=3):
             steps = cache.steps_for(ref)
             if not steps:

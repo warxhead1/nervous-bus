@@ -291,6 +291,26 @@ def render_taxonomy_section(classifications: list[dict], window_days: int) -> li
     return lines
 
 
+def render_successes_section(verdicts_path: Optional[Path] = None) -> list[str]:
+    """Rules whose target hit rate fell after the change, from the verdicts
+    file steering_audit.py wrote earlier in this batch."""
+    import steering_audit
+    import steering_verdicts
+
+    path = verdicts_path or steering_audit.STEERING_DIGEST_DIR / "verdicts-latest.json"
+    lines = ["## Rule successes (completed windows)", ""]
+    try:
+        items = json.loads(path.read_text()).get("successes")
+    except (OSError, ValueError):
+        items = None
+    if items is None:
+        lines.append(f"- unavailable (no readable successes in {path})")
+    else:
+        lines.extend(steering_verdicts.success_lines(items) or ["- none"])
+    lines.append("")
+    return lines
+
+
 def build_digest(
     db_path: Path,
     label_result: StepResult,
@@ -298,6 +318,7 @@ def build_digest(
     window_days: int,
     struggle_window_days: int,
     step_timeout: int,
+    verdicts_path: Optional[Path] = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     stats = _run_json(
@@ -469,6 +490,7 @@ def build_digest(
     else:
         lines.append("- no struggle-ledger data (or query unavailable)")
     lines.append("")
+    lines.extend(render_successes_section(verdicts_path))
 
     # Issue #34 — per-agent_kind tool_call coverage gauge.
     lines.append(f"## Tool-call coverage by agent_kind ({window_days}d)")

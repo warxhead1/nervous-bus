@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """query.py — CLI query layer over the Reflexarc SQLite run-store.
 
 Usage

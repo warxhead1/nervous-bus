@@ -189,20 +189,83 @@ def _run_cmd_cwd(cmd: list[str], cwd: str, timeout: int = 8) -> Optional[str]:
     return None
 
 
-def _gh_pr_state(branch: str, worktree_path: Optional[str]) -> Optional[dict]:
-    """Query gh pr for the most recent PR on branch.
+#: How many PRs one `gh pr list` fetches per repo. A branch missing from a
+#: list shorter than this has no PR; from a full list it is unknown.
+_PR_LIST_LIMIT = 2000
+
+
+def _gh_work_dir(worktree_path: Optional[str], repo_root: Optional[str]) -> Optional[str]:
+    """The directory gh runs in, which picks the GitHub repo it asks.
+
+    A live worktree wins. A reaped worktree falls back to the run's main repo.
+    No directory at all means no lookup: label.py's own cwd belongs to a
+    different project and would answer for the wrong repo.
+    """
+    if worktree_path and Path(worktree_path).exists():
+        return worktree_path
+    if repo_root:
+        return repo_root
+    return worktree_path or None
+
+
+def _pick_pr(prs: list[dict]) -> Optional[dict]:
+    """One branch can carry several PRs. Pick the one `gh pr view <branch>`
+    would: an open PR, else the most recently created one. The list path and
+    the view path then give one branch the same verdict."""
+    if not prs:
+        return None
+    for p in prs:
+        if (p.get("state") or "").upper() == "OPEN":
+            return p
+    return max(prs, key=lambda p: p.get("createdAt") or "")
+
+
+def _gh_pr_index(work_dir: str) -> Optional[tuple[dict, bool]]:
+    """One `gh pr list` for the repo at work_dir: ({headRefName: [pr...]},
+    complete). complete is False when the list hit _PR_LIST_LIMIT."""
+    out = _run_cmd_cwd(
+        ["gh", "pr", "list", "--state", "all", "--limit", str(_PR_LIST_LIMIT),
+         "--json", "headRefName,state,mergedAt,closedAt,createdAt"],
+        cwd=work_dir,
+        timeout=60,
+    )
+    if out is None:
+        return None
+    try:
+        prs = json.loads(out)
+    except Exception:
+        return None
+    index: dict[str, list[dict]] = {}
+    for p in prs:
+        index.setdefault(p.get("headRefName") or "", []).append(p)
+    return index, len(prs) < _PR_LIST_LIMIT
+
+
+def _gh_pr_state(branch: str, worktree_path: Optional[str],
+                 repo_root: Optional[str] = None) -> Optional[dict]:
+    """Query gh pr for the most relevant PR on branch.
 
     `gh` has no `-C` flag; run it with cwd=work_dir so it resolves that
     repo's remote. Degrades safely to None on no-PR or network error.
 
+    Inside a labeling pass, the PR list of each repo is fetched once and
+    answers every branch of that repo. A branch missing from a full list
+    falls back to `gh pr view`.
+
     Returns dict with {state, mergedAt} or None if no PR found.
     """
-    # Determine the working directory for gh: prefer the worktree path, fall
-    # back to ".".  We don't gate on Path.exists() here — the worktree may have
-    # been cleaned up but the parent project git repo is still valid for gh.
-    # If gh fails (no remote, network error), _run_cmd_cwd returns None and we
-    # degrade safely to None without mislabeling.
-    work_dir = worktree_path if worktree_path else "."
+    work_dir = _gh_work_dir(worktree_path, repo_root)
+    if work_dir is None:
+        return None
+
+    if _PASS_MEMO is not None:
+        index = _memoized(("prlist", repo_root or work_dir),
+                          lambda: _gh_pr_index(work_dir))
+        if index is not None:
+            by_branch, complete = index
+            hit = _pick_pr(by_branch.get(branch, []))
+            if hit is not None or complete:
+                return hit
 
     out = _run_cmd_cwd(
         ["gh", "pr", "view", branch, "--json", "state,mergedAt,closedAt"],
@@ -217,14 +280,15 @@ def _gh_pr_state(branch: str, worktree_path: Optional[str]) -> Optional[dict]:
     return None
 
 
-def _git_has_revert(branch: str, worktree_path: Optional[str]) -> bool:
+def _git_has_revert(branch: str, worktree_path: Optional[str],
+                    repo_root: Optional[str] = None) -> bool:
     """Check if there's a revert commit on this branch.
 
-    Uses git log on the branch (or in the worktree directory).
+    Uses git log on the branch, in the worktree or else the run's main repo.
     Conservative: only flags explicit "Revert" commit messages.
     """
-    work_dir = worktree_path or "."
-    if not Path(work_dir).exists():
+    work_dir = _gh_work_dir(worktree_path, repo_root)
+    if not work_dir or not Path(work_dir).exists():
         return False
     out = _run_cmd(
         ["git", "-C", work_dir, "log", "--oneline", "--max-count=50", branch],
@@ -347,21 +411,25 @@ def _with_pass_memo(fn):
     return wrapper
 
 
-def label_from_pr(branch: str, worktree_path: Optional[str]) -> Optional[tuple[str, str]]:
+def label_from_pr(branch: str, worktree_path: Optional[str],
+                  repo_root: Optional[str] = None) -> Optional[tuple[str, str]]:
     """Try to derive outcome from GitHub PR state.
+
+    repo_root is the run's main repo. gh runs there when the worktree is gone.
 
     Returns (outcome, source) or None. Within a pass, repeated lookups of the
     same (branch, worktree) are answered once.
     """
-    return _memoized(("pr", branch, worktree_path),
-                     lambda: _label_from_pr_live(branch, worktree_path))
+    return _memoized(("pr", branch, worktree_path, repo_root),
+                     lambda: _label_from_pr_live(branch, worktree_path, repo_root))
 
 
-def _label_from_pr_live(branch: str, worktree_path: Optional[str]) -> Optional[tuple[str, str]]:
-    pr = _gh_pr_state(branch, worktree_path)
+def _label_from_pr_live(branch: str, worktree_path: Optional[str],
+                        repo_root: Optional[str] = None) -> Optional[tuple[str, str]]:
+    pr = _gh_pr_state(branch, worktree_path, repo_root)
     if not pr:
         # No PR yet — try git revert as fallback
-        if _git_has_revert(branch, worktree_path):
+        if _git_has_revert(branch, worktree_path, repo_root):
             return "reverted", "git_revert"
         return None
 
@@ -373,12 +441,12 @@ def _label_from_pr_live(branch: str, worktree_path: Optional[str]) -> Optional[t
 
     if state == "CLOSED":
         # Closed without merge
-        if _git_has_revert(branch, worktree_path):
+        if _git_has_revert(branch, worktree_path, repo_root):
             return "reverted", "git_revert"
         return "abandoned", "pr_closed_unmerged"
 
     # OPEN — not yet resolved
-    if _git_has_revert(branch, worktree_path):
+    if _git_has_revert(branch, worktree_path, repo_root):
         return "reverted", "git_revert"
 
     return None
@@ -873,9 +941,15 @@ def _prefer_higher_tier(
     return b if _source_tier(b[1]) > _source_tier(a[1]) else a
 
 
+#: A sibling segment counts only if it started within this window of the run.
+#: A long-lived lead pane can share one run_key for days, and a landing two
+#: days later says nothing about whether this fragment was abandoned.
+SIBLING_WINDOW = timedelta(hours=24)
+
+
 def _session_has_landed_sibling(conn: sqlite3.Connection, run: dict) -> bool:
-    """True if some OTHER run sharing this run's run_key committed, pushed,
-    or landed.
+    """True if some OTHER run sharing this run's run_key, started within
+    SIBLING_WINDOW of it, committed, pushed, or landed.
 
     Keyed on run_key, NOT session_id/host_conversation_id: those two are
     shared by a parent host session and every subagent/workflow shard it
@@ -899,14 +973,18 @@ def _session_has_landed_sibling(conn: sqlite3.Connection, run: dict) -> bool:
     if not run_key:
         return False
 
-    query = "SELECT outcome, label_history, features FROM runs WHERE run_key = ?"
+    query = "SELECT outcome, label_history, features, started FROM runs WHERE run_key = ?"
     params: list = [run_key]
     if run_id:
         query += " AND run_id != ?"
         params.append(run_id)
 
+    run_start = _parse_ts(run.get("started"))
     cur = conn.execute(query, params)
-    for sib_outcome, sib_history_json, sib_features_json in cur.fetchall():
+    for sib_outcome, sib_history_json, sib_features_json, sib_started in cur.fetchall():
+        sib_start = _parse_ts(sib_started)
+        if run_start and sib_start and abs(sib_start - run_start) > SIBLING_WINDOW:
+            continue
         if sib_outcome == "landed":
             return True
         try:
@@ -977,7 +1055,7 @@ def compute_label(
     # EXPLICIT: PR / git_revert / local git ancestry
     git_result: Optional[tuple[str, str]] = None
     if git_branch and git_branch not in ("HEAD", "main", "master"):
-        git_result = label_from_pr(git_branch, worktree)
+        git_result = label_from_pr(git_branch, worktree, _project_repo_root(run))
         if git_result is None:
             # EXPLICIT: local git ancestry (squash/merge with no PR — tengine pattern)
             git_result = label_from_git_merge(
@@ -1726,7 +1804,7 @@ def reverify_run(
 
     if git_branch and git_branch not in ("HEAD", "main", "master"):
         worktree = run.get("worktree")
-        git_result = label_from_pr(git_branch, worktree)
+        git_result = label_from_pr(git_branch, worktree, _project_repo_root(run))
 
         if git_result is None:
             run_has_commit = _run_has_commit_from_features(run)

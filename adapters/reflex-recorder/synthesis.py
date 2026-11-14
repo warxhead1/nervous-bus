@@ -62,7 +62,6 @@ from detectors.base import (
 )
 from detectors.worktree_leak import WorktreeLeakDetector
 from detectors.rebuild_cache_miss import RebuildCacheMissDetector
-from detectors.repeated_question import RepeatedQuestionDetector
 from detectors.edit_build_fail_revert import EditBuildFailRevertDetector
 from detectors.reread_same_file import RereadSameFileDetector
 from detectors.red_baseline_dispatch import RedBaselineDispatchDetector
@@ -74,7 +73,6 @@ from detectors.param_sweep_thrash import ParamSweepThrashDetector
 from detectors.gate_bound_loosened import GateBoundLoosenedDetector
 from detectors.foreground_wait import ForegroundWaitDetector
 from detectors.guard_denial import GuardDenialDetector
-from detectors.kb_recall_gap import KbRecallGapDetector
 from detectors.failure_taxonomy import FailureTaxonomyDetector
 from detectors.skill_opportunity import SkillOpportunityDetector
 from detectors.user_correction import UserCorrectionDetector
@@ -154,7 +152,7 @@ CLASSIFIER_MIN_CONFIRMED_FAILURES: int = 5
 
 # Detector registry — explicit import list (small + auditable).
 # Built-in detectors shipped with the public engine:
-#   - generic tier (project-agnostic): worktree_leak, reread_same_file, repeated_question
+#   - generic tier (project-agnostic): worktree_leak, reread_same_file
 #   - rust/cargo ecosystem tier (any worktree-based Rust project): rebuild_cache_miss,
 #     edit_build_fail_revert — these key on `cargo` alone, NOT any single project.
 # Project-SPECIFIC detectors are contributed by private adapters in
@@ -162,7 +160,6 @@ CLASSIFIER_MIN_CONFIRMED_FAILURES: int = 5
 _BUILTIN_DETECTOR_CLASSES: list[type[BaseDetector]] = [
     WorktreeLeakDetector,
     RebuildCacheMissDetector,
-    RepeatedQuestionDetector,
     EditBuildFailRevertDetector,
     RereadSameFileDetector,
     RedBaselineDispatchDetector,
@@ -181,10 +178,6 @@ _BUILTIN_DETECTOR_CLASSES: list[type[BaseDetector]] = [
     # them doesn't matter, only "before FailureTaxonomyDetector" matters.
     UserCorrectionDetector,
     SkillOpportunityDetector,
-    # KbRecallGapDetector MUST come after RepeatedQuestionDetector (it reads
-    # repeated_question's detector_hits rows from THIS SAME synthesis pass —
-    # see its module docstring) and before FailureTaxonomyDetector (below).
-    KbRecallGapDetector,
     # FailureTaxonomyDetector MUST stay last: it reads detector_hits recorded by
     # every detector above it in THIS SAME synthesis pass (see its module
     # docstring). Appending a new built-in detector after this line would make
@@ -1471,8 +1464,12 @@ def run_synthesis(
     emit_beads: bool = False,
     classifier_min_runs: int = CLASSIFIER_MIN_RUNS,
     classifier_min_confirmed_failures: int = CLASSIFIER_MIN_CONFIRMED_FAILURES,
+    progress: Optional[Any] = None,
 ) -> SynthesisResult:
     """Execute the full synthesis pass.
+
+    ``progress`` is called with one line per stage and per detector, each
+    carrying the seconds since the pass began.
 
     Steps:
     0. Re-stitch logical runs.
@@ -1489,9 +1486,16 @@ def run_synthesis(
     _CARGO_REPLAY_CACHE.clear()
     result = SynthesisResult()
     synthesis_pass_at = _now_utc()
+    t0 = time.monotonic()
+
+    def _stage(msg: str) -> None:
+        if progress is not None:
+            progress(f"{time.monotonic() - t0:7.1f}s {msg}")
+
     ensure_eval_schema(conn)
 
     # ── Step 0: Re-stitch ──────────────────────────────────────────────────
+    _stage("stitch logical runs")
     logical_runs = stitch_logical_runs(conn)
     # Count logical runs per project
     logical_run_ids_by_project: dict[str, set[str]] = {}
@@ -1509,6 +1513,7 @@ def run_synthesis(
     # ── Step 0.5: Ingest adapter signals ───────────────────────────────────
     # Private adapters may pull non-activity cost signals (e.g. tengine's build
     # reports) into the store before detectors key on them. Never fatal.
+    _stage(f"{len(logical_runs)} logical runs; ingest adapter signals")
     for adapter in load_adapters():
         for ingester in (adapter.signals() or []):
             try:
@@ -1539,6 +1544,7 @@ def run_synthesis(
     sig_to_candidate: dict[str, PatternCandidate] = {}
     detector_instances: dict[str, BaseDetector] = {}
     for DetectorClass in DETECTOR_CLASSES:
+        _stage(f"detector {DetectorClass.DETECTOR_NAME}")
         try:
             detector = DetectorClass(conn)
             detector_instances[detector.DETECTOR_NAME] = detector
@@ -1587,11 +1593,14 @@ def run_synthesis(
         )
     issues.extend(legacy_classifier_rows.values())
 
+    _stage(f"detectors done; score {len(issues)} issues")
     if not issues:
         return result
 
     # ── Steps 2-6: Score, rung, replay, decision, emit ─────────────────────
-    for issue in issues:
+    for n_issue, issue in enumerate(issues, 1):
+        if n_issue % 25 == 0:
+            _stage(f"scored {n_issue}/{len(issues)} issues")
         signature = issue["signature"]
         project = issue["project"]
         detector_name = issue["detector"]
@@ -1609,7 +1618,6 @@ def run_synthesis(
         _DETECTOR_RUNGS = {
             "rebuild_cache_miss": "eliminate",
             "worktree_leak": "automate",
-            "repeated_question": "automate",
             "reread_same_file": "automate",
             "edit_build_fail_revert": "inform",
             "file_reads_to_finding": "inform",
@@ -1910,6 +1918,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     result = run_synthesis(
         conn,
+        progress=lambda line: print(f"[synthesis] {line}", file=sys.stderr, flush=True),
         project_filter=args.project,
         window_days=args.window_days,
         dry_run=dry_run,

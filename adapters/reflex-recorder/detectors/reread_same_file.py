@@ -208,8 +208,7 @@ class RereadSameFileDetector(BaseDetector):
         # Pull all Read-tool events, ordered for per-run analysis.
         #
         # Two-step when since_ts is given, not a single JOIN filtered on
-        # r.started (issue #32 perf fix, same root cause as
-        # repeated_question.py): the tool_name filter is a json_extract() over
+        # r.started (issue #32 perf fix): the tool_name filter is a json_extract() over
         # re.raw_json with no index, so a single-query JOIN drives from
         # run_events regardless of the runs.started filter (verified via
         # EXPLAIN QUERY PLAN on the live DB: `SCAN re USING INDEX

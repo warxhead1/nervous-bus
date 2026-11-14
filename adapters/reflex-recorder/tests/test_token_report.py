@@ -77,6 +77,23 @@ class TestReport(unittest.TestCase):
         self.assertGreater(pp["iet_now"], 0)
         self.assertIn("Prior proposals", tr.to_markdown(rep))
 
+    def test_effective_settings_carry_only_the_knobs(self):
+        rep = tr.build(sqlite3.connect(self.db), days=7)
+        settings = Path(self.td.name) / "settings.json"
+        settings.write_text(json.dumps({
+            "promptCacheTtl": "1h", "model": "x",
+            "env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "375000", "SOME_API_KEY": "sekrit"}}))
+        tr.attach_effective_settings(rep, settings)
+        self.assertEqual(rep["effective_settings"], {
+            "promptCacheTtl": "1h", "env.CLAUDE_CODE_AUTO_COMPACT_WINDOW": "375000"})
+        md = tr.to_markdown(rep)
+        self.assertIn('- env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = "375000"', md)
+        self.assertNotIn("sekrit", md + json.dumps(rep))
+        fresh = tr.build(sqlite3.connect(self.db), days=7)
+        tr.attach_effective_settings(fresh, Path(self.td.name) / "missing.json")
+        self.assertNotIn("effective_settings", fresh)
+        self.assertNotIn("Effective settings", tr.to_markdown(fresh))
+
 
 if __name__ == "__main__":
     unittest.main()

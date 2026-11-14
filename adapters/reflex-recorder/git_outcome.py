@@ -50,6 +50,7 @@ import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional
@@ -406,7 +407,13 @@ def verify_discarded_landed(repo: str, branch: str, main_ref: str = "main") -> O
     (`git log -S`) — the work landed under a different/reworded commit and the
     'discarded' verdict is a patch-id-drift false positive.  Returns False if
     NONE are found (genuinely discarded).  Returns None if no usable probe lines
-    could be sampled (cannot decide — leave the medium-confidence verdict).
+    could be sampled, or if any probe timed out or failed (a failed probe is
+    not evidence of absence — cannot decide, leave the medium-confidence verdict).
+
+    The probes are independent read-only `git log -S` calls, so they run in
+    parallel: the wall cost is about one probe instead of the sum. Each probe
+    scans only `mb..main`: the branch's code cannot have landed before the
+    branch forked.
 
     This follows the CODE, so it survives rebase, squash, and reword that defeat
     commit-identity checks.  Slower than the ancestry classifier (history-wide
@@ -419,10 +426,15 @@ def verify_discarded_landed(repo: str, branch: str, main_ref: str = "main") -> O
     probes = _distinctive_added_lines(repo, mb, branch)
     if not probes:
         return None
-    found = 0
-    for line in probes:
-        if _git(repo, "log", main_ref, f"--max-count={_PICKAXE_DEPTH}", "-S", line, "--oneline", timeout=40):
-            found += 1
+    def probe(line: str) -> Optional[str]:
+        return _git(repo, "log", f"{mb}..{main_ref}", f"--max-count={_PICKAXE_DEPTH}",
+                    "-S", line, "--oneline", timeout=40)
+
+    with ThreadPoolExecutor(max_workers=len(probes)) as pool:
+        outs = list(pool.map(probe, probes))
+    if any(o is None for o in outs):
+        return None       # a probe timed out or git failed → no evidence either way
+    found = sum(1 for o in outs if o)
     if found == len(probes):
         return True       # all the code is in main → it landed
     if found == 0:

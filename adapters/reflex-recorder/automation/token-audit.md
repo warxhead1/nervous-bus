@@ -36,6 +36,11 @@ measured waste per unit of effort. Not a list. One.
   which instruction files (CLAUDE.md, memory) load and how big they are.
 - `redundant_reruns`: the same test/build command run again with no edit in
   between.
+- `Effective settings`: the compaction and cache TTL knobs already set in
+  ~/.claude/settings.json, both settings keys and `env` overrides. A proposal
+  that touches one of these knobs must quote the current value and say how the
+  change interacts with it. When an env override and a settings key cover the
+  same knob, mark which one wins as "verify".
 - `Prior proposals`: candidates filed on earlier days, with that candidate's IET
   at filing vs now. If a prior fix shows no drop after a week, SAY SO. That is a
   finding in its own right, and never propose the same title again.

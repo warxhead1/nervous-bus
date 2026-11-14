@@ -65,11 +65,59 @@ class SkillMapping:
         self.context_pattern = re.compile(context_pattern, re.IGNORECASE) if context_pattern else None
 
     def matches(self, command: str) -> bool:
-        if not self.pattern.search(command):
+        """True when the mapped CLI is INVOKED: the pattern must match at the
+        start of a command segment, never inside a path or an argument. The
+        context pattern may match anywhere in the whole command."""
+        if not any(self._invokes(seg) for seg in command_segments(command)):
             return False
         if self.context_pattern is not None and not self.context_pattern.search(command):
             return False
         return True
+
+
+    def _invokes(self, segment: str) -> bool:
+        """The pattern matches from the command word and covers all of it:
+        `mmx run` invokes mmx, `mmx-db-readonly.sh` does not."""
+        m = self.pattern.match(segment)
+        return bool(m) and m.end() >= len(segment.split(" ", 1)[0])
+
+
+_SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||[;|\n`]|\$\(")
+_VERB_LIST_RE = re.compile(r"^[A-Za-z0-9_.-]+(?: [A-Za-z0-9_.-]+)*$")
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*\s+")
+_WRAPPER_RE = re.compile(r"^(?:sudo|exec|command|env|nohup|setsid|time|timeout\s+\S+)\s+")
+
+
+def command_segments(command: str) -> list[str]:
+    """Each simple command in a shell line, starting at its command word.
+
+    A line of bare words is read as the bus summary's list of command words,
+    so each word starts a segment. Otherwise it splits on `&&`, `||`, `;`,
+    `|`, newlines, backticks and `$(`. Drops leading
+    env assignments and wrappers (`sudo`, `timeout 60`, ...). A command word
+    given as a path is reduced to its basename, so `~/bin/mmx run` reads
+    `mmx run` while `ls ~/projects/mmx` stays `ls ...`.
+    """
+    if _VERB_LIST_RE.match(command):
+        # The bus summary can be the command words alone ("cd hearth-vault
+        # tail"). Every word there is a command position.
+        words = command.split()
+        return [" ".join(words[i:]) for i in range(len(words))]
+    out = []
+    for seg in _SEGMENT_SPLIT_RE.split(command):
+        seg = seg.strip().lstrip("({ ").strip()
+        while True:
+            nxt = _WRAPPER_RE.sub("", _ENV_ASSIGN_RE.sub("", seg), count=1)
+            if nxt == seg:
+                break
+            seg = nxt
+        if not seg:
+            continue
+        word, _, rest = seg.partition(" ")
+        if "/" in word:
+            word = word.rstrip("/").rsplit("/", 1)[-1]
+        out.append(f"{word} {rest}".strip())
+    return out
 
 
 def load_skill_map(path: Path = DEFAULT_SKILL_MAP_PATH) -> list[SkillMapping]:
@@ -150,7 +198,7 @@ class SkillOpportunityDetector(BaseDetector):
         params: list = [since_ts] if since_ts else []
         rows = conn.execute(
             f"""
-            SELECT re.run_id, r.project, r.features, re.raw_json
+            SELECT re.run_id, r.project, r.features, re.raw_json, r.run_key
             FROM run_events re
             JOIN runs r ON r.run_id = re.run_id
             WHERE json_extract(re.raw_json, '$.data.event') = 'tool_call'
@@ -164,15 +212,30 @@ class SkillOpportunityDetector(BaseDetector):
 
         # run_id -> (project, features_json, set(command strings))
         by_run: dict[str, tuple[str, str, list[str]]] = {}
-        for run_id, project, features_json, raw_json in rows:
+        key_of: dict[str, str] = {}
+        for run_id, project, features_json, raw_json, run_key in rows:
             cmd = _extract_bash_command(raw_json)
             if not cmd:
                 continue
+            if run_key:
+                key_of[run_id] = run_key
             entry = by_run.get(run_id)
             if entry is None:
                 by_run[run_id] = (project, features_json, [cmd])
             else:
                 entry[2].append(cmd)
+
+        # A skill loaded in any segment of the same logical run (run_key) is
+        # still in that agent's context, so it is not a bypass.
+        key_skills: dict[str, set[str]] = {}
+        keys = sorted(set(key_of.values()))
+        for i in range(0, len(keys), 500):
+            chunk = keys[i:i + 500]
+            for run_key, features_json in conn.execute(
+                f"SELECT run_key, features FROM runs WHERE run_key IN ({','.join('?' * len(chunk))})",
+                chunk,
+            ):
+                key_skills.setdefault(run_key, set()).update(_skill_names(features_json))
 
         # project -> skill -> set(run_id)  [bypass hits]
         hits: dict[str, dict[str, set[str]]] = {}
@@ -182,7 +245,7 @@ class SkillOpportunityDetector(BaseDetector):
         cli_used: dict[str, dict[str, set[str]]] = {}
 
         for run_id, (project, features_json, commands) in by_run.items():
-            skill_names = _skill_names(features_json)
+            skill_names = _skill_names(features_json) | key_skills.get(key_of.get(run_id), set())
             for mapping in mappings:
                 used = any(mapping.matches(cmd) for cmd in commands)
                 if not used:
