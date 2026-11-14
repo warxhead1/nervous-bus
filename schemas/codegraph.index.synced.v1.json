@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/codegraph.index.synced.v1.json",
+  "title": "codegraph.index.synced v1",
+  "description": "Emitted by adapters/codegraph-sync/sync.py after it runs `codegraph sync` on an opted-in repo (kb config `codegraph.repos`) whose checkout changed. One event per sync attempt, success or failure. Source: /nervous-bus.",
+  "type": "object",
+  "required": ["repo", "path", "head", "ok", "duration_ms", "trigger"],
+  "properties": {
+    "repo": { "type": "string", "description": "Repo name from codegraph.repos." },
+    "path": { "type": "string", "description": "Absolute path of the indexed checkout." },
+    "head": { "type": "string", "description": "HEAD commit of the checkout when the change was fingerprinted." },
+    "ok": { "type": "boolean", "description": "`codegraph sync` exited 0 within its timeout." },
+    "duration_ms": { "type": "integer", "minimum": 0, "description": "Wall time of the sync." },
+    "trigger": { "type": "string", "enum": ["quiescent", "max_pending"], "description": "quiescent: the change held still for one timer tick. max_pending: the tree kept moving for 30 minutes." },
+    "pending_s": { "type": "integer", "minimum": 0, "description": "Seconds between first seeing the change and syncing it." }
+  },
+  "additionalProperties": true
+}
