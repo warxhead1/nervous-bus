@@ -122,3 +122,72 @@ def test_kill_switch_and_bad_input(tmp_path):
     assert run(tmp_path, write(tmp_path, "probe.md", BEFORE), PLAIN_PROSE_DISABLE="1")[0] == 0
     p = subprocess.run([sys.executable, str(HOOK)], input="nope", capture_output=True, text=True)
     assert p.returncode == 0 and not p.stderr
+
+
+# --- commit messages and pull request bodies (PreToolUse on Bash) ---
+
+BODY = HEAVY.replace('"', "'")
+PLAIN_BODY = "retry: raise the limit to 5\n\nThe queue drops a job after 3 tries. A slow disk needs 4.\nThe limit is now 5. The test covers a job that passes on try 5.\n"
+
+
+def bash(tmp, command, event="PreToolUse", session="m1", cwd=None, **env):
+    ev = {"session_id": session, "hook_event_name": event, "tool_name": "Bash", "tool_input": {"command": command}}
+    if cwd:
+        ev["cwd"] = str(cwd)
+    p = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(ev), capture_output=True, encoding="utf-8",
+                       env={**os.environ, "XDG_CACHE_HOME": str(tmp / "cache"), **env})
+    return p.returncode, p.stderr
+
+
+def heredoc(command, body):
+    return f"{command} <<'EOF'\n{body}\nEOF"
+
+
+def test_a_heavy_commit_message_is_sent_back_once_then_runs(tmp_path):
+    cmd = heredoc("git add -A && git commit -q -F -", BODY)
+    rc, err = bash(tmp_path, cmd)
+    assert rc == 2 and "did not run" in err and "semicolon" in err
+    assert bash(tmp_path, cmd)[0] == 0                    # the same text again: the writer chose it
+    assert bash(tmp_path, cmd)[0] == 2                    # a later heavy message is a new report
+
+
+def test_a_rewrite_after_a_report_runs_even_if_still_heavy(tmp_path):
+    assert bash(tmp_path, heredoc("git commit -F -", BODY))[0] == 2
+    assert bash(tmp_path, heredoc("git commit -F -", BODY + "\nOne more line; and another; and a third."))[0] == 0
+
+
+def test_a_plain_commit_message_runs(tmp_path):
+    assert bash(tmp_path, heredoc("git commit -F -", PLAIN_BODY)) == (0, "")
+    assert bash(tmp_path, 'git commit -m "retry: raise the limit to 5" -m "A slow disk needs 4 tries."')[0] == 0
+
+
+@pytest.mark.parametrize("command", [
+    'gh pr create --title "x" --body "$(cat <<\'EOF\'\n' + BODY + '\nEOF\n)"',
+    heredoc("gh pr create --title x --body-file -", BODY),
+    heredoc("gh issue comment 12 --body-file -", BODY),
+    'git commit -m "' + " ".join(BODY.split()) + '"',
+    "gh pr edit 7 --body '" + " ".join(BODY.split()) + "'",
+], ids=["pr-body-cat", "pr-body-file", "issue-comment", "commit-m", "pr-edit"])
+def test_every_way_of_passing_the_text_is_read(tmp_path, command):
+    assert bash(tmp_path, command)[0] == 2
+
+
+def test_a_message_file_is_read_from_the_working_directory(tmp_path):
+    write(tmp_path, "repo/msg.txt", BODY)
+    assert bash(tmp_path, "git commit -F msg.txt", cwd=tmp_path / "repo")[0] == 2
+    assert bash(tmp_path, "git commit -F missing.txt", cwd=tmp_path / "repo", session="m2")[0] == 0
+
+
+def test_text_that_is_not_the_message_is_not_scored(tmp_path):
+    script = heredoc("python3 -", BODY) + '\ngit commit -q -m "retry: raise the limit to 5"'
+    assert bash(tmp_path, script)[0] == 0
+    for command in ("git commit --amend --no-edit", "git log --oneline | grep commit", "git status",
+                    heredoc("cat > notes.txt", BODY), 'gh pr view 12 --json body'):
+        assert bash(tmp_path, command)[0] == 0
+
+
+def test_the_message_check_runs_before_the_command_only_and_has_a_kill_switch(tmp_path):
+    cmd = heredoc("git commit -F -", BODY)
+    assert bash(tmp_path, cmd, event="PostToolUse")[0] == 0
+    assert bash(tmp_path, cmd, PLAIN_PROSE_DISABLE="1")[0] == 0
+    assert bash(tmp_path, cmd)[0] == 2

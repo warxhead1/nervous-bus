@@ -17,7 +17,7 @@ claude plugin install human-attention@nervous-bus
 | `isolated-dispatch` | Every agent that edits gets its own worktree; uncommitted work that is not yours is read, never hidden. Ships a skill, a hook that blocks an editing dispatch with no isolation, and a hook that blocks a bare `git stash`, `pop`, `drop`, or `clear`. |
 | `remediation-ladder` | Fix the cause at the highest rung: eliminate, automate, then inform. Ships a skill and a hook that blocks a command that skips a check (`--no-verify`, `HUSKY=0`, a guard's kill switch set inline). |
 | `falsify-your-gate` | A check counts only after you have seen it fail. Ships a skill and a hook that reports a test an edit adds that cannot fail. |
-| `plain-prose` | Prose a person reads once: one idea per sentence, plain words, no AI tells. Ships the `ste80-humanizer` skill (a copy of [Dodaios/ste80-humanizer](https://github.com/Dodaios/ste80-humanizer), MIT), a hook that reports heavy prose an edit adds to a document, and a session-start ruling. |
+| `plain-prose` | Prose a person reads once: one idea per sentence, plain words, no AI tells. Ships the `ste80-humanizer` skill (a copy of [Dodaios/ste80-humanizer](https://github.com/Dodaios/ste80-humanizer), MIT), a hook that reports heavy prose an edit adds to a document and sends a heavy commit message or pull request body back once before it is published, and a session-start ruling. |
 
 ## How a rule reaches the agent
 
