@@ -33,7 +33,7 @@ def run(tmp, path, tool="Write", tool_input=None, response=None, session="s1", *
           "tool_input": {"file_path": str(path), **(tool_input or {})}}
     if response is not None:
         ev["tool_response"] = response
-    p = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(ev), capture_output=True, text=True,
+    p = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(ev), capture_output=True, encoding="utf-8",
                        env={**os.environ, "XDG_CACHE_HOME": str(tmp / "cache"), **env})
     return p.returncode, p.stderr
 
@@ -41,7 +41,7 @@ def run(tmp, path, tool="Write", tool_input=None, response=None, session="s1", *
 def write(tmp, name, text):
     path = tmp / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
     return path
 
 
@@ -68,14 +68,14 @@ def test_one_long_sentence_in_a_long_plain_document_is_quiet(tmp_path):
 
 @pytest.mark.parametrize("skill", sorted(STEERING.glob("*/skills/*/SKILL.md")), ids=lambda p: p.parent.name)
 def test_quiet_on_the_skills_this_repo_ships(tmp_path, skill):
-    assert run(tmp_path, write(tmp_path, "SKILL.md", skill.read_text()))[0] == 0
+    assert run(tmp_path, write(tmp_path, "SKILL.md", skill.read_text(encoding="utf-8")))[0] == 0
 
 
 def test_an_edit_is_blamed_only_for_the_lines_it_added(tmp_path):
     path = write(tmp_path, "notes.md", HEAVY + "\nThe retry limit is 5.\n")
     edit = {"old_string": "The retry limit is 3.", "new_string": "The retry limit is 5."}
     assert run(tmp_path, path, "Edit", edit)[0] == 0
-    line = len(path.read_text().splitlines())
+    line = len(path.read_text(encoding="utf-8").splitlines())
     patch = [{"oldStart": line, "oldLines": 1, "newStart": line, "newLines": 1,
               "lines": ["-The retry limit is 3.", "+The retry limit is 5."]}]
     assert run(tmp_path, path, "Edit", edit, response={"structuredPatch": patch})[0] == 0

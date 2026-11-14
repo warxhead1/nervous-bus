@@ -129,7 +129,7 @@ def main():
         if (path.suffix.lower() not in PROSE or NOT_OURS.match(path.name) or VENDORED & set(path.parts) or NOTES & {p.name for p in list(path.parents)[:2]}
                 or not path.is_file() or path.stat().st_size > 400_000):
             return 0
-        src = path.read_text(errors="replace")
+        src = path.read_text(encoding="utf-8", errors="replace")
         added = added_lines(ev, src)
         if added is not None and not added:
             return 0
@@ -152,6 +152,10 @@ def main():
     except Exception:
         pass
 
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")   # a console that is not UTF-8 must not break the report
+    except Exception:
+        pass
     long = found["very_long"] + found["long"]
     parts = [f"{len(v)} {name}" for name, v in (("AI tell(s)", found["tell"]), (f"sentence(s) over {LONG} words", long),
                                                  ("semicolon(s)", found["semicolon"]), ("dash(es) joining clauses", found["dash"])) if v]
