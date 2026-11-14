@@ -206,3 +206,19 @@ cp systemd/ci-sweep.* ~/.config/systemd/user/ && systemctl --user daemon-reload 
 ```
 
 The timer runs it every 5 minutes. One pass over the 15 roster repos takes about 20 seconds and about 30 API calls.
+
+## Fork guard: the runner refuses code from another repository
+
+`fork_guard.py` is a runner job-started hook. The runner calls it before any step of a job. It reads the webhook payload and exits 1 when a pull request, or a `workflow_run`, comes from another repository. The job then fails before it runs anything. A payload that cannot be read is refused too.
+
+The workflow `if:` guard and the fork approval setting both live in GitHub. This hook lives on the host, so a pull request cannot remove it.
+
+Install it on the runner of every public repository. The hook is a copy at a fixed host path, never a link into a checkout.
+
+```bash
+install -D -m 755 fork_guard.py ~/.local/share/nervous-bus/runner-hooks/fork-guard
+install -D -m 644 systemd/fork-guard.conf ~/.config/systemd/user/actions-runner-<name>.service.d/60-fork-guard.conf
+systemctl --user daemon-reload && systemctl --user restart actions-runner-<name>.service   # only when the runner is idle
+```
+
+Every job log then shows one line, `fork-guard: allowed (...)` or `fork-guard: REFUSED (...)`, in the "Set up runner" step. To remove the hook, delete the drop-in and restart the runner.
