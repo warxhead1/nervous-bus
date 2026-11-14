@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/memory.agent.skill.proposed.v1.json",
+  "title": "memory.agent.skill.proposed v1",
+  "description": "EverOS distilled a SKILL.md from successful agent runs, and adapters/everos-sink proposes it for review. A person gates it as a PR to agent-skills; it never auto-loads. IDS AND METADATA ONLY: the payload never carries the skill body. Private projects (tachyonac) publish to the private overlay, never here. Design: nervous-bus#115.",
+  "type": "object",
+  "required": [
+    "app_id",
+    "project_id",
+    "agent_id",
+    "skill_name",
+    "md_path",
+    "case_count",
+    "proposed_at"
+  ],
+  "properties": {
+    "app_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "EverOS app scope: the project the runs came from."
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "EverOS project scope."
+    },
+    "agent_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Assistant-side sender id the cases were extracted for (claude-code, codex, ...)."
+    },
+    "skill_name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Skill directory name, skills/skill_<name>/ in EverOS."
+    },
+    "md_path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "SKILL.md path relative to the EverOS memory root."
+    },
+    "case_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "agent_case entries the skill was clustered from."
+    },
+    "session_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Sessions behind those cases, when known."
+    },
+    "pr_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "The agent-skills PR opened for review, once it exists."
+    },
+    "proposed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the sink proposed the skill (RFC3339 UTC)."
+    }
+  },
+  "additionalProperties": false
+}
