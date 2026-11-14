@@ -10,6 +10,12 @@ Run it under a clean --config-dir: measured here, a config whose always-loaded
 rules already cover a skill loads that skill 0 times in 14.
 
     steering/tools/trigger-eval [--plugins a,b] [--runs N] [--model M] [--jobs J] [--json out.json]
+
+Any skill, not just steering ones: --cases <file|dir> reads the same shape (one object
+or a list) from elsewhere, e.g. tools/trigger_cases/. Each skill is found under
+--skill-root (default ~/.claude/skills) and linked into the run's own .claude/skills,
+so only the skills under test are loaded. --dry-run prints the plan and the request
+count and calls nothing.
 """
 import argparse
 import concurrent.futures as cf
@@ -24,15 +30,39 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def load_cases(only):
+def case_files(paths):
+    if not paths:
+        return sorted(ROOT.glob("*/evals/trigger.json"))
+    out = []
+    for p in map(Path, paths):
+        out += sorted(p.glob("*.json")) if p.is_dir() else [p]
+    return out
+
+
+def load_cases(only, paths=None):
     cases = []
-    for f in sorted(ROOT.glob("*/evals/trigger.json")):
-        d = json.loads(f.read_text())
-        if only and d["skill"] not in only:
-            continue
-        cases += [(d["skill"], True, q) for q in d.get("should", [])]
-        cases += [(d["skill"], False, q) for q in d.get("should_not", [])]
+    for f in case_files(paths):
+        doc = json.loads(f.read_text())
+        for d in doc if isinstance(doc, list) else [doc]:
+            if only and d["skill"] not in only:
+                continue
+            cases += [(d["skill"], True, q) for q in d.get("should", [])]
+            cases += [(d["skill"], False, q) for q in d.get("should_not", [])]
     return cases
+
+
+def link_skills(skills, roots, cwd):
+    """Link each skill dir into <cwd>/.claude/skills; return the names not found."""
+    dest = Path(cwd) / ".claude" / "skills"
+    dest.mkdir(parents=True, exist_ok=True)
+    missing = []
+    for s in sorted(skills):
+        src = next((Path(r).expanduser() / s for r in roots if (Path(r).expanduser() / s / "SKILL.md").is_file()), None)
+        if src is None:
+            missing.append(s)
+        elif not (dest / s).exists():
+            (dest / s).symlink_to(src.resolve(), target_is_directory=True)
+    return missing
 
 
 def skills_called(stream):
@@ -78,14 +108,34 @@ def main():
     ap.add_argument("--config-dir", help="CLAUDE_CONFIG_DIR to run under. Use a clean one (credentials only): "
                     "a home config that already states these rules hides whether the skill loads")
     ap.add_argument("--json", dest="out")
+    ap.add_argument("--cases", action="append", help="case file or dir (repeatable); default: steering plugin evals")
+    ap.add_argument("--skill-root", action="append", help="where --cases skills live (repeatable; default ~/.claude/skills)")
+    ap.add_argument("--limit", type=int, default=0, help="run only the first N prompts (a smoke run)")
+    ap.add_argument("--dry-run", action="store_true", help="print the plan and request count; call nothing")
     args = ap.parse_args()
     only = {s for s in args.plugins.split(",") if s}
-    cases = load_cases(only)
+    cases = load_cases(only, args.cases)
     if not cases:
         sys.exit("no cases found")
-    dirs = [] if args.no_plugin_dir else [f.parents[1] for f in sorted(ROOT.glob("*/evals/trigger.json"))]
+    if args.limit:
+        cases = cases[: args.limit]
     cwd = tempfile.mkdtemp(prefix="trigger-eval-")
+    if args.cases:
+        dirs = []
+        missing = link_skills({s for s, _, _ in cases}, args.skill_root or ["~/.claude/skills"], cwd)
+        if missing:
+            sys.exit(f"skill dir not found under --skill-root: {', '.join(missing)}")
+    else:
+        dirs = [] if args.no_plugin_dir else [f.parents[1] for f in sorted(ROOT.glob("*/evals/trigger.json"))]
     jobs = [(skill, want, q, r) for skill, want, q in cases for r in range(args.runs)]
+    if args.dry_run:
+        for skill in sorted({s for s, _, _ in cases}):
+            pos = sum(1 for s, w, _ in cases if s == skill and w)
+            neg = sum(1 for s, w, _ in cases if s == skill and not w)
+            print(f"{skill:24} should={pos} should_not={neg}")
+        print(f"requests: {len(jobs)} ({len(cases)} prompts x {args.runs} runs, up to 2 turns each), "
+              f"model {args.model}, cwd {cwd}")
+        return
     rows = []
     with cf.ThreadPoolExecutor(args.jobs) as ex:
         futs = {ex.submit(run_one, args, q, dirs, cwd): (skill, want, q) for skill, want, q, _ in jobs}
