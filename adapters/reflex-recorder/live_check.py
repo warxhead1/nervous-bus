@@ -4,7 +4,8 @@
 The nightly pass finds a lane's thrash hours after it could have been stopped.
 This runs param_sweep_thrash, foreground_wait and gate_bound_loosened on the
 runs of one session (or the given run ids) and prints each hit it has not
-printed before. A SubagentStop hook can run it and hand the lines to the lead.
+printed before. The caller delivers the lines to the lead. Which caller does
+that (a hook or a terminal relay) is not decided yet.
 
 Read-only on runs.db: it calls detect(), never run(), so nothing is persisted
 there. The only write is the seen-hits state file, which dedupes across calls.
