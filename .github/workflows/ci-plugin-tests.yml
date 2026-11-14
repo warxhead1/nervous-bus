@@ -31,8 +31,10 @@ jobs:
         with:
           clean: false
 
-      - name: Install wasm32-wasip1 target
-        run: rustup target add wasm32-wasip1
+      - name: Install wasm32-wasip1 target, clippy and rustfmt
+        run: |
+          rustup target add wasm32-wasip1
+          rustup component add clippy rustfmt
 
       - name: cargo fmt --check
         working-directory: plugin
