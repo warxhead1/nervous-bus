@@ -389,13 +389,15 @@ class ParamSweepThrashDetector(BaseDetector):
 
     DETECTOR_NAME = "param_sweep_thrash"
     transcript_roots: Optional[list[Path]] = None
+    # Live checks (live_check.py) scope a pass to these runs.
+    run_ids: Optional[list[str]] = None
 
     def detect(self, conn: sqlite3.Connection,
                since_ts: Optional[str] = None) -> list[PatternCandidate]:
         cache = StepCache()
         out: list[PatternCandidate] = []
         # either trigger needs that many Bash calls: skip runs too small to hold one
-        for ref in run_refs(conn, since_ts=since_ts, roots=self.transcript_roots,
+        for ref in run_refs(conn, since_ts=since_ts, run_ids=self.run_ids, roots=self.transcript_roots,
                             min_events=min(MIN_PARAM_RERUNS, MIN_SERIAL_CALLS)):
             steps = cache.steps_for(ref)
             if not steps:
