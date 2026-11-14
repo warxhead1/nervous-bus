@@ -59,13 +59,18 @@ def git(repo: Path, *args: str) -> Optional[bytes]:
 
 def fingerprint(repo: Path, git_fn: Callable[..., Optional[bytes]] = git) -> Optional[dict]:
     """HEAD plus a digest of the dirty tree. Porcelain alone misses a second
-    edit to an already-modified file, so dirty paths' mtimes go in too."""
+    edit to an already-modified file, so dirty paths' mtimes go in too.
+    Untracked DIRECTORIES (porcelain collapses them to `dir/`) count by name
+    only: tool state such as `.beads/` rewrites its own files constantly, and
+    its mtime would trigger a sync on every write."""
     head = git_fn(repo, "rev-parse", "HEAD")
     status = git_fn(repo, "status", "--porcelain=v1", "-z", "--untracked-files=normal")
     if head is None or status is None:
         return None
     h = hashlib.sha256(status)
     for entry in status.split(b"\0"):
+        if entry.startswith(b"?? ") and entry.endswith(b"/"):
+            continue
         if len(entry) > 3:
             try:
                 h.update(str((repo / entry[3:].decode(errors="replace")).stat().st_mtime_ns).encode())

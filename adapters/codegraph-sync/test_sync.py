@@ -115,6 +115,23 @@ class TestFingerprint(unittest.TestCase):
             self.assertNotEqual(dirty1, dirty2)
             self.assertEqual(clean["head"], dirty2["head"])
 
+    def test_churn_inside_untracked_dir_does_not_change_fingerprint(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null"}
+            run = lambda *a: subprocess.run(["git", "-C", d, *a], check=True, capture_output=True, env=env)
+            run("init", "-q", "-b", "main")
+            (repo / "a.py").write_text("x = 1\n")
+            run("add", "a.py")
+            run("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "init")
+            (repo / ".beads").mkdir()
+            (repo / ".beads" / "db").write_text("1")
+            before = sync.fingerprint(repo)
+            (repo / ".beads" / "db.tmp").write_text("2")
+            os.replace(repo / ".beads" / "db.tmp", repo / ".beads" / "db")
+            os.utime(repo / ".beads", ns=(time.time_ns() + 10**9, time.time_ns() + 10**9))
+            self.assertEqual(before, sync.fingerprint(repo))
+
     def test_not_a_repo_is_none(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertIsNone(sync.fingerprint(Path(d)))
