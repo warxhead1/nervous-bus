@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
-"""PostToolUse hook (Write|Edit|MultiEdit): report heavy prose an edit ADDED to a document.
+"""Report heavy prose where it is written: a document, a commit message, a pull request.
 
-Runs the ste80-humanizer checker over the lines this edit added and keeps the
-findings a careful writer rarely makes on purpose: AI tells, sentences that
-carry too much, semicolons and dashes used as sentence glue. Text that was
-already in the file is never blamed on the edit. Exit 2 puts stderr in front of
-the agent. The write itself stands. A file is reported at most twice a session.
-Kill switch: PLAIN_PROSE_DISABLE=1.
+Runs the ste80-humanizer checker and keeps the findings a careful writer rarely
+makes on purpose: AI tells, sentences that carry too much, semicolons and
+dashes used as sentence glue.
+
+PostToolUse (Write|Edit|MultiEdit): scores the lines the edit ADDED to a
+document. Text that was already in the file is never blamed on the edit. The
+write stands. A file is reported at most twice a session.
+
+PreToolUse (Bash): scores the message of a `git commit` and the body of a
+`gh pr` or `gh issue` command, before it runs. History cannot be rewritten
+after a push, so this is the one moment the text can still change. The command
+is sent back once. The next such command runs without a check, so the same
+text, or a rewrite, always goes through.
+
+Exit 2 puts stderr in front of the agent. Kill switch: PLAIN_PROSE_DISABLE=1.
 """
 import importlib.util
 import json
@@ -37,6 +46,10 @@ QUOTED = re.compile(r'"[^"\n]{1,200}"|“[^”\n]{1,200}”')    # someone else'
 REPORTS_PER_FILE = 2
 FENCE = re.compile(r"^\s*(```|~~~)|^---\s*$")
 GLUE = re.compile(r"\s(?:—|--)\s")
+WRITES_A_MESSAGE = re.compile(r"\bgit\b[^\n|;&]*\bcommit\b|\bgh\s+(?:pr|issue)\s+(?:create|edit|comment|review)\b")
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n(.*?)\n[ \t]*\2\b", re.S)
+INLINE = re.compile(r"""(?:\s-[a-zA-Z]*m|\s--message|\s--body|\s-b)[=\s]\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')""", re.S)
+FROM_FILE = re.compile(r"(?:\s-F|\s--file|\s--body-file)[=\s]\s*([^\s'\"<|;&]+)")
 MID_SEMI = re.compile(r"[a-z)],?;\s+\w")     # joins two clauses; not the end of a list item, not code
 
 
@@ -103,8 +116,8 @@ def score(mod, src, added=None):
             n = int(f.message.split()[0])
             if n > LONG:
                 out["very_long" if n > VERY_LONG else "long"].append((f.line, f"{n} words", f.excerpt))
-        elif f.rule == "semicolon" and MID_SEMI.search(raw[f.line - 1]):
-            out["semicolon"].append((f.line, "semicolon", f.excerpt))
+        elif f.rule == "semicolon":              # the checker reports a line once; count each join in it
+            out["semicolon"] += [(f.line, "semicolon", f.excerpt)] * len(MID_SEMI.findall(raw[f.line - 1]))
         elif f.rule == "dash" and glue_dash(raw[f.line - 1]):
             out["dash"].append((f.line, "dash", f.excerpt))
     return out, sum(len(p.split()) for _, p in mod.paragraphs(mod.strip_markdown(src)))
@@ -120,11 +133,66 @@ def state_file(ev):
     return (Path(base) if base else Path.home() / ".cache") / "plain-prose-guard" / f"{ev.get('session_id', 'nosession')}.json"
 
 
-def main():
-    if os.environ.get("PLAIN_PROSE_DISABLE") == "1":
-        return 0
+def message_text(command, cwd):
+    """The prose a commit or a gh command is about to publish, or "" when there is none to read."""
+    if not WRITES_A_MESSAGE.search(command):
+        return ""
+    parts = []
+    for m in HEREDOC.finditer(command):
+        opener = command[command.rfind("\n", 0, m.start()) + 1:m.start()]
+        if WRITES_A_MESSAGE.search(opener):          # a heredoc that feeds some other command is not the message
+            parts.append(m.group(3))
+    for m in INLINE.finditer(HEREDOC.sub(" ", command)):
+        text = m.group(1) if m.group(1) is not None else m.group(2)
+        if "$(" not in text:
+            parts.append(text.replace("\\n", "\n"))
+    for m in FROM_FILE.finditer(command):
+        try:
+            f = Path(cwd or ".") / m.group(1)
+            if m.group(1) != "-" and f.is_file() and f.stat().st_size < 100_000:
+                parts.append(f.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            pass
+    return "\n\n".join(parts).replace("\\`", "`").replace('\\"', '"').replace("\\$", "$")   # undo shell escapes
+
+
+def read_state(ev):
     try:
-        ev = json.load(sys.stdin)
+        return json.loads(state_file(ev).read_text())
+    except Exception:
+        return {}
+
+
+def write_state(ev, seen):
+    try:
+        state_file(ev).parent.mkdir(parents=True, exist_ok=True)
+        state_file(ev).write_text(json.dumps(seen))
+    except Exception:
+        pass
+
+
+def report(where, found, advice):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")   # a console that is not UTF-8 must not break the report
+    except Exception:
+        pass
+    long = found["very_long"] + found["long"]
+    parts = [f"{len(v)} {name}" for name, v in (("AI tell(s)", found["tell"]), (f"sentence(s) over {LONG} words", long),
+                                                 ("semicolon(s)", found["semicolon"]), ("dash(es) joining clauses", found["dash"])) if v]
+    print(f"plain-prose {where} {', '.join(parts)}.", file=sys.stderr)
+    worst = found["tell"] + sorted(long, key=lambda x: -int(x[1].split()[0])) + found["semicolon"] + found["dash"]
+    for line, note, excerpt in worst[:6]:
+        print(f"  line {line} ({note}): {excerpt[:90]}", file=sys.stderr)
+    print(
+        "One idea per sentence. Split at the semicolon, the dash or the second \"and\", and name who acts. "
+        f"Keep every fact, number and name. {advice} Method: ste80-humanizer skill.",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def document(ev):
+    try:
         path = Path(ev["tool_input"]["file_path"])
         if (path.suffix.lower() not in PROSE or NOT_OURS.match(path.name) or VENDORED & set(path.parts) or NOTES & {p.name for p in list(path.parents)[:2]}
                 or not path.is_file() or path.stat().st_size > 400_000):
@@ -138,38 +206,50 @@ def main():
         return 0
     if not fires(found, words):
         return 0
-
-    try:
-        seen = json.loads(state_file(ev).read_text())
-    except Exception:
-        seen = {}
+    seen = read_state(ev)
     if seen.get(str(path), 0) >= REPORTS_PER_FILE:
         return 0
     seen[str(path)] = seen.get(str(path), 0) + 1
-    try:
-        state_file(ev).parent.mkdir(parents=True, exist_ok=True)
-        state_file(ev).write_text(json.dumps(seen))
-    except Exception:
-        pass
+    write_state(ev, seen)
+    return report(f"{path.name}: this edit added", found,
+                  "Leave it if it is a quote, a list of data, or text the reader asked for in this form.")
 
+
+def message(ev):
     try:
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")   # a console that is not UTF-8 must not break the report
+        text = message_text(ev["tool_input"]["command"], ev.get("cwd"))
+        if not text.strip():
+            return 0
     except Exception:
-        pass
-    long = found["very_long"] + found["long"]
-    parts = [f"{len(v)} {name}" for name, v in (("AI tell(s)", found["tell"]), (f"sentence(s) over {LONG} words", long),
-                                                 ("semicolon(s)", found["semicolon"]), ("dash(es) joining clauses", found["dash"])) if v]
-    print(f"plain-prose {path.name}: this edit added {', '.join(parts)}.", file=sys.stderr)
-    worst = found["tell"] + sorted(long, key=lambda x: -int(x[1].split()[0])) + found["semicolon"] + found["dash"]
-    for line, note, excerpt in worst[:6]:
-        print(f"  line {line} ({note}): {excerpt[:90]}", file=sys.stderr)
-    print(
-        "One idea per sentence. Split at the semicolon, the dash or the second \"and\", and name who acts. "
-        "Keep every fact, number and name. Leave it if it is a quote, a list of data, or text the reader "
-        "asked for in this form. Method: ste80-humanizer skill.",
-        file=sys.stderr,
-    )
-    return 2
+        return 0
+    seen = read_state(ev)
+    if seen.pop("message sent back", False):          # the try after a report always runs
+        write_state(ev, seen)
+        return 0
+    try:
+        found, words = score(load_checker(), text)
+    except Exception:
+        return 0
+    if not fires(found, words):
+        return 0
+    seen["message sent back"] = True
+    write_state(ev, seen)
+    return report("message: the text this command publishes has", found,
+                  "The command did not run. Rewrite the text and run it again. "
+                  "To publish it as it is, run the same command again.")
+
+
+def main():
+    if os.environ.get("PLAIN_PROSE_DISABLE") == "1":
+        return 0
+    try:
+        ev = json.load(sys.stdin)
+        bash = ev.get("tool_name") == "Bash"
+        if bash and ev.get("hook_event_name") != "PreToolUse":
+            return 0
+    except Exception:
+        return 0
+    return message(ev) if bash else document(ev)
 
 
 if __name__ == "__main__":

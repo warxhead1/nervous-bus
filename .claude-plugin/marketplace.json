@@ -43,7 +43,7 @@
     {
       "name": "plain-prose",
       "source": "./steering/plain-prose",
-      "description": "Prose a person reads once: one idea per sentence, plain words, no AI tells. The ste80-humanizer skill, and a hook that reports heavy prose an edit adds to a document."
+      "description": "Prose a person reads once: one idea per sentence, plain words, no AI tells. The ste80-humanizer skill, and a hook that reports heavy prose in a document, a commit message or a pull request."
     }
   ]
 }

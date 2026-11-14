@@ -12,5 +12,7 @@ a document, a report, a commit message, a pull request and a brief.
 - Keep every fact, number and name, and keep the certainty the source has.
 
 Method: the `ste80-humanizer` skill. A hook reports heavy prose that an edit
-adds to a document (off: `PLAIN_PROSE_DISABLE=1`). The hook does not see
-commit messages or pull requests, so those are on you.
+adds to a document. It also reads a commit message and the body of a `gh pr`
+or `gh issue` command before the command runs, and sends a heavy one back
+once (off: `PLAIN_PROSE_DISABLE=1`). It does not see a brief you pass to an
+agent, so that is on you.
