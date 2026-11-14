@@ -1,0 +1,9 @@
+{
+  "name": "plain-prose",
+  "version": "0.1.0",
+  "description": "Prose a person reads once: one idea per sentence, plain words, no AI tells. Vendors the ste80-humanizer skill and adds a hook that reports heavy prose an edit adds.",
+  "author": { "name": "warxhead1" },
+  "repository": "https://github.com/warxhead1/nervous-bus",
+  "license": "MIT",
+  "keywords": ["writing", "prose", "docs", "steering", "hooks"]
+}

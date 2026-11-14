@@ -1,0 +1,14 @@
+{
+  "skill": "ste80-humanizer",
+  "should": [
+    "Humanize this LinkedIn post, it sounds like ChatGPT wrote it.",
+    "This README section is too wordy. Tighten the text without losing anything.",
+    "Write a blog post that announces the 2.0 release.",
+    "Rewrite the report in plain English so the whole team can follow it.",
+    "The incident summary is hard to read. Make it clearer."
+  ],
+  "should_not": [
+    "Rename the env var DB_URL to DATABASE_URL across the repo.",
+    "Why does this query do a sequential scan?"
+  ]
+}

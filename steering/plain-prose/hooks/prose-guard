@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""PostToolUse hook (Write|Edit|MultiEdit): report heavy prose an edit ADDED to a document.
+
+Runs the ste80-humanizer checker over the lines this edit added and keeps the
+findings a careful writer rarely makes on purpose: AI tells, sentences that
+carry too much, semicolons and dashes used as sentence glue. Text that was
+already in the file is never blamed on the edit. Exit 2 puts stderr in front of
+the agent. The write itself stands. A file is reported at most twice a session.
+Kill switch: PLAIN_PROSE_DISABLE=1.
+"""
+import importlib.util
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+PROSE = {".md", ".mdx", ".txt", ".rst"}
+NOT_OURS = re.compile(r"^(LICEN[CS]E|NOTICE|COPYING|THIRD_PARTY|CHANGELOG)", re.I)
+VENDORED = {"node_modules", "vendor", "third_party", ".git"}
+NOTES = {"scratch", "tmp"}                   # working notes, when the file sits one or two levels inside
+# Checker rules that are tells on one sighting.
+TELLS = {"not-x-but-y", "chatbot", "run-up", "fake-depth", "closer", "strawman", "knowledge-hedge",
+         "meta", "stacked-hedge", "vague-authority", "ing-rider", "inflation"}
+# Words from the checker's swap list that nobody needs; the rest ("verify", "via") are ordinary.
+STOCK = {"utilize", "utilise", "delve", "seamless", "seamlessly", "pivotal", "tapestry", "testament",
+         "game-changer", "showcase", "groundbreaking", "cutting-edge", "world-class", "best-in-class",
+         "stunning", "breathtaking", "it is important to note", "it's important to note",
+         "it should be noted", "in order to", "serves as", "stands as", "boasts"}
+LONG, VERY_LONG = 30, 45                     # words in one sentence
+KINDS = ("tell", "very_long", "long", "semicolon", "dash")
+# A tell reports on one sighting. The rest add up to a load: a long sentence and a semicolon
+# count 1 each, a very long sentence 2, a dash a half. Report at LOAD or more, when that is also
+# PER_100 or more per 100 added words, so a long document with a few of them stays quiet.
+LOAD, PER_100 = 4, 1.0
+QUOTED = re.compile(r'"[^"\n]{1,200}"|“[^”\n]{1,200}”')    # someone else's words, or a phrase under discussion
+REPORTS_PER_FILE = 2
+FENCE = re.compile(r"^\s*(```|~~~)|^---\s*$")
+GLUE = re.compile(r"\s(?:—|--)\s")
+MID_SEMI = re.compile(r"[a-z)],?;\s+\w")     # joins two clauses; not the end of a list item, not code
+
+
+def load_checker():
+    path = Path(__file__).resolve().parents[1] / "skills" / "ste80-humanizer" / "scripts" / "ste_check.py"
+    spec = importlib.util.spec_from_file_location("ste_check", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["ste_check"] = mod           # its dataclass looks itself up here
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def added_lines(ev, src):
+    """1-based numbers of the lines this tool call added, or None for the whole file."""
+    patch = (ev.get("tool_response") or {}).get("structuredPatch") if isinstance(ev.get("tool_response"), dict) else None
+    if patch:
+        out = set()
+        for hunk in patch:
+            n = hunk.get("newStart", 1)
+            for line in hunk.get("lines", []):
+                if line.startswith("+"):
+                    out.add(n)
+                if not line.startswith("-"):
+                    n += 1
+        return out
+    tool, ti = ev.get("tool_name"), ev.get("tool_input", {})
+    if tool == "Write":
+        return None
+    out, lines = set(), src.splitlines()
+    for e in ti.get("edits") or [ti]:
+        new, old = e.get("new_string", ""), set(e.get("old_string", "").splitlines())
+        at = src.find(new) if new else -1
+        if at < 0:
+            continue
+        first = src.count("\n", 0, at) + 1
+        for n in range(first, first + new.count("\n") + 1):
+            if n <= len(lines) and lines[n - 1] not in old:
+                out.add(n)
+    return out
+
+
+def glue_dash(raw):
+    """A dash that joins two clauses, not one that follows a label or sits in a heading."""
+    if raw.lstrip().startswith("#"):
+        return False
+    return any(len(a.split()) >= 4 and len(b.split()) >= 4
+               for a, b in zip(GLUE.split(raw), GLUE.split(raw)[1:]))
+
+
+def score(mod, src, added=None):
+    """Findings on the added lines of src: ({kind: [(line, note, excerpt)]}, words added)."""
+    raw = src.splitlines()
+    if added is not None:                    # blank what the edit did not add; keep fences so code stays code
+        src = "\n".join(l if n in added or FENCE.match(l) else "" for n, l in enumerate(raw, 1))
+    src = QUOTED.sub("QUOTE", src)           # the checker counts a quote as one word too
+    src = "\n".join("" if l.lstrip().startswith(">") else l for l in src.split("\n"))   # a block quote is a quote
+    out = {k: [] for k in KINDS}
+    for f in mod.check(src, False):
+        if f.rule in TELLS:
+            out["tell"].append((f.line, f.message.split(":")[0], f.excerpt))
+        elif f.rule == "word" and f.message.split("'")[1] in STOCK:
+            out["tell"].append((f.line, f.message, f.excerpt))
+        elif f.rule == "sentence-length":
+            n = int(f.message.split()[0])
+            if n > LONG:
+                out["very_long" if n > VERY_LONG else "long"].append((f.line, f"{n} words", f.excerpt))
+        elif f.rule == "semicolon" and MID_SEMI.search(raw[f.line - 1]):
+            out["semicolon"].append((f.line, "semicolon", f.excerpt))
+        elif f.rule == "dash" and glue_dash(raw[f.line - 1]):
+            out["dash"].append((f.line, "dash", f.excerpt))
+    return out, sum(len(p.split()) for _, p in mod.paragraphs(mod.strip_markdown(src)))
+
+
+def fires(found, words):
+    load = len(found["long"]) + 2 * len(found["very_long"]) + len(found["semicolon"]) + len(found["dash"]) / 2
+    return bool(found["tell"]) or (load >= LOAD and 100 * load >= PER_100 * max(words, 1))
+
+
+def state_file(ev):
+    base = os.environ.get("XDG_CACHE_HOME")
+    return (Path(base) if base else Path.home() / ".cache") / "plain-prose-guard" / f"{ev.get('session_id', 'nosession')}.json"
+
+
+def main():
+    if os.environ.get("PLAIN_PROSE_DISABLE") == "1":
+        return 0
+    try:
+        ev = json.load(sys.stdin)
+        path = Path(ev["tool_input"]["file_path"])
+        if (path.suffix.lower() not in PROSE or NOT_OURS.match(path.name) or VENDORED & set(path.parts) or NOTES & {p.name for p in list(path.parents)[:2]}
+                or not path.is_file() or path.stat().st_size > 400_000):
+            return 0
+        src = path.read_text(encoding="utf-8", errors="replace")
+        added = added_lines(ev, src)
+        if added is not None and not added:
+            return 0
+        found, words = score(load_checker(), src, added)
+    except Exception:
+        return 0
+    if not fires(found, words):
+        return 0
+
+    try:
+        seen = json.loads(state_file(ev).read_text())
+    except Exception:
+        seen = {}
+    if seen.get(str(path), 0) >= REPORTS_PER_FILE:
+        return 0
+    seen[str(path)] = seen.get(str(path), 0) + 1
+    try:
+        state_file(ev).parent.mkdir(parents=True, exist_ok=True)
+        state_file(ev).write_text(json.dumps(seen))
+    except Exception:
+        pass
+
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")   # a console that is not UTF-8 must not break the report
+    except Exception:
+        pass
+    long = found["very_long"] + found["long"]
+    parts = [f"{len(v)} {name}" for name, v in (("AI tell(s)", found["tell"]), (f"sentence(s) over {LONG} words", long),
+                                                 ("semicolon(s)", found["semicolon"]), ("dash(es) joining clauses", found["dash"])) if v]
+    print(f"plain-prose {path.name}: this edit added {', '.join(parts)}.", file=sys.stderr)
+    worst = found["tell"] + sorted(long, key=lambda x: -int(x[1].split()[0])) + found["semicolon"] + found["dash"]
+    for line, note, excerpt in worst[:6]:
+        print(f"  line {line} ({note}): {excerpt[:90]}", file=sys.stderr)
+    print(
+        "One idea per sentence. Split at the semicolon, the dash or the second \"and\", and name who acts. "
+        "Keep every fact, number and name. Leave it if it is a quote, a list of data, or text the reader "
+        "asked for in this form. Method: ste80-humanizer skill.",
+        file=sys.stderr,
+    )
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
