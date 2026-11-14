@@ -160,6 +160,47 @@ def _nervous_cli() -> str:
     here = Path(__file__).resolve().parents[2] / "sdk" / "shell" / "nervous"
     return str(here) if here.is_file() else "nervous"
 
+RAW_CAP = 8000
+# Bulky fields, dropped from _raw in this order until it fits. stats and the ids always stay.
+_RAW_SHED = ("sample_events", "error_events", "peer_snapshot", "transient_context", "pattern_dist")
+
+
+def _raw_within(bundle: dict, cap: int = RAW_CAP) -> str:
+    """The bundle as JSON of at most ``cap`` characters that still parses.
+
+    Slicing the JSON string cut off ``stats`` (it comes after the samples), so a
+    consumer saw no baseline_deviation on exactly the bundles worth analysing.
+    Instead, list fields are halved, then emptied, until the JSON fits. The names
+    of shortened fields go in ``_raw_trimmed``.
+    """
+    raw = json.dumps(bundle)
+    if len(raw) <= cap:
+        return raw
+    b = dict(bundle)
+    trimmed: list[str] = []
+    b["_raw_trimmed"] = trimmed
+    for key in _RAW_SHED:
+        val = b.get(key)
+        if not val:
+            continue
+        trimmed.append(key)
+        while len(raw) > cap and val:
+            if isinstance(val, list):
+                val = val[: len(val) // 2]
+            else:
+                val = type(val)()
+            b[key] = val
+            raw = json.dumps(b)
+        if len(raw) <= cap:
+            return raw
+    stats = dict(b.get("stats") or {})
+    if stats.pop("field_stats", None) is not None:
+        trimmed.append("stats.field_stats")
+        b["stats"] = stats
+        raw = json.dumps(b)
+    return raw
+
+
 _NOTIFY_KEYS = ("bundle_id", "channel", "source_stream", "event_count",
                 "low_interest", "window_start", "window_end")
 _NOTIFY_STATS = ("rate_per_min", "error_rate", "baseline_deviation", "baseline_n")
@@ -239,7 +280,10 @@ def _emit(r: redis_lib.Redis, window, deviation, baseline_n: int, maxlen: int, w
         "transient_context": json.dumps(transient_context),
         "pattern_dist": json.dumps(pattern_dist),
         "peer_snapshot": json.dumps(peer_snapshot),
-        "_raw": json.dumps(bundle)[:8000],
+        "stats": json.dumps(stats),
+        "window_start": bundle["window_start"],
+        "window_end": bundle["window_end"],
+        "_raw": _raw_within(bundle, RAW_CAP),
     }
     r.xadd("nbus:bundles", fields, maxlen=maxlen, approximate=True)
     if not bundle["low_interest"]:
