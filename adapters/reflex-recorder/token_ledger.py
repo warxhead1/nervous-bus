@@ -52,6 +52,7 @@ if _TRANSCRIPTS not in sys.path:
     sys.path.append(_TRANSCRIPTS)
 from project import project_of as _resolve_project  # noqa: E402
 from claude_layout import session_files as _session_files  # noqa: E402
+from sources.codex import Codex as _Codex  # noqa: E402
 
 HOME = Path.home()
 DEFAULT_DB = HOME / ".cache" / "nervous-bus" / "reflex" / "tokens.db"
@@ -61,10 +62,9 @@ ROOTS = (
     ("mmx", HOME / ".mmx" / "projects"),
 )
 
-CODEX_ROOTS = (
-    HOME / ".codex" / "sessions",
-    *sorted((HOME / ".config" / "orca" / "codex-accounts").glob("*/home/sessions")),
-)
+# $CODEX_HOME (default ~/.codex) sessions and archived_sessions, the Orca account
+# homes, and NBUS_TRANSCRIPTS_CODEX: the transcript reader's own list.
+CODEX_ROOTS = tuple(Path(r) for r in _Codex().roots())
 GEMINI_ROOTS = (HOME / ".gemini" / "tmp",)
 
 SCHEMA = """

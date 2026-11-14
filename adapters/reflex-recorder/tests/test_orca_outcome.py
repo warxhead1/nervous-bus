@@ -227,5 +227,25 @@ class TestLabelFromOrcaWorkerDone(unittest.TestCase):
         self.assertEqual(index.get(sid), "succeeded")
 
 
+
+class TestRolloutRootsFollowCodexHome(unittest.TestCase):
+    """Rollouts are found under $CODEX_HOME, including archived sessions, like the transcript reader."""
+
+    def test_codex_home_sessions_and_archive_are_scanned(self):
+        import os
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            codex_home = Path(tmp) / "elsewhere"
+            live = codex_home / "sessions" / "2026" / "11" / "14"
+            old = codex_home / "archived_sessions" / "2026" / "11" / "13"
+            sid1, sid2 = "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"
+            for d, sid in ((live, sid1), (old, sid2)):
+                d.mkdir(parents=True)
+                (d / _rollout_filename(sid)).write_text("{}\n")
+            with mock.patch.dict(os.environ, {"CODEX_HOME": str(codex_home), "HOME": tmp}):
+                found = {_session_id_from_path(p) for p in iter_rollout_paths()}
+            self.assertEqual(found, {sid1, sid2})
+
+
 if __name__ == "__main__":
     unittest.main()

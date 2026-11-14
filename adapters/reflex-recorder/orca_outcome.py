@@ -28,23 +28,25 @@ Outcome mapping (tier 3, alongside bead_close/pr_merge/git_merged_into_main):
 """
 from __future__ import annotations
 
-import glob
 import json
+import os
 import re
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-# Every place a codex rollout can live. `~/.codex/sessions` is the primary
-# runtime; `~/.config/orca/codex-accounts/<acct>/home/sessions` mirrors the
-# exact same files per configured account — duplicates, deduped below by
-# session id, not by path.
+_TRANSCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "transcripts")
+if _TRANSCRIPTS not in sys.path:
+    sys.path.append(_TRANSCRIPTS)
+from sources.codex import Codex as _Codex  # noqa: E402
+
+
+# Every place a codex rollout can live, from the transcript reader: $CODEX_HOME
+# sessions and archived_sessions, and the Orca account homes. The account homes
+# mirror the same files, so callers dedupe by session id, not by path.
 def _rollout_roots() -> list[str]:
-    roots = [str(Path.home() / ".codex" / "sessions")]
-    roots.extend(sorted(glob.glob(
-        str(Path.home() / ".config" / "orca" / "codex-accounts" / "*" / "home" / "sessions")
-    )))
-    return roots
+    return _Codex().roots()
 
 
 _ROLLOUT_NAME_RE = re.compile(
