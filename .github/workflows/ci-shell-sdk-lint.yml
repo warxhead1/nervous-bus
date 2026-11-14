@@ -22,23 +22,18 @@ concurrency:
 jobs:
   shell-sdk-lint:
     name: shell-sdk-lint
-    # A fork's pull request never runs on our own machine. tools/check_self_hosted_guard.py enforces this.
-    if: github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, linux, nervous-bus]
+    # Needs nothing from our machine, so it runs on a hosted runner and does not queue.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          clean: false
+          python-version: '3.12'
 
-      - name: Ensure shellcheck is available
+      - name: Install shellcheck
         run: |
-          # The runner's job PATH is leaner than the user's interactive shell,
-          # so use python3 -m pip and resolve shellcheck via full path.
-          if [ ! -x "$HOME/.local/bin/shellcheck" ]; then
-            python3 -m pip install --user --quiet shellcheck-py
-          fi
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          "$HOME/.local/bin/shellcheck" --version
+          python3 -m pip install --quiet shellcheck-py
+          shellcheck --version
 
       - name: Lint all shell scripts under sdk/ and adapters/
         run: |
@@ -59,4 +54,4 @@ jobs:
           fi
           printf "Linting %d files:\n" "${#files[@]}"
           printf "  %s\n" "${files[@]}"
-          "$HOME/.local/bin/shellcheck" -S warning "${files[@]}"
+          shellcheck -S warning "${files[@]}"

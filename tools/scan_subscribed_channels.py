@@ -473,6 +473,25 @@ EXT_DISPATCH = {
 }
 
 
+def _files(root: Path, dotgit: bool = False):
+    """Files under root, never descending into a SKIP_DIRS directory.
+
+    A full recursive glob read node_modules, .venv and target and dropped the
+    results afterwards. With dotgit=True this yields each `.git` entry (file or
+    directory) found outside a skipped tree, and nothing else.
+    """
+    import os
+    if not dotgit and any(part in SKIP_DIRS for part in root.parts):
+        return
+    for dirpath, dirnames, filenames in os.walk(root):
+        if dotgit and (".git" in dirnames or ".git" in filenames):
+            yield Path(dirpath) / ".git"
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        if not dotgit:
+            for name in sorted(filenames):
+                yield Path(dirpath) / name
+
+
 def _nested_repo_prefixes(root: Path) -> tuple[str, ...]:
     """Relative-path prefixes for nested git repos / worktrees under `root`.
 
@@ -485,7 +504,7 @@ def _nested_repo_prefixes(root: Path) -> tuple[str, ...]:
     Returns posix relative-path prefixes (each ending in `/`).
     """
     prefixes: list[str] = []
-    for dotgit in root.rglob(".git"):
+    for dotgit in _files(root, dotgit=True):
         # A `.git` directly under `root` belongs to `root` itself — not nested.
         parent = dotgit.parent
         if parent == root:
@@ -504,7 +523,7 @@ def _collect_ts_channels_map(
 ) -> dict[str, str]:
     """Pre-scan the whole tree for the CHANNELS map (lives in schemas.ts)."""
     cmap: dict[str, str] = {}
-    for path in root.rglob("*.ts"):
+    for path in (f for f in _files(root) if f.suffix == ".ts"):
         if not path.is_file():
             continue
         if any(part in SKIP_DIRS for part in path.parts):
@@ -558,7 +577,7 @@ def walk_tree(root: Path, consumer: str) -> list[dict]:
     # Pre-scan the CHANNELS map once for the whole tree (TS).
     ts_map = _collect_ts_channels_map(root, nested=nested)
 
-    for path in root.rglob("*"):
+    for path in _files(root):
         if not path.is_file():
             continue
         if any(part in SKIP_DIRS for part in path.parts):
