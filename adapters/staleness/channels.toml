@@ -18,15 +18,6 @@ kind = "activity"
 match = "hearth-linter.*"
 kind = "activity"
 
-# hearth-loom dispatch: one event per bead step, nothing when no bead is dispatched.
-[[channel]]
-match = "bus.bead.lifecycle.v1"
-kind = "activity"
-
-[[channel]]
-match = "loom.shared-session.v1"
-kind = "activity"
-
 # memory graph writes from everos-watch: one event per EverOS memory file change.
 [[channel]]
 match = "memory.node.*"
