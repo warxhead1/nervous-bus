@@ -24,13 +24,17 @@ concurrency:
 jobs:
   schema-lint:
     name: schema-lint
-    # Needs nothing from our machine, so it runs on a hosted runner and does not queue.
-    runs-on: ubuntu-latest
+    # A fork's pull request never runs on our own machine. tools/check_self_hosted_guard.py enforces this.
+    if: github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, linux, nervous-bus]
     steps:
+      - name: Configure PATH
+        run: |
+          echo "$HOME/.pyenv/shims" >> $GITHUB_PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          clean: false
 
       - name: Validate JSON, names and required fields
         # One process for all schemas. A process per schema took 13 minutes on the self-hosted runner.
@@ -56,8 +60,15 @@ jobs:
           sys.exit(1 if bad else 0)
           EOF
 
-      - name: Install jsonschema
-        run: python3 -m pip install --quiet jsonschema
+      - name: Ensure jsonschema is available
+        run: |
+          # PATH is set at job-level to prefer pyenv (which ships pip).
+          which python3
+          python3 --version
+          if ! python3 -c "import jsonschema" 2>/dev/null; then
+            python3 -m pip install --user --quiet jsonschema
+          fi
+          python3 -c "import importlib.metadata as m; print('jsonschema', m.version('jsonschema'))"
 
       - name: Validate schemas as JSON Schema 2020-12
         run: |

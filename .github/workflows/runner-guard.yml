@@ -11,8 +11,12 @@ permissions:
 
 jobs:
   runner-guard:
-    runs-on: ubuntu-latest
+    # A fork's pull request never runs on our own machine. tools/check_self_hosted_guard.py enforces this.
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, linux, nervous-bus]
     steps:
       - uses: actions/checkout@v7
+        with:
+          clean: false
       - run: python3 tools/check_self_hosted_guard.py
       - run: python3 -m unittest tools/test_check_self_hosted_guard.py
