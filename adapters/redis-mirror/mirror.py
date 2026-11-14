@@ -79,6 +79,7 @@ return 1
 # event. We therefore store `_raw` in full; this is only a threshold above which
 # we log that an unusually large payload was mirrored (never truncated).
 RAW_WARN_BYTES = 262144  # 256 KiB
+DEFAULT_MAX_PAYLOAD_BYTES = 16384  # same default as the Go and shell SDK guards
 
 _NBUS_ROOT = Path(__file__).parent.parent.parent  # adapters/redis-mirror/../../ == nervous-bus root
 # User-home dir for private/custom schemas and config. Overridable via NERVOUS_HOME env var.
@@ -215,6 +216,7 @@ def load_config(config_path: Path) -> dict:
         "min_idle_ms": 0,
         "offset_file": DEFAULT_OFFSET_FILE,
         "metrics_interval_s": 60.0,
+        "max_payload_bytes": DEFAULT_MAX_PAYLOAD_BYTES,
     }
 
     if "channels" in raw:
@@ -241,6 +243,8 @@ def load_config(config_path: Path) -> dict:
         cfg["trim_strategy"] = streams_cfg["trim_strategy"]
     if "min_idle_ms" in streams_cfg:
         cfg["min_idle_ms"] = streams_cfg["min_idle_ms"]
+    if "max_payload_bytes" in streams_cfg:
+        cfg["max_payload_bytes"] = int(streams_cfg["max_payload_bytes"])
 
     channel_cfg_raw = raw.get("channels", {})
     if isinstance(channel_cfg_raw, dict):
@@ -306,6 +310,7 @@ class State:
         mirror_all: bool,
         universal_stream: str,
         universal_stream_maxlen: int,
+        max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES,
     ):
         self.log_path = log_path
         self.channel_prefixes = channel_prefixes
@@ -321,6 +326,8 @@ class State:
         self.mirror_all: bool = mirror_all
         self.universal_stream: str = universal_stream
         self.universal_stream_maxlen: int = universal_stream_maxlen
+        # A line over this many UTF-8 bytes is dead-lettered, not mirrored. 0 or less disables.
+        self.max_payload_bytes: int = max_payload_bytes
 
         self.fp: Optional[object] = None
         self.inode: Optional[int] = None
@@ -337,6 +344,7 @@ class State:
         self.events_mirrored = 0
         self.events_dropped = 0
         self.events_deduped = 0
+        self.events_too_large = 0
         self.redis_errors = 0
         self.last_metrics_log = time.time()
         self.started_at = time.time()
@@ -513,8 +521,15 @@ def atomic_publish(
     return int(inserted) == 1
 
 
-def _emit_dead_letter(state: State, event_type: str, raw: str, violation_detail: str) -> None:
-    """Emit a bus.dead_letter.v1 event to Redis for a schema-violating event.
+def _emit_dead_letter(
+    state: State,
+    event_type: str,
+    raw: str,
+    violation_detail: str = "",
+    failure_reason: str = "schema_violation",
+    extra: Optional[Dict[str, object]] = None,
+) -> None:
+    """Emit a bus.dead_letter.v1 event to Redis for an event that was not mirrored.
 
     This is best-effort — if Redis is unreachable the dead-letter itself is
     silently dropped (we don't recurse or block).
@@ -522,12 +537,15 @@ def _emit_dead_letter(state: State, event_type: str, raw: str, violation_detail:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     import uuid
     dl_id = str(uuid.uuid4())
-    dl_data = {
-        "failure_reason": "schema_violation",
+    dl_data: Dict[str, object] = {
+        "failure_reason": failure_reason,
         "original_type": event_type,
         "original_payload_excerpt": raw[:500],
-        "schema_violation_detail": violation_detail[:500],
     }
+    if violation_detail:
+        dl_data["schema_violation_detail"] = violation_detail[:500]
+    if extra:
+        dl_data.update(extra)
     dl_envelope = {
         "specversion": "1.0",
         "id": dl_id,
@@ -564,6 +582,28 @@ def mirror_event(state: State, raw: str) -> bool:
         return False
 
     if not state.connect_redis():
+        state.events_dropped += 1
+        return False
+
+    limit = getattr(state, "max_payload_bytes", DEFAULT_MAX_PAYLOAD_BYTES)
+    size = len(raw.encode("utf-8"))
+    if limit > 0 and size > limit:
+        sys.stderr.write(
+            f"[redis-mirror] {event_type} line is {size} bytes, over the {limit} byte limit; "
+            f"dead-lettered, not mirrored\n"
+        )
+        sys.stderr.flush()
+        src = event.get("source")
+        _emit_dead_letter(
+            state, event_type, raw,
+            failure_reason="payload_too_large",
+            extra={
+                "original_source": src if isinstance(src, str) else "",
+                "payload_bytes": size,
+                "limit_bytes": limit,
+            },
+        )
+        state.events_too_large = getattr(state, "events_too_large", 0) + 1
         state.events_dropped += 1
         return False
 
@@ -644,7 +684,8 @@ def log_metrics(state: State) -> None:
     sys.stderr.write(
         f"[{now_str}] redis-mirror metrics: "
         f"mirrored={state.events_mirrored} dropped={state.events_dropped} "
-        f"deduped={state.events_deduped} redis_errors={state.redis_errors} "
+        f"deduped={state.events_deduped} too_large={getattr(state, 'events_too_large', 0)} "
+        f"redis_errors={state.redis_errors} "
         f"unknown_channels={unknown_total} rate={events_per_sec:.2f}/s\n"
     )
     sys.stderr.flush()
@@ -705,6 +746,7 @@ def main() -> int:
         mirror_all=cfg.get("mirror_all", False),
         universal_stream=cfg.get("universal_stream", ""),
         universal_stream_maxlen=cfg.get("universal_stream_maxlen", 50000),
+        max_payload_bytes=cfg.get("max_payload_bytes", DEFAULT_MAX_PAYLOAD_BYTES),
     )
 
     reader = TailReader(state)
