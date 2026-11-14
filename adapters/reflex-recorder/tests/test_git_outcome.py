@@ -176,6 +176,59 @@ def test_verify_discarded_landed_false_when_truly_gone(repo: Path):
     assert go.verify_discarded_landed(str(repo), "worktree-agent-gone") is False
 
 
+def _orphan_branch(repo: Path) -> None:
+    _new_branch(repo, "worktree-agent-slow")
+    _run(repo, "switch", "-q", "worktree-agent-slow")
+    _commit(repo, "slow.txt",
+            "const first_unique_never_landed_token = orphaned_dispatch_work();\n"
+            "const second_unique_never_landed_token = orphaned_dispatch_more();\n",
+            "feat: orphaned")
+    _run(repo, "switch", "-q", "main")
+
+
+def test_verify_discarded_landed_abstains_when_a_probe_times_out(repo: Path, monkeypatch):
+    """A pickaxe probe that times out is not evidence the code is absent. The
+    verifier must abstain (None), never return False, which would become a
+    terminal 'abandoned' label."""
+    _orphan_branch(repo)
+    real_git = go._git
+
+    def git_with_timeout(r, *args, **kw):
+        if "-S" in args and "first_unique" in args[args.index("-S") + 1]:
+            return None  # what _git returns on TimeoutExpired
+        return real_git(r, *args, **kw)
+
+    monkeypatch.setattr(go, "_git", git_with_timeout)
+    assert go.verify_discarded_landed(str(repo), "worktree-agent-slow") is None
+
+
+def test_verify_discarded_landed_runs_probes_concurrently(repo: Path, monkeypatch):
+    """The probes are independent, so they overlap in time instead of queuing."""
+    import threading
+    _orphan_branch(repo)
+    real_git = go._git
+    lock = threading.Lock()
+    state = {"live": 0, "peak": 0}
+
+    def git_tracking(r, *args, **kw):
+        if "-S" not in args:
+            return real_git(r, *args, **kw)
+        with lock:
+            state["live"] += 1
+            state["peak"] = max(state["peak"], state["live"])
+        try:
+            import time
+            time.sleep(0.2)
+            return real_git(r, *args, **kw)
+        finally:
+            with lock:
+                state["live"] -= 1
+
+    monkeypatch.setattr(go, "_git", git_tracking)
+    assert go.verify_discarded_landed(str(repo), "worktree-agent-slow") is False
+    assert state["peak"] >= 2
+
+
 # ── live worktree enumeration ────────────────────────────────────────────────────
 
 def test_live_worktree_branches(repo: Path, tmp_path: Path):
