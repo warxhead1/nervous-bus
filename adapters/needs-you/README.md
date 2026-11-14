@@ -9,6 +9,11 @@ Stop hook `needs_you.py hook` reads it, stores the latest block per session unde
 used tools but ended without the block is sent back once to add it. A later
 `**Needs you:** nothing` clears that session's earlier asks.
 
+Goal loop breaker: when the `/goal` checker re-opens a session 3 turns in a row and none of those
+turns makes a tool call, the hook returns `continue: false`. Claude Code then ends the turn and
+pauses the goal ("a hook that ended the turn"). The ask "Goal checker is looping" goes to the top
+of the queue. A goal turn that uses a tool, or any prompt from a person, resets the count.
+
 ```bash
 needs-you            # open items, grouped by session
 needs-you ack 2      # mark entry 2 handled; `ack all` clears the queue

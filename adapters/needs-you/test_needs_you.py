@@ -214,6 +214,51 @@ class Hook(unittest.TestCase):
         self.assertTrue(rec["transcript"].endswith(".jsonl"))
         self.assertGreater(rec["turn_ts"], 0)
 
+    def _goal_fire(self, n):
+        cond = "finish the open issues"
+        return [user(f"Stop hook feedback:\n[{cond}]: Not satisfied. Issues remain.", f"g{n}"),
+                {"type": "attachment", "attachment": {"type": "goal_status", "met": False, "condition": cond}},
+                text("Still paused, as you asked.\n\n**Needs you:**\n- pause or clear the goal")]
+
+    def _work_turn(self):
+        return [user("do the issues", "w1"), tool_use(), tool_result(),
+                text("Paused.\n\n**Needs you:**\n- pause or clear the goal")]
+
+    def test_goal_loop_breaker_fires_on_the_third_noop_reopen_not_before(self):
+        entries = self._work_turn()
+        for n in (1, 2):
+            entries += self._goal_fire(n)
+            self.assertIsNone(self.run_hook(*entries), f"fired after {n} re-opens")
+        entries += self._goal_fire(3)
+        out = self.run_hook(*entries)
+        self.assertIs(out["continue"], False)
+        self.assertIn("3 re-opens", out["stopReason"])
+        items = ny.load()[0]["items"]
+        self.assertTrue(items[0].startswith("Goal checker is looping"))
+        self.assertIn("pause or clear the goal", items)
+
+    def test_goal_reopen_that_does_work_resets_the_streak(self):
+        entries = self._work_turn() + self._goal_fire(1) + self._goal_fire(2)
+        entries += [user("Stop hook feedback:\n[finish the open issues]: Not satisfied.", "g3"),
+                    {"type": "attachment", "attachment": {"type": "goal_status", "met": False}},
+                    tool_use(), tool_result(), text("Fixed one.\n\n**Needs you:** nothing")]
+        self.assertIsNone(self.run_hook(*entries))
+        entries += self._goal_fire(4) + self._goal_fire(5)
+        self.assertIsNone(self.run_hook(*entries))
+
+    def test_other_stop_hook_feedback_is_not_a_goal_fire(self):
+        entries = self._work_turn()
+        for n in range(3):
+            entries += [user("Stop hook feedback:\nThis turn used tools but the reply has no block.", f"b{n}"),
+                        text("**Needs you:** nothing")]
+        self.assertIsNone(self.run_hook(*entries))
+
+    def test_goal_loop_without_a_needs_you_block_still_stops(self):
+        entries = self._work_turn()
+        for n in range(3):
+            entries += self._goal_fire(n)[:2] + [text("Still paused.")]
+        self.assertIs(self.run_hook(*entries)["continue"], False)
+
     def test_no_terminal_no_binding(self):
         with mock.patch.dict(os.environ, {"ORCA_TERMINAL_HANDLE": "", "TMUX_PANE": ""}):
             ny.bind("s2", "/x")
