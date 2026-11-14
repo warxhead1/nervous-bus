@@ -356,11 +356,11 @@ fn next_ulid() -> String {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     // The only error is an 80-bit entropy overflow inside one millisecond,
-    // which is not realistically recoverable. `Ulid::new` still emits a
+    // which is not realistically recoverable. `Ulid::generate` still emits a
     // standards-compliant Crockford ULID if that pathological edge occurs.
     generator
         .generate()
-        .unwrap_or_else(|_| ulid::Ulid::new())
+        .unwrap_or_else(|_| ulid::Ulid::generate())
         .to_string()
 }
 
