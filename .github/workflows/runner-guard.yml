@@ -20,3 +20,4 @@ jobs:
           clean: false
       - run: python3 tools/check_self_hosted_guard.py
       - run: python3 -m unittest tools/test_check_self_hosted_guard.py
+      - run: python3 -m unittest adapters/ci-watch/test_fork_guard.py
