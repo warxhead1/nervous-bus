@@ -32,6 +32,7 @@ SHIM_MARK = "nervous-bus shim"
 CLIS = {
     "argshape": ("adapters/argshape/argshape.py", "python"),
     "needs-you": ("adapters/needs-you/needs_you.py", "python"),
+    "reflex": ("adapters/reflex-recorder/query.py", "python"),
     "transcripts": ("adapters/transcripts/transcripts.py", "python"),
     "nervous": ("sdk/shell/nervous", "bash"),
     "nbd": ("sdk/shell/nbd", "bash"),
