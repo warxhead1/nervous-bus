@@ -39,6 +39,11 @@
       "name": "falsify-your-gate",
       "source": "./steering/falsify-your-gate",
       "description": "A test, gate, or detector counts only after you have watched it fail. Skill, and a hook that reports a test an edit adds that cannot fail."
+    },
+    {
+      "name": "plain-prose",
+      "source": "./steering/plain-prose",
+      "description": "Prose a person reads once: one idea per sentence, plain words, no AI tells. The ste80-humanizer skill, and a hook that reports heavy prose an edit adds to a document."
     }
   ]
 }
