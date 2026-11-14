@@ -1,0 +1,10 @@
+[Unit]
+Description=Cancel CI runs of closed pull requests (nervous-bus ci-watch sweep)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/ci-watch/sweep.py
+SyslogIdentifier=nervous-ci-sweep
