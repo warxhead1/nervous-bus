@@ -1,0 +1,29 @@
+# Per-channel staleness rules for public channels. First match wins.
+# Private channels go in $NERVOUS_HOME/staleness-channels.toml, which is read first.
+#
+#   match          fnmatch glob over the channel name
+#   kind           "activity": publishes only when there is work, so silence is normal
+#                  "retired":  the producer is gone on purpose
+#   min_gap_hours  the stale threshold is at least this many hours
+#
+# Add a rule only when the producer's code or its own logs show why it is quiet.
+# A channel with no such evidence stays stale until someone looks.
+
+# hearth-loom sidecars emit health only while a build or lint is running.
+[[channel]]
+match = "hearth-builder.*"
+kind = "activity"
+
+[[channel]]
+match = "hearth-linter.*"
+kind = "activity"
+
+# memory graph writes from everos-watch: one event per EverOS memory file change.
+[[channel]]
+match = "memory.node.*"
+kind = "activity"
+
+# hearth ember insights arrive in batches hours apart.
+[[channel]]
+match = "hearth.ember.insight.v1"
+min_gap_hours = 24

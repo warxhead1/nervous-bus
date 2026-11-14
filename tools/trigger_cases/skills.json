@@ -1,0 +1,80 @@
+[
+  {
+    "skill": "beads",
+    "group": "top-used",
+    "should": [
+      "file a bead for the flaky redis-mirror test and label it for this project",
+      "what beads are ready to work on right now?",
+      "close bd issue nervous-bus-4f2 now that the fix landed"
+    ],
+    "should_not": [
+      "rename the variable count to total in this function",
+      "what does a 502 from nginx usually mean?"
+    ]
+  },
+  {
+    "skill": "hearth-vault",
+    "group": "top-used",
+    "should": [
+      "this script needs the MINIMAX_API_KEY, run it without printing the key",
+      "there's a .env with real API keys in the repo, move them somewhere safe",
+      "wire the GitHub token into the systemd unit for the relay service"
+    ],
+    "should_not": [
+      "add a .env.example listing the variables the app reads",
+      "explain what a JWT refresh token is"
+    ]
+  },
+  {
+    "skill": "host-governance",
+    "group": "top-used",
+    "should": [
+      "the cargo build is making my game stutter, lower its priority",
+      "why does nproc say 4 inside this service when the box has 32 cores?",
+      "deprioritize the self-hosted runner while I'm gaming"
+    ],
+    "should_not": [
+      "make this python loop faster",
+      "how many cores does a Ryzen 9 7950X have?"
+    ]
+  },
+  {
+    "skill": "hand-drawn-diagrams",
+    "group": "never-seen",
+    "should": [
+      "draw me an excalidraw diagram of the bus architecture",
+      "make a hand-drawn style sketch of the login flow I can edit later",
+      "turn this list of services into a whiteboard-style diagram"
+    ],
+    "should_not": [
+      "make a bar chart of request latency per endpoint",
+      "describe the login flow in words"
+    ]
+  },
+  {
+    "skill": "web-clone",
+    "group": "never-seen",
+    "should": [
+      "clone this website's landing page so I can rebrand it",
+      "reproduce the WebGL hero effect from that site in our app",
+      "复刻这个网站的首页"
+    ],
+    "should_not": [
+      "git clone the nervous-bus repo into data2",
+      "fix the CSS on our own landing page header"
+    ]
+  },
+  {
+    "skill": "geo-content-optimizer",
+    "group": "never-seen",
+    "should": [
+      "optimize this article so ChatGPT and Perplexity cite it",
+      "how do I get our docs quoted in Google AI Overviews?",
+      "make this page more citable by AI search engines"
+    ],
+    "should_not": [
+      "fix the broken meta description on our homepage",
+      "write a new blog post about our pricing"
+    ]
+  }
+]

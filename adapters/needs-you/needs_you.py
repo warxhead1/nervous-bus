@@ -228,6 +228,66 @@ def turn_from_transcript(path: str) -> tuple[str, bool, str]:
     return "\n".join(texts), used_tools, turn_id
 
 
+GOAL_LOOP_AT = 3
+GOAL_FEEDBACK_RE = re.compile(r"^Stop hook feedback:\s*\n?\[")
+
+
+def _prompt_text(content) -> str | None:
+    """The text of a real prompt, or None for a tool_result carrier."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        if any(isinstance(c, dict) and c.get("type") == "tool_result" for c in content):
+            return None
+        return "\n".join(c.get("text", "") for c in content if isinstance(c, dict))
+    return None
+
+
+def goal_noop_streak(lines: list[str]) -> int:
+    """How many turns at the end of the transcript were opened by the /goal checker
+    ("Stop hook feedback: [<condition>]: Not satisfied", with a goal_status attachment
+    that is not met) and made no tool call. A turn opened by anything else, or one
+    that used a tool, ends the streak."""
+    turns: list[dict] = []
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        kind = e.get("type")
+        if kind == "user":
+            txt = _prompt_text((e.get("message") or {}).get("content"))
+            if txt is not None:
+                turns.append({"feedback": bool(GOAL_FEEDBACK_RE.match(txt)), "goal": False, "tools": False})
+        elif kind == "attachment" and turns:
+            att = e.get("attachment") or {}
+            if att.get("type") == "goal_status" and att.get("met") is False:
+                turns[-1]["goal"] = True
+        elif kind == "assistant" and turns:
+            content = (e.get("message") or {}).get("content")
+            if isinstance(content, list) and any(
+                isinstance(c, dict) and c.get("type") == "tool_use" for c in content
+            ):
+                turns[-1]["tools"] = True
+    streak = 0
+    for t in reversed(turns):
+        if not (t["feedback"] and t["goal"]) or t["tools"]:
+            break
+        streak += 1
+    return streak
+
+
+def goal_loop_streak(path: str) -> int:
+    try:
+        return goal_noop_streak(Path(path).read_text(errors="replace").splitlines())
+    except OSError:
+        return 0
+
+
+GOAL_LOOP_ITEM = ("Goal checker is looping: {n} re-opens in a row with no tool call. "
+                  "The session is stopped. Clear or pause the goal, or give it the next step.")
+
+
 def project_of(cwd: str) -> str:
     try:
         common = subprocess.run(
@@ -385,7 +445,8 @@ def hook(data: dict) -> dict | None:
     transcript = data.get("transcript_path") or ""
     out = turn_end(data, session_id, transcript)
     # Only a Stop that ends the turn makes the session idle; a block continues it.
-    bind(session_id, data.get("cwd") or os.getcwd(), "busy" if out else "idle", transcript)
+    busy = bool(out) and out.get("decision") == "block"
+    bind(session_id, data.get("cwd") or os.getcwd(), "busy" if busy else "idle", transcript)
     return out
 
 
@@ -396,6 +457,10 @@ def turn_end(data: dict, session_id: str, transcript: str) -> dict | None:
     items = extract(reply)
     if items is None:
         if not used_tools:
+            streak = goal_loop_streak(transcript)
+            if streak >= GOAL_LOOP_AT:
+                log("goal_loop_stop", data, streak=streak)
+                return {"continue": False, "stopReason": GOAL_LOOP_ITEM.format(n=streak)}
             log("pass_chat_turn", data)
             return None
         if already_blocked(session_id, turn_id or reply[-200:]):
@@ -416,10 +481,19 @@ def turn_end(data: dict, session_id: str, transcript: str) -> dict | None:
         "ts": time.time(),
         "acked": False,
     }
+    streak = goal_loop_streak(transcript) if not used_tools else 0
+    if streak >= GOAL_LOOP_AT:
+        loop_item = GOAL_LOOP_ITEM.format(n=streak)
+        if loop_item not in entry["items"]:
+            entry["items"] = [loop_item] + entry["items"][:19]
     write_entry(entry)
     publish(entry)
     prose_path_hint(session_id, entry["items"])
     log("recorded", data, items=len(entry["items"]))
+    if streak >= GOAL_LOOP_AT:
+        log("goal_loop_stop", data, streak=streak)
+        # continue:false ends the turn even when another Stop hook (the goal checker) blocks.
+        return {"continue": False, "stopReason": GOAL_LOOP_ITEM.format(n=streak)}
     return None
 
 

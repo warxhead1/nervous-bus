@@ -38,6 +38,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import math
 import os
@@ -96,6 +97,16 @@ DEFAULT_FLOOR_SECONDS = 1800.0
 # once per cooldown window; the report.md always shows current state
 # regardless of cooldown.
 DEFAULT_ALERT_COOLDOWN_S = 6 * 3600.0
+
+# Per-channel rules. The overlay (private channels, local decisions) is read
+# first, so its rules win over the public file for the same channel.
+PUBLIC_POLICY_FILE = Path(__file__).resolve().parent / "channels.toml"
+OVERLAY_POLICY_FILE = Path(os.environ.get(
+    "NERVOUS_STALENESS_POLICY",
+    str(Path(os.environ.get("NERVOUS_HOME", str(Path.home() / ".config" / "nervous-bus")))
+        / "staleness-channels.toml"),
+))
+POLICY_KINDS = ("activity", "retired")
 
 NERVOUS_BIN = os.environ.get(
     "NERVOUS_BIN",
@@ -295,6 +306,62 @@ def is_dormant(result: dict) -> bool:
     return result["observed_gap_seconds"] > DORMANT_AFTER_DAYS * 86400
 
 
+def load_policy(paths: Tuple[Path, ...] = (OVERLAY_POLICY_FILE, PUBLIC_POLICY_FILE)) -> List[dict]:
+    """Channel rules from each TOML file in order; a missing file adds nothing.
+
+    Each [[channel]] has `match` (an fnmatch glob) and one of:
+      kind = "activity"   the producer only publishes when there is work; never stale
+      kind = "retired"    the producer is gone on purpose; never stale
+      min_gap_hours = N   the threshold is at least N hours
+    """
+    try:
+        import tomllib
+    except ImportError:  # Python < 3.11
+        tomllib = None
+    rules: List[dict] = []
+    for path in paths:
+        if not path.exists():
+            continue
+        if tomllib is None:
+            sys.stderr.write(f"[staleness] python {sys.version_info[:2]} has no tomllib; ignoring {path}\n")
+            continue
+        try:
+            data = tomllib.loads(path.read_text())
+        except (OSError, ValueError) as e:
+            sys.stderr.write(f"[staleness] bad policy file {path}: {e}\n")
+            continue
+        for rule in data.get("channel", []):
+            if not isinstance(rule, dict) or not isinstance(rule.get("match"), str):
+                continue
+            if rule.get("kind") not in (None, *POLICY_KINDS):
+                sys.stderr.write(f"[staleness] {path}: unknown kind {rule.get('kind')!r} for {rule['match']}\n")
+                continue
+            rules.append(rule)
+    return rules
+
+
+def rule_for(channel: str, rules: List[dict]) -> Optional[dict]:
+    for rule in rules:
+        if fnmatch.fnmatchcase(channel, rule["match"]):
+            return rule
+    return None
+
+
+def apply_policy(result: dict, rule: Optional[dict]) -> dict:
+    """The verdict after a channel's rule. Only a stale verdict changes."""
+    if not rule or result.get("verdict") != "stale":
+        return result
+    kind = rule.get("kind")
+    if kind in POLICY_KINDS:
+        return {**result, "verdict": kind}
+    min_gap = rule.get("min_gap_hours")
+    if isinstance(min_gap, (int, float)) and min_gap > 0:
+        expected = max(result["expected_gap_seconds"], float(min_gap) * 3600)
+        verdict = "stale" if result["observed_gap_seconds"] > expected else "ok"
+        return {**result, "verdict": verdict, "expected_gap_seconds": expected}
+    return result
+
+
 def render_report(results: List[dict], *, generated_at: Optional[float] = None) -> str:
     generated_at = generated_at if generated_at is not None else time.time()
     all_stale = [r for r in results if r["verdict"] == "stale"]
@@ -302,13 +369,14 @@ def render_report(results: List[dict], *, generated_at: Optional[float] = None) 
     stale = [r for r in all_stale if not is_dormant(r)]
     ok = [r for r in results if r["verdict"] == "ok"]
     sparse = [r for r in results if r["verdict"] in ("sparse", "empty")]
+    quiet = [r for r in results if r["verdict"] in POLICY_KINDS]
 
     lines = [
         "# nervous-bus channel staleness report",
         "",
         f"Generated: {iso(generated_at)}",
         f"Channels observed: {len(results)}  (stale={len(stale)} dormant={len(dormant)} "
-        f"ok={len(ok)} sparse/empty={len(sparse)})",
+        f"ok={len(ok)} sparse/empty={len(sparse)} activity/retired={len(quiet)})",
         "",
     ]
 
@@ -355,6 +423,15 @@ def render_report(results: List[dict], *, generated_at: Optional[float] = None) 
         )
     lines.append("")
 
+    if quiet:
+        lines.append("## Quiet by rule (activity-driven or retired, never alerted)")
+        lines.append("")
+        lines.append("| channel | rule | last event |")
+        lines.append("|---|---|---|")
+        for r in sorted(quiet, key=lambda r: (r["verdict"], r["channel"])):
+            lines.append(f"| {r['channel']} | {r['verdict']} | {fmt_age(r.get('last_event_at'))} |")
+        lines.append("")
+
     lines.append("## Sparse / empty (never alerted — insufficient history)")
     lines.append("")
     lines.append("| channel | lifetime events | last event |")
@@ -377,10 +454,12 @@ def run(
     dry_run: bool = False,
     baseline_path: Path = BASELINE_FILE,
     report_path: Path = REPORT_FILE,
+    policy: Optional[List[dict]] = None,
 ) -> List[dict]:
     client = redis.Redis.from_url(redis_url, decode_responses=True, socket_timeout=5, socket_connect_timeout=5)
     streams = list_channel_streams(client, pattern=pattern)
     baselines = load_baselines(baseline_path)
+    rules = load_policy() if policy is None else policy
     now = time.time()
 
     results = []
@@ -393,6 +472,7 @@ def run(
             floor_seconds=floor_seconds,
             now=now,
         )
+        r = apply_policy(r, rule_for(r["channel"], rules))
         results.append(r)
 
         if r["verdict"] != "stale":
@@ -440,6 +520,9 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="compute + report, never publish")
     parser.add_argument("--baseline-file", type=Path, default=BASELINE_FILE)
     parser.add_argument("--report-file", type=Path, default=REPORT_FILE)
+    parser.add_argument("--policy", type=Path, action="append",
+                        help="channel rules file, repeatable, first match wins "
+                             f"(default: {OVERLAY_POLICY_FILE} then {PUBLIC_POLICY_FILE})")
     args = parser.parse_args()
 
     results = run(
@@ -452,6 +535,7 @@ def main() -> int:
         dry_run=args.dry_run,
         baseline_path=args.baseline_file,
         report_path=args.report_file,
+        policy=load_policy(tuple(args.policy)) if args.policy else None,
     )
 
     all_stale = [r for r in results if r["verdict"] == "stale"]

@@ -298,3 +298,94 @@ class TestPublishCli(unittest.TestCase):
         self.assertTrue(os.path.isfile(cli), cli)
         self.assertTrue(os.access(cli, os.X_OK), cli)
         self.assertEqual(calls[0][1:3], ["publish", "bus.pattern.bundle.v1"])
+
+
+class TestRawWithinCap(unittest.TestCase):
+    """nbus:bundles _raw must stay parseable: the consumer gates on stats.baseline_deviation."""
+
+    def _bundle(self):
+        return TestPublishNotification._bundle(None, 20)
+
+    def test_oversized_bundle_keeps_stats_and_parses(self):
+        import json
+        from bundler import _raw_within
+        b = self._bundle()
+        self.assertGreater(len(json.dumps(b)), 8000)
+        raw = _raw_within(b, 8000)
+        self.assertLessEqual(len(raw), 8000)
+        got = json.loads(raw)
+        self.assertEqual(got["stats"]["baseline_deviation"], 3.2)
+        self.assertEqual(got["bundle_id"], "01TEST")
+        self.assertIn("sample_events", got["_raw_trimmed"])
+        self.assertLess(len(got["sample_events"]), 20)
+        self.assertEqual(len(b["sample_events"]), 20)  # caller's bundle untouched
+
+    def test_small_bundle_is_unchanged(self):
+        import json
+        from bundler import _raw_within
+        b = {"bundle_id": "x", "stats": {"baseline_deviation": 2.5}, "sample_events": ["a"]}
+        self.assertEqual(json.loads(_raw_within(b, 8000)), b)
+
+    def test_emit_writes_parseable_raw_and_a_stats_field(self):
+        import json
+        from unittest.mock import MagicMock
+        import bundler
+        r = MagicMock()
+        r.hgetall.return_value = {}
+        r.hget.return_value = None
+        w = Window("log:journal:x", "logs", 100, 300.0)
+        for i in range(30):
+            w.ingest_log({"level": "error", "service": "x", "message": "boom " * 100 + str(i)})
+        real_publish = bundler._publish
+        bundler._publish = lambda b: None
+        try:
+            bundler._emit(r, w, 4.0, 150, 1000)
+        finally:
+            bundler._publish = real_publish
+        fields = r.xadd.call_args.args[1]
+        self.assertEqual(json.loads(fields["_raw"])["stats"]["baseline_deviation"], 4.0)
+        self.assertEqual(json.loads(fields["stats"])["baseline_deviation"], 4.0)
+
+
+class TestPublishNotification(unittest.TestCase):
+    def _bundle(self, n_samples: int) -> dict:
+        return {
+            "bundle_id": "01TEST", "source_stream": "bus", "channel": "x.y.v1",
+            "window_start": "2026-11-14T00:00:00Z", "window_end": "2026-11-14T00:05:00Z",
+            "event_count": n_samples, "low_interest": False,
+            "sample_events": ["e" * 2000] * n_samples,
+            "error_events": ["boom " * 400] * 20,
+            "transient_context": [], "pattern_dist": [{"fp": "f", "count": 1, "rate_per_100": 1.0}],
+            "peer_snapshot": {"a": 1},
+            "stats": {"rate_per_min": 1.5, "error_rate": 0.1, "baseline_deviation": 3.2,
+                      "baseline_n": 120, "field_stats": {"k": {"top_values": {"v" * 500: 3}}}},
+        }
+
+    def test_published_payload_is_small_and_valid_against_the_schema(self):
+        import json
+        import bundler
+        import jsonschema
+        captured = []
+
+        class Done:
+            returncode, stderr = 0, ""
+
+        def fake_run(cmd, **kw):
+            captured.append(cmd)
+            return Done()
+
+        real_run = bundler.subprocess.run
+        bundler.subprocess.run = fake_run
+        try:
+            bundler._publish(self._bundle(20))
+        finally:
+            bundler.subprocess.run = real_run
+        raw = captured[0][3]
+        self.assertLess(len(raw.encode()), 1024)
+        payload = json.loads(raw)
+        self.assertEqual(payload["bundle_id"], "01TEST")
+        self.assertEqual(payload["stats"]["baseline_deviation"], 3.2)
+        self.assertNotIn("sample_events", payload)
+        self.assertNotIn("field_stats", payload["stats"])
+        schema_path = Path(__file__).parents[2] / "schemas" / "bus.pattern.bundle.v1.json"
+        jsonschema.Draft202012Validator(json.loads(schema_path.read_text())).validate(payload)

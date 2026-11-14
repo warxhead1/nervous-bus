@@ -23,9 +23,11 @@ nervous-bus (debug.jsonl)  →  redis-mirror  →  Redis Streams (nbus:<channel>
 
 4. **Retention** — `MAXLEN ~N` trims older entries as the stream grows. `MINID` strategy with `min_idle_ms` is also supported.
 
-5. **Fail-soft** — when Redis is unreachable or config is empty, the adapter stays quiet and continues retrying.
+5. **Byte guard** — a line over `max_payload_bytes` (16 KiB by default, the same limit as the Go and shell SDKs) is not mirrored. It goes to `nbus:bus.dead_letter` with `failure_reason: "payload_too_large"`, and the metrics line counts it as `too_large`. File-only producers never pass through the SDK guard, so this is their only size check.
 
-6. **Offset persistence** — tail position is saved to `~/.cache/nervous-bus/redis-mirror-offset.json` after each batch, enabling restart resilience.
+6. **Fail-soft** — when Redis is unreachable or config is empty, the adapter stays quiet and continues retrying.
+
+7. **Offset persistence** — tail position is saved to `~/.cache/nervous-bus/redis-mirror-offset.json` after each batch, enabling restart resilience.
 
 ## Configuration
 
@@ -48,6 +50,7 @@ connect_timeout_s = 5.0
 maxlen = 10000           # MAXLEN ~N: keep last N entries
 trim_strategy = "MAXLEN"  # or "MINID" for time-based trimming
 min_idle_ms = 0           # for MINID strategy
+max_payload_bytes = 16384 # larger lines are dead-lettered; 0 disables
 
 [offset_file]
 path = "~/.cache/nervous-bus/redis-mirror-offset.json"

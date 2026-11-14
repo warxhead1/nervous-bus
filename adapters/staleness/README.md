@@ -79,6 +79,20 @@ Outputs:
 - `~/.cache/nervous-bus/staleness/report.md` — human-readable standing report (stale / ok / sparse tables)
 - `bus.channel.stale.v1` events on the bus (schema: `schemas/bus.channel.stale.v1.json`)
 
+## Per-channel rules
+
+The P95 cadence model does not fit every channel. Rules in TOML override a stale verdict:
+
+- `kind = "activity"`: the producer only publishes when there is work, so silence is normal.
+- `kind = "retired"`: the producer is gone on purpose.
+- `min_gap_hours = N`: the threshold is at least N hours.
+
+Public channels live in `channels.toml` next to the monitor. Private channels go in
+`$NERVOUS_HOME/staleness-channels.toml` (default `~/.config/nervous-bus/`, or set
+`NERVOUS_STALENESS_POLICY`). That file is read first, so its rules win. `--policy <file>`
+replaces both and can repeat. Ruled channels are listed in their own report section and
+never alerted.
+
 ## Running as a systemd user timer
 
 ```bash

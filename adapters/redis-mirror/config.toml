@@ -87,6 +87,10 @@ trim_strategy = "MAXLEN"
 min_idle_ms = 0
 universal_stream = "nbus:all"
 universal_stream_maxlen = 50000
+# A debug.jsonl line larger than this (UTF-8 bytes) is not mirrored. It goes to
+# nbus:bus.dead_letter with failure_reason = "payload_too_large", matching the
+# Go and shell SDK guards. 0 disables the check.
+max_payload_bytes = 16384
 
 [offset_file]
 # Path to persist tail position for restart resilience.

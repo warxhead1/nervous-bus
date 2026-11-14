@@ -418,6 +418,7 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `market-ops.knowledge.imported.v1` | market-ops knowledge imported |
 | `market-ops.position.drifted.v1` | market-ops position drifted |
 | `market-ops.radar.scored.v1` | market-ops radar scored |
+| `memory.agent.skill.proposed.v1` | memory.agent.skill.proposed v1 |
 | `memory.node.created.v1` | memory.node.created v1 |
 | `memory.node.deleted.v1` | memory.node.deleted v1 |
 | `memory.node.updated.v1` | memory.node.updated v1 |

@@ -1,15 +1,16 @@
 """Claude Code: one JSONL per session under <config>/projects/<mangled cwd>/.
 
-Sub-agent transcripts live in <session>/subagents/agent-*.jsonl next to the
-parent file; they are sessions of their own (most Bash calls happen there).
+Sub-agent transcripts live in <session>/subagents/ next to the parent file,
+workflow lanes one level deeper (see claude_layout). They are sessions of their
+own (most Bash calls happen there).
 """
 from __future__ import annotations
 
-import glob
 import json
 import os
 import re
 
+from claude_layout import is_subagent, session_files
 from model import SessionRef, Source, ToolCall, env_path, extra_roots, home, unique
 
 # Text that means the program never ran or its output is gone (hook/permission
@@ -31,16 +32,14 @@ class Claude(Source):
 
     def sessions(self, since: float = 0.0):
         for root in self.roots():
-            for pat in ("*/*.jsonl", "*/*/subagents/*.jsonl"):
-                for path in glob.glob(os.path.join(root, pat)):
-                    try:
-                        mt = os.path.getmtime(path)
-                    except OSError:
-                        continue
-                    if mt >= since:
-                        sid = os.path.splitext(os.path.basename(path))[0]
-                        yield SessionRef(self.name, sid, path, mt,
-                                         extra={"subagent": "/subagents/" in path.replace(os.sep, "/")})
+            for _rel, path in session_files(root):
+                try:
+                    mt = os.path.getmtime(path)
+                except OSError:
+                    continue
+                if mt >= since:
+                    sid = os.path.splitext(os.path.basename(path))[0]
+                    yield SessionRef(self.name, sid, path, mt, extra={"subagent": is_subagent(path)})
 
     def tool_calls(self, ref: SessionRef):
         pend: dict[str, ToolCall] = {}

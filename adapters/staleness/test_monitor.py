@@ -183,5 +183,69 @@ class TestDormantSection(unittest.TestCase):
         self.assertNotIn("DORMANT", report)
 
 
+class TestChannelPolicy(unittest.TestCase):
+    """Per-channel rules: pure, no Redis needed."""
+
+    @staticmethod
+    def _stale(channel, hours):
+        return {"channel": channel, "verdict": "stale", "last_event_at": 0.0,
+                "observed_gap_seconds": hours * 3600, "expected_gap_seconds": 1800,
+                "p95_gap_seconds": 60, "baseline_sample_size": 40}
+
+    def _write(self, text):
+        d = tempfile.mkdtemp(prefix="staleness-policy-")
+        p = Path(d) / "rules.toml"
+        p.write_text(text)
+        return p
+
+    def test_activity_and_retired_channels_are_never_stale(self):
+        rules = [{"match": "kb.entry.*", "kind": "activity"}, {"match": "old.chan.v1", "kind": "retired"}]
+        out = monitor.apply_policy(self._stale("kb.entry.moved.v1", 300), monitor.rule_for("kb.entry.moved.v1", rules))
+        self.assertEqual(out["verdict"], "activity")
+        out = monitor.apply_policy(self._stale("old.chan.v1", 300), monitor.rule_for("old.chan.v1", rules))
+        self.assertEqual(out["verdict"], "retired")
+        out = monitor.apply_policy(self._stale("kb.other.v1", 300), monitor.rule_for("kb.other.v1", rules))
+        self.assertEqual(out["verdict"], "stale")
+
+    def test_min_gap_raises_the_threshold_but_still_catches_a_real_break(self):
+        rules = [{"match": "slow.batch.v1", "min_gap_hours": 24}]
+        rule = monitor.rule_for("slow.batch.v1", rules)
+        within = monitor.apply_policy(self._stale("slow.batch.v1", 10), rule)
+        self.assertEqual(within["verdict"], "ok")
+        self.assertEqual(within["expected_gap_seconds"], 24 * 3600)
+        broken = monitor.apply_policy(self._stale("slow.batch.v1", 30), rule)
+        self.assertEqual(broken["verdict"], "stale")
+
+    def test_ok_verdict_is_untouched(self):
+        ok = {**self._stale("kb.entry.moved.v1", 0.1), "verdict": "ok"}
+        out = monitor.apply_policy(ok, {"match": "*", "kind": "retired"})
+        self.assertEqual(out["verdict"], "ok")
+
+    def test_overlay_rules_win_and_bad_rules_are_dropped(self):
+        overlay = self._write('[[channel]]\nmatch = "a.*"\nkind = "retired"\n'
+                              '[[channel]]\nmatch = "b.*"\nkind = "sometimes"\n')
+        public = self._write('[[channel]]\nmatch = "a.b.v1"\nkind = "activity"\n')
+        rules = monitor.load_policy((overlay, public, Path("/nonexistent/rules.toml")))
+        self.assertEqual(monitor.rule_for("a.b.v1", rules)["kind"], "retired")
+        self.assertIsNone(monitor.rule_for("b.c.v1", rules))
+
+    def test_report_lists_quiet_channels_apart_from_stale(self):
+        now = 1_800_000_000.0
+        quiet = {**self._stale("kb.entry.moved.v1", 300), "verdict": "activity", "last_event_at": now - 86400}
+        report = monitor.render_report([quiet, {**self._stale("real.break", 5), "last_event_at": now - 5 * 3600}],
+                                       generated_at=now)
+        self.assertIn("real.break", report.split("## STALE")[1].split("## OK")[0])
+        self.assertNotIn("kb.entry.moved.v1", report.split("## Quiet")[0])
+        self.assertIn("| kb.entry.moved.v1 | activity |", report)
+        self.assertIn("stale=1", report)
+
+    def test_public_rules_parse_and_name_no_private_channel(self):
+        rules = monitor.load_policy((monitor.PUBLIC_POLICY_FILE,))
+        self.assertTrue(rules)
+        for rule in rules:
+            self.assertFalse(rule["match"].startswith(("tachyonos.", "tengine.diag.", "hearth.market.state.")),
+                             rule["match"])
+
+
 if __name__ == "__main__":
     unittest.main()

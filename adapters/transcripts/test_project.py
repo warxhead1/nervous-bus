@@ -126,6 +126,20 @@ def test_unresolvable_is_none_never_a_basename(cwd):
     assert project.project_of(cwd) is None
 
 
+@pytest.mark.parametrize("cwd, expected", [
+    ("/Users/someone/projects/thermoflow", "thermoflow"),
+    ("/Users/someone/projects/thermoflow/src/deep", "thermoflow"),
+    ("/home/other/projects/kb/agent-ab12cd34ef56", "kb"),
+    ("/home/other/src/projects/hearth-loom", "hearth-loom"),
+    ("/home/other/projects", None),                 # the container itself says nothing
+    ("/home/other/projects/.cache", None),
+    ("/home/other/projects/batch-2026-11-14", None),
+    ("/home/other/projects/agent-ab12cd34ef56", None),
+])
+def test_another_machines_projects_dir_names_the_project(cwd, expected):
+    assert project.project_of(cwd) == expected
+
+
 def test_lane_directories_are_never_projects(home):
     assert project.project_of(str(home / "data2/worktrees/agent-ac5d5249d1e2ec589")) is None
     assert project.project_of(
@@ -152,7 +166,9 @@ def test_custom_roots_replace_the_defaults(home, monkeypatch):
     monkeypatch.setenv("NBUS_PROJECT_ROOTS", os.pathsep.join([str(home / "code"), str(home / "wt")]))
     assert project.project_of(str(home / "code/app/src")) == "app"
     assert project.project_of(str(home / "wt/app2/lane")) == "app2"
-    assert project.project_of(str(home / "projects/kb")) is None
+    assert project.project_of(str(home / "data2/orca/app-to-market/wardr")) is None
+    # */projects/<name> is a layout rule now, so it holds with or without the root
+    assert project.project_of(str(home / "projects/kb")) == "kb"
 
 
 def test_aliases_fold_renamed_projects(home, monkeypatch):
