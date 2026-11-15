@@ -39,7 +39,7 @@
 //! See `sdk/rust/README.md` for a full walkthrough and hearth's
 //! `nbus_consumer.rs` as a real production reference.
 
-use redis::aio::ConnectionManager;
+use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{AsyncCommands, RedisError, RedisResult, Value as RedisValue};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -184,6 +184,17 @@ pub struct StreamConsumer {
     consumer: String,
 }
 
+/// A connection for blocking stream reads.
+///
+/// redis 1.x gives every `ConnectionManager` a 500 ms response timeout by
+/// default. `read_new` blocks for the caller's `BLOCK` window, so the default
+/// would fail every read longer than 500 ms. Entries delivered to a timed-out
+/// read would also sit unread in the pending list.
+async fn blocking_connection(client: redis::Client) -> RedisResult<ConnectionManager> {
+    let config = ConnectionManagerConfig::new().set_response_timeout(None);
+    ConnectionManager::new_with_config(client, config).await
+}
+
 impl StreamConsumer {
     /// Connect and idempotently bootstrap the consumer group:
     /// `XGROUP CREATE <stream> <group> $ MKSTREAM`, swallowing the
@@ -196,7 +207,7 @@ impl StreamConsumer {
         consumer: &str,
     ) -> RedisResult<Self> {
         let client = redis::Client::open(redis_url)?;
-        let conn = ConnectionManager::new(client).await?;
+        let conn = blocking_connection(client).await?;
         let mut me = Self {
             conn,
             stream: stream.to_string(),
@@ -844,6 +855,20 @@ mod live_tests {
                 let _: RedisResult<()> = redis::cmd("DEL").arg(stream).query_async(&mut conn).await;
             }
         }
+    }
+
+    #[tokio::test]
+    async fn live_read_new_blocks_past_the_default_response_timeout() {
+        let stream = unique_name("nbus:test.block");
+        let mut c = StreamConsumer::connect(&test_redis_url(), &stream, "g1", "c1")
+            .await
+            .expect("connect");
+        let started = std::time::Instant::now();
+        let got = c.read_new(10, Duration::from_millis(1500)).await;
+        assert!(got.is_ok(), "a 1.5 s block must not time out: {:?}", got.err());
+        assert!(got.unwrap().is_empty());
+        assert!(started.elapsed() >= Duration::from_millis(1400));
+        cleanup(&stream).await;
     }
 
     #[tokio::test]
