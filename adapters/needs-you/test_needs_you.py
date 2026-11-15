@@ -138,6 +138,15 @@ class Hook(unittest.TestCase):
         self.assertEqual(ny.load(), [])
         self.assertEqual(len(ny.load(include_acked=True)), 1)
 
+    def test_ack_by_session_id(self):
+        self.run_hook(user("go"), tool_use(), tool_result(), text("**Needs you:**\n- x"))
+        with redirect_stdout(io.StringIO()), \
+                mock.patch.object(ny, "hearth_ack", return_value=True) as ha:
+            self.assertEqual(ny.cmd_ack("s-unknown"), 1)
+            self.assertEqual(ny.cmd_ack("s1"), 0)
+        ha.assert_called_once_with("s1")
+        self.assertEqual(ny.load(), [])
+
     def test_ack_unreachable_keeps_local_flip_and_says_so(self):
         self.run_hook(user("go"), tool_use(), tool_result(), text("**Needs you:**\n- x"))
         out = io.StringIO()

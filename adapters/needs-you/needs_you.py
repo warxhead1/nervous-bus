@@ -9,7 +9,9 @@ that reads the queue.
                              publishes agent.attention.v1, and blocks the stop ONCE
                              if a turn that used tools ended without the block.
   needs_you.py [list]        Open items, grouped by project. --all includes acked.
-  needs_you.py ack <n|all>   Mark entry n (from list) or every entry as handled.
+  needs_you.py ack <n|all|session-id>
+                             Mark entry n (from list), a session's entry, or
+                             every entry as handled.
   needs_you.py --json        Raw open entries.
   needs_you.py bind          SessionStart hook (stdin = hook JSON): record which
                              terminal this session runs in. The Stop hook does the
@@ -570,7 +572,12 @@ def hearth_ack(session_id: str) -> bool:
 def cmd_ack(which: str) -> int:
     entries = load()
     targets = entries if which == "all" else []
-    if which != "all":
+    if which != "all" and not which.isdigit():  # a session id, as Kiln's row actions send
+        targets = [e for e in entries if e.get("session_id") == which]
+        if not targets:
+            print(f"no open entry for session {which!r}", file=sys.stderr)
+            return 1
+    elif which != "all":
         try:
             targets = [entries[int(which) - 1]]
         except (ValueError, IndexError):
