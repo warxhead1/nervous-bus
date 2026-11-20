@@ -1,0 +1,14 @@
+{
+  "skill": "ub-mode",
+  "should": [
+    "Run ub-mode on the billing package before I open the PR.",
+    "Which functions in internal/health are complex and badly tested?",
+    "Did my change copy logic that already exists somewhere else in the repo?",
+    "Would the tests catch it if someone flipped this comparison?",
+    "Refactor this handler and prove the behavior did not change."
+  ],
+  "should_not": [
+    "Summarise the last five commits on this branch.",
+    "Rename the staging bucket in the deploy config."
+  ]
+}

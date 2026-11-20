@@ -1,0 +1,6 @@
+[
+ {
+  "pattern": "\\bub[- ]mode\\b|\\bcrap (score|metric)s?\\b|\\bcrapper\\b|\\bmutation (test|testing|score)\\b|\\bmutants?\\b|\\bcyclomatic\\b|\\bquality gates?\\b|\\bduplicat(e|ed|ion) (code|functions?|logic)\\b|\\bcop(y|ied|ies) (logic|code|a function|a helper)\\b.*\\b(exists?|already)\\b|\\bcomplex\\b.*\\b(badly|poorly|un|not|under)[- ]?tested\\b|\\btests? (catch|notice|detect)\\b.*\\b(flip|flipped|broke|broken|mutat)|\\bprove (the )?behaviou?r (did not|didn't|has not|hasn't) change",
+  "say": "[ub-mode] Measure it instead of judging it: `ub-gate crap`, `ub-gate dry --since <base> --against-repo`, `ub-gate mutate <file>`, run on the code you changed. Load the ub-mode skill."
+ }
+]

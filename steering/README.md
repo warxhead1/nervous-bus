@@ -18,6 +18,7 @@ claude plugin install human-attention@nervous-bus
 | `remediation-ladder` | Fix the cause at the highest rung: eliminate, automate, then inform. Ships a skill and a hook that blocks a command that skips a check (`--no-verify`, `HUSKY=0`, a guard's kill switch set inline). |
 | `falsify-your-gate` | A check counts only after you have seen it fail. Ships a skill and a hook that reports a test an edit adds that cannot fail. |
 | `plain-prose` | Prose a person reads once: one idea per sentence, plain words, no AI tells. Ships the `ste80-humanizer` skill (a copy of [Dodaios/ste80-humanizer](https://github.com/Dodaios/ste80-humanizer), MIT), a hook that reports heavy prose an edit adds to a document and sends a heavy commit message or pull request body back once before it is published, and a session-start ruling. |
+| `ub-mode` | Make it work, then make it right, measured: CRAP (complexity the tests miss), duplicated code, and mutation testing. Ships a skill and `ub-gate`, which runs [unclebob](https://github.com/unclebob/ub-mode)'s crapper, dryer, and mutator at pinned versions with no network, plus a faster exact duplicate search that also checks new code against the whole repo. |
 
 ## How a rule reaches the agent
 

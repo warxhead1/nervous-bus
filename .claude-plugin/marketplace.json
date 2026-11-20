@@ -44,6 +44,11 @@
       "name": "plain-prose",
       "source": "./steering/plain-prose",
       "description": "Prose a person reads once: one idea per sentence, plain words, no AI tells. The ste80-humanizer skill, and a hook that reports heavy prose in a document, a commit message or a pull request."
+    },
+    {
+      "name": "ub-mode",
+      "source": "./steering/ub-mode",
+      "description": "Make it work, then make it right, measured. Skill, and `ub-gate`: unclebob's crapper, dryer, and mutator, pinned, hash-locked, and run with no network."
     }
   ]
 }
