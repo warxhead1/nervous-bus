@@ -120,13 +120,19 @@ def test_summary_digests_metrics(tmp_path):
         '{:entries [{:name "place" :namespace "demo.Board" :complexity 3 :coverage 75.0 :crap 3.1}\n'
         '           {:name "walk" :namespace "demo" :complexity 12 :coverage 0.0 :crap 156.0}]}\n')
     (metrics / "dry.edn").write_text('{:candidates [{:score 1.0 :language "go"} {:score 0.85 :language "go"}]}\n')
+    # The snapshot shape from mutator's README, including the :outcomes map.
     (metrics / "mutate" / "demo.edn").write_text(
-        '{:version 1 :forms [{:id "defn/place" :killed 3 :survived 1 :uncovered 2 :sites 6}]}\n')
+        '{:version 1\n :source "src/demo/board.py"\n :namespace "demo.board.Board"\n'
+        ' :outcomes {"[\\"src/demo/board.py\\",\\"demo.board.Board\\",\\"defn/place\\",10,11,\\">\\",\\">=\\"]" :survived '
+        '"[\\"src/demo/board.py\\",\\"demo.board.Board\\",\\"defn/place\\",12,13,\\"<\\",\\"<=\\"]" :killed}\n'
+        ' :forms [{:id "defn/place" :kind "defn" :file "src/demo/board.py" :line 2 :end-line 4\n'
+        '          :hash "abc" :killed 3 :survived 1 :uncovered 2 :sites 6}\n'
+        '         {:id "defn-/_hide" :kind "defn-" :killed 0 :survived 0 :uncovered 1 :sites 1}]}\n')
     report = json.loads(gate("summary", cwd=tmp_path, check=True).stdout)
     assert report["crap"]["functions"] == 2 and report["crap"]["over_10"] == 1
     assert report["crap"]["worst"][0]["name"] == "walk"
     assert report["dry"] == {"pairs": 2, "at_1.0": 1}
-    assert report["mutate"] == {"killed": 3, "survived": 1, "uncovered": 2, "score": 0.75}
+    assert report["mutate"] == {"killed": 3, "survived": 1, "uncovered": 3, "score": 0.75}
 
 
 # --- the gates, when the tools are installed ---------------------------------
@@ -179,10 +185,10 @@ def test_mutate_survivor_on_weak_test_killed_by_boundary_test(tmp_path):
     (tmp_path / "go.mod").write_text("module example.com/kat\n\ngo 1.22\n")
     (tmp_path / "adult.go").write_text(GO_ADULT)
     (tmp_path / "adult_test.go").write_text(GO_WEAK)
-    weak = gate("mutate", "adult.go", cwd=tmp_path)
+    weak = gate("mutate-go", "adult.go", cwd=tmp_path)
     assert weak.returncode == 3 and "SURVIVED" in weak.stdout, weak.stdout + weak.stderr
     (tmp_path / "adult_test.go").write_text(GO_STRONG)
-    strong = gate("mutate", "adult.go", cwd=tmp_path)
+    strong = gate("mutate-go", "adult.go", cwd=tmp_path)
     assert strong.returncode == 0 and "SURVIVED" not in strong.stdout, strong.stdout + strong.stderr
 
 

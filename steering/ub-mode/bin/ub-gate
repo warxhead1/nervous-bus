@@ -4,11 +4,12 @@
   ub-gate install              fetch the pinned tools and parser grammars (the only networked step)
   ub-gate doctor               JSON: install state, pins, and whether the sandbox works here
   ub-gate crap   [crapper args]   CRAP per function          -> .metrics/crap.edn
-  ub-gate crap-go DIR...       cover these Go dirs (DIR/...) then score them with that coverage
+  ub-gate crap-go DIR... [-- crapper args]   cover DIR/... with go test, then score DIR with it
   ub-gate dry    [dryer args]     structural duplicates      -> .metrics/dry.edn
                  --since REF      only forms in files changed since REF
                  --against-repo   compare those forms with the whole project
   ub-gate mutate [mutator args]   mutation testing           -> .metrics/mutate/*.edn
+  ub-gate mutate-go FILE.go... [-- mutator args]   cover only those files' packages, then mutate
   ub-gate summary              JSON digest of .metrics in the current directory
   ub-gate sandbox -- CMD...    run any command with no network (loopback only)
 
@@ -40,7 +41,6 @@ TOOLS = ("crapper", "dryer", "mutator")
 
 OFFLINE_ENV = {
     "GOPROXY": "off",
-    "GOFLAGS": (os.environ.get("GOFLAGS", "") + " -mod=mod").strip(),
     "PIP_NO_INDEX": "1",
     "npm_config_offline": "true",
     "CARGO_NET_OFFLINE": "true",
@@ -159,7 +159,11 @@ def cmd_install(_args) -> int:
     repo = PINS["tools_repo"]
     for name in TOOLS:
         url = f"git+{repo.format(name=name)}@{PINS['tools'][name]}"
-        subprocess.run(pip + ["--no-deps", url], check=True)
+        # No build isolation: the build backend is the hash-locked setuptools,
+        # not whatever setuptools the index has today.
+        # PIP_NO_INDEX makes any fetch beyond the pinned git commit fail closed.
+        subprocess.run(pip + ["--no-deps", "--no-build-isolation", url], check=True,
+                       env=dict(os.environ, PIP_NO_INDEX="1"))
     langs = PINS["grammars"]["languages"]
     subprocess.run([str(vpy()), "-I", "-c",
                     f"import tree_sitter_language_pack as t; t.download({langs!r})"], check=True)
@@ -208,22 +212,46 @@ def cmd_dry(args: list[str]) -> int:
     return run_offline([str(vpy()), "-I", str(HERE / "ub_gate_dry.py"), *args])
 
 
-def cmd_crap_go(args: list[str]) -> int:
-    dirs = [a for a in args if not a.startswith("-")]
-    extra = [a for a in args if a.startswith("-")]
-    if not dirs:
-        die("crap-go needs at least one package directory, e.g. `ub-gate crap-go internal/health`")
-    need_install()
+def _split_passthrough(args: list[str]) -> tuple[list[str], list[str]]:
+    """`TARGETS... [-- TOOL ARGS...]`."""
+    if "--" in args:
+        index = args.index("--")
+        return args[:index], args[index + 1 :]
+    return args, []
+
+
+def _go_cover(patterns: list[str]) -> None:
+    """Write crapper's Go coverage profile for exactly these package patterns."""
     profile = Path("target/coverage/go/coverage.out")
     profile.parent.mkdir(parents=True, exist_ok=True)
-    patterns = ["./" + d.strip("./").rstrip("/") + "/..." for d in dirs]
+    profile.unlink(missing_ok=True)
     code = run_offline(["go", "test", "-count=1", f"-coverprofile={profile}", *patterns])
     if code != 0:
-        print(f"ub-gate: go test exited {code}; functions in failing packages will score 0% coverage",
-              file=sys.stderr)
+        print(f"ub-gate: go test exited {code}; code in failing packages reads as uncovered", file=sys.stderr)
     if not profile.is_file():
         die("go test wrote no coverage profile", 2)
+
+
+def _rel(path: str) -> str:
+    return str(Path(path)).removeprefix("./").rstrip("/") or "."
+
+
+def cmd_crap_go(args: list[str]) -> int:
+    dirs, extra = _split_passthrough(args)
+    if not dirs:
+        die("usage: ub-gate crap-go DIR... [-- crapper args]")
+    need_install()
+    _go_cover([f"./{_rel(d)}/..." if _rel(d) != "." else "./..." for d in dirs])
     return run_offline([str(vpy()), "-I", "-m", "crapper", "--use-existing-coverage", *extra, *dirs])
+
+
+def cmd_mutate_go(args: list[str]) -> int:
+    files, extra = _split_passthrough(args)
+    if not files or not all(f.endswith(".go") for f in files):
+        die("usage: ub-gate mutate-go FILE.go... [-- mutator args]")
+    need_install()
+    _go_cover(sorted({f"./{_rel(str(Path(f).parent))}" for f in files}))
+    return run_offline([str(vpy()), "-I", "-m", "mutator", "--use-existing-coverage", *extra, *files])
 
 
 def _edn_entries(text: str) -> list[dict]:
@@ -257,6 +285,8 @@ def cmd_summary(_args) -> int:
         totals = {"killed": 0, "survived": 0, "uncovered": 0}
         for f in mutate.rglob("*.edn"):
             for e in _edn_entries(f.read_text()):
+                if "id" not in e:  # skip the :outcomes map; only :forms carry counts
+                    continue
                 for k in totals:
                     totals[k] += int(e.get(k) or 0)
         ran = totals["killed"] + totals["survived"]
@@ -293,6 +323,8 @@ def main(argv: list[str]) -> int:
         return cmd_dry(args)
     if command == "crap-go":
         return cmd_crap_go(args)
+    if command == "mutate-go":
+        return cmd_mutate_go(args)
     if command == "sandbox":
         if args[:1] == ["--"]:
             args = args[1:]

@@ -33,7 +33,9 @@ them against a sha256 pinned in this plugin. Every other command runs in a
 network namespace with only loopback up, so no analysis can reach the network.
 On a host without unprivileged user namespaces (macOS, some locked-down Linux)
 the command stops. `UB_GATE_NETWORK=allow` runs it with offline settings for
-pip, npm, cargo, and Go, but no namespace.
+pip, npm, cargo, and Go, but no namespace. Once `install` has cached the
+grammars, crapper and dryer open no sockets at all (checked with strace).
+Mutator runs your tests, so it reaches whatever your tests reach.
 
 The tools write `.metrics/` and `target/` in the project root. Add both to
 `.gitignore` before the first run.
@@ -67,9 +69,11 @@ ub-gate crap --use-existing-coverage src # any language, your own coverage repor
 - crapper scores a function with no coverage data as 0% covered, and does not
   warn. Score only the code your coverage run covered. `crap-go` covers
   `DIR/...` and scores the same `DIR`, so the two always match.
-- Do not let crapper generate coverage for a large repo. Its default runs
-  `go test ./...` and installs coverage tools into the project. Use `crap-go` or
-  pass `--use-existing-coverage`.
+- Do not let crapper generate coverage for a large repo. For Go its default
+  runs `go test ./...` on the whole module. Use `crap-go` or pass
+  `--use-existing-coverage`.
+- Python coverage comes from the project's own `.venv` (or `venv`), which needs
+  `pytest` and `coverage` installed. ub-gate will not install them for you.
 - For each changed function over 10: split it, test it, or both. A function
   that was already over 10 must not get worse.
 - Complexity alone is what gocyclo already reports (crapper agrees with it
@@ -97,9 +101,13 @@ ub-gate dry src/billing                          # every pair inside a tree
 ### Mutation: would the tests notice a broken line?
 
 ```bash
-ub-gate mutate path/to/file.go          # one file at a time
-ub-gate mutate --scan path/to/file.go   # list the sites, run nothing
+ub-gate mutate-go internal/billing/fee.go   # Go: cover that package only, then mutate
+ub-gate mutate src/billing/fee.py           # other languages, one file at a time
+ub-gate mutate --scan src/billing/fee.py    # list the sites, run nothing
 ```
+
+Plain `mutate` on a Go file builds its coverage with `go test ./...` across the
+whole module first. `mutate-go` covers only the file's package.
 
 - A survivor is a line you can break and the tests still pass. Add the
   assertion that catches it, usually at a boundary (`>` to `>=`, `0` to `1`).
@@ -109,8 +117,8 @@ ub-gate mutate --scan path/to/file.go   # list the sites, run nothing
   to kill an equivalent mutant.
 - Mutator only runs mutants on covered lines. An uncovered line is a missing
   test, not a pass.
-- Cost: an 85-site Go file with fast tests took 19 s on 6 workers and grew
-  the Go build cache by about 200 MB. Run it on the file you changed.
+- Cost: an 85-site Go file with fast tests took 19 to 29 s on 6 workers and
+  grew the Go build cache by about 200 MB. Run it on the file you changed.
 
 `ub-gate summary` prints a JSON digest of `.metrics/` for a report or a gate.
 
