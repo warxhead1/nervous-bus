@@ -1,0 +1,20 @@
+{
+  "tools": {
+    "crapper": "c757ec79a6c15dc815238bbd9c2f4601eb54d3cc",
+    "dryer": "66ff6d21a42c04afcad89c78a80066176d1294b0",
+    "mutator": "29afb427129b6bf03699286966fc55ec8a4830d7"
+  },
+  "tools_repo": "https://github.com/unclebob/{name}",
+  "grammars": {
+    "package_version": "1.24.0",
+    "languages": ["go", "python", "rust", "typescript", "tsx", "java", "clojure"],
+    "bundle_sha256": {
+      "linux-aarch64": "58e053b3ca548e0c84a0c99b529e3acab7ba448ef8b77847ad0868cc6cce336d",
+      "linux-x86_64": "9318c36e5cd9006106c74c0128b44edaa84a27048a1ca4d19a943face027cadd",
+      "macos-arm64": "aa56e05754d70a485e79bef055a3b153e365163f76a3501fd531d2a74d413e8c",
+      "macos-x86_64": "0d9ae50c984fa2a6026678882c8456b2083150b844675a5959fe1259e534d8d7",
+      "windows-aarch64": "80200e333ecb4365666fa44c66fa108a12ebb06ad77967f01b73491558cf6337",
+      "windows-x86_64": "05955628d4a602b5bc96977378480c8bcc56a20a44d44dc5aba911ffe39f44f1"
+    }
+  }
+}
