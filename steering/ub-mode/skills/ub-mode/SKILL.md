@@ -19,8 +19,10 @@ Make it work, then make it right. The tools tell you which code is not right yet
 
 ## Set up once per machine
 
-`ub-gate` is on PATH when this plugin is installed. Otherwise run
-`${CLAUDE_SKILL_DIR}/../../bin/ub-gate`.
+Every command below runs `ub-gate`. The Claude Code plugin puts it on PATH.
+With any other agent, link it onto PATH as `README.md` in the ub-mode folder
+shows. If `ub-gate` is not found, stop and say so. Do not install the tools
+another way.
 
 ```bash
 ub-gate install    # the only step that uses the network
