@@ -14,6 +14,8 @@ that reads the queue.
                              every entry as handled. Each --answer answers one
                              item in order; hearth types the answers into the
                              asking session instead of a bare acknowledgement.
+                             If hearth does not take the answer, exit 3 and
+                             the ask stays open.
   needs_you.py --json        Raw open entries.
   needs_you.py bind          SessionStart hook (stdin = hook JSON): record which
                              terminal this session runs in. The Stop hook does the
@@ -594,6 +596,18 @@ def cmd_ack(which: str, answers: list[str] | None = None, via: str = "cli") -> i
     if answers and (which == "all" or len(targets) != 1):
         print("--answer needs one target: a session id or an entry number", file=sys.stderr)
         return 1
+    if answers:
+        # An answer exists only once hearth takes it: on failure the ask stays
+        # open, so the answering surface can say so and retry.
+        e = targets[0]
+        if not hearth_ack(e["session_id"], answers, e.get("items") or [], via):
+            print("hearth unreachable or refused: answer not sent; the ask stays open",
+                  file=sys.stderr)
+            return 3
+        e["acked"] = True
+        write_entry(e)
+        print("answered 1")
+        return 0
     for e in targets:
         e["acked"] = True
         write_entry(e)
