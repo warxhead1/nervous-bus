@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "ub-mode-cue-UserPromptSubmit",
+      "trigger": "UserPromptSubmit",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event UserPromptSubmit \"$STEERING_HOME/ub-mode/hooks/cue\""
+      },
+      "timeout": 5,
+      "enabled": true
+    }
+  ]
+}

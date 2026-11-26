@@ -1,0 +1,39 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/plain-prose/hooks/prose-guard\"",
+            "timeout": 10
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/plain-prose/hooks/prose-guard\"",
+            "timeout": 10
+          }
+        ],
+        "matcher": "Write|Edit|MultiEdit"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/plain-prose/hooks/cue\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

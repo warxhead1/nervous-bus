@@ -1,0 +1,26 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "falsify-your-gate-vacuous-test-guard-PostToolUse",
+      "trigger": "PostToolUse",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event PostToolUse \"$STEERING_HOME/falsify-your-gate/hooks/vacuous-test-guard\""
+      },
+      "timeout": 8,
+      "enabled": true,
+      "matcher": "write"
+    },
+    {
+      "name": "falsify-your-gate-cue-UserPromptSubmit",
+      "trigger": "UserPromptSubmit",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event UserPromptSubmit \"$STEERING_HOME/falsify-your-gate/hooks/cue\""
+      },
+      "timeout": 5,
+      "enabled": true
+    }
+  ]
+}

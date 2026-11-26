@@ -1,0 +1,26 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "model-tiering-dispatch-model-guard-PreToolUse",
+      "trigger": "PreToolUse",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event PreToolUse \"$STEERING_HOME/model-tiering/hooks/dispatch-model-guard\""
+      },
+      "timeout": 5,
+      "enabled": true,
+      "matcher": "subagent"
+    },
+    {
+      "name": "model-tiering-cue-UserPromptSubmit",
+      "trigger": "UserPromptSubmit",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event UserPromptSubmit \"$STEERING_HOME/model-tiering/hooks/cue\""
+      },
+      "timeout": 5,
+      "enabled": true
+    }
+  ]
+}

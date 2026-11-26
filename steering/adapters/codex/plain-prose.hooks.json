@@ -1,0 +1,39 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness codex --event PreToolUse \"$STEERING_HOME/plain-prose/hooks/prose-guard\"",
+            "timeout": 10
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness codex --event PostToolUse \"$STEERING_HOME/plain-prose/hooks/prose-guard\"",
+            "timeout": 10
+          }
+        ],
+        "matcher": "apply_patch"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness codex --event UserPromptSubmit \"$STEERING_HOME/plain-prose/hooks/cue\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

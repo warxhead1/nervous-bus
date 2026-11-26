@@ -16,6 +16,31 @@ Makes an agent measure whether code is right, with deterministic gates instead o
 
 This plugin has no blocking or reporting hook. What it adds to upstream (dependency cooldown, the faster exact duplicate search, a no-network sandbox, and the rewritten skill) is in [UPSTREAM.md](UPSTREAM.md).
 
+<!-- catalog:start -->
+## Use it in any agent
+
+Each piece below works alone. Nothing here needs Claude Code, and nothing needs the rest of this repository.
+
+**The rule.** Paste this into `AGENTS.md`, `GEMINI.md`, a Kiro steering file or any system prompt. File: [ub-mode.md](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/rulings/ub-mode.md).
+
+> # ub-mode
+>
+> Measure it instead of judging it: `ub-gate crap`, `ub-gate dry --since <base> --against-repo`, `ub-gate mutate <file>`, run on the code you changed.
+
+**The skill.** An [Agent Skills](https://agentskills.io) folder: [`SKILL.md`](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/ub-mode/skills/ub-mode/SKILL.md).
+
+**The checks.** Plain Python 3 scripts with no dependencies.
+
+| check | what it takes | effect | event and matcher | off |
+|---|---|---|---|---|
+| [`ub-gate`](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/ub-mode/bin/ub-gate) | `ub-gate install | doctor | crap | dry | mutate | summary | sandbox -- CMD`. `install` is the only networked step. `doctor` prints JSON. Needs Python 3.11 or newer and git. Keep with it: `ub_gate_dry.py`, `simjoin.py`, `pins.json`, `requirements.lock`. | cli | run by hand |  |
+| [`cue`](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/ub-mode/hooks/cue) | One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0. Keep with it: `cues.json`. | context | UserPromptSubmit | `STEERING_CUES_DISABLE=1` |
+
+**Ready-made hook config** (set `STEERING_HOME`, see the harness page): [claude-code](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/claude-code/ub-mode.settings.json), [codex](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/codex/ub-mode.hooks.json), [gemini](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/gemini/ub-mode.settings.json), [kiro](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/kiro/ub-mode.json).
+
+Wiring, hook events, input shapes and what each hook can block: [Claude Code](../adapters/claude-code.md), [Codex CLI](../adapters/codex.md), [Gemini CLI](../adapters/gemini.md), [Kiro CLI](../adapters/kiro.md), [oh-my-pi](../adapters/omp.md).
+<!-- catalog:end -->
+
 ## Install
 
 1. **Marketplace, whole repo.** `claude plugin marketplace add warxhead1/nervous-bus`, then `claude plugin install ub-mode@nervous-bus`. This clones the full repository.

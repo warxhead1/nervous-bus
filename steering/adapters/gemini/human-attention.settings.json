@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "AfterTool": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness gemini --event PostToolUse \"$STEERING_HOME/human-attention/skills/human-attention/scripts/copy-audit-hook\"",
+            "timeout": 10
+          }
+        ],
+        "matcher": "write_file|replace"
+      }
+    ]
+  }
+}

@@ -16,6 +16,22 @@ Every plugin is self-contained: its hooks run only files inside its own folder, 
 | the skill alone, any agent | `npx skills add https://github.com/warxhead1/nervous-bus/tree/main/steering/<name>/skills/<skill> -a claude-code` | a clone of the repo, then the one skill copied out. No hooks |
 | everything | `claude plugin marketplace add warxhead1/nervous-bus` | the whole repo |
 
+## Take one piece, in any agent
+
+Nothing here is tied to Claude Code. Each plugin is four separate pieces: a **ruling** (plain markdown), a **skill** (an Agent Skills folder), **checks** (stdlib Python scripts that read one JSON event on stdin and exit 2 to block or report), and **adapters** (hook config for each harness). [`catalog.json`](catalog.json) and [`llms.txt`](llms.txt) list every piece with a one-line purpose, its dependencies, and its raw URL on main, so an agent can fetch exactly one.
+
+| you want | do this |
+|---|---|
+| the rule only | Paste `rulings/<plugin>.md` (or `human-attention/hooks/ruling.md`, `plain-prose/hooks/ruling.md`) into `AGENTS.md`, `GEMINI.md`, a Kiro steering file or a system prompt |
+| the skill only | Copy the skill folder into the agent's skills directory |
+| one check | `steering/tools/export --piece <plugin>/check/<name> ./out` copies the script and the files it needs |
+| hook wiring | Pick `adapters/<harness>/<plugin>.*` and read the harness page: [Claude Code](adapters/claude-code.md), [Codex CLI](adapters/codex.md), [Gemini CLI](adapters/gemini.md), [Kiro CLI](adapters/kiro.md), [oh-my-pi](adapters/omp.md) |
+| a list of pieces | `steering/tools/export --list` |
+
+Each non-Claude harness runs a check through [`adapters/shim`](adapters/shim), which rewrites that harness's event name, tool name and tool input to the shape the checks read. The generated configs were built from the hook docs of each harness and the shim is tested for its translation. None of the four non-Claude configs has been run inside the live harness yet. Where a harness documents no hook point for a check, run the check from a pre-commit hook or a CI wrapper that feeds it the same JSON, or keep the rule text in `AGENTS.md`.
+
+`steering/tools/catalog` regenerates the catalog, `llms.txt`, the rulings, the adapter configs and the "Use it in any agent" block in each plugin README. Edit its table, not the output. A test fails when they drift.
+
 `steering/tools/export` copies only the chosen plugins and the LICENSE, and writes a `marketplace.json` for them. To publish the output yourself, commit it to its own repository or branch and add that.
 
 The plugin docs ([marketplace add and `#ref`](https://code.claude.com/docs/en/plugins/install.md#add-a-marketplace), [`--sparse` and `sparsePaths`](https://code.claude.com/docs/en/plugins/marketplace-reference.md#fields-by-type)) describe the marketplace paths. The `npx skills` tree-URL form is from the [skills CLI](https://github.com/vercel-labs/skills/blob/main/docs/commands.md). A skill alone does not carry the hook, so it holds only the rule an agent has to remember.

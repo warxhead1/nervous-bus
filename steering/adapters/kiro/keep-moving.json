@@ -1,0 +1,37 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "keep-moving-rerun-guard-PreToolUse",
+      "trigger": "PreToolUse",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event PreToolUse \"$STEERING_HOME/keep-moving/hooks/rerun-guard\""
+      },
+      "timeout": 5,
+      "enabled": true,
+      "matcher": "shell"
+    },
+    {
+      "name": "keep-moving-rerun-guard-PostToolUse",
+      "trigger": "PostToolUse",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event PostToolUse \"$STEERING_HOME/keep-moving/hooks/rerun-guard\""
+      },
+      "timeout": 5,
+      "enabled": true,
+      "matcher": "write"
+    },
+    {
+      "name": "keep-moving-cue-UserPromptSubmit",
+      "trigger": "UserPromptSubmit",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event UserPromptSubmit \"$STEERING_HOME/keep-moving/hooks/cue\""
+      },
+      "timeout": 5,
+      "enabled": true
+    }
+  ]
+}

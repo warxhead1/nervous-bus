@@ -1,0 +1,458 @@
+#!/usr/bin/env python3
+"""Build steering/catalog.json, steering/llms.txt and steering/rulings/*.md, and the
+"Use it in any agent" block of each plugin README, from the plugin folders.
+
+    steering/tools/catalog            write the files
+    steering/tools/catalog --check    exit 1 if a written file is out of date
+
+The catalog lists each ruling, skill, check and adapter as its own piece with a raw
+URL on main, so an agent can fetch exactly one. Edit META below, not the output.
+"""
+import json
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+ST = ROOT / "steering"
+REPO = "warxhead1/nervous-bus"
+RAW = f"https://raw.githubusercontent.com/{REPO}/main/"
+HOOK_IN = ("One JSON object on stdin, as Claude Code sends to a hook. {fields}. "
+           "Exit 0 allows. Exit 2 means {meaning}, with the message on stderr. "
+           "Bad input or a kill switch always exits 0.")
+CUE_SMOKE_NOTE = "prints the rule on stdout when the prompt matches, nothing otherwise"
+
+HEAVY = ("The reader gets the whole plan in one breath; the writer saved a period and the reader pays for it; "
+         "nobody asked for that trade. The cache holds the last answer; the next call reads it; the one after that finds it stale. "
+         "The queue holds the job; the worker takes it; the lease expires; the job runs twice.")
+GAME = ('<!doctype html><html><body><h1>Fever Dungeon</h1>\n<p>You are burning up. Your fever climbs every second and at one hundred you die.</p>\n'
+        '<p>Stand on a blue tile to cool down. Dodge the red embers. Reach the golden door in each of the rooms.</p>\n'
+        '<p>Move with the arrow keys or WASD. Pause with P or Escape. Good luck out there.</p>\n<button>Start</button></body></html>')
+
+
+def check(name, path, purpose, effect, event, matcher, off, fields, meaning, smoke, requires=()):
+    return {"name": name, "path": path, "purpose": purpose, "effect": effect, "event": event, "matcher": matcher,
+            "kill_switch": off, "input": HOOK_IN.format(fields=fields, meaning=meaning), "requires": list(requires),
+            "smoke": smoke}
+
+
+EDIT_IN = "`tool_name` (Write, Edit, MultiEdit) and `tool_input` with `file_path` and `content` or `old_string`/`new_string`"
+BASH_IN = "`tool_name` (Bash) and `tool_input.command`"
+AGENT_IN = "`tool_name` (Agent or Task) and `tool_input` with `prompt`, `subagent_type`, `model`, `isolation`"
+TMP = "{TMP}"
+
+META = {
+    "human-attention": {
+        "purpose": "Few words on screen: the design carries the meaning.",
+        "ruling": "hooks/ruling.md", "skill": "human-attention",
+        "checks": [
+            check("copy-audit-hook", "skills/human-attention/scripts/copy-audit-hook",
+                  "Report the copy an edit adds to a UI file.", "report", "PostToolUse", "Write|Edit|MultiEdit",
+                  "COPY_AUDIT_DISABLE=1", EDIT_IN, "the edit added too much copy; the write stands",
+                  {"files": {"game.html": GAME}, "env": {"XDG_CACHE_HOME": f"{TMP}/cache"},
+                   "steps": [{"stdin": {"session_id": "s", "tool_name": "Write", "tool_input": {"file_path": f"{TMP}/game.html"}}, "exit": 2}]},
+                  requires=["skills/human-attention/scripts/copy-audit"]),
+            {"name": "copy-audit", "path": "skills/human-attention/scripts/copy-audit",
+             "purpose": "List the text a person will see in UI source and count the usual excess.", "effect": "cli",
+             "event": None, "matcher": None, "kill_switch": None,
+             "input": "`copy-audit <file-or-dir>... [--json] [--max-words N] [--max-pairs N]`. Reads .html .vue .svelte .jsx .tsx and canvas text. Prints the copy and counts; with `--json`, one JSON object. Exit 1 only when a --max limit is given and exceeded.",
+             "requires": [], "smoke": {"files": {"game.html": GAME}, "steps": [{"args": ["{TMP}/game.html", "--json"], "exit": 0, "stdout_contains": "words"}]}},
+        ]},
+    "evidence-before-done": {
+        "purpose": "A claim of done carries what was observed.",
+        "skill": "evidence-before-done",
+        "checks": [
+            check("unfinished-guard", "hooks/unfinished-guard", "Report stubs and suppressions an edit adds.", "report",
+                  "PostToolUse", "Write|Edit|MultiEdit", "UNFINISHED_GUARD_DISABLE=1", EDIT_IN,
+                  "the edit added a stub or suppression; the write stands",
+                  {"steps": [{"stdin": {"tool_name": "Edit", "tool_input": {"file_path": "/x/a.rs", "old_string": "fn f() {}", "new_string": "fn f() { todo!() }"}}, "exit": 2}]}),
+            check("visual-proof-guard", "hooks/visual-proof-guard",
+                  "Send the agent back once when it edited a UI file and never looked at a rendered result.", "send-back",
+                  "Stop", None, "VISUAL_PROOF_DISABLE=1",
+                  "`session_id`, `transcript_path` (a Claude Code transcript .jsonl), `stop_hook_active`",
+                  "the agent should look at the result before it finishes",
+                  {"files": {"t.jsonl": json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "/app/src/Card.tsx", "old_string": "a", "new_string": "b"}}]}}) + "\n"},
+                   "env": {"XDG_CACHE_HOME": f"{TMP}/cache"},
+                   "steps": [{"stdin": {"session_id": "s1", "transcript_path": f"{TMP}/t.jsonl", "stop_hook_active": False}, "exit": 2}]}),
+        ]},
+    "keep-moving": {
+        "purpose": "No stalling on a wait, no rerunning what cannot change.", "skill": "keep-moving",
+        "checks": [
+            check("rerun-guard", "hooks/rerun-guard", "Block the third identical build or test run when no file changed.", "block",
+                  "PreToolUse (counts) and PostToolUse (resets on an edit)", "Bash; Write|Edit|MultiEdit", "RERUN_GUARD_DISABLE=1",
+                  "`session_id`, `hook_event_name`, " + BASH_IN, "the same command ran twice already with no edit between",
+                  {"env": {"XDG_CACHE_HOME": f"{TMP}/cache"},
+                   "steps": [{"stdin": {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "cargo test -p core"}}, "exit": e} for e in (0, 0, 2)]}),
+        ]},
+    "model-tiering": {
+        "purpose": "Every dispatch names its model, chosen by what would catch a wrong answer.", "skill": "model-tiering",
+        "checks": [
+            check("dispatch-model-guard", "hooks/dispatch-model-guard", "Block a subagent dispatch that names no model.", "block",
+                  "PreToolUse", "Agent|Task", "MODEL_TIERING_DISABLE=1", AGENT_IN, "the dispatch has no `model`",
+                  {"steps": [{"stdin": {"tool_name": "Agent", "tool_input": {"prompt": "x", "description": "y"}}, "exit": 2},
+                             {"stdin": {"tool_name": "Agent", "tool_input": {"prompt": "x", "model": "haiku"}}, "exit": 0}]}),
+        ]},
+    "isolated-dispatch": {
+        "purpose": "Editing agents get their own worktree; nobody's uncommitted work is hidden.", "skill": "isolated-dispatch",
+        "checks": [
+            check("dispatch-isolation-guard", "hooks/dispatch-isolation-guard",
+                  "Block a dispatch that asks for edits and sets no isolation.", "block", "PreToolUse", "Agent|Task",
+                  "ISOLATED_DISPATCH_DISABLE=1", AGENT_IN, "the dispatch edits files with no isolation",
+                  {"steps": [{"stdin": {"tool_name": "Agent", "tool_input": {"prompt": "Fix the failing parser test and commit it."}}, "exit": 2},
+                             {"stdin": {"tool_name": "Agent", "tool_input": {"prompt": "Fix the failing parser test.", "isolation": "worktree"}}, "exit": 0}]}),
+            check("stash-guard", "hooks/stash-guard", "Block an anonymous `git stash` and a `pop` or `drop` that names no entry.", "block",
+                  "PreToolUse", "Bash", "STASH_GUARD_DISABLE=1", BASH_IN, "the stash is anonymous and shared across worktrees",
+                  {"steps": [{"stdin": {"tool_name": "Bash", "tool_input": {"command": "git stash"}}, "exit": 2},
+                             {"stdin": {"tool_name": "Bash", "tool_input": {"command": "git stash list"}}, "exit": 0}]}),
+        ]},
+    "remediation-ladder": {
+        "purpose": "Fix the cause at the highest rung: eliminate, automate, then inform.", "skill": "remediation-ladder",
+        "checks": [
+            check("bypass-guard", "hooks/bypass-guard", "Block a command that skips a check instead of passing it.", "block",
+                  "PreToolUse", "Bash", "BYPASS_GUARD_DISABLE=1", BASH_IN, "the command skips a check (`--no-verify`, `HUSKY=0`, `-DskipTests`)",
+                  {"steps": [{"stdin": {"tool_name": "Bash", "tool_input": {"command": "git commit --no-verify -m wip"}}, "exit": 2},
+                             {"stdin": {"tool_name": "Bash", "tool_input": {"command": "git commit -m 'fix parser'"}}, "exit": 0}]}),
+        ]},
+    "falsify-your-gate": {
+        "purpose": "A check counts only after you have seen it fail.", "skill": "falsify-your-gate",
+        "checks": [
+            check("vacuous-test-guard", "hooks/vacuous-test-guard", "Report a test an edit adds that cannot fail.", "report",
+                  "PostToolUse", "Write|Edit|MultiEdit", "VACUOUS_TEST_GUARD_DISABLE=1", EDIT_IN,
+                  "the edit added a test that asserts nothing or something always true; the write stands",
+                  {"files": {"test_cart.py": "def test_total():\n    total([1, 2])\n"},
+                   "steps": [{"stdin": {"tool_name": "Write", "tool_input": {"file_path": f"{TMP}/test_cart.py", "content": "def test_total():\n    total([1, 2])\n"}}, "exit": 2}]}),
+        ]},
+    "plain-prose": {
+        "purpose": "Prose a person reads once: one idea per sentence, plain words, no AI tells.",
+        "ruling": "hooks/ruling.md", "skill": "ste80-humanizer",
+        "checks": [
+            check("prose-guard", "hooks/prose-guard",
+                  "Report heavy prose in an edited document, and block a heavy commit message or PR body once.", "report and block-once",
+                  "PostToolUse; PreToolUse", "Write|Edit|MultiEdit; Bash", "PLAIN_PROSE_DISABLE=1",
+                  "`session_id`, `hook_event_name`, " + EDIT_IN + ", or " + BASH_IN + " for a `git commit` or `gh pr`/`gh issue` command",
+                  "the text is heavy (a document edit is reported and stands; a commit or PR command is sent back once)",
+                  {"env": {"XDG_CACHE_HOME": f"{TMP}/cache"},
+                   "steps": [{"stdin": {"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                                        "tool_input": {"command": 'git commit -m "' + HEAVY + '"'}}, "exit": 2}]},
+                  requires=["skills/ste80-humanizer/scripts/ste_check.py"]),
+            {"name": "ste_check.py", "path": "skills/ste80-humanizer/scripts/ste_check.py",
+             "purpose": "Upstream linter for AI tells and STE-style English.", "effect": "cli", "event": None, "matcher": None,
+             "kill_switch": None, "input": "`ste_check.py [--strict] [--json] FILE...`, or `-` for stdin. Prints findings with line numbers; with `--json`, a JSON list.",
+             "requires": [], "smoke": {"files": {"a.md": "Great question! It is important to note that we delve into seamless tapestries.\n"},
+                                       "steps": [{"args": ["{TMP}/a.md"], "exit": None, "stdout_contains": "a.md"}]}},
+        ]},
+    "ub-mode": {
+        "purpose": "Make it work, then make it right, measured.", "skill": "ub-mode", "ruling": None,
+        "checks": [
+            {"name": "ub-gate", "path": "bin/ub-gate",
+             "purpose": "Run unclebob's crapper, dryer and mutator at pinned versions with no network.", "effect": "cli",
+             "event": None, "matcher": None, "kill_switch": None,
+             "input": "`ub-gate install | doctor | crap | dry | mutate | summary | sandbox -- CMD`. `install` is the only networked step. `doctor` prints JSON. Needs Python 3.11 or newer and git.",
+             "requires": ["bin/ub_gate_dry.py", "bin/simjoin.py", "lock/pins.json", "lock/requirements.lock"],
+             "smoke": {"steps": [{"args": ["--help"], "exit": 0, "stdout_contains": "ub-gate"}]}},
+        ]},
+}
+
+ORDER = ["human-attention", "evidence-before-done", "keep-moving", "model-tiering", "isolated-dispatch",
+         "remediation-ladder", "falsify-your-gate", "plain-prose", "ub-mode"]
+HARNESSES = [
+    ("claude-code", "Claude Code", "adapters/claude-code.md"),
+    ("codex", "Codex CLI", "adapters/codex.md"),
+    ("gemini", "Gemini CLI", "adapters/gemini.md"),
+    ("kiro", "Kiro CLI", "adapters/kiro.md"),
+    ("omp", "oh-my-pi", "adapters/omp.md"),
+]
+
+
+def rel(p):
+    return str(Path(p).relative_to(ROOT))
+
+
+def url(path):
+    return RAW + path
+
+
+def ruling_text(name):
+    """Plain markdown rule text, built from the plugin's cues when it has no ruling file."""
+    cues = json.loads((ST / name / "hooks" / "cues.json").read_text())
+    seen, out = set(), []
+    for c in cues:
+        t = re.sub(r"^\[[^\]]+\]\s*", "", c["say"])
+        t = re.sub(r"\s*Load the [\w-]+ skill\.?\s*$", "", t).strip()
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return f"# {name}\n\n" + "\n\n".join(out) + "\n"
+
+
+def skill_files(name, skill):
+    d = ST / name / "skills" / skill
+    return sorted(rel(p) for p in d.rglob("*") if p.is_file() and "__pycache__" not in p.parts and not p.name.endswith(".pyc"))
+
+
+def plugin_hooks(name):
+    """(script basename, event, matcher, timeout) from the plugin's own hooks.json."""
+    data = json.loads((ST / name / "hooks" / "hooks.json").read_text())["hooks"]
+    out = []
+    for event, groups in data.items():
+        for g in groups:
+            for h in g["hooks"]:
+                m = re.search(r'/((?:hooks|skills|bin)/[^"\s]+)"?$', h["command"].strip()) or re.search(r'/((?:hooks|skills|bin)/\S+)', h["command"])
+                if m and not h["command"].startswith("cat "):
+                    out.append((m.group(1), event, g.get("matcher"), h.get("timeout", 10)))
+    return out
+
+
+EVENT_MAP = {"codex": {}, "kiro": {}, "claude-code": {},
+             "gemini": {"PreToolUse": "BeforeTool", "PostToolUse": "AfterTool", "UserPromptSubmit": "BeforeAgent", "Stop": "AfterAgent"},
+             "omp": {"PreToolUse": "tool_call", "PostToolUse": "tool_result"}}
+MATCH_MAP = {
+    "codex": {"Bash": "Bash", "Write|Edit|MultiEdit": "apply_patch", "Agent|Task": "spawn_agent"},
+    "gemini": {"Bash": "run_shell_command", "Write|Edit|MultiEdit": "write_file|replace"},
+    "kiro": {"Bash": "shell", "Write|Edit|MultiEdit": "write", "Agent|Task": "subagent"},
+    "omp": {"Bash": "bash", "Write|Edit|MultiEdit": "edit|write"},
+    "claude-code": {"Bash": "Bash", "Write|Edit|MultiEdit": "Write|Edit|MultiEdit", "Agent|Task": "Agent|Task"},
+}
+HOME = "$STEERING_HOME"
+
+
+def command_for(harness, name, script, event):
+    target = f'"{HOME}/{name}/{script}"'
+    if harness == "claude-code":
+        return f"python3 {target}"
+    return f'python3 "{HOME}/adapters/shim" --harness {harness} --event {event} {target}'
+
+
+def adapter_files():
+    """{path: text} of one hook config per harness per plugin, from the plugin's own hooks.json."""
+    out = {}
+    for name in ORDER:
+        hooks = plugin_hooks(name)
+        for harness in ("claude-code", "codex", "gemini", "kiro", "omp"):
+            rows = []
+            for script, event, matcher, timeout in hooks:
+                ev = EVENT_MAP[harness].get(event, event) if harness != "omp" else EVENT_MAP["omp"].get(event)
+                if ev is None:
+                    continue
+                if matcher is not None:
+                    mt = MATCH_MAP[harness].get(matcher)
+                    if mt is None:
+                        continue
+                else:
+                    mt = None
+                rows.append((script, event, ev, mt, timeout))
+            if not rows:
+                continue
+            if harness in ("claude-code", "codex", "gemini"):
+                cfg = {}
+                for script, event, ev, mt, timeout in rows:
+                    g = {"hooks": [{"type": "command", "command": command_for(harness, name, script, event), "timeout": timeout}]}
+                    if mt:
+                        g["matcher"] = mt
+                    cfg.setdefault(ev, []).append(g)
+                path = {"claude-code": f"steering/adapters/claude-code/{name}.settings.json",
+                        "codex": f"steering/adapters/codex/{name}.hooks.json",
+                        "gemini": f"steering/adapters/gemini/{name}.settings.json"}[harness]
+                out[path] = json.dumps({"hooks": cfg}, indent=2) + "\n"
+            elif harness == "kiro":
+                hs = []
+                for script, event, ev, mt, timeout in rows:
+                    h = {"name": f"{name}-{Path(script).name}-{event}", "trigger": ev, "action": {"type": "command", "command": command_for(harness, name, script, event)},
+                         "timeout": timeout, "enabled": True}
+                    if mt:
+                        h["matcher"] = mt
+                    hs.append(h)
+                out[f"steering/adapters/kiro/{name}.json"] = json.dumps({"version": "v1", "hooks": hs}, indent=2) + "\n"
+            else:
+                for kind, handler in (("pre", "tool_call"), ("post", "tool_result")):
+                    mine = [r for r in rows if r[2] == handler]
+                    if not mine:
+                        continue
+                    calls = ",\n".join(
+                        f'  ["{mt or ".*"}", "{HOME}/{name}/{script}", "{event}"]' for script, event, ev, mt, timeout in mine)
+                    block = '{ block: true, reason: r.stderr }' if kind == 'pre' else '{ additionalContext: r.stderr }'
+                    ts = OMP_TS.format(handler=handler, calls=calls, kind=kind, block=block)
+                    out[f"steering/adapters/omp/{name}.{kind}.ts"] = ts
+    return out
+
+
+OMP_TS = """// oh-my-pi {kind} hook for a steering plugin. Put it in .omp/hooks/{kind}/ (project) or ~/.omp/agent/hooks/{kind}/.
+// Runs each check through adapters/shim and turns exit code 2 into a block (pre) or extra context (post).
+// Set STEERING_HOME to the folder that holds adapters/ and one folder per plugin.
+import {{ spawnSync }} from "node:child_process";
+
+const checks: [string, string, string][] = [
+{calls}
+];
+const home = process.env.STEERING_HOME ?? "";
+
+export default function (pi: any): void {{
+  pi.on("{handler}", async (event: any) => {{
+    for (const [pattern, script, hookEvent] of checks) {{
+      if (!new RegExp("^(" + pattern + ")$").test(event.toolName)) continue;
+      const r = spawnSync("python3", [home + "/adapters/shim", "--harness", "omp", "--event", hookEvent, script.replace("$STEERING_HOME", home)], {{
+        input: JSON.stringify({{ hook_event_name: "{handler}", toolName: event.toolName, input: event.input }}),
+        encoding: "utf8",
+      }});
+      if (r.status === 2) return {block};
+    }}
+  }});
+}}
+"""
+
+
+def adapter_pieces(files):
+    out = [{"id": "adapter/shim", "kind": "adapter", "plugin": None, "path": "steering/adapters/shim",
+            "purpose": "Translate a Codex, Gemini CLI, Kiro CLI or oh-my-pi hook event to the Claude Code event the checks read, and run a check.",
+            "requires": [],
+            "smoke": {"steps": [{"args": ["--help"], "exit": 0, "stdout_contains": "harness"}]}}]
+    for key, label, p in HARNESSES:
+        out.append({"id": f"adapter/{key}", "kind": "adapter", "plugin": None, "path": "steering/" + p,
+                    "purpose": f"How to wire the rulings, skills and checks into {label}, with the hook events, input shapes and what can block.", "requires": []})
+    for path in sorted(files):
+        parts = Path(path).parts
+        harness, fname = parts[2], parts[3]
+        plugin = fname.split(".")[0]
+        out.append({"id": f"adapter/{harness}/{plugin}" + (f"/{fname.split('.')[1]}" if harness == "omp" else ""), "kind": "adapter",
+                    "plugin": plugin, "path": path,
+                    "purpose": f"Hook config that runs the {plugin} checks in {dict((k, l) for k, l, _ in HARNESSES)[harness]}.",
+                    "requires": ["steering/adapters/shim"] if harness != "claude-code" else []})
+    return out
+
+
+def build():
+    rulings, pieces = {}, []
+    for name in ORDER:
+        m = META[name]
+        if m.get("ruling") is None and name != "ub-mode":
+            pass
+        if m.get("ruling"):
+            rpath = f"steering/{name}/{m['ruling']}"
+        elif name == "ub-mode":
+            rpath = None
+        else:
+            rpath = f"steering/rulings/{name}.md"
+            rulings[rpath] = ruling_text(name)
+        if name == "ub-mode":
+            rpath = "steering/rulings/ub-mode.md"
+            rulings[rpath] = ruling_text(name)
+        pieces.append({"id": f"{name}/ruling", "kind": "ruling", "plugin": name, "path": rpath,
+                       "purpose": m["purpose"] + " Plain markdown to paste into AGENTS.md, GEMINI.md, a Kiro steering file or a system prompt.",
+                       "requires": []})
+        files = skill_files(name, m["skill"])
+        pieces.append({"id": f"{name}/skill", "kind": "skill", "plugin": name, "path": f"steering/{name}/skills/{m['skill']}",
+                       "entry": f"steering/{name}/skills/{m['skill']}/SKILL.md", "files": files,
+                       "purpose": f"The `{m['skill']}` method as an Agent Skills folder (SKILL.md and its references).", "requires": []})
+        cue = {"name": "cue", "path": "hooks/cue", "purpose": "Say the rule when the prompt calls for it.", "effect": "context",
+               "event": "UserPromptSubmit", "matcher": None, "kill_switch": "STEERING_CUES_DISABLE=1",
+               "input": "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
+               "requires": ["hooks/cues.json"],
+               "smoke": {"steps": [{"stdin": {"prompt": json.loads((ST / name / "evals" / "trigger.json").read_text())["should"][0]}, "exit": 0, "stdout_contains": f"[{name}]"}]}}
+        for c in m["checks"] + ([cue] if (ST / name / "hooks" / "cue").is_file() else []):
+            pieces.append({"id": f"{name}/check/{c['name']}", "kind": "check", "plugin": name, "path": f"steering/{name}/{c['path']}",
+                           "purpose": c["purpose"], "effect": c["effect"], "event": c["event"], "matcher": c["matcher"],
+                           "kill_switch": c["kill_switch"], "input": c["input"],
+                           "requires": [f"steering/{name}/{r}" for r in c["requires"]], "smoke": c["smoke"]})
+    afiles = adapter_files()
+    pieces += adapter_pieces(afiles)
+    for p in pieces:
+        p["url"] = url(p["path"])
+        if "files" in p:
+            p["file_urls"] = [url(f) for f in p["files"]]
+        if p["requires"]:
+            p["require_urls"] = [url(r) for r in p["requires"]]
+    cat = {"repo": REPO, "ref": "main", "raw_base": RAW,
+           "about": "Each piece stands alone: fetch its `url` (and `require_urls`, kept at the same relative layout) and use it. Checks are Python 3 scripts that use only the standard library.",
+           "pieces": pieces}
+    return cat, rulings, afiles
+
+
+def llms(cat):
+    lines = ["# steering", "",
+             "> Rulings for coding agents, each with the check that enforces it. Every piece below is fetchable on its own by raw URL. Machine-readable list: " + url("steering/catalog.json"), ""]
+    for kind, title in (("ruling", "Rulings (plain markdown, paste into AGENTS.md, GEMINI.md, a steering file or a system prompt)"),
+                        ("skill", "Skills (Agent Skills folders; fetch SKILL.md, then the other files listed)"),
+                        ("check", "Checks (Python 3 scripts; JSON on stdin, exit 2 blocks or reports)"),
+                        ("adapter", "Adapters (per-harness wiring)")):
+        lines += [f"## {title}", ""]
+        for p in cat["pieces"]:
+            if p["kind"] != kind:
+                continue
+            tgt = p.get("entry") and url(p["entry"]) or p["url"]
+            dep = f" Needs: {', '.join(p['require_urls'])}." if p.get("require_urls") else ""
+            lines.append(f"- [{p['id']}]({tgt}): {p['purpose']}{dep}")
+            for fu in (p.get("file_urls") or []):
+                if fu != tgt:
+                    lines.append(f"  - {fu}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+START, END = "<!-- catalog:start -->", "<!-- catalog:end -->"
+
+
+def block(cat, name, rulings):
+    ps = [p for p in cat["pieces"] if p["plugin"] == name]
+    ruling = next(p for p in ps if p["kind"] == "ruling")
+    skill = next(p for p in ps if p["kind"] == "skill")
+    text = (rulings.get(ruling["path"]) or (ROOT / ruling["path"]).read_text()).strip()
+    quoted = "\n".join(("> " + l).rstrip() for l in text.splitlines())
+    out = [START, "## Use it in any agent", "",
+           "Each piece below works alone. Nothing here needs Claude Code, and nothing needs the rest of this repository.", "",
+           f"**The rule.** Paste this into `AGENTS.md`, `GEMINI.md`, a Kiro steering file or any system prompt. File: [{Path(ruling['path']).name}]({ruling['url']}).", "",
+           quoted, "",
+           f"**The skill.** An [Agent Skills](https://agentskills.io) folder: [`SKILL.md`]({url(skill['entry'])})"
+           + (f" with {len(skill['files']) - 1} more file(s) listed in [catalog.json](../catalog.json)." if len(skill["files"]) > 1 else "."), "",
+           "**The checks.** Plain Python 3 scripts with no dependencies.", "",
+           "| check | what it takes | effect | event and matcher | off |", "|---|---|---|---|---|"]
+    for p in ps:
+        if p["kind"] != "check":
+            continue
+        ev = ((p["event"] or "run by hand") + (f" on {p['matcher']}" if p["matcher"] else "")).replace("|", "\\|")
+        needs = f" Keep with it: {', '.join('`' + Path(r).name + '`' for r in p['requires'])}." if p["requires"] else ""
+        off = f"`{p['kill_switch']}`" if p["kill_switch"] else ""
+        out.append(f"| [`{Path(p['path']).name}`]({p['url']}) | {p['input']}{needs} | {p['effect']} | {ev} | {off} |")
+    cfgs = [q for q in cat["pieces"] if q["kind"] == "adapter" and q["plugin"] == name]
+    names = []
+    for q in cfgs:
+        parts = q["id"].split("/")
+        names.append(f"[{parts[1]}{'/' + parts[3] if len(parts) == 4 else ''}]({q['url']})")
+    out += ["", "**Ready-made hook config** (set `STEERING_HOME`, see the harness page): " + ", ".join(names) + ".",
+            "", "Wiring, hook events, input shapes and what each hook can block: "
+            + ", ".join(f"[{label}](../{path})" for _, label, path in HARNESSES) + ".", END]
+    return "\n".join(out)
+
+
+def readme_with(cat, name, rulings):
+    p = ST / name / "README.md"
+    s = p.read_text()
+    b = block(cat, name, rulings)
+    if START in s:
+        return re.sub(re.escape(START) + r".*?" + re.escape(END), lambda _: b, s, flags=re.S)
+    i = s.index("## Install")
+    return s[:i] + b + "\n\n" + s[i:]
+
+
+def main(argv):
+    cat, rulings, afiles = build()
+    rulings = {**rulings, **afiles}
+    outputs = {ST / "catalog.json": json.dumps(cat, indent=2) + "\n", ST / "llms.txt": llms(cat) + "\n"}
+    for path, text in rulings.items():
+        outputs[ROOT / path] = text
+    for name in ORDER:
+        outputs[ST / name / "README.md"] = readme_with(cat, name, rulings)
+    stale = [rel(p) for p, t in outputs.items() if not p.exists() or p.read_text() != t]
+    if "--check" in argv:
+        if stale:
+            print("out of date: " + ", ".join(stale), file=sys.stderr)
+            return 1
+        return 0
+    for p, t in outputs.items():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(t)
+    print(f"wrote {len(outputs)} files, {len(cat['pieces'])} pieces")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

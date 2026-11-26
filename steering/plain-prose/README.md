@@ -44,6 +44,58 @@ The ruling itself asks for more than the guard enforces: under 25 words on avera
 
 **Ten-topic evaluation.** Ten drafts across ten domains (glass cleaning, a PostgreSQL scan, idempotency keys, form validation, key rotation, an LLM judge, a rebase, a retry loop, a loan, a proxy error) were written under the merged ruling. All ten averaged under 20.5 words a sentence and passed `prose-guard` with zero warnings. First drafts failed in three repeated ways: cause, condition and fix packed into one sentence (topics 07 and 09 averaged 25.3 and 28.4 words, then 17.0 and 19.6 once split), developer slang such as `spin up` and `silent fallback`, and list items opening with gerunds, which the upstream checker flags as `ing-form` and the guard ignores. Full table and samples: [evals/10-topic-style-eval.md](evals/10-topic-style-eval.md). This is one run by one writer, a worked check and not a benchmark.
 
+<!-- catalog:start -->
+## Use it in any agent
+
+Each piece below works alone. Nothing here needs Claude Code, and nothing needs the rest of this repository.
+
+**The rule.** Paste this into `AGENTS.md`, `GEMINI.md`, a Kiro steering file or any system prompt. File: [ruling.md](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/ruling.md).
+
+> # Write prose a person reads once
+>
+> A person reads your prose one sentence at a time, usually once. This holds for
+> a reply, an explanation, a document, a report, a commit message, a pull request
+> and a brief.
+>
+> - Start with the concrete cause, answer or fix in sentence one. Order points
+>   silently by practical impact and stop on the last point with no wrap-up.
+> - State a specific cause or action and its concrete result in every opening
+>   sentence, long-reply heading and list item. Weave one **bold key phrase** into
+>   a complete sentence instead of starting items with `**Label.**` prefixes.
+> - One idea per sentence. Keep sentences under 25 words on average and never
+>   exceed 35 words. Keep `that`, `who` and `which`, break 3+ noun stacks with
+>   prepositions or hyphens, and use no semicolons, em dashes or side-remark
+>   parentheses.
+> - Prefer active voice with simple tenses, and use passive voice only when it
+>   reads more naturally than an awkward relative clause.
+> - Pair inanimate nouns only with literal verbs, adjectives and adverbs (never
+>   `knows`, `tells`, `reads as`, `survives`, `silently`, `happily`, `honest`,
+>   `sane`, `polite`, `forgiving` or `stubborn`), and use plain standard words.
+> - No staging: no "not X but Y", no run-up, no closing line that repeats the
+>   point, no three adjectives where one fact does the work.
+> - Keep every fact, number and name, and keep the certainty the source has.
+>
+> Method: the `ste80-humanizer` skill. A hook reports heavy prose that an edit
+> adds to a document. It also reads a commit message and the body of a `gh pr`
+> or `gh issue` command before the command runs, and sends a heavy one back
+> once (off: `PLAIN_PROSE_DISABLE=1`). It does not see chat replies or a brief
+> that you pass to an agent, so those stay on you.
+
+**The skill.** An [Agent Skills](https://agentskills.io) folder: [`SKILL.md`](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/SKILL.md) with 9 more file(s) listed in [catalog.json](../catalog.json).
+
+**The checks.** Plain Python 3 scripts with no dependencies.
+
+| check | what it takes | effect | event and matcher | off |
+|---|---|---|---|---|
+| [`prose-guard`](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/prose-guard) | One JSON object on stdin, as Claude Code sends to a hook. `session_id`, `hook_event_name`, `tool_name` (Write, Edit, MultiEdit) and `tool_input` with `file_path` and `content` or `old_string`/`new_string`, or `tool_name` (Bash) and `tool_input.command` for a `git commit` or `gh pr`/`gh issue` command. Exit 0 allows. Exit 2 means the text is heavy (a document edit is reported and stands; a commit or PR command is sent back once), with the message on stderr. Bad input or a kill switch always exits 0. Keep with it: `ste_check.py`. | report and block-once | PostToolUse; PreToolUse on Write\|Edit\|MultiEdit; Bash | `PLAIN_PROSE_DISABLE=1` |
+| [`ste_check.py`](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/scripts/ste_check.py) | `ste_check.py [--strict] [--json] FILE...`, or `-` for stdin. Prints findings with line numbers; with `--json`, a JSON list. | cli | run by hand |  |
+| [`cue`](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/cue) | One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0. Keep with it: `cues.json`. | context | UserPromptSubmit | `STEERING_CUES_DISABLE=1` |
+
+**Ready-made hook config** (set `STEERING_HOME`, see the harness page): [claude-code](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/claude-code/plain-prose.settings.json), [codex](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/codex/plain-prose.hooks.json), [gemini](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/gemini/plain-prose.settings.json), [kiro](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/kiro/plain-prose.json), [omp/post](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/plain-prose.post.ts), [omp/pre](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/plain-prose.pre.ts).
+
+Wiring, hook events, input shapes and what each hook can block: [Claude Code](../adapters/claude-code.md), [Codex CLI](../adapters/codex.md), [Gemini CLI](../adapters/gemini.md), [Kiro CLI](../adapters/kiro.md), [oh-my-pi](../adapters/omp.md).
+<!-- catalog:end -->
+
 ## Install
 
 Pick one. Each needs no other plugin from this repo.

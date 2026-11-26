@@ -3,6 +3,13 @@
 
     steering/tools/export plain-prose /path/to/out        one plugin
     steering/tools/export --all /path/to/out              every plugin
+    steering/tools/export --piece plain-prose/check/prose-guard /path/to/out
+    steering/tools/export --list                          every piece id in steering/catalog.json
+
+--piece copies one catalog piece (a ruling, a skill folder, a check with the files it
+needs, or an adapter) into OUT, keeping each file's path under steering/. Set
+STEERING_HOME to OUT and the adapter configs find the check.
+
     steering/tools/export --git plain-prose /path/to/out  also run git init and commit
 
 The output holds only the chosen plugins, the repo LICENSE, and a
@@ -56,13 +63,44 @@ def build(names, out, repo=ROOT, init_git=False):
     return name, wanted
 
 
+def piece(piece_id, out, repo=ROOT):
+    """Copy one catalog piece (a ruling, a skill, a check and what it needs, an adapter) into out."""
+    cat = json.loads((repo / "steering" / "catalog.json").read_text())
+    by_id = {p["id"]: p for p in cat["pieces"]}
+    if piece_id not in by_id:
+        raise SystemExit(f"unknown piece {piece_id!r}; run with --list")
+    p = by_id[piece_id]
+    out = Path(out)
+    if out.exists() and any(out.iterdir()):
+        raise SystemExit(f"{out} is not empty")
+    paths = (p.get("files") or [p["path"]]) + p["requires"]
+    for path in paths:
+        dst = out / Path(path).relative_to("steering")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repo / path, dst)
+    return [str(Path(x).relative_to("steering")) for x in paths]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("plugin", nargs="?", help="plugin name (omit with --all)")
     ap.add_argument("out", nargs="?")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--git", action="store_true", help="run git init and commit in the output")
+    ap.add_argument("--piece", help="export one catalog piece by id, such as plain-prose/check/prose-guard")
+    ap.add_argument("--list", action="store_true", help="list catalog piece ids")
     a = ap.parse_args(argv)
+    if a.list:
+        for q in json.loads((ROOT / "steering" / "catalog.json").read_text())["pieces"]:
+            print(q["id"])
+        return 0
+    if a.piece:
+        out = a.out or a.plugin
+        if not out:
+            ap.error("give an output directory")
+        for f in piece(a.piece, out):
+            print(f"{out}/{f}")
+        return 0
     if a.all:
         out, names = a.out or a.plugin, ["--all"]
     else:

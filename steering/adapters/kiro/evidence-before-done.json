@@ -1,0 +1,36 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "evidence-before-done-unfinished-guard-PostToolUse",
+      "trigger": "PostToolUse",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event PostToolUse \"$STEERING_HOME/evidence-before-done/hooks/unfinished-guard\""
+      },
+      "timeout": 10,
+      "enabled": true,
+      "matcher": "write"
+    },
+    {
+      "name": "evidence-before-done-cue-UserPromptSubmit",
+      "trigger": "UserPromptSubmit",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event UserPromptSubmit \"$STEERING_HOME/evidence-before-done/hooks/cue\""
+      },
+      "timeout": 5,
+      "enabled": true
+    },
+    {
+      "name": "evidence-before-done-visual-proof-guard-Stop",
+      "trigger": "Stop",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event Stop \"$STEERING_HOME/evidence-before-done/hooks/visual-proof-guard\""
+      },
+      "timeout": 10,
+      "enabled": true
+    }
+  ]
+}

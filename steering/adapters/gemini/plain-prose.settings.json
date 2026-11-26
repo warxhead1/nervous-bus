@@ -1,0 +1,39 @@
+{
+  "hooks": {
+    "BeforeTool": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness gemini --event PreToolUse \"$STEERING_HOME/plain-prose/hooks/prose-guard\"",
+            "timeout": 10
+          }
+        ],
+        "matcher": "run_shell_command"
+      }
+    ],
+    "AfterTool": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness gemini --event PostToolUse \"$STEERING_HOME/plain-prose/hooks/prose-guard\"",
+            "timeout": 10
+          }
+        ],
+        "matcher": "write_file|replace"
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness gemini --event UserPromptSubmit \"$STEERING_HOME/plain-prose/hooks/cue\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "plain-prose-prose-guard-PreToolUse",
+      "trigger": "PreToolUse",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event PreToolUse \"$STEERING_HOME/plain-prose/hooks/prose-guard\""
+      },
+      "timeout": 10,
+      "enabled": true,
+      "matcher": "shell"
+    },
+    {
+      "name": "plain-prose-prose-guard-PostToolUse",
+      "trigger": "PostToolUse",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event PostToolUse \"$STEERING_HOME/plain-prose/hooks/prose-guard\""
+      },
+      "timeout": 10,
+      "enabled": true,
+      "matcher": "write"
+    },
+    {
+      "name": "plain-prose-cue-UserPromptSubmit",
+      "trigger": "UserPromptSubmit",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event UserPromptSubmit \"$STEERING_HOME/plain-prose/hooks/cue\""
+      },
+      "timeout": 5,
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Run a steering check for a harness that is not Claude Code.
+
+    shim --harness codex|gemini|kiro|omp|claude-code [--event EVENT] CHECK [CHECK_ARGS...]
+
+The checks read one Claude Code hook event as JSON on stdin and signal with the
+exit code: 0 allows, 2 blocks or reports, with the message on stderr. This shim reads
+the other harness's hook event from stdin, rewrites it to that shape (event name, tool
+name, tool_input keys), runs CHECK with it, and passes the exit code and stderr
+through. Standard library only.
+
+Gemini CLI requires JSON on stdout at exit 0, so a check's plain stdout (the cue)
+is wrapped as hookSpecificOutput.additionalContext.
+"""
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+EVENTS = {
+    "pretooluse": "PreToolUse", "beforetool": "PreToolUse", "tool_call": "PreToolUse",
+    "posttooluse": "PostToolUse", "aftertool": "PostToolUse", "tool_result": "PostToolUse",
+    "userpromptsubmit": "UserPromptSubmit", "beforeagent": "UserPromptSubmit", "before_agent_start": "UserPromptSubmit",
+    "prompt submit": "UserPromptSubmit",
+    "stop": "Stop", "afteragent": "Stop", "agent_end": "Stop", "agentstop": "Stop", "agent stop": "Stop",
+    "sessionstart": "SessionStart", "session_start": "SessionStart",
+}
+TOOLS = {
+    "Bash": {"bash", "shell", "run_shell_command", "execute_bash", "execute_cmd", "local_shell"},
+    "Write": {"write", "write_file", "fs_write", "create", "create_file"},
+    "Edit": {"edit", "replace", "str_replace", "multiedit", "edit_file"},
+    "Agent": {"agent", "task", "spawn_agent", "subagent", "invoke_subagent", "delegate"},
+}
+KEYS = {"path": "file_path", "filepath": "file_path", "filePath": "file_path", "file": "file_path",
+        "file_text": "content", "text": "content", "old_str": "old_string", "oldString": "old_string", "old_text": "old_string",
+        "new_str": "new_string", "newString": "new_string", "new_text": "new_string", "cmd": "command"}
+PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update) File: (.+)$", re.M)
+
+
+def event_name(raw):
+    return EVENTS.get(str(raw or "").strip().lower(), str(raw or ""))
+
+
+def tool_name(raw):
+    low = str(raw or "").lower()
+    for canon, names in TOOLS.items():
+        if low in names:
+            return canon
+    return str(raw or "")
+
+
+def normalize(ev, event=None):
+    out = dict(ev)
+    out["hook_event_name"] = event or event_name(ev.get("hook_event_name") or ev.get("event"))
+    raw_tool = ev.get("tool_name") or ev.get("toolName") or ev.get("tool")
+    if raw_tool:
+        out["tool_name"] = tool_name(raw_tool)
+    ti = ev.get("tool_input", ev.get("input", ev.get("toolInput")))
+    if isinstance(ti, dict):
+        out["tool_input"] = {KEYS.get(k, k): v for k, v in ti.items()}
+    if "prompt" not in out and isinstance(ev.get("user_prompt"), str):
+        out["prompt"] = ev["user_prompt"]
+    return out
+
+
+def patch_files(ev):
+    """Codex edits through apply_patch; the patch text names the files it touches."""
+    ti = ev.get("tool_input") or {}
+    text = next((v for v in ti.values() if isinstance(v, str) and "*** " in v), "")
+    return PATCH_FILE.findall(text)
+
+
+def run(check, args, ev):
+    p = subprocess.run([sys.executable, check, *args], input=json.dumps(ev), capture_output=True, text=True)
+    return p.returncode, p.stdout, p.stderr
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--harness", required=True, choices=["claude-code", "codex", "gemini", "kiro", "omp"])
+    ap.add_argument("--event", help="force the event name when the harness does not send one")
+    ap.add_argument("check")
+    ap.add_argument("args", nargs=argparse.REMAINDER)
+    a = ap.parse_args(argv)
+    try:
+        ev = normalize(json.load(sys.stdin), event_name(a.event) if a.event else None)
+    except Exception:
+        return 0
+    jobs = [ev]
+    if a.harness == "codex" and ev.get("tool_name") == "apply_patch":
+        # The checks read a Write or Edit. A patch names files; treat each as a Write of the file on disk.
+        jobs = []
+        for f in patch_files(ev):
+            p = Path(ev.get("cwd") or ".") / f
+            content = p.read_text(errors="replace") if p.is_file() else ""
+            jobs.append({**ev, "tool_name": "Write", "tool_input": {"file_path": str(p), "content": content}})
+    worst, out, err = 0, "", ""
+    for j in jobs:
+        rc, so, se = run(a.check, a.args, j)
+        out, err = out + so, err + se
+        worst = 2 if 2 in (worst, rc) else max(worst, rc)
+    if a.harness == "gemini" and worst == 0 and out.strip():
+        out = json.dumps({"hookSpecificOutput": {"hookEventName": "BeforeAgent" if ev["hook_event_name"] == "UserPromptSubmit" else "AfterTool",
+                                                 "additionalContext": out.strip()}})
+    sys.stdout.write(out)
+    sys.stderr.write(err)
+    return worst
+
+
+if __name__ == "__main__":
+    sys.exit(main())
