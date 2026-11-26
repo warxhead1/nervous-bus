@@ -1,0 +1,17 @@
+# Install:
+#   cp adapters/steering-hits/systemd/steering-hits.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now steering-hits.timer
+#   journalctl --user -u steering-hits.service -n 20
+
+[Unit]
+Description=nervous-bus steering hit tailer, every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=steering-hits.service
+
+[Install]
+WantedBy=timers.target

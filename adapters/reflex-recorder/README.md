@@ -190,6 +190,8 @@ stored runs from `run_events`; dry-run and read-only unless `--apply`):
 reflex skills [--by project|month|agent_kind]   # per-skill usage + harness split
 reflex skills --inventory                       # on-disk skills vs usage; never-seen
 reflex skills --lift [--min-n 20]               # outcome rate with vs without (correlational)
+reflex steering-hits [--by day|session|project|check|rule] [--change YYYY-MM-DD]   # steering plugin hits; avg sentence length trend
+reflex stretch-opens [--by day|project|form] [--change YYYY-MM-DD]                  # turns where the reader opened a stretchtext stretch
 reflex dispatch [--by month|project]            # model mix, missing-model rate
 ```
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=nervous-bus steering hit tailer: publish new hits.jsonl lines to agent.steering.hit
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/projects/nervous-bus/adapters/steering-hits/tailer.py
+TimeoutStartSec=5min
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=steering-hits

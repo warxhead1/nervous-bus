@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/agent.steering.hit.v1.json",
+  "title": "agent.steering.hit v1",
+  "description": "One finding or measurement from a steering plugin hook (prose-guard, prose-compare, reply-score, copy-audit). The plugin appends the record to a local hits.jsonl; adapters/steering-hits mirrors each line into the bus. Consumers (reflex-recorder) trend the counts before and after a ruling change. Carries counts, rule names and paths only; never sentences, ask text or file contents.",
+  "type": "object",
+  "required": ["v", "ts", "plugin", "check", "surface", "action", "findings", "rules"],
+  "properties": {
+    "v": {"const": 1},
+    "ts": {"type": "string", "format": "date-time"},
+    "plugin": {"type": "string", "minLength": 1, "maxLength": 100},
+    "check": {"type": "string", "enum": ["prose-guard", "prose-compare", "reply-score", "copy-audit"]},
+    "surface": {"type": "string", "enum": ["doc", "commit", "pr", "issue", "reply", "ui-file"]},
+    "session_id": {"type": "string", "maxLength": 200},
+    "cwd": {"type": "string", "maxLength": 1000},
+    "path": {"type": "string", "maxLength": 1000, "description": "Relative or absolute file path, empty when none"},
+    "action": {"type": "string", "enum": ["report", "block", "none"], "description": "report: findings shown to the agent. block: the hook sent the agent back once. none: measured only."},
+    "findings": {"type": "integer", "minimum": 0},
+    "rules": {
+      "type": "object",
+      "description": "Finding count per rule name (ste_check.py or copy-audit rule names)",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "words": {"type": "integer", "minimum": 0},
+    "avg_sentence": {"type": "number", "minimum": 0},
+    "max_sentence": {"type": "integer", "minimum": 0},
+    "lost": {
+      "type": "object",
+      "description": "prose-compare only: counts ste_check.py --compare reports as lost",
+      "properties": {
+        "numbers": {"type": "integer", "minimum": 0},
+        "urls": {"type": "integer", "minimum": 0},
+        "code": {"type": "integer", "minimum": 0},
+        "flags": {"type": "integer", "minimum": 0},
+        "quotes": {"type": "integer", "minimum": 0},
+        "hedges": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

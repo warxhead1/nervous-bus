@@ -76,6 +76,8 @@ from detectors.guard_denial import GuardDenialDetector
 from detectors.failure_taxonomy import FailureTaxonomyDetector
 from detectors.skill_opportunity import SkillOpportunityDetector
 from detectors.user_correction import UserCorrectionDetector
+from detectors.steering_hits import SteeringHitsDetector
+from detectors.stretch_opens import StretchOpensDetector
 from adapter_api import load_adapters
 
 # ---------------------------------------------------------------------------
@@ -178,6 +180,10 @@ _BUILTIN_DETECTOR_CLASSES: list[type[BaseDetector]] = [
     # them doesn't matter, only "before FailureTaxonomyDetector" matters.
     UserCorrectionDetector,
     SkillOpportunityDetector,
+    # Trend aggregators (steering_hit_*, stretch_open_* tables): they emit no
+    # candidates and write no detector_hits, so their order does not matter.
+    SteeringHitsDetector,
+    StretchOpensDetector,
     # FailureTaxonomyDetector MUST stay last: it reads detector_hits recorded by
     # every detector above it in THIS SAME synthesis pass (see its module
     # docstring). Appending a new built-in detector after this line would make
