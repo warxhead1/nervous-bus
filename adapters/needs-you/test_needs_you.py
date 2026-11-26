@@ -4,7 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -134,7 +134,7 @@ class Hook(unittest.TestCase):
         with redirect_stdout(io.StringIO()), \
                 mock.patch.object(ny, "hearth_ack", return_value=True) as ha:
             self.assertEqual(ny.cmd_ack("1"), 0)
-        ha.assert_called_once_with("s1")
+        ha.assert_called_once_with("s1", None, ["x"], "cli")
         self.assertEqual(ny.load(), [])
         self.assertEqual(len(ny.load(include_acked=True)), 1)
 
@@ -144,8 +144,24 @@ class Hook(unittest.TestCase):
                 mock.patch.object(ny, "hearth_ack", return_value=True) as ha:
             self.assertEqual(ny.cmd_ack("s-unknown"), 1)
             self.assertEqual(ny.cmd_ack("s1"), 0)
-        ha.assert_called_once_with("s1")
+        ha.assert_called_once_with("s1", None, ["x"], "cli")
         self.assertEqual(ny.load(), [])
+
+    def test_ack_cli_carries_answers_and_surface(self):
+        self.run_hook(user("go"), tool_use(), tool_result(), text("**Needs you:**\n- x"))
+        with redirect_stdout(io.StringIO()), \
+                mock.patch.object(ny, "hearth_ack", return_value=True) as ha:
+            self.assertEqual(ny.main(["ack", "s1", "--via", "kiln", "--answer", "ship it"]), 0)
+        ha.assert_called_once_with("s1", ["ship it"], ["x"], "kiln")
+
+    def test_answers_need_one_target(self):
+        self.run_hook(user("go"), tool_use(), tool_result(), text("**Needs you:**\n- x"))
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), \
+                mock.patch.object(ny, "hearth_ack", return_value=True) as ha:
+            self.assertEqual(ny.main(["ack", "all", "--answer", "yes"]), 1)
+            self.assertEqual(ny.main(["ack", "s1", "--via", "Bad Surface"]), 2)
+        ha.assert_not_called()
+        self.assertEqual(len(ny.load()), 1)
 
     def test_ack_unreachable_keeps_local_flip_and_says_so(self):
         self.run_hook(user("go"), tool_use(), tool_result(), text("**Needs you:**\n- x"))
@@ -332,6 +348,30 @@ class HearthAck(unittest.TestCase):
             self.assertTrue(ny.hearth_ack("s9"))
         self.assertTrue(calls[-1][0].endswith("/api/attention/s9/ack?via=cli"))
         self.assertEqual(calls[-1][1], "Bearer T")
+
+    def test_answers_go_in_the_ack_body(self):
+        calls = []
+
+        def fake(req, timeout=None, context=None):
+            calls.append((req.full_url, json.loads(req.data or b"{}")))
+            return self.Resp(200)
+        with mock.patch("urllib.request.urlopen", fake), \
+                mock.patch.dict(os.environ, {"HEARTH_API_TOKEN": "T"}):
+            self.assertTrue(ny.hearth_ack("s9", ["yes, embers first"], ["Pick the scope"], "kiln"))
+        url, body = calls[-1]
+        self.assertTrue(url.endswith("/api/attention/s9/ack?via=kiln"))
+        self.assertEqual(body, {"answers": ["yes, embers first"], "items": ["Pick the scope"]})
+
+    def test_a_bare_ack_sends_an_empty_body(self):
+        calls = []
+
+        def fake(req, timeout=None, context=None):
+            calls.append(json.loads(req.data or b"{}"))
+            return self.Resp(200)
+        with mock.patch("urllib.request.urlopen", fake), \
+                mock.patch.dict(os.environ, {"HEARTH_API_TOKEN": "T"}):
+            self.assertTrue(ny.hearth_ack("s9"))
+        self.assertEqual(calls[-1], {})
 
     def test_unreachable_is_false(self):
         with mock.patch("urllib.request.urlopen", side_effect=OSError("down")):

@@ -9,9 +9,11 @@ that reads the queue.
                              publishes agent.attention.v1, and blocks the stop ONCE
                              if a turn that used tools ended without the block.
   needs_you.py [list]        Open items, grouped by project. --all includes acked.
-  needs_you.py ack <n|all|session-id>
+  needs_you.py ack <n|all|session-id> [--via SURFACE] [--answer TEXT]...
                              Mark entry n (from list), a session's entry, or
-                             every entry as handled.
+                             every entry as handled. Each --answer answers one
+                             item in order; hearth types the answers into the
+                             asking session instead of a bare acknowledgement.
   needs_you.py --json        Raw open entries.
   needs_you.py bind          SessionStart hook (stdin = hook JSON): record which
                              terminal this session runs in. The Stop hook does the
@@ -532,11 +534,13 @@ def cmd_list(include_acked: bool) -> int:
     return 0
 
 
-def hearth_ack(session_id: str) -> bool:
+def hearth_ack(session_id: str, answers: list[str] | None = None, items: list[str] | None = None,
+               via: str = "cli") -> bool:
     """POST /api/attention/{id}/ack?via=cli. Auth as tools/agent_review.py does:
     HEARTH_API_TOKEN verbatim, else a loopback POST /api/auth/local-token. Never
     prints the token. True only when hearth answered 2xx."""
     import ssl
+    import urllib.parse
     import urllib.request
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -561,7 +565,11 @@ def hearth_ack(session_id: str) -> bool:
                 token = json.loads(raw).get("access_token")
             if not token:
                 continue
-            status, _ = call(base, f"/api/attention/{session_id}/ack?via=cli", {}, token)
+            body = {}
+            if answers:
+                body = {"answers": answers, "items": items or []}
+            q = urllib.parse.quote(via, safe="")
+            status, _ = call(base, f"/api/attention/{session_id}/ack?via={q}", body, token)
             if 200 <= status < 300:
                 return True
         except Exception:  # unreachable, 403, bad JSON: try the next base
@@ -569,7 +577,7 @@ def hearth_ack(session_id: str) -> bool:
     return False
 
 
-def cmd_ack(which: str) -> int:
+def cmd_ack(which: str, answers: list[str] | None = None, via: str = "cli") -> int:
     entries = load()
     targets = entries if which == "all" else []
     if which != "all" and not which.isdigit():  # a session id, as Kiln's row actions send
@@ -583,10 +591,14 @@ def cmd_ack(which: str) -> int:
         except (ValueError, IndexError):
             print(f"no open entry {which!r}; run `needs-you` to list", file=sys.stderr)
             return 1
+    if answers and (which == "all" or len(targets) != 1):
+        print("--answer needs one target: a session id or an entry number", file=sys.stderr)
+        return 1
     for e in targets:
         e["acked"] = True
         write_entry(e)
-    failed = [e for e in targets if not hearth_ack(e["session_id"])]
+    failed = [e for e in targets
+              if not hearth_ack(e["session_id"], answers, e.get("items") or [], via)]
     print(f"acked {len(targets)}")
     if failed:
         print(f"hearth unreachable or refused: phone row not cleared for {len(failed)} "
@@ -653,8 +665,22 @@ def main(argv: list[str]) -> int:
         except Exception as exc:  # a hook must never wedge the session
             print(f"needs-you bind: {exc}", file=sys.stderr)
         return 0
-    if argv[:1] == ["ack"] and len(argv) == 2:
-        return cmd_ack(argv[1])
+    if argv[:1] == ["ack"] and len(argv) >= 2:
+        rest, answers, via = argv[2:], [], "cli"
+        while rest:
+            flag = rest.pop(0)
+            if flag not in ("--answer", "--via") or not rest:
+                print(__doc__, file=sys.stderr)
+                return 2
+            val = rest.pop(0)
+            if flag == "--answer":
+                answers.append(val)
+            elif re.fullmatch(r"[a-z][a-z0-9-]{0,31}", val):
+                via = val
+            else:
+                print(f"bad --via {val!r}", file=sys.stderr)
+                return 2
+        return cmd_ack(argv[1], answers, via)
     if argv[:1] == ["name"] and len(argv) <= 2:
         return cmd_name(argv[1] if len(argv) == 2 else None)
     if "--json" in argv:
