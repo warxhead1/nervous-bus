@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness codex --event PreToolUse \"$STEERING_HOME/model-tiering/hooks/dispatch-model-guard\"",
+            "timeout": 5
+          }
+        ],
+        "matcher": "spawn_agent"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness codex --event UserPromptSubmit \"$STEERING_HOME/model-tiering/hooks/cue\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

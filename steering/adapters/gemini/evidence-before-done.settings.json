@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "AfterTool": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness gemini --event PostToolUse \"$STEERING_HOME/evidence-before-done/hooks/unfinished-guard\"",
+            "timeout": 10
+          }
+        ],
+        "matcher": "write_file|replace"
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness gemini --event UserPromptSubmit \"$STEERING_HOME/evidence-before-done/hooks/cue\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness gemini --event Stop \"$STEERING_HOME/evidence-before-done/hooks/visual-proof-guard\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

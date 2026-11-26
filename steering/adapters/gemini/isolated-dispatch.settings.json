@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "BeforeTool": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness gemini --event PreToolUse \"$STEERING_HOME/isolated-dispatch/hooks/stash-guard\"",
+            "timeout": 5
+          }
+        ],
+        "matcher": "run_shell_command"
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness gemini --event UserPromptSubmit \"$STEERING_HOME/isolated-dispatch/hooks/cue\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

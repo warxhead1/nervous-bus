@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Build a self-contained copy of steering plugins, with its own marketplace.json.
+
+    steering/tools/export plain-prose /path/to/out        one plugin
+    steering/tools/export --all /path/to/out              every plugin
+    steering/tools/export --piece plain-prose/check/prose-guard /path/to/out
+    steering/tools/export --list                          every piece id in steering/catalog.json
+
+--piece copies one catalog piece (a ruling, a skill folder, a check with the files it
+needs, or an adapter) into OUT, keeping each file's path under steering/. Set
+STEERING_HOME to OUT and the adapter configs find the check.
+
+    steering/tools/export --git plain-prose /path/to/out  also run git init and commit
+
+The output holds only the chosen plugins, the repo LICENSE, and a
+.claude-plugin/marketplace.json whose plugin entries are copied from the repo's
+own marketplace file with the source rewritten to ./<name>. Nothing else from the
+repository is copied. Publish the directory as its own repository or branch, or
+add it where it stands: claude plugin marketplace add /path/to/out
+"""
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+IGNORE = shutil.ignore_patterns("__pycache__", ".pytest_cache", "*.pyc", ".DS_Store")
+
+
+def build(names, out, repo=ROOT, init_git=False):
+    market = json.loads((repo / ".claude-plugin" / "marketplace.json").read_text())
+    by_name = {p["name"]: p for p in market["plugins"]}
+    wanted = list(by_name) if names == ["--all"] else names
+    for n in wanted:
+        if n not in by_name:
+            raise SystemExit(f"unknown plugin {n!r}; known: {', '.join(by_name)}")
+        if not (repo / by_name[n]["source"]).is_dir():
+            raise SystemExit(f"{n}: source {by_name[n]['source']} is not a directory")
+    out = Path(out)
+    if out.exists() and any(out.iterdir()):
+        raise SystemExit(f"{out} is not empty")
+    entries = []
+    for n in wanted:
+        shutil.copytree(repo / by_name[n]["source"], out / n, ignore=IGNORE)
+        entries.append({**by_name[n], "source": f"./{n}"})
+    (out / ".claude-plugin").mkdir(exist_ok=True)
+    name = "steering" if len(wanted) > 1 else f"{wanted[0]}-standalone"
+    (out / ".claude-plugin" / "marketplace.json").write_text(json.dumps({
+        "name": name,
+        "description": market.get("description", ""),
+        "owner": market["owner"],
+        "plugins": entries,
+    }, indent=2) + "\n")
+    if (repo / "LICENSE").is_file():
+        shutil.copy2(repo / "LICENSE", out / "LICENSE")
+    if init_git:
+        for cmd in (["init", "-q", "-b", "main"], ["add", "-A"],
+                    ["-c", "user.name=export", "-c", "user.email=export@localhost", "commit", "-q", "-m",
+                     f"steering export: {', '.join(wanted)}"]):
+            subprocess.run(["git", "-C", str(out), *cmd], check=True)
+    return name, wanted
+
+
+def piece(piece_id, out, repo=ROOT):
+    """Copy one catalog piece (a ruling, a skill, a check and what it needs, an adapter) into out."""
+    cat = json.loads((repo / "steering" / "catalog.json").read_text())
+    by_id = {p["id"]: p for p in cat["pieces"]}
+    if piece_id not in by_id:
+        raise SystemExit(f"unknown piece {piece_id!r}; run with --list")
+    p = by_id[piece_id]
+    out = Path(out)
+    if out.exists() and any(out.iterdir()):
+        raise SystemExit(f"{out} is not empty")
+    paths = (p.get("files") or [p["path"]]) + p["requires"]
+    for path in paths:
+        dst = out / Path(path).relative_to("steering")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repo / path, dst)
+    return [str(Path(x).relative_to("steering")) for x in paths]
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("plugin", nargs="?", help="plugin name (omit with --all)")
+    ap.add_argument("out", nargs="?")
+    ap.add_argument("--all", action="store_true")
+    ap.add_argument("--git", action="store_true", help="run git init and commit in the output")
+    ap.add_argument("--piece", help="export one catalog piece by id, such as plain-prose/check/prose-guard")
+    ap.add_argument("--list", action="store_true", help="list catalog piece ids")
+    a = ap.parse_args(argv)
+    if a.list:
+        for q in json.loads((ROOT / "steering" / "catalog.json").read_text())["pieces"]:
+            print(q["id"])
+        return 0
+    if a.piece:
+        out = a.out or a.plugin
+        if not out:
+            ap.error("give an output directory")
+        for f in piece(a.piece, out):
+            print(f"{out}/{f}")
+        return 0
+    if a.all:
+        out, names = a.out or a.plugin, ["--all"]
+    else:
+        out, names = a.out, [a.plugin] if a.plugin else []
+    if not out or not names:
+        ap.error("give a plugin (or --all) and an output directory")
+    name, wanted = build(names, out, init_git=a.git)
+    print(f"exported {', '.join(wanted)} to {out}")
+    print(f"claude plugin marketplace add {out}")
+    for n in wanted:
+        print(f"claude plugin install {n}@{name}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

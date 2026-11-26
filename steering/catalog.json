@@ -1,0 +1,1617 @@
+{
+  "repo": "warxhead1/nervous-bus",
+  "ref": "main",
+  "raw_base": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/",
+  "about": "Each piece stands alone: fetch its `url` (and `require_urls`, kept at the same relative layout) and use it. Checks are Python 3 scripts that use only the standard library.",
+  "pieces": [
+    {
+      "id": "human-attention/ruling",
+      "kind": "ruling",
+      "plugin": "human-attention",
+      "path": "steering/human-attention/hooks/ruling.md",
+      "purpose": "Few words on screen: the design carries the meaning. Plain markdown to paste into AGENTS.md, GEMINI.md, a Kiro steering file or a system prompt.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/hooks/ruling.md"
+    },
+    {
+      "id": "human-attention/skill",
+      "kind": "skill",
+      "plugin": "human-attention",
+      "path": "steering/human-attention/skills/human-attention",
+      "entry": "steering/human-attention/skills/human-attention/SKILL.md",
+      "files": [
+        "steering/human-attention/skills/human-attention/SKILL.md",
+        "steering/human-attention/skills/human-attention/scripts/copy-audit",
+        "steering/human-attention/skills/human-attention/scripts/copy-audit-hook",
+        "steering/human-attention/skills/human-attention/scripts/steering_hits.py"
+      ],
+      "purpose": "The `human-attention` method as an Agent Skills folder (SKILL.md and its references).",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention",
+      "file_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/SKILL.md",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/scripts/copy-audit",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/scripts/copy-audit-hook",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/scripts/steering_hits.py"
+      ]
+    },
+    {
+      "id": "human-attention/check/copy-audit-hook",
+      "kind": "check",
+      "plugin": "human-attention",
+      "path": "steering/human-attention/skills/human-attention/scripts/copy-audit-hook",
+      "purpose": "Report the copy an edit adds to a UI file.",
+      "effect": "report",
+      "event": "PostToolUse",
+      "matcher": "Write|Edit|MultiEdit",
+      "kill_switch": "COPY_AUDIT_DISABLE=1",
+      "input": "One JSON object on stdin, as Claude Code sends to a hook. `tool_name` (Write, Edit, MultiEdit) and `tool_input` with `file_path` and `content` or `old_string`/`new_string`. Exit 0 allows. Exit 2 means the edit added too much copy; the write stands, with the message on stderr. Bad input or a kill switch always exits 0.",
+      "requires": [
+        "steering/human-attention/skills/human-attention/scripts/copy-audit",
+        "steering/human-attention/skills/human-attention/scripts/steering_hits.py"
+      ],
+      "smoke": {
+        "files": {
+          "game.html": "<!doctype html><html><body><h1>Fever Dungeon</h1>\n<p>You are burning up. Your fever climbs every second and at one hundred you die.</p>\n<p>Stand on a blue tile to cool down. Dodge the red embers. Reach the golden door in each of the rooms.</p>\n<p>Move with the arrow keys or WASD. Pause with P or Escape. Good luck out there.</p>\n<button>Start</button></body></html>"
+        },
+        "env": {
+          "XDG_CACHE_HOME": "{TMP}/cache"
+        },
+        "steps": [
+          {
+            "stdin": {
+              "session_id": "s",
+              "tool_name": "Write",
+              "tool_input": {
+                "file_path": "{TMP}/game.html"
+              }
+            },
+            "exit": 2
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/scripts/copy-audit-hook",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/scripts/copy-audit",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/scripts/steering_hits.py"
+      ]
+    },
+    {
+      "id": "human-attention/check/copy-audit",
+      "kind": "check",
+      "plugin": "human-attention",
+      "path": "steering/human-attention/skills/human-attention/scripts/copy-audit",
+      "purpose": "List the text a person will see in UI source and count the usual excess.",
+      "effect": "cli",
+      "event": null,
+      "matcher": null,
+      "kill_switch": null,
+      "input": "`copy-audit <file-or-dir>... [--json] [--max-words N] [--max-pairs N]`. Reads .html .vue .svelte .jsx .tsx and canvas text. Prints the copy and counts; with `--json`, one JSON object. Exit 1 only when a --max limit is given and exceeded.",
+      "requires": [],
+      "smoke": {
+        "files": {
+          "game.html": "<!doctype html><html><body><h1>Fever Dungeon</h1>\n<p>You are burning up. Your fever climbs every second and at one hundred you die.</p>\n<p>Stand on a blue tile to cool down. Dodge the red embers. Reach the golden door in each of the rooms.</p>\n<p>Move with the arrow keys or WASD. Pause with P or Escape. Good luck out there.</p>\n<button>Start</button></body></html>"
+        },
+        "steps": [
+          {
+            "args": [
+              "{TMP}/game.html",
+              "--json"
+            ],
+            "exit": 0,
+            "stdout_contains": "words"
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/scripts/copy-audit"
+    },
+    {
+      "id": "evidence-before-done/ruling",
+      "kind": "ruling",
+      "plugin": "evidence-before-done",
+      "path": "steering/rulings/evidence-before-done.md",
+      "purpose": "A claim of done carries what was observed. Plain markdown to paste into AGENTS.md, GEMINI.md, a Kiro steering file or a system prompt.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/rulings/evidence-before-done.md"
+    },
+    {
+      "id": "evidence-before-done/skill",
+      "kind": "skill",
+      "plugin": "evidence-before-done",
+      "path": "steering/evidence-before-done/skills/evidence-before-done",
+      "entry": "steering/evidence-before-done/skills/evidence-before-done/SKILL.md",
+      "files": [
+        "steering/evidence-before-done/skills/evidence-before-done/SKILL.md",
+        "steering/evidence-before-done/skills/evidence-before-done/visual-rubric.md"
+      ],
+      "purpose": "The `evidence-before-done` method as an Agent Skills folder (SKILL.md and its references).",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/evidence-before-done/skills/evidence-before-done",
+      "file_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/evidence-before-done/skills/evidence-before-done/SKILL.md",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/evidence-before-done/skills/evidence-before-done/visual-rubric.md"
+      ]
+    },
+    {
+      "id": "evidence-before-done/check/unfinished-guard",
+      "kind": "check",
+      "plugin": "evidence-before-done",
+      "path": "steering/evidence-before-done/hooks/unfinished-guard",
+      "purpose": "Report stubs and suppressions an edit adds.",
+      "effect": "report",
+      "event": "PostToolUse",
+      "matcher": "Write|Edit|MultiEdit",
+      "kill_switch": "UNFINISHED_GUARD_DISABLE=1",
+      "input": "One JSON object on stdin, as Claude Code sends to a hook. `tool_name` (Write, Edit, MultiEdit) and `tool_input` with `file_path` and `content` or `old_string`/`new_string`. Exit 0 allows. Exit 2 means the edit added a stub or suppression; the write stands, with the message on stderr. Bad input or a kill switch always exits 0.",
+      "requires": [],
+      "smoke": {
+        "steps": [
+          {
+            "stdin": {
+              "tool_name": "Edit",
+              "tool_input": {
+                "file_path": "/x/a.rs",
+                "old_string": "fn f() {}",
+                "new_string": "fn f() { todo!() }"
+              }
+            },
+            "exit": 2
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/evidence-before-done/hooks/unfinished-guard"
+    },
+    {
+      "id": "evidence-before-done/check/visual-proof-guard",
+      "kind": "check",
+      "plugin": "evidence-before-done",
+      "path": "steering/evidence-before-done/hooks/visual-proof-guard",
+      "purpose": "Send the agent back once when it edited a UI file and never looked at a rendered result.",
+      "effect": "send-back",
+      "event": "Stop",
+      "matcher": null,
+      "kill_switch": "VISUAL_PROOF_DISABLE=1",
+      "input": "One JSON object on stdin, as Claude Code sends to a hook. `session_id`, `transcript_path` (a Claude Code transcript .jsonl), `stop_hook_active`. Exit 0 allows. Exit 2 means the agent should look at the result before it finishes, with the message on stderr. Bad input or a kill switch always exits 0.",
+      "requires": [],
+      "smoke": {
+        "files": {
+          "t.jsonl": "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Edit\", \"input\": {\"file_path\": \"/app/src/Card.tsx\", \"old_string\": \"a\", \"new_string\": \"b\"}}]}}\n"
+        },
+        "env": {
+          "XDG_CACHE_HOME": "{TMP}/cache"
+        },
+        "steps": [
+          {
+            "stdin": {
+              "session_id": "s1",
+              "transcript_path": "{TMP}/t.jsonl",
+              "stop_hook_active": false
+            },
+            "exit": 2
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/evidence-before-done/hooks/visual-proof-guard"
+    },
+    {
+      "id": "evidence-before-done/check/cue",
+      "kind": "check",
+      "plugin": "evidence-before-done",
+      "path": "steering/evidence-before-done/hooks/cue",
+      "purpose": "Say the rule when the prompt calls for it.",
+      "effect": "context",
+      "event": "UserPromptSubmit",
+      "matcher": null,
+      "kill_switch": "STEERING_CUES_DISABLE=1",
+      "input": "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
+      "requires": [
+        "steering/evidence-before-done/hooks/cues.json"
+      ],
+      "smoke": {
+        "steps": [
+          {
+            "stdin": {
+              "prompt": "The tests pass now, I think we're done. Write up the summary of the fix."
+            },
+            "exit": 0,
+            "stdout_contains": "[evidence-before-done]"
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/evidence-before-done/hooks/cue",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/evidence-before-done/hooks/cues.json"
+      ]
+    },
+    {
+      "id": "keep-moving/ruling",
+      "kind": "ruling",
+      "plugin": "keep-moving",
+      "path": "steering/rulings/keep-moving.md",
+      "purpose": "No stalling on a wait, no rerunning what cannot change. Plain markdown to paste into AGENTS.md, GEMINI.md, a Kiro steering file or a system prompt.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/rulings/keep-moving.md"
+    },
+    {
+      "id": "keep-moving/skill",
+      "kind": "skill",
+      "plugin": "keep-moving",
+      "path": "steering/keep-moving/skills/keep-moving",
+      "entry": "steering/keep-moving/skills/keep-moving/SKILL.md",
+      "files": [
+        "steering/keep-moving/skills/keep-moving/SKILL.md"
+      ],
+      "purpose": "The `keep-moving` method as an Agent Skills folder (SKILL.md and its references).",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/keep-moving/skills/keep-moving",
+      "file_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/keep-moving/skills/keep-moving/SKILL.md"
+      ]
+    },
+    {
+      "id": "keep-moving/check/rerun-guard",
+      "kind": "check",
+      "plugin": "keep-moving",
+      "path": "steering/keep-moving/hooks/rerun-guard",
+      "purpose": "Block the third identical build or test run when no file changed.",
+      "effect": "block",
+      "event": "PreToolUse (counts) and PostToolUse (resets on an edit)",
+      "matcher": "Bash; Write|Edit|MultiEdit",
+      "kill_switch": "RERUN_GUARD_DISABLE=1",
+      "input": "One JSON object on stdin, as Claude Code sends to a hook. `session_id`, `hook_event_name`, `tool_name` (Bash) and `tool_input.command`. Exit 0 allows. Exit 2 means the same command ran twice already with no edit between, with the message on stderr. Bad input or a kill switch always exits 0.",
+      "requires": [],
+      "smoke": {
+        "env": {
+          "XDG_CACHE_HOME": "{TMP}/cache"
+        },
+        "steps": [
+          {
+            "stdin": {
+              "session_id": "s1",
+              "hook_event_name": "PreToolUse",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "cargo test -p core"
+              }
+            },
+            "exit": 0
+          },
+          {
+            "stdin": {
+              "session_id": "s1",
+              "hook_event_name": "PreToolUse",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "cargo test -p core"
+              }
+            },
+            "exit": 0
+          },
+          {
+            "stdin": {
+              "session_id": "s1",
+              "hook_event_name": "PreToolUse",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "cargo test -p core"
+              }
+            },
+            "exit": 2
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/keep-moving/hooks/rerun-guard"
+    },
+    {
+      "id": "keep-moving/check/cue",
+      "kind": "check",
+      "plugin": "keep-moving",
+      "path": "steering/keep-moving/hooks/cue",
+      "purpose": "Say the rule when the prompt calls for it.",
+      "effect": "context",
+      "event": "UserPromptSubmit",
+      "matcher": null,
+      "kill_switch": "STEERING_CUES_DISABLE=1",
+      "input": "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
+      "requires": [
+        "steering/keep-moving/hooks/cues.json"
+      ],
+      "smoke": {
+        "steps": [
+          {
+            "stdin": {
+              "prompt": "Why did you stop? The deploy is still running, but there are four other open bugs."
+            },
+            "exit": 0,
+            "stdout_contains": "[keep-moving]"
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/keep-moving/hooks/cue",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/keep-moving/hooks/cues.json"
+      ]
+    },
+    {
+      "id": "model-tiering/ruling",
+      "kind": "ruling",
+      "plugin": "model-tiering",
+      "path": "steering/rulings/model-tiering.md",
+      "purpose": "Every dispatch names its model, chosen by what would catch a wrong answer. Plain markdown to paste into AGENTS.md, GEMINI.md, a Kiro steering file or a system prompt.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/rulings/model-tiering.md"
+    },
+    {
+      "id": "model-tiering/skill",
+      "kind": "skill",
+      "plugin": "model-tiering",
+      "path": "steering/model-tiering/skills/model-tiering",
+      "entry": "steering/model-tiering/skills/model-tiering/SKILL.md",
+      "files": [
+        "steering/model-tiering/skills/model-tiering/SKILL.md"
+      ],
+      "purpose": "The `model-tiering` method as an Agent Skills folder (SKILL.md and its references).",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/model-tiering/skills/model-tiering",
+      "file_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/model-tiering/skills/model-tiering/SKILL.md"
+      ]
+    },
+    {
+      "id": "model-tiering/check/dispatch-model-guard",
+      "kind": "check",
+      "plugin": "model-tiering",
+      "path": "steering/model-tiering/hooks/dispatch-model-guard",
+      "purpose": "Block a subagent dispatch that names no model.",
+      "effect": "block",
+      "event": "PreToolUse",
+      "matcher": "Agent|Task",
+      "kill_switch": "MODEL_TIERING_DISABLE=1",
+      "input": "One JSON object on stdin, as Claude Code sends to a hook. `tool_name` (Agent or Task) and `tool_input` with `prompt`, `subagent_type`, `model`, `isolation`. Exit 0 allows. Exit 2 means the dispatch has no `model`, with the message on stderr. Bad input or a kill switch always exits 0.",
+      "requires": [],
+      "smoke": {
+        "steps": [
+          {
+            "stdin": {
+              "tool_name": "Agent",
+              "tool_input": {
+                "prompt": "x",
+                "description": "y"
+              }
+            },
+            "exit": 2
+          },
+          {
+            "stdin": {
+              "tool_name": "Agent",
+              "tool_input": {
+                "prompt": "x",
+                "model": "haiku"
+              }
+            },
+            "exit": 0
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/model-tiering/hooks/dispatch-model-guard"
+    },
+    {
+      "id": "model-tiering/check/cue",
+      "kind": "check",
+      "plugin": "model-tiering",
+      "path": "steering/model-tiering/hooks/cue",
+      "purpose": "Say the rule when the prompt calls for it.",
+      "effect": "context",
+      "event": "UserPromptSubmit",
+      "matcher": null,
+      "kill_switch": "STEERING_CUES_DISABLE=1",
+      "input": "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
+      "requires": [
+        "steering/model-tiering/hooks/cues.json"
+      ],
+      "smoke": {
+        "steps": [
+          {
+            "stdin": {
+              "prompt": "Fan out agents to audit every package in this monorepo for dead code."
+            },
+            "exit": 0,
+            "stdout_contains": "[model-tiering]"
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/model-tiering/hooks/cue",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/model-tiering/hooks/cues.json"
+      ]
+    },
+    {
+      "id": "isolated-dispatch/ruling",
+      "kind": "ruling",
+      "plugin": "isolated-dispatch",
+      "path": "steering/rulings/isolated-dispatch.md",
+      "purpose": "Editing agents get their own worktree; nobody's uncommitted work is hidden. Plain markdown to paste into AGENTS.md, GEMINI.md, a Kiro steering file or a system prompt.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/rulings/isolated-dispatch.md"
+    },
+    {
+      "id": "isolated-dispatch/skill",
+      "kind": "skill",
+      "plugin": "isolated-dispatch",
+      "path": "steering/isolated-dispatch/skills/isolated-dispatch",
+      "entry": "steering/isolated-dispatch/skills/isolated-dispatch/SKILL.md",
+      "files": [
+        "steering/isolated-dispatch/skills/isolated-dispatch/SKILL.md"
+      ],
+      "purpose": "The `isolated-dispatch` method as an Agent Skills folder (SKILL.md and its references).",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/isolated-dispatch/skills/isolated-dispatch",
+      "file_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/isolated-dispatch/skills/isolated-dispatch/SKILL.md"
+      ]
+    },
+    {
+      "id": "isolated-dispatch/check/dispatch-isolation-guard",
+      "kind": "check",
+      "plugin": "isolated-dispatch",
+      "path": "steering/isolated-dispatch/hooks/dispatch-isolation-guard",
+      "purpose": "Block a dispatch that asks for edits and sets no isolation.",
+      "effect": "block",
+      "event": "PreToolUse",
+      "matcher": "Agent|Task",
+      "kill_switch": "ISOLATED_DISPATCH_DISABLE=1",
+      "input": "One JSON object on stdin, as Claude Code sends to a hook. `tool_name` (Agent or Task) and `tool_input` with `prompt`, `subagent_type`, `model`, `isolation`. Exit 0 allows. Exit 2 means the dispatch edits files with no isolation, with the message on stderr. Bad input or a kill switch always exits 0.",
+      "requires": [],
+      "smoke": {
+        "steps": [
+          {
+            "stdin": {
+              "tool_name": "Agent",
+              "tool_input": {
+                "prompt": "Fix the failing parser test and commit it."
+              }
+            },
+            "exit": 2
+          },
+          {
+            "stdin": {
+              "tool_name": "Agent",
+              "tool_input": {
+                "prompt": "Fix the failing parser test.",
+                "isolation": "worktree"
+              }
+            },
+            "exit": 0
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/isolated-dispatch/hooks/dispatch-isolation-guard"
+    },
+    {
+      "id": "isolated-dispatch/check/stash-guard",
+      "kind": "check",
+      "plugin": "isolated-dispatch",
+      "path": "steering/isolated-dispatch/hooks/stash-guard",
+      "purpose": "Block an anonymous `git stash` and a `pop` or `drop` that names no entry.",
+      "effect": "block",
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "kill_switch": "STASH_GUARD_DISABLE=1",
+      "input": "One JSON object on stdin, as Claude Code sends to a hook. `tool_name` (Bash) and `tool_input.command`. Exit 0 allows. Exit 2 means the stash is anonymous and shared across worktrees, with the message on stderr. Bad input or a kill switch always exits 0.",
+      "requires": [],
+      "smoke": {
+        "steps": [
+          {
+            "stdin": {
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "git stash"
+              }
+            },
+            "exit": 2
+          },
+          {
+            "stdin": {
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "git stash list"
+              }
+            },
+            "exit": 0
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/isolated-dispatch/hooks/stash-guard"
+    },
+    {
+      "id": "isolated-dispatch/check/cue",
+      "kind": "check",
+      "plugin": "isolated-dispatch",
+      "path": "steering/isolated-dispatch/hooks/cue",
+      "purpose": "Say the rule when the prompt calls for it.",
+      "effect": "context",
+      "event": "UserPromptSubmit",
+      "matcher": null,
+      "kill_switch": "STEERING_CUES_DISABLE=1",
+      "input": "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
+      "requires": [
+        "steering/isolated-dispatch/hooks/cues.json"
+      ],
+      "smoke": {
+        "steps": [
+          {
+            "stdin": {
+              "prompt": "Fix these four bugs in parallel, one agent each. They all touch the api package."
+            },
+            "exit": 0,
+            "stdout_contains": "[isolated-dispatch]"
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/isolated-dispatch/hooks/cue",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/isolated-dispatch/hooks/cues.json"
+      ]
+    },
+    {
+      "id": "remediation-ladder/ruling",
+      "kind": "ruling",
+      "plugin": "remediation-ladder",
+      "path": "steering/rulings/remediation-ladder.md",
+      "purpose": "Fix the cause at the highest rung: eliminate, automate, then inform. Plain markdown to paste into AGENTS.md, GEMINI.md, a Kiro steering file or a system prompt.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/rulings/remediation-ladder.md"
+    },
+    {
+      "id": "remediation-ladder/skill",
+      "kind": "skill",
+      "plugin": "remediation-ladder",
+      "path": "steering/remediation-ladder/skills/remediation-ladder",
+      "entry": "steering/remediation-ladder/skills/remediation-ladder/SKILL.md",
+      "files": [
+        "steering/remediation-ladder/skills/remediation-ladder/SKILL.md"
+      ],
+      "purpose": "The `remediation-ladder` method as an Agent Skills folder (SKILL.md and its references).",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/remediation-ladder/skills/remediation-ladder",
+      "file_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/remediation-ladder/skills/remediation-ladder/SKILL.md"
+      ]
+    },
+    {
+      "id": "remediation-ladder/check/bypass-guard",
+      "kind": "check",
+      "plugin": "remediation-ladder",
+      "path": "steering/remediation-ladder/hooks/bypass-guard",
+      "purpose": "Block a command that skips a check instead of passing it.",
+      "effect": "block",
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "kill_switch": "BYPASS_GUARD_DISABLE=1",
+      "input": "One JSON object on stdin, as Claude Code sends to a hook. `tool_name` (Bash) and `tool_input.command`. Exit 0 allows. Exit 2 means the command skips a check (`--no-verify`, `HUSKY=0`, `-DskipTests`), with the message on stderr. Bad input or a kill switch always exits 0.",
+      "requires": [],
+      "smoke": {
+        "steps": [
+          {
+            "stdin": {
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "git commit --no-verify -m wip"
+              }
+            },
+            "exit": 2
+          },
+          {
+            "stdin": {
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "git commit -m 'fix parser'"
+              }
+            },
+            "exit": 0
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/remediation-ladder/hooks/bypass-guard"
+    },
+    {
+      "id": "remediation-ladder/check/cue",
+      "kind": "check",
+      "plugin": "remediation-ladder",
+      "path": "steering/remediation-ladder/hooks/cue",
+      "purpose": "Say the rule when the prompt calls for it.",
+      "effect": "context",
+      "event": "UserPromptSubmit",
+      "matcher": null,
+      "kill_switch": "STEERING_CUES_DISABLE=1",
+      "input": "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
+      "requires": [
+        "steering/remediation-ladder/hooks/cues.json"
+      ],
+      "smoke": {
+        "steps": [
+          {
+            "stdin": {
+              "prompt": "The deploy script failed on the lockfile again. That's the third time this month."
+            },
+            "exit": 0,
+            "stdout_contains": "[remediation-ladder]"
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/remediation-ladder/hooks/cue",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/remediation-ladder/hooks/cues.json"
+      ]
+    },
+    {
+      "id": "falsify-your-gate/ruling",
+      "kind": "ruling",
+      "plugin": "falsify-your-gate",
+      "path": "steering/rulings/falsify-your-gate.md",
+      "purpose": "A check counts only after you have seen it fail. Plain markdown to paste into AGENTS.md, GEMINI.md, a Kiro steering file or a system prompt.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/rulings/falsify-your-gate.md"
+    },
+    {
+      "id": "falsify-your-gate/skill",
+      "kind": "skill",
+      "plugin": "falsify-your-gate",
+      "path": "steering/falsify-your-gate/skills/falsify-your-gate",
+      "entry": "steering/falsify-your-gate/skills/falsify-your-gate/SKILL.md",
+      "files": [
+        "steering/falsify-your-gate/skills/falsify-your-gate/SKILL.md"
+      ],
+      "purpose": "The `falsify-your-gate` method as an Agent Skills folder (SKILL.md and its references).",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/falsify-your-gate/skills/falsify-your-gate",
+      "file_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/falsify-your-gate/skills/falsify-your-gate/SKILL.md"
+      ]
+    },
+    {
+      "id": "falsify-your-gate/check/vacuous-test-guard",
+      "kind": "check",
+      "plugin": "falsify-your-gate",
+      "path": "steering/falsify-your-gate/hooks/vacuous-test-guard",
+      "purpose": "Report a test an edit adds that cannot fail.",
+      "effect": "report",
+      "event": "PostToolUse",
+      "matcher": "Write|Edit|MultiEdit",
+      "kill_switch": "VACUOUS_TEST_GUARD_DISABLE=1",
+      "input": "One JSON object on stdin, as Claude Code sends to a hook. `tool_name` (Write, Edit, MultiEdit) and `tool_input` with `file_path` and `content` or `old_string`/`new_string`. Exit 0 allows. Exit 2 means the edit added a test that asserts nothing or something always true; the write stands, with the message on stderr. Bad input or a kill switch always exits 0.",
+      "requires": [],
+      "smoke": {
+        "files": {
+          "test_cart.py": "def test_total():\n    total([1, 2])\n"
+        },
+        "steps": [
+          {
+            "stdin": {
+              "tool_name": "Write",
+              "tool_input": {
+                "file_path": "{TMP}/test_cart.py",
+                "content": "def test_total():\n    total([1, 2])\n"
+              }
+            },
+            "exit": 2
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/falsify-your-gate/hooks/vacuous-test-guard"
+    },
+    {
+      "id": "falsify-your-gate/check/cue",
+      "kind": "check",
+      "plugin": "falsify-your-gate",
+      "path": "steering/falsify-your-gate/hooks/cue",
+      "purpose": "Say the rule when the prompt calls for it.",
+      "effect": "context",
+      "event": "UserPromptSubmit",
+      "matcher": null,
+      "kill_switch": "STEERING_CUES_DISABLE=1",
+      "input": "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
+      "requires": [
+        "steering/falsify-your-gate/hooks/cues.json"
+      ],
+      "smoke": {
+        "steps": [
+          {
+            "stdin": {
+              "prompt": "Add a regression test for the off-by-one in the pagination helper."
+            },
+            "exit": 0,
+            "stdout_contains": "[falsify-your-gate]"
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/falsify-your-gate/hooks/cue",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/falsify-your-gate/hooks/cues.json"
+      ]
+    },
+    {
+      "id": "plain-prose/ruling",
+      "kind": "ruling",
+      "plugin": "plain-prose",
+      "path": "steering/plain-prose/hooks/ruling.md",
+      "purpose": "Prose a person reads once: one idea per sentence, plain words, no AI tells. Plain markdown to paste into AGENTS.md, GEMINI.md, a Kiro steering file or a system prompt.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/ruling.md"
+    },
+    {
+      "id": "plain-prose/skill",
+      "kind": "skill",
+      "plugin": "plain-prose",
+      "path": "steering/plain-prose/skills/ste80-humanizer",
+      "entry": "steering/plain-prose/skills/ste80-humanizer/SKILL.md",
+      "files": [
+        "steering/plain-prose/skills/ste80-humanizer/LICENSE",
+        "steering/plain-prose/skills/ste80-humanizer/SKILL.md",
+        "steering/plain-prose/skills/ste80-humanizer/THIRD_PARTY_NOTICES.md",
+        "steering/plain-prose/skills/ste80-humanizer/UPSTREAM.md",
+        "steering/plain-prose/skills/ste80-humanizer/references/ai-tells.md",
+        "steering/plain-prose/skills/ste80-humanizer/references/ste80-rules.md",
+        "steering/plain-prose/skills/ste80-humanizer/references/strict-mode.md",
+        "steering/plain-prose/skills/ste80-humanizer/references/word-swaps.md",
+        "steering/plain-prose/skills/ste80-humanizer/references/worked-example.md",
+        "steering/plain-prose/skills/ste80-humanizer/scripts/ste_check.py"
+      ],
+      "purpose": "The `ste80-humanizer` method as an Agent Skills folder (SKILL.md and its references).",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer",
+      "file_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/LICENSE",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/SKILL.md",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/THIRD_PARTY_NOTICES.md",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/UPSTREAM.md",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/references/ai-tells.md",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/references/ste80-rules.md",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/references/strict-mode.md",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/references/word-swaps.md",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/references/worked-example.md",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/scripts/ste_check.py"
+      ]
+    },
+    {
+      "id": "plain-prose/check/prose-guard",
+      "kind": "check",
+      "plugin": "plain-prose",
+      "path": "steering/plain-prose/hooks/prose-guard",
+      "purpose": "Report heavy prose in an edited document, and block a heavy commit message or PR body once.",
+      "effect": "report and block-once",
+      "event": "PostToolUse; PreToolUse",
+      "matcher": "Write|Edit|MultiEdit; Bash",
+      "kill_switch": "PLAIN_PROSE_DISABLE=1",
+      "input": "One JSON object on stdin, as Claude Code sends to a hook. `session_id`, `hook_event_name`, `tool_name` (Write, Edit, MultiEdit) and `tool_input` with `file_path` and `content` or `old_string`/`new_string`, or `tool_name` (Bash) and `tool_input.command` for a `git commit` or `gh pr`/`gh issue` command. Exit 0 allows. Exit 2 means the text is heavy (a document edit is reported and stands; a commit or PR command is sent back once), with the message on stderr. Bad input or a kill switch always exits 0.",
+      "requires": [
+        "steering/plain-prose/skills/ste80-humanizer/scripts/ste_check.py",
+        "steering/plain-prose/hooks/steering_hits.py",
+        "steering/plain-prose/hooks/prose_score.py"
+      ],
+      "smoke": {
+        "env": {
+          "XDG_CACHE_HOME": "{TMP}/cache"
+        },
+        "steps": [
+          {
+            "stdin": {
+              "session_id": "s1",
+              "hook_event_name": "PreToolUse",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "git commit -m \"The reader gets the whole plan in one breath; the writer saved a period and the reader pays for it; nobody asked for that trade. The cache holds the last answer; the next call reads it; the one after that finds it stale. The queue holds the job; the worker takes it; the lease expires; the job runs twice.\""
+              }
+            },
+            "exit": 2
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/prose-guard",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/scripts/ste_check.py",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/steering_hits.py",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/prose_score.py"
+      ]
+    },
+    {
+      "id": "plain-prose/check/ste_check.py",
+      "kind": "check",
+      "plugin": "plain-prose",
+      "path": "steering/plain-prose/skills/ste80-humanizer/scripts/ste_check.py",
+      "purpose": "Upstream linter for AI tells and STE-style English.",
+      "effect": "cli",
+      "event": null,
+      "matcher": null,
+      "kill_switch": null,
+      "input": "`ste_check.py [--strict] [--json] FILE...`, or `-` for stdin. Prints findings with line numbers; with `--json`, a JSON list.",
+      "requires": [],
+      "smoke": {
+        "files": {
+          "a.md": "Great question! It is important to note that we delve into seamless tapestries.\n"
+        },
+        "steps": [
+          {
+            "args": [
+              "{TMP}/a.md"
+            ],
+            "exit": null,
+            "stdout_contains": "a.md"
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/scripts/ste_check.py"
+    },
+    {
+      "id": "plain-prose/check/cue",
+      "kind": "check",
+      "plugin": "plain-prose",
+      "path": "steering/plain-prose/hooks/cue",
+      "purpose": "Say the rule when the prompt calls for it.",
+      "effect": "context",
+      "event": "UserPromptSubmit",
+      "matcher": null,
+      "kill_switch": "STEERING_CUES_DISABLE=1",
+      "input": "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
+      "requires": [
+        "steering/plain-prose/hooks/cues.json"
+      ],
+      "smoke": {
+        "steps": [
+          {
+            "stdin": {
+              "prompt": "Humanize this LinkedIn post, it sounds like ChatGPT wrote it."
+            },
+            "exit": 0,
+            "stdout_contains": "[plain-prose]"
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/cue",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/cues.json"
+      ]
+    },
+    {
+      "id": "ub-mode/ruling",
+      "kind": "ruling",
+      "plugin": "ub-mode",
+      "path": "steering/rulings/ub-mode.md",
+      "purpose": "Make it work, then make it right, measured. Plain markdown to paste into AGENTS.md, GEMINI.md, a Kiro steering file or a system prompt.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/rulings/ub-mode.md"
+    },
+    {
+      "id": "ub-mode/skill",
+      "kind": "skill",
+      "plugin": "ub-mode",
+      "path": "steering/ub-mode/skills/ub-mode",
+      "entry": "steering/ub-mode/skills/ub-mode/SKILL.md",
+      "files": [
+        "steering/ub-mode/skills/ub-mode/SKILL.md"
+      ],
+      "purpose": "The `ub-mode` method as an Agent Skills folder (SKILL.md and its references).",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/ub-mode/skills/ub-mode",
+      "file_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/ub-mode/skills/ub-mode/SKILL.md"
+      ]
+    },
+    {
+      "id": "ub-mode/check/ub-gate",
+      "kind": "check",
+      "plugin": "ub-mode",
+      "path": "steering/ub-mode/bin/ub-gate",
+      "purpose": "Run unclebob's crapper, dryer and mutator at pinned versions with no network.",
+      "effect": "cli",
+      "event": null,
+      "matcher": null,
+      "kill_switch": null,
+      "input": "`ub-gate install | doctor | crap | dry | mutate | summary | sandbox -- CMD`. `install` is the only networked step. `doctor` prints JSON. Needs Python 3.11 or newer and git.",
+      "requires": [
+        "steering/ub-mode/bin/ub_gate_dry.py",
+        "steering/ub-mode/bin/simjoin.py",
+        "steering/ub-mode/lock/pins.json",
+        "steering/ub-mode/lock/requirements.lock"
+      ],
+      "smoke": {
+        "steps": [
+          {
+            "args": [
+              "--help"
+            ],
+            "exit": 0,
+            "stdout_contains": "ub-gate"
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/ub-mode/bin/ub-gate",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/ub-mode/bin/ub_gate_dry.py",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/ub-mode/bin/simjoin.py",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/ub-mode/lock/pins.json",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/ub-mode/lock/requirements.lock"
+      ]
+    },
+    {
+      "id": "ub-mode/check/cue",
+      "kind": "check",
+      "plugin": "ub-mode",
+      "path": "steering/ub-mode/hooks/cue",
+      "purpose": "Say the rule when the prompt calls for it.",
+      "effect": "context",
+      "event": "UserPromptSubmit",
+      "matcher": null,
+      "kill_switch": "STEERING_CUES_DISABLE=1",
+      "input": "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
+      "requires": [
+        "steering/ub-mode/hooks/cues.json"
+      ],
+      "smoke": {
+        "steps": [
+          {
+            "stdin": {
+              "prompt": "Run ub-mode on the billing package before I open the PR."
+            },
+            "exit": 0,
+            "stdout_contains": "[ub-mode]"
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/ub-mode/hooks/cue",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/ub-mode/hooks/cues.json"
+      ]
+    },
+    {
+      "id": "adapter/shim",
+      "kind": "adapter",
+      "plugin": null,
+      "path": "steering/adapters/shim",
+      "purpose": "Translate a Codex, Gemini CLI, Kiro CLI or oh-my-pi hook event to the Claude Code event the checks read, and run a check.",
+      "requires": [],
+      "smoke": {
+        "steps": [
+          {
+            "args": [
+              "--help"
+            ],
+            "exit": 0,
+            "stdout_contains": "harness"
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+    },
+    {
+      "id": "adapter/claude-code",
+      "kind": "adapter",
+      "plugin": null,
+      "path": "steering/adapters/claude-code.md",
+      "purpose": "How to wire the rulings, skills and checks into Claude Code, with the hook events, input shapes and what can block.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/claude-code.md"
+    },
+    {
+      "id": "adapter/codex",
+      "kind": "adapter",
+      "plugin": null,
+      "path": "steering/adapters/codex.md",
+      "purpose": "How to wire the rulings, skills and checks into Codex CLI, with the hook events, input shapes and what can block.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/codex.md"
+    },
+    {
+      "id": "adapter/gemini",
+      "kind": "adapter",
+      "plugin": null,
+      "path": "steering/adapters/gemini.md",
+      "purpose": "How to wire the rulings, skills and checks into Gemini CLI, with the hook events, input shapes and what can block.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/gemini.md"
+    },
+    {
+      "id": "adapter/kiro",
+      "kind": "adapter",
+      "plugin": null,
+      "path": "steering/adapters/kiro.md",
+      "purpose": "How to wire the rulings, skills and checks into Kiro CLI, with the hook events, input shapes and what can block.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/kiro.md"
+    },
+    {
+      "id": "adapter/omp",
+      "kind": "adapter",
+      "plugin": null,
+      "path": "steering/adapters/omp.md",
+      "purpose": "How to wire the rulings, skills and checks into oh-my-pi, with the hook events, input shapes and what can block.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp.md"
+    },
+    {
+      "id": "adapter/claude-code/evidence-before-done",
+      "kind": "adapter",
+      "plugin": "evidence-before-done",
+      "path": "steering/adapters/claude-code/evidence-before-done.settings.json",
+      "purpose": "Hook config that runs the evidence-before-done checks in Claude Code.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/claude-code/evidence-before-done.settings.json"
+    },
+    {
+      "id": "adapter/claude-code/falsify-your-gate",
+      "kind": "adapter",
+      "plugin": "falsify-your-gate",
+      "path": "steering/adapters/claude-code/falsify-your-gate.settings.json",
+      "purpose": "Hook config that runs the falsify-your-gate checks in Claude Code.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/claude-code/falsify-your-gate.settings.json"
+    },
+    {
+      "id": "adapter/claude-code/human-attention",
+      "kind": "adapter",
+      "plugin": "human-attention",
+      "path": "steering/adapters/claude-code/human-attention.settings.json",
+      "purpose": "Hook config that runs the human-attention checks in Claude Code.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/claude-code/human-attention.settings.json"
+    },
+    {
+      "id": "adapter/claude-code/isolated-dispatch",
+      "kind": "adapter",
+      "plugin": "isolated-dispatch",
+      "path": "steering/adapters/claude-code/isolated-dispatch.settings.json",
+      "purpose": "Hook config that runs the isolated-dispatch checks in Claude Code.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/claude-code/isolated-dispatch.settings.json"
+    },
+    {
+      "id": "adapter/claude-code/keep-moving",
+      "kind": "adapter",
+      "plugin": "keep-moving",
+      "path": "steering/adapters/claude-code/keep-moving.settings.json",
+      "purpose": "Hook config that runs the keep-moving checks in Claude Code.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/claude-code/keep-moving.settings.json"
+    },
+    {
+      "id": "adapter/claude-code/model-tiering",
+      "kind": "adapter",
+      "plugin": "model-tiering",
+      "path": "steering/adapters/claude-code/model-tiering.settings.json",
+      "purpose": "Hook config that runs the model-tiering checks in Claude Code.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/claude-code/model-tiering.settings.json"
+    },
+    {
+      "id": "adapter/claude-code/plain-prose",
+      "kind": "adapter",
+      "plugin": "plain-prose",
+      "path": "steering/adapters/claude-code/plain-prose.settings.json",
+      "purpose": "Hook config that runs the plain-prose checks in Claude Code.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/claude-code/plain-prose.settings.json"
+    },
+    {
+      "id": "adapter/claude-code/remediation-ladder",
+      "kind": "adapter",
+      "plugin": "remediation-ladder",
+      "path": "steering/adapters/claude-code/remediation-ladder.settings.json",
+      "purpose": "Hook config that runs the remediation-ladder checks in Claude Code.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/claude-code/remediation-ladder.settings.json"
+    },
+    {
+      "id": "adapter/claude-code/ub-mode",
+      "kind": "adapter",
+      "plugin": "ub-mode",
+      "path": "steering/adapters/claude-code/ub-mode.settings.json",
+      "purpose": "Hook config that runs the ub-mode checks in Claude Code.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/claude-code/ub-mode.settings.json"
+    },
+    {
+      "id": "adapter/codex/evidence-before-done",
+      "kind": "adapter",
+      "plugin": "evidence-before-done",
+      "path": "steering/adapters/codex/evidence-before-done.hooks.json",
+      "purpose": "Hook config that runs the evidence-before-done checks in Codex CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/codex/evidence-before-done.hooks.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/codex/falsify-your-gate",
+      "kind": "adapter",
+      "plugin": "falsify-your-gate",
+      "path": "steering/adapters/codex/falsify-your-gate.hooks.json",
+      "purpose": "Hook config that runs the falsify-your-gate checks in Codex CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/codex/falsify-your-gate.hooks.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/codex/human-attention",
+      "kind": "adapter",
+      "plugin": "human-attention",
+      "path": "steering/adapters/codex/human-attention.hooks.json",
+      "purpose": "Hook config that runs the human-attention checks in Codex CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/codex/human-attention.hooks.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/codex/isolated-dispatch",
+      "kind": "adapter",
+      "plugin": "isolated-dispatch",
+      "path": "steering/adapters/codex/isolated-dispatch.hooks.json",
+      "purpose": "Hook config that runs the isolated-dispatch checks in Codex CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/codex/isolated-dispatch.hooks.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/codex/keep-moving",
+      "kind": "adapter",
+      "plugin": "keep-moving",
+      "path": "steering/adapters/codex/keep-moving.hooks.json",
+      "purpose": "Hook config that runs the keep-moving checks in Codex CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/codex/keep-moving.hooks.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/codex/model-tiering",
+      "kind": "adapter",
+      "plugin": "model-tiering",
+      "path": "steering/adapters/codex/model-tiering.hooks.json",
+      "purpose": "Hook config that runs the model-tiering checks in Codex CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/codex/model-tiering.hooks.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/codex/plain-prose",
+      "kind": "adapter",
+      "plugin": "plain-prose",
+      "path": "steering/adapters/codex/plain-prose.hooks.json",
+      "purpose": "Hook config that runs the plain-prose checks in Codex CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/codex/plain-prose.hooks.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/codex/remediation-ladder",
+      "kind": "adapter",
+      "plugin": "remediation-ladder",
+      "path": "steering/adapters/codex/remediation-ladder.hooks.json",
+      "purpose": "Hook config that runs the remediation-ladder checks in Codex CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/codex/remediation-ladder.hooks.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/codex/ub-mode",
+      "kind": "adapter",
+      "plugin": "ub-mode",
+      "path": "steering/adapters/codex/ub-mode.hooks.json",
+      "purpose": "Hook config that runs the ub-mode checks in Codex CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/codex/ub-mode.hooks.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/gemini/evidence-before-done",
+      "kind": "adapter",
+      "plugin": "evidence-before-done",
+      "path": "steering/adapters/gemini/evidence-before-done.settings.json",
+      "purpose": "Hook config that runs the evidence-before-done checks in Gemini CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/gemini/evidence-before-done.settings.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/gemini/falsify-your-gate",
+      "kind": "adapter",
+      "plugin": "falsify-your-gate",
+      "path": "steering/adapters/gemini/falsify-your-gate.settings.json",
+      "purpose": "Hook config that runs the falsify-your-gate checks in Gemini CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/gemini/falsify-your-gate.settings.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/gemini/human-attention",
+      "kind": "adapter",
+      "plugin": "human-attention",
+      "path": "steering/adapters/gemini/human-attention.settings.json",
+      "purpose": "Hook config that runs the human-attention checks in Gemini CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/gemini/human-attention.settings.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/gemini/isolated-dispatch",
+      "kind": "adapter",
+      "plugin": "isolated-dispatch",
+      "path": "steering/adapters/gemini/isolated-dispatch.settings.json",
+      "purpose": "Hook config that runs the isolated-dispatch checks in Gemini CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/gemini/isolated-dispatch.settings.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/gemini/keep-moving",
+      "kind": "adapter",
+      "plugin": "keep-moving",
+      "path": "steering/adapters/gemini/keep-moving.settings.json",
+      "purpose": "Hook config that runs the keep-moving checks in Gemini CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/gemini/keep-moving.settings.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/gemini/model-tiering",
+      "kind": "adapter",
+      "plugin": "model-tiering",
+      "path": "steering/adapters/gemini/model-tiering.settings.json",
+      "purpose": "Hook config that runs the model-tiering checks in Gemini CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/gemini/model-tiering.settings.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/gemini/plain-prose",
+      "kind": "adapter",
+      "plugin": "plain-prose",
+      "path": "steering/adapters/gemini/plain-prose.settings.json",
+      "purpose": "Hook config that runs the plain-prose checks in Gemini CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/gemini/plain-prose.settings.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/gemini/remediation-ladder",
+      "kind": "adapter",
+      "plugin": "remediation-ladder",
+      "path": "steering/adapters/gemini/remediation-ladder.settings.json",
+      "purpose": "Hook config that runs the remediation-ladder checks in Gemini CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/gemini/remediation-ladder.settings.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/gemini/ub-mode",
+      "kind": "adapter",
+      "plugin": "ub-mode",
+      "path": "steering/adapters/gemini/ub-mode.settings.json",
+      "purpose": "Hook config that runs the ub-mode checks in Gemini CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/gemini/ub-mode.settings.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/kiro/evidence-before-done",
+      "kind": "adapter",
+      "plugin": "evidence-before-done",
+      "path": "steering/adapters/kiro/evidence-before-done.json",
+      "purpose": "Hook config that runs the evidence-before-done checks in Kiro CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/kiro/evidence-before-done.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/kiro/falsify-your-gate",
+      "kind": "adapter",
+      "plugin": "falsify-your-gate",
+      "path": "steering/adapters/kiro/falsify-your-gate.json",
+      "purpose": "Hook config that runs the falsify-your-gate checks in Kiro CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/kiro/falsify-your-gate.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/kiro/human-attention",
+      "kind": "adapter",
+      "plugin": "human-attention",
+      "path": "steering/adapters/kiro/human-attention.json",
+      "purpose": "Hook config that runs the human-attention checks in Kiro CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/kiro/human-attention.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/kiro/isolated-dispatch",
+      "kind": "adapter",
+      "plugin": "isolated-dispatch",
+      "path": "steering/adapters/kiro/isolated-dispatch.json",
+      "purpose": "Hook config that runs the isolated-dispatch checks in Kiro CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/kiro/isolated-dispatch.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/kiro/keep-moving",
+      "kind": "adapter",
+      "plugin": "keep-moving",
+      "path": "steering/adapters/kiro/keep-moving.json",
+      "purpose": "Hook config that runs the keep-moving checks in Kiro CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/kiro/keep-moving.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/kiro/model-tiering",
+      "kind": "adapter",
+      "plugin": "model-tiering",
+      "path": "steering/adapters/kiro/model-tiering.json",
+      "purpose": "Hook config that runs the model-tiering checks in Kiro CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/kiro/model-tiering.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/kiro/plain-prose",
+      "kind": "adapter",
+      "plugin": "plain-prose",
+      "path": "steering/adapters/kiro/plain-prose.json",
+      "purpose": "Hook config that runs the plain-prose checks in Kiro CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/kiro/plain-prose.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/kiro/remediation-ladder",
+      "kind": "adapter",
+      "plugin": "remediation-ladder",
+      "path": "steering/adapters/kiro/remediation-ladder.json",
+      "purpose": "Hook config that runs the remediation-ladder checks in Kiro CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/kiro/remediation-ladder.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/kiro/ub-mode",
+      "kind": "adapter",
+      "plugin": "ub-mode",
+      "path": "steering/adapters/kiro/ub-mode.json",
+      "purpose": "Hook config that runs the ub-mode checks in Kiro CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/kiro/ub-mode.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/omp/evidence-before-done/post",
+      "kind": "adapter",
+      "plugin": "evidence-before-done",
+      "path": "steering/adapters/omp/evidence-before-done.post.ts",
+      "purpose": "Hook config that runs the evidence-before-done checks in oh-my-pi.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/evidence-before-done.post.ts",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/omp/falsify-your-gate/post",
+      "kind": "adapter",
+      "plugin": "falsify-your-gate",
+      "path": "steering/adapters/omp/falsify-your-gate.post.ts",
+      "purpose": "Hook config that runs the falsify-your-gate checks in oh-my-pi.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/falsify-your-gate.post.ts",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/omp/human-attention/post",
+      "kind": "adapter",
+      "plugin": "human-attention",
+      "path": "steering/adapters/omp/human-attention.post.ts",
+      "purpose": "Hook config that runs the human-attention checks in oh-my-pi.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/human-attention.post.ts",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/omp/isolated-dispatch/pre",
+      "kind": "adapter",
+      "plugin": "isolated-dispatch",
+      "path": "steering/adapters/omp/isolated-dispatch.pre.ts",
+      "purpose": "Hook config that runs the isolated-dispatch checks in oh-my-pi.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/isolated-dispatch.pre.ts",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/omp/keep-moving/post",
+      "kind": "adapter",
+      "plugin": "keep-moving",
+      "path": "steering/adapters/omp/keep-moving.post.ts",
+      "purpose": "Hook config that runs the keep-moving checks in oh-my-pi.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/keep-moving.post.ts",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/omp/keep-moving/pre",
+      "kind": "adapter",
+      "plugin": "keep-moving",
+      "path": "steering/adapters/omp/keep-moving.pre.ts",
+      "purpose": "Hook config that runs the keep-moving checks in oh-my-pi.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/keep-moving.pre.ts",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/omp/plain-prose/post",
+      "kind": "adapter",
+      "plugin": "plain-prose",
+      "path": "steering/adapters/omp/plain-prose.post.ts",
+      "purpose": "Hook config that runs the plain-prose checks in oh-my-pi.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/plain-prose.post.ts",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/omp/plain-prose/pre",
+      "kind": "adapter",
+      "plugin": "plain-prose",
+      "path": "steering/adapters/omp/plain-prose.pre.ts",
+      "purpose": "Hook config that runs the plain-prose checks in oh-my-pi.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/plain-prose.pre.ts",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/omp/remediation-ladder/pre",
+      "kind": "adapter",
+      "plugin": "remediation-ladder",
+      "path": "steering/adapters/omp/remediation-ladder.pre.ts",
+      "purpose": "Hook config that runs the remediation-ladder checks in oh-my-pi.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/remediation-ladder.pre.ts",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    }
+  ]
+}

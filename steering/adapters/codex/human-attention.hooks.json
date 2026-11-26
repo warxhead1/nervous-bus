@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness codex --event PostToolUse \"$STEERING_HOME/human-attention/skills/human-attention/scripts/copy-audit-hook\"",
+            "timeout": 10
+          }
+        ],
+        "matcher": "apply_patch"
+      }
+    ]
+  }
+}

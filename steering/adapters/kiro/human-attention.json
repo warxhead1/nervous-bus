@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "human-attention-copy-audit-hook-PostToolUse",
+      "trigger": "PostToolUse",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event PostToolUse \"$STEERING_HOME/human-attention/skills/human-attention/scripts/copy-audit-hook\""
+      },
+      "timeout": 10,
+      "enabled": true,
+      "matcher": "write"
+    }
+  ]
+}

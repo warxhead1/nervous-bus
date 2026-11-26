@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness codex --event PostToolUse \"$STEERING_HOME/falsify-your-gate/hooks/vacuous-test-guard\"",
+            "timeout": 8
+          }
+        ],
+        "matcher": "apply_patch"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness codex --event UserPromptSubmit \"$STEERING_HOME/falsify-your-gate/hooks/cue\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

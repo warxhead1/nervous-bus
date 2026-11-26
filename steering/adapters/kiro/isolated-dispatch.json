@@ -1,0 +1,37 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "isolated-dispatch-dispatch-isolation-guard-PreToolUse",
+      "trigger": "PreToolUse",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event PreToolUse \"$STEERING_HOME/isolated-dispatch/hooks/dispatch-isolation-guard\""
+      },
+      "timeout": 5,
+      "enabled": true,
+      "matcher": "subagent"
+    },
+    {
+      "name": "isolated-dispatch-stash-guard-PreToolUse",
+      "trigger": "PreToolUse",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event PreToolUse \"$STEERING_HOME/isolated-dispatch/hooks/stash-guard\""
+      },
+      "timeout": 5,
+      "enabled": true,
+      "matcher": "shell"
+    },
+    {
+      "name": "isolated-dispatch-cue-UserPromptSubmit",
+      "trigger": "UserPromptSubmit",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event UserPromptSubmit \"$STEERING_HOME/isolated-dispatch/hooks/cue\""
+      },
+      "timeout": 5,
+      "enabled": true
+    }
+  ]
+}
