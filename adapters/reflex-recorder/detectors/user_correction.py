@@ -689,3 +689,22 @@ def _resolve_run(
         run_id, project, _st, _en = min(candidates, key=lambda t: t[2])
         return run_id, project
     return None, None
+
+
+def scan_transcripts(root: Path) -> dict[str, int]:
+    """Signature -> number of human turns under *root* (any ``*.jsonl`` tree),
+    with no run join. Shows what the detector sees in a transcript archive
+    when runs.db holds none of its sessions."""
+    counts: dict[str, int] = {}
+    for path in sorted(root.rglob("*.jsonl")):
+        for _ts, text, after_interrupt in _iter_claude_turns(path):
+            for sig in classify_turn(text, after_interrupt):
+                counts[sig] = counts.get(sig, 0) + 1
+    return counts
+
+
+if __name__ == "__main__":
+    import sys
+
+    target = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_TRANSCRIPT_ROOT
+    print(json.dumps(scan_transcripts(target), sort_keys=True))

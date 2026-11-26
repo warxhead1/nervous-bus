@@ -36,6 +36,7 @@ from detectors.user_correction import (
     classify_turn,
     match_themes,
     _strip_envelope,
+    scan_transcripts,
 )
 
 
@@ -212,6 +213,17 @@ class TestRealTurnShapes(unittest.TestCase):
         self.assertEqual(_strip_envelope(wrapped), "")
         relay = "Another claude session sent a message: you killed my worktree, stop it"
         self.assertEqual(_strip_envelope(relay), "")
+
+
+class TestScanTranscripts(unittest.TestCase):
+    def test_counts_signatures_without_any_run(self):
+        root = Path(tempfile.mkdtemp())
+        _write_transcript(root, "s1", [
+            _user_line("you killed my session, never do that again", "2026-11-26T00:00:00Z"),
+            _user_line("<system-reminder>stop it, you killed it</system-reminder>", "2026-11-26T00:01:00Z"),
+            _user_line("add a chart", "2026-11-26T00:02:00Z"),
+        ])
+        self.assertEqual(scan_transcripts(root), {"destructive_op": 1})
 
 
 class TestDetectorClaudeSource(unittest.TestCase):
