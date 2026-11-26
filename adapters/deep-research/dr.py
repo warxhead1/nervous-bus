@@ -156,6 +156,9 @@ NOTEBOOK_ID = re.compile(r"^https://gemini\.google\.com/notebook/([0-9a-f-]{20,}
 
 FAILED_TEXT = re.compile(r"(Something went wrong|couldn.t complete|research (failed|was cancelled)|"
                          r"reached your .*limit)", re.I)
+# Gemini's closing line once the research is done. The report card under it may be collapsed,
+# and then no report toolbar is on the page (observed 2026-11-26 on an unattended run).
+COMPLETED_TEXT = re.compile(r"I.ve completed your research", re.I)
 CONVERSATION_URL = re.compile(r"^https://gemini\.google\.com/app/([A-Za-z0-9_-]+)")
 
 # OBSERVED: the finished report body inside the immersive panel. The panel also holds the
@@ -209,6 +212,21 @@ def parse_snapshot(text):
         if r:
             out.append((m.group("role"), (m.group("name") or "").replace('\\"', '"'), "@" + r.group(1)))
     return out
+
+
+def report_card_ref(snapshot):
+    """Ref of the clickable report card after Gemini's last 'completed' line, or None."""
+    lines = snapshot.splitlines()
+    last = max((i for i, l in enumerate(lines) if COMPLETED_TEXT.search(l)), default=None)
+    if last is None:
+        return None
+    for line in lines[last + 1:]:
+        m = SNAP_LINE.match(line)
+        if m and m.group("role") == "status" and "clickable" in (m.group("rest") or ""):
+            r = REF.search(m.group("rest"))
+            if r:
+                return "@" + r.group(1)
+    return None
 
 
 def find_ref(snapshot, key, table=None):
@@ -362,6 +380,12 @@ class GeminiWebEngine(Engine):
         if find_ref(snap, "signed_out"):
             return dict(base, state="failed", reason="signed out")
         running = find_ref(snap, "running")
+        if not running and not find_ref(snap, "report_done") and COMPLETED_TEXT.search(snap):
+            card = report_card_ref(snap)
+            if card:
+                b.click(card)
+                snap = b.snapshot()
+                running = find_ref(snap, "running")
         if find_ref(snap, "report_done") and not running:
             raw = json.loads(b.eval(REPORT_JS % (json.dumps(REPORT_SELECTORS), json.dumps(USED_SOURCES_SELECTOR))) or "{}")
             return dict(base, state="completed", markdown=raw.get("markdown", ""))

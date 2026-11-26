@@ -53,12 +53,13 @@ class FakeOrca:
         ("tools_menu", r"^Deep research"): "composer_dr",
         ("ready", r"^Send message"): "plan",
         ("plan", r"^Start research"): "running",
+        ("done_collapsed", r"^$"): "done",  # the unnamed report card
     }
     # Real signed-in captures (scrubbed); "failed" is the only synthetic one (no real failure was observed).
     SNAP = {"composer": "composer", "tools_menu": "tools_menu",
             "composer_dr": "composer_dr", "ready": "ready_to_send",
             "plan": "plan", "done": "done", "failed": "synthetic_failed",
-            "running": "running"}
+            "running": "running", "done_collapsed": "done_collapsed"}
 
     def __init__(self, end="done", running_polls=2, first="composer", first_snap=None, report=None):
         self.report = report or SMALL_REPORT
@@ -90,7 +91,7 @@ class FakeOrca:
             if "walk" in expr:
                 return json.dumps({"ok": True, "result": {"result": json.dumps({"markdown": self.report})}})
             url = "https://gemini.google.com/app"
-            if self.phase in ("plan", "running", "done", "failed"):
+            if self.phase in ("plan", "running", "done", "done_collapsed", "failed"):
                 url += "/abc123def"
             return json.dumps({"ok": True, "result": {"result": url}})
         raise AssertionError(f"unexpected orca call {args}")
@@ -155,6 +156,21 @@ def test_run_completes_and_persists(tmp_path):
     assert [c["url"] for c in run["citations"]] == ["https://example.org/a", "https://example.org/b", "https://example.org/a"]
     assert fake.filled == "What is AAIF?"
     assert fake.tabs_open == 0  # tab closed at the end
+
+
+def test_a_collapsed_report_card_is_opened_then_read(tmp_path):
+    # An unattended run finished with the report card collapsed: no report toolbar on the page.
+    s = (FIX / "done_collapsed.txt").read_text()
+    assert not dr.find_ref(s, "report_done") and dr.report_card_ref(s) == "@e199"
+    run, fake, _ = run_it(tmp_path, end="done_collapsed")
+    assert run["status"] == "completed"
+    assert (tmp_path / run["run_id"] / "report.md").read_text().startswith("# AAIF report")
+    last_click = [c for c in fake.calls if c[0] == "click"][-1]
+    assert last_click[last_click.index("--element") + 1] == "@e199"
+
+
+def test_no_card_click_while_research_runs():
+    assert dr.report_card_ref((FIX / "running.txt").read_text()) is None
 
 
 def test_start_follows_the_ui_order(tmp_path):

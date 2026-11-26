@@ -1,0 +1,138 @@
+page: PAGE
+CloudEvents Required Attribute Set - Google Gemini — https://gemini.google.com/app/abc123def
+- generic
+  - main
+    - button "Open sidebar" [expanded=false, ref=e182]
+    - generic
+      - generic
+      - generic
+        - generic
+          - heading "Conversation with Gemini" [level=1, ref=e160]
+          - generic
+            - generic
+              - generic
+                - heading "You said What is the CloudEvents spec's required attribute set? Cite the spec." [level=5, ref=e171]
+                  - StaticText "You said What is the CloudEvents spec's required attribute set? Cite the spec."
+                - paragraph
+                  - StaticText "What is the CloudEvents spec's required attribute set? Cite the spec."
+              - button "Copy prompt" [ref=e168]
+              - button "Edit" [ref=e169]
+              - generic
+                - heading "Gemini said" [level=6, ref=e172]
+                - generic
+                  - paragraph
+                    - StaticText "Here's my plan to tackle that topic. Let me know if you need to make changes."
+                  - heading " CloudEvents Required Context Attributes " [level=3, ref=e177]
+                  - StaticText "Research Websites"
+                  - StaticText "(1) Locate the authoritative CNCF CloudEvents specification repository and official documentation to determine the current stable release version (e.g., v1.0.2 or any subsequent stable release) as well as any active working drafts.\n(2) Extract the complete list of required context attributes from the core CloudEvents specification, documenting for each attribute:\n(a) exact normative attribute name and data type\n(b) formal constraints, validation rules, and RFC 2119 requirements (such as non-empty string requirements, uniqueness scope, and URI-reference formatting)\n(c) official description and canonical examples provided in the spec\n(3) Record precise specification citations for every required attribute, including exact version tags, section headings, anchor links, and canonical repository URLs.\n(4) Review version history and official binding specifications (such as JSON event format and HTTP protocol binding) to verify whether the required attribute set changed across versions and note any serialization or transport-level rules affecting required attributes (such as binary vs. structured content modes)."
+                  - StaticText "Analyze Results"
+                  - StaticText "Create Report"
+                  - StaticText "Ready in a few mins"
+                  - button "Edit the research plan" [disabled, ref=e178]
+                    - StaticText "Edit plan"
+                  - button "Start research" [disabled, ref=e198]
+                    - StaticText "Start research"
+                - button "Good response" [ref=e363]
+                - button "Bad response" [ref=e364]
+                - button "Copy" [ref=e365]
+                - button "Show more options" [ref=e373]
+            - generic
+              - generic
+                - heading "You said Start research" [level=5, ref=e195]
+                  - StaticText "You said Start research"
+                - paragraph
+                  - StaticText "Start research"
+              - button "Copy prompt" [ref=e193]
+              - button "Edit" [ref=e194]
+              - generic
+                - heading "Gemini said" [level=6, ref=e196]
+                - generic
+                  - paragraph
+                    - StaticText "I've completed your research. Feel free to ask me follow-up questions or request changes."
+                  - status [ref=e199] clickable [cursor:pointer]
+                    - StaticText "CloudEvents Required Context Attributes"
+                    - StaticText "Nov 26, 12:03 PM"
+                - button "Good response" [ref=e366]
+                - button "Bad response" [ref=e367]
+                - button "Copy" [ref=e368]
+                - button "Show more options" [ref=e374]
+          - generic
+            - status
+            - generic
+              - generic
+                - generic
+                  - button "Upload & tools" [expanded=false, ref=e15]
+                  - button "Deselect Deep research" [ref=e38]
+                    - StaticText "Deep research"
+                  - generic
+                    - textbox "Enter a prompt for Gemini" [ref=e23]: 
+
+                      - StaticText "What do you want to research?"
+                      - paragraph
+                        - LineBreak "\n"
+                  - generic
+                    - group
+                      - button "Open mode picker, currently Neon" [expanded=false, ref=e18]
+                        - StaticText "Neon"
+                    - generic
+                      - button "Dictate (^⇧D)" [ref=e24]
+                  - generic
+                    - button "Sources, Google Search selected" [expanded=false, ref=e37]
+                      - StaticText "Sources"
+                    - button "Files" [ref=e39]
+                      - StaticText "Files"
+            - paragraph
+              - StaticText "Gemini is AI and can make mistakes."
+        - generic
+          - generic
+            - heading "CloudEvents Required Context Attributes" [level=2, ref=e190]
+            - button "Table of contents menu" [expanded=false, ref=e315]
+              - StaticText "Contents"
+            - button "Close panel" [ref=e192]
+          - generic
+            - generic
+              - heading "CloudEvents Specification Required Attribute Set" [level=1, ref=e369]
+              - paragraph
+                - StaticText "The CloudEvents core specification defines a minimal set of exactly four required context attributes that MUST be present in every compliant CloudEvent: "
+                - code
+                  - StaticText "id"
+                - StaticText ", "
+                - code
+                  - StaticText "source"
+                - StaticText ", "
+                - code
+                  - StaticText "specversion"
+                - StaticText ", and "
+                - code
+                  - StaticText "type"
+                - superscript
+                - StaticText ". Normatively, these four attributes are specified in the CloudEvents Core Specification, Version 1.0.2 ("
+                - code
+                  - StaticText "cloudevents/spec.md"
+                - StaticText ", under Context Attributes → REQUIRED Attributes, canonical anchor "
+                - code
+                  - StaticText "https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md#required-attributes"
+                - StaticText ")"
+                - superscript
+                - StaticText " and enforced structurally in the official JSON Schema ("
+                - code
+                  - StaticText "cloudevents/formats/cloudevents.json"
+                - StaticText ") via "
+                - code
+                  - StaticText "\"required\": [\"id\", \"source\", \"specversion\", \"type\"]"
+                - superscript
+                - StaticText ". Release "
+                - code
+                  - StaticText "v1.0.2"
+                - StaticText " (tagged "
+                - code
+                  - StaticText "ce@v1.0.2"
+                - StaticText " and aliased at "
+                - code
+                  - StaticText "ce@stable"
+                - StaticText ", released February 5, 2022) is the latest stable release listed in the official CNCF Graduated CloudEvents repository, with specification-tracking commentary confirming it remained stable at "
+                - code
+                  - StaticText "1.0.2"
+                - StaticText " as of September 2026"
+                - superscript
+                - StaticText "."
