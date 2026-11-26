@@ -28,11 +28,13 @@ The cache holds the last answer; the next call reads it; the one after that find
 """
 
 
-def run(tmp, path, tool="Write", tool_input=None, response=None, session="s1", **env):
+def run(tmp, path, tool="Write", tool_input=None, response=None, session="s1", cwd=None, **env):
     ev = {"session_id": session, "hook_event_name": "PostToolUse", "tool_name": tool,
           "tool_input": {"file_path": str(path), **(tool_input or {})}}
     if response is not None:
         ev["tool_response"] = response
+    if cwd:
+        ev["cwd"] = str(cwd)
     p = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(ev), capture_output=True, encoding="utf-8",
                        env={**os.environ, "XDG_CACHE_HOME": str(tmp / "cache"), **env})
     return p.returncode, p.stderr

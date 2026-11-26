@@ -2,6 +2,7 @@
 """copy-audit: list the text a person will see in UI source, and count the usual excess.
 
   copy-audit <file-or-dir>... [--json] [--max-words N] [--max-pairs N]
+  copy-audit - --ext .tsx [--json]      read the source from stdin
 
 Reads markup text and user-facing string props from .html .htm .vue .svelte .jsx
 .tsx, and canvas fillText literals from those plus .js .ts. Static and approximate. Exit 1 only
@@ -170,11 +171,14 @@ def main():
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--max-words", type=int)
     ap.add_argument("--max-pairs", type=int)
+    ap.add_argument("--ext", default=".html", help="file type of the stdin source (default .html)")
     a = ap.parse_args()
 
     files = []
     for p in map(Path, a.paths):
-        if p.is_dir():
+        if str(p) == "-":
+            files.append("-")
+        elif p.is_dir():
             files += [f for f in sorted(p.rglob("*")) if f.suffix in EXTS and f.is_file()
                       and not SKIP_DIRS & set(f.parts) and ".test." not in f.name and ".spec." not in f.name]
         elif p.is_file():
@@ -184,13 +188,13 @@ def main():
 
     report, total = [], {"strings": 0, "words": 0, "heading_subtitle_pairs": 0, "description_slots": 0, "long": 0, "stock": 0}
     for f in files:
-        strings, pairs, slots = audit_file(f)
+        strings, pairs, slots = audit_text(sys.stdin.read(), a.ext) if f == "-" else audit_file(f)
         if not strings:
             continue
         for s in strings:
             s["long"] = s["words"] > LONG_WORDS
             s["stock"] = bool(STOCK.search(s["text"]))
-        row = {"file": str(f), "strings": len(strings), "words": sum(s["words"] for s in strings),
+        row = {"file": "<stdin>" if f == "-" else str(f), "strings": len(strings), "words": sum(s["words"] for s in strings),
                "heading_subtitle_pairs": pairs, "description_slots": slots,
                "long": sum(s["long"] for s in strings), "stock": sum(s["stock"] for s in strings), "items": strings}
         report.append(row)

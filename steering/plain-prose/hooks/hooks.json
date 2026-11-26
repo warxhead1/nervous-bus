@@ -31,6 +31,17 @@
         ]
       }
     ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/hooks/reply-score",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
