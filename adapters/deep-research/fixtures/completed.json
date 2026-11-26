@@ -1,0 +1,57 @@
+{
+  "id": "int_abc123",
+  "status": "completed",
+  "agent": "deep-research-preview-04-2026",
+  "steps": [
+    {
+      "type": "thought",
+      "content": [
+        {
+          "type": "text",
+          "text": "thinking"
+        }
+      ]
+    },
+    {
+      "type": "model_output",
+      "content": [
+        {
+          "type": "text",
+          "text": "# AAIF report\n\nAgent Skills 🙂 was donated on 2026-10-22 to the AAIF by Anthropic. 日本語 The AAIF hosts 10 projects now.\n\nSee [the LF release](https://example.org/lf) for members.\n",
+          "annotations": [
+            {
+              "type": "url_citation",
+              "url": "https://example.org/a",
+              "title": "A",
+              "start_index": 33,
+              "end_index": 84
+            },
+            {
+              "type": "url_citation",
+              "url": "https://example.org/b",
+              "title": "B",
+              "start_index": 95,
+              "end_index": 126
+            },
+            {
+              "type": "url_citation",
+              "url": "https://example.org/a",
+              "title": "A",
+              "start_index": 95,
+              "end_index": 126
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "total_input_tokens": 1000000,
+    "total_cached_tokens": 0,
+    "total_output_tokens": 20000,
+    "total_tool_use_tokens": 5000,
+    "total_thought_tokens": 10000,
+    "total_tokens": 1035000,
+    "grounding_tool_count": 42
+  }
+}
