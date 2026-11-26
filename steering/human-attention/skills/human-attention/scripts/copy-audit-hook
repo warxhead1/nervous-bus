@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""PostToolUse hook (Write|Edit|MultiEdit): report the copy an edit ADDED to a UI file.
+"""Report the copy an edit ADDED to a UI file. Claude Code PostToolUse hook (Write|Edit|MultiEdit), or a CLI for any harness:
+
+  copy-audit-hook check [--before FILE] [--ext .tsx] [--json] [--session ID] [--cwd DIR] [FILE|-]
+
+The CLI scores FILE (or stdin, typed by --ext) against the optional --before file and exits 0
+0 when clean, 1 when it reports heavy copy, 64 on unreadable input. Both paths share one core
+and append hit records to $AGENT_STEERING_HITS (off: AGENT_STEERING_LOG=0).
 
 Scores the difference between the file before and after the edit, so existing
 copy is never blamed on the edit that happened to touch its file. Documents
@@ -15,6 +21,9 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from steering_hits import log_hit  # the plugin's own writer, next to this file
 
 UI = {".html", ".htm", ".vue", ".svelte", ".jsx", ".tsx"}
 
@@ -75,7 +84,44 @@ def before_text(ev, path, now):
         return None
 
 
+def assess(mod, src, ext, before, old_texts):
+    """What this version added over `before`: None when it is within bounds, else the numbers behind the report."""
+    now, strings = counts(mod, src, ext)
+    surface = bool(INTERACTIVE.search(src))
+    added = {k: now[k] - before.get(k, 0) for k in ADDED}
+    hit = [k for k, floor in ADDED.items() if added[k] >= floor and (surface or k not in SURFACE_ONLY)]
+    if not hit:
+        return None
+    new = [s for s in strings if s["text"] not in old_texts]
+    flagged = [s for s in new if s["kind"] == "sub" or s["words"] > mod.LONG_WORDS or mod.STOCK.search(s["text"])]
+    return {"now": now, "added": added, "hit": hit, "lines": (flagged or sorted(new, key=lambda s: -s["words"]))[:8]}
+
+
+def render(name, r, out):
+    added, now = r["added"], r["now"]
+    print(
+        f"copy-audit {name}: this edit added {added['words']} visible words "
+        f"({added['heading_subtitle_pairs']} heading+subtitle pairs, {added['description_slots']} description slots, "
+        f"{added['long']} long strings, {added['stock']} stock phrases). File now shows {now['strings']} strings, {now['words']} words.",
+        file=out,
+    )
+    for s in r["lines"]:
+        print(f"  line {s['line']}: {s['text'][:90]}", file=out)
+    print(
+        "A person reads one thing at a time. For each line: would a first-time user miss it? "
+        "Can the design say it instead? Cut or redesign, or keep it if it is an error, a "
+        "confirmation, or something the user asked for. Method: human-attention skill.",
+        file=out,
+    )
+
+
+def log(ev, shown, r):
+    log_hit("copy-audit", "ui-file", ev, "report", len(r["hit"]), {k: r["added"][k] for k in r["hit"]}, shown, {"words": r["added"]["words"]})
+
+
 def main():
+    if len(sys.argv) > 1:
+        return cli(sys.argv[1:])
     if os.environ.get("COPY_AUDIT_DISABLE") == "1":
         return 0
     try:
@@ -110,29 +156,56 @@ def main():
     except Exception:
         pass
 
-    surface = bool(INTERACTIVE.search(src))
-    added = {k: now[k] - before.get(k, 0) for k in ADDED}
-    hit = [k for k, floor in ADDED.items() if added[k] >= floor and (surface or k not in SURFACE_ONLY)]
-    if not hit:
+    r = assess(mod, src, path.suffix, before, old_texts)
+    if r is None:
         return 0
-
-    print(
-        f"copy-audit {path.name}: this edit added {added['words']} visible words "
-        f"({added['heading_subtitle_pairs']} heading+subtitle pairs, {added['description_slots']} description slots, "
-        f"{added['long']} long strings, {added['stock']} stock phrases). File now shows {now['strings']} strings, {now['words']} words.",
-        file=sys.stderr,
-    )
-    new = [s for s in strings if s["text"] not in old_texts]
-    flagged = [s for s in new if s["kind"] == "sub" or s["words"] > mod.LONG_WORDS or mod.STOCK.search(s["text"])]
-    for s in (flagged or sorted(new, key=lambda s: -s["words"]))[:8]:
-        print(f"  line {s['line']}: {s['text'][:90]}", file=sys.stderr)
-    print(
-        "A person reads one thing at a time. For each line: would a first-time user miss it? "
-        "Can the design say it instead? Cut or redesign, or keep it if it is an error, a "
-        "confirmation, or something the user asked for. Method: human-attention skill.",
-        file=sys.stderr,
-    )
+    try:
+        shown = str(path.resolve().relative_to(Path(ev.get("cwd") or os.getcwd()).resolve()))
+    except Exception:
+        shown = str(path)
+    log(ev, shown, r)
+    render(path.name, r, sys.stderr)
     return 2
+
+
+def cli(argv):
+    import argparse
+    ap = argparse.ArgumentParser(prog="copy-audit-hook", usage="copy-audit-hook check [--before FILE] [--ext .tsx] [--json] "
+                                 "[--session ID] [--cwd DIR] [FILE|-]", add_help=True)
+    ap.add_argument("command", choices=("check",))
+    ap.add_argument("file", nargs="?")
+    ap.add_argument("--before", metavar="FILE", help="the file as it was before the edit; without it the whole file counts as added")
+    ap.add_argument("--ext", help="file type of stdin, or to override the file's own (default .html)")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--session", default="", help="session id for the hit record")
+    ap.add_argument("--cwd", default=None, help="working directory for the hit record (default: the current one)")
+    a = ap.parse_intermixed_args(argv)
+    ext = a.ext or (Path(a.file).suffix if a.file not in (None, "-") and Path(a.file).suffix else ".html")
+    if not ext.startswith("."):
+        ext = "." + ext
+    try:
+        src = sys.stdin.read() if a.file in (None, "-") else Path(a.file).read_text(errors="replace")
+        prior = Path(a.before).read_text(errors="replace") if a.before else ""
+    except OSError as exc:
+        print(f"copy-audit-hook: {exc}", file=sys.stderr)
+        return 64
+    mod = load_audit()
+    before, old = counts(mod, prior, ext)
+    r = assess(mod, src, ext, before, {s["text"] for s in old})
+    shown = a.file if a.file not in (None, "-") else ""
+    ev = {"cwd": a.cwd or os.getcwd(), "session_id": a.session}
+    if r:
+        log(ev, shown, r)
+    if a.json:
+        print(json.dumps({"surface": "ui-file", "action": "report" if r else "none", "findings": len(r["hit"]) if r else 0,
+                          "rules": {k: r["added"][k] for k in r["hit"]} if r else {},
+                          "now": r["now"] if r else counts(mod, src, ext)[0],
+                          "lines": [{"line": s["line"], "text": s["text"][:90]} for s in r["lines"]] if r else []}))
+    elif r:
+        render(a.file if shown else "stdin", r, sys.stdout)
+    else:
+        print("clean")
+    return 1 if r else 0
 
 
 if __name__ == "__main__":

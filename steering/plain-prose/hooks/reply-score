@@ -1,0 +1,33 @@
+#!/usr/bin/env python3
+"""Claude Code Stop hook: score the final reply and log the numbers. It never blocks and prints nothing.
+
+A thin adapter over prose_score.score_reply, the same core as `prose-guard score`.
+Reads `last_assistant_message` from the hook input, or the last assistant text in the
+transcript. The record holds counts only, never the reply.
+Kill switches: PLAIN_PROSE_DISABLE=1, AGENT_STEERING_LOG=0.
+"""
+import json
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from prose_score import score_reply, transcript_reply
+
+
+def main():
+    if os.environ.get("PLAIN_PROSE_DISABLE") == "1" or os.environ.get("AGENT_STEERING_LOG") == "0":
+        return 0
+    try:
+        ev = json.load(sys.stdin)
+        text = ev.get("last_assistant_message")
+        if not isinstance(text, str) or not text.strip():
+            text = transcript_reply(ev["transcript_path"])
+        score_reply(text, ev)
+    except Exception:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
