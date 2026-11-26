@@ -735,3 +735,9 @@ def test_cli_rejects_path_traversal_run_id(tmp_path, capsys):
 def test_wrapper_script_help():
     p = subprocess.run([str(HERE / "dr"), "--help"], capture_output=True, text=True)
     assert p.returncode == 0 and "notebook" in p.stdout
+
+
+def test_command_judge_turns_off_steering_hit_log():
+    script = 'import os,sys,json; sys.stdin.read(); print(json.dumps({"verdict": "CONFIRMED", "reason": os.environ.get("AGENT_STEERING_LOG", "unset")}))'
+    judge = dr.make_command_judge(f"{sys.executable} -c '{script}'", 30)
+    assert judge("claim", "page") == ("CONFIRMED", "0")

@@ -584,7 +584,9 @@ def make_command_judge(cmd, timeout):
     def judge(claim, page):
         prompt = JUDGE_PROMPT.format(claim=claim, page=page)
         try:
-            p = subprocess.run(argv, input=prompt, capture_output=True, text=True, timeout=timeout)
+            # A judge verdict is machine JSON, not a reply to a person: keep it out of the steering hit log.
+            env = {**os.environ, "AGENT_STEERING_LOG": "0"}
+            p = subprocess.run(argv, input=prompt, capture_output=True, text=True, timeout=timeout, env=env)
         except (OSError, subprocess.TimeoutExpired) as e:
             raise DrError(f"judge failed: {type(e).__name__}")
         if p.returncode != 0:
