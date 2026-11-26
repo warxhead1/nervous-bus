@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """dr: programmatic deep research -> claim-level citation audit -> kb inbox.
 
-Stdlib only. Engines are pluggable (see Engine); the first is Gemini Deep
-Research through the Interactions API.
+Stdlib only. Engines are pluggable (see Engine); the default is gemini-web,
+Gemini Deep Research driven through Orca's embedded browser (no API key).
 """
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import abc
 import argparse
 import datetime as dt
 import html
-import importlib.util
 import ipaddress
 import json
 import os
@@ -27,16 +26,12 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-API_BASE = "https://generativelanguage.googleapis.com/v1beta"
-DEFAULT_AGENT = "deep-research-preview-04-2026"
-DEFAULT_API_REVISION = "2026-05-20"
-KEY_ENV = "GEMINI_API_KEY"
 TERMINAL = {"completed", "failed", "cancelled", "incomplete", "budget_exceeded"}
 VERDICTS = ("CONFIRMED", "WEAKENED", "REFUTED", "UNREACHABLE")
 MAX_CONFIDENCE = 0.4
 DEFAULT_JUDGE = "claude -p --model haiku --output-format json"
 
-EXIT_OK, EXIT_FAIL, EXIT_USAGE, EXIT_NOKEY, EXIT_API = 0, 1, 2, 3, 4
+EXIT_OK, EXIT_FAIL, EXIT_USAGE, EXIT_LOGIN, EXIT_API = 0, 1, 2, 3, 4
 
 
 class DrError(Exception):
@@ -59,16 +54,16 @@ def default_runs_dir():
 
 def load_config(path=None):
     cfg = {
-        "agent": DEFAULT_AGENT,
-        "api_revision": DEFAULT_API_REVISION,
-        "poll_initial": 5.0,
-        "poll_max": 30.0,
+        "engine": "gemini-web",
+        "orca_bin": "orca",
+        "step_timeout": 120.0,
+        "poll_initial": 15.0,
+        "poll_max": 60.0,
         "timeout": 3600.0,
         "judge_cmd": DEFAULT_JUDGE,
         "judge_timeout": 120.0,
         "fetch_timeout": 20.0,
         "fetch_max_bytes": 400_000,
-        "prices_per_mtok": {},
         "kb_bin": "kb",
     }
     p = Path(path) if path else Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "deep-research" / "config.toml"
@@ -77,23 +72,6 @@ def load_config(path=None):
     elif path:
         raise DrError(f"config not found: {path}", EXIT_USAGE)
     return cfg
-
-
-# ---------------------------------------------------------------- http
-
-def urllib_http(method, url, headers, body, timeout):
-    req = urllib.request.Request(url, data=body, method=method, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.status, r.read()
-    except urllib.error.HTTPError as e:
-        return e.code, e.read()
-
-
-def scrub(text, key):
-    if key:
-        text = text.replace(key, "[REDACTED]")
-    return re.sub(r"AIza[0-9A-Za-z_-]{20,}", "[REDACTED]", text)
 
 
 # ---------------------------------------------------------------- engines
@@ -127,78 +105,261 @@ class Engine(abc.ABC):
         """Return (report_md, usage dict, citations [{claim_span, url, title}])."""
 
 
-class GeminiEngine(Engine):
-    name = "gemini-deep-research"
+# ------------------------------------------------------------ gemini-web
+#
+# Every label, role and regex the engine depends on lives in UI and NB. A UI
+# change is a one-place edit here. OBSERVED entries were read from a live
+# accessibility snapshot; UNVERIFIED entries need a signed-in snapshot to
+# confirm (Orca's browser was signed out when this was written).
 
-    def __init__(self, cfg, http=urllib_http, env=None):
-        self.cfg = cfg
-        self.http = http
-        env = os.environ if env is None else env
-        self.key = env.get(KEY_ENV, "")
-        if not self.key:
-            raise DrError(f"{KEY_ENV} is not set; inject it from your secrets manager", EXIT_NOKEY)
-        agent = cfg.get("agent", "")
-        if not agent or agent in ("latest", "default") or agent.endswith("-latest"):
-            raise DrError("agent id must be pinned to an exact id in config", EXIT_USAGE)
-        self.agent = agent
+GEMINI_URL = "https://gemini.google.com/app"
+NOTEBOOK_URL = "https://notebook.google.com"
 
-    def _call(self, method, path, body=None):
-        headers = {
-            "x-goog-api-key": self.key,
-            "Content-Type": "application/json",
-            "Api-Revision": self.cfg["api_revision"],
-        }
-        data = json.dumps(body).encode() if body is not None else None
+UI = {
+    # OBSERVED: signed-out pages show a "Sign in" button; signed-in pages do not.
+    "signed_out": ("button", r"^Sign in( to |$)"),
+    # OBSERVED
+    "prompt": ("textbox", r"^Enter a prompt"),
+    # OBSERVED: opens a menu whose items include the Deep research checkbox.
+    "tools": ("button", r"^Upload & tools"),
+    # OBSERVED
+    "deep_research": ("menuitemcheckbox", r"^Deep research"),
+    # UNVERIFIED
+    "send": ("button", r"^Send message"),
+    # UNVERIFIED: the plan card shown before the research starts.
+    "start_research": ("button", r"^Start research"),
+    # UNVERIFIED: present only once the finished report is rendered.
+    "report_done": ("button", r"^(Share & export|Export to Docs)"),
+    # UNVERIFIED: present while research runs.
+    "running": ("button", r"^(Stop research|Cancel research)"),
+    # UNVERIFIED
+    "share_export": ("button", r"^Share & export"),
+    "export_docs": ("menuitem", r"^Export to Docs"),
+}
+
+# Gemini Notebook (notebook.google.com). OBSERVED: signed-out landing only.
+NB = {
+    "signed_out": ("button", r"^Sign in( to |$)"),
+    # UNVERIFIED
+    "new_notebook": ("button", r"^(Create new|New notebook|Create)"),
+    "add_source": ("button", r"^(Add source|Add sources|Upload a source)"),
+    "copied_text": ("button", r"^(Copied text|Pasted text|Paste text)"),
+    "websites": ("button", r"^(Website|Websites|Link)"),
+    "source_text": ("textbox", r".*"),
+    "insert": ("button", r"^(Insert|Add|Submit)$"),
+}
+FAILED_TEXT = re.compile(r"(Something went wrong|couldn.t complete|research (failed|was cancelled)|"
+                         r"reached your .*limit)", re.I)
+CONVERSATION_URL = re.compile(r"^https://gemini\.google\.com/app/([A-Za-z0-9_-]+)")
+
+# UNVERIFIED container selectors, tried in order; the last is a broad fallback.
+REPORT_SELECTORS = ["deep-research-immersive-panel", "immersive-editor", "message-content", "main"]
+
+# Converts the report DOM to markdown and keeps external links as [text](url).
+REPORT_JS = """(function(sels){
+var el=null;for(var i=0;i<sels.length&&!el;i++){var all=document.querySelectorAll(sels[i]);if(all.length)el=all[all.length-1];}
+if(!el)return JSON.stringify({markdown:''});
+function unwrap(h){try{var u=new URL(h,location.href);if(u.hostname.endsWith('google.com')&&u.pathname==='/url'){return u.searchParams.get('q')||h;}return u.href;}catch(e){return h;}}
+function walk(n){
+if(n.nodeType===3)return n.textContent;
+if(n.nodeType!==1)return '';
+var t=n.tagName.toLowerCase();
+if(t==='script'||t==='style'||t==='button')return '';
+var inner=Array.prototype.map.call(n.childNodes,walk).join('');
+if(/^h[1-6]$/.test(t))return '\\n\\n'+'#'.repeat(+t[1])+' '+inner.trim()+'\\n\\n';
+if(t==='p')return inner.trim()+'\\n\\n';
+if(t==='li')return '- '+inner.trim()+'\\n';
+if(t==='br')return '\\n';
+if(t==='a'&&n.href){var h=unwrap(n.href);if(/^https?:/.test(h)&&!/\\/\\/([a-z0-9-]+\\.)*google\\.com\\//.test(h))return '['+inner.trim()+']('+h+')';return inner;}
+return inner;}
+return JSON.stringify({markdown:walk(el).replace(/\\n{3,}/g,'\\n\\n').trim()});
+})(%s)"""
+
+SNAP_LINE = re.compile(r'^\s*- (?P<role>[A-Za-z]+)(?: "(?P<name>(?:[^"\\]|\\.)*)")?(?P<rest>.*)$')
+REF = re.compile(r"ref=(e\d+)")
+
+
+def parse_snapshot(text):
+    """Accessibility snapshot text -> [(role, name, ref)] for nodes that carry a ref."""
+    out = []
+    for line in text.splitlines():
+        m = SNAP_LINE.match(line)
+        if not m:
+            continue
+        r = REF.search(m.group("rest") or "")
+        if r:
+            out.append((m.group("role"), (m.group("name") or "").replace('\\"', '"'), "@" + r.group(1)))
+    return out
+
+
+def find_ref(snapshot, key, table=None):
+    role, pat = (table or UI)[key]
+    for r, name, ref in parse_snapshot(snapshot):
+        if r == role and re.search(pat, name):
+            return ref
+    return None
+
+
+def orca_runner(orca_bin="orca"):
+    """Default runner: argv list -> stdout text. Raises DrError when orca fails."""
+    def run(args, timeout=120):
         try:
-            status, raw = self.http(method, API_BASE + path, headers, data, 60)
-        except (urllib.error.URLError, OSError) as e:
-            raise DrError(scrub(f"{method} {path}: {e}", self.key), EXIT_API)
-        if status >= 400:
-            msg = scrub(raw.decode("utf-8", "replace")[:500], self.key)
-            raise DrError(f"{method} {path} -> HTTP {status}: {msg}", EXIT_API)
-        return json.loads(raw) if raw.strip() else {}
+            p = subprocess.run([orca_bin] + list(args), capture_output=True, text=True, timeout=timeout)
+        except FileNotFoundError:
+            raise DrError(f"`{orca_bin}` not found; the gemini-web engine needs Orca's CLI", EXIT_USAGE)
+        except subprocess.TimeoutExpired:
+            raise DrError(f"orca {args[0]} timed out", EXIT_API)
+        if p.returncode != 0:
+            raise DrError(f"orca {args[0]} failed: {(p.stderr or p.stdout).strip()[:300]}", EXIT_API)
+        return p.stdout
+    return run
+
+
+class OrcaBrowser:
+    """Thin wrapper over orca's browser subcommands. `runner(args) -> stdout`."""
+
+    def __init__(self, runner, page=None):
+        self.runner, self.page = runner, page
+
+    def _json(self, args):
+        out = json.loads(self.runner(list(args) + ["--json"]) or "{}")
+        if not out.get("ok", True):
+            raise DrError(f"orca {args[0]}: {out.get('error')}", EXIT_API)
+        return out.get("result", {})
+
+    def _p(self):
+        if not self.page:
+            raise DrError("no browser tab open", EXIT_API)
+        return ["--page", self.page]
+
+    def open(self, url):
+        self.page = self._json(["tab", "create", "--url", url])["browserPageId"]
+        return self.page
+
+    def goto(self, url):
+        self._json(["goto", "--url", url] + self._p())
+
+    def snapshot(self):
+        return self.runner(["snapshot"] + self._p())
+
+    def click(self, ref):
+        self._json(["click", "--element", ref] + self._p())
+
+    def fill(self, ref, value):
+        self._json(["fill", "--element", ref, "--value", value] + self._p())
+
+    def eval(self, expression):
+        return self._json(["eval", "--expression", expression] + self._p()).get("result", "")
+
+    def url(self):
+        return self.eval("location.href")
+
+    def close(self):
+        if self.page:
+            try:
+                self._json(["tab", "close"] + self._p())
+            except DrError:
+                pass
+            self.page = None
+
+
+def wait_for(fn, timeout, sleep, clock, interval=3.0, what="element"):
+    end = clock() + timeout
+    while True:
+        v = fn()
+        if v:
+            return v
+        if clock() >= end:
+            raise DrError(f"timed out waiting for {what}", EXIT_API)
+        sleep(interval)
+
+
+def conversation_id(url):
+    m = CONVERSATION_URL.match(url or "")
+    return m.group(1) if m else None
+
+
+class GeminiWebEngine(Engine):
+    """Gemini Deep Research driven through gemini.google.com in Orca's embedded browser."""
+    name = "gemini-web"
+    agent = "gemini-web-deep-research"
+
+    def __init__(self, cfg, runner=None, sleep=time.sleep, clock=time.monotonic):
+        self.cfg = cfg
+        self.sleep, self.clock = sleep, clock
+        self.runner = runner or orca_runner(cfg.get("orca_bin", "orca"))
+        self.browser = OrcaBrowser(self.runner)
+        self.step_timeout = float(cfg.get("step_timeout", 120.0))
+
+    def _until(self, key, what):
+        """Wait for a UI element; return the snapshot that contains it."""
+        def probe():
+            s = self.browser.snapshot()
+            if find_ref(s, "signed_out") and not find_ref(s, "prompt"):
+                raise DrError("Orca's browser is not signed in to Google: sign in at gemini.google.com "
+                              "in Orca's default browser profile, then retry", EXIT_LOGIN)
+            return s if find_ref(s, key) else None
+        return wait_for(probe, self.step_timeout, self.sleep, self.clock, what=what)
 
     def start(self, question):
-        out = self._call("POST", "/interactions", {
-            "input": question,
-            "agent": self.agent,
-            "background": True,
-            "agent_config": {"type": "deep-research"},
-        })
-        if not out.get("id"):
-            raise DrError("create returned no interaction id", EXIT_API)
-        return out["id"]
+        try:
+            return self._start(question)
+        except BaseException:
+            self.browser.close()
+            raise
+
+    def _start(self, question):
+        b = self.browser
+        b.open(GEMINI_URL)
+        snap = self._until("prompt", "the prompt box")
+        if find_ref(snap, "signed_out"):
+            raise DrError("Orca's browser is not signed in to Google: sign in at gemini.google.com "
+                          "in Orca's default browser profile, then retry", EXIT_LOGIN)
+        b.click(find_ref(snap, "tools"))
+        snap = self._until("deep_research", "the tools menu entry")
+        b.click(find_ref(snap, "deep_research"))
+        snap = self._until("prompt", "the prompt box")
+        b.fill(find_ref(snap, "prompt"), question)
+        snap = self._until("send", "the send button")
+        b.click(find_ref(snap, "send"))
+        cid = wait_for(lambda: conversation_id(b.url()), self.step_timeout, self.sleep, self.clock,
+                       what="the conversation URL")
+        snap = self._until("start_research", "the research plan")
+        b.click(find_ref(snap, "start_research"))
+        return cid
 
     def poll(self, ident):
-        return self._call("GET", f"/interactions/{urllib.parse.quote(ident, safe='')}")
+        b = self.browser
+        if not b.page:
+            b.open(f"{GEMINI_URL}/{ident}")
+        snap = b.snapshot()
+        url = b.url()
+        base = {"url": url, "conversation": ident}
+        if find_ref(snap, "signed_out"):
+            return dict(base, state="failed", reason="signed out")
+        running = find_ref(snap, "running")
+        if find_ref(snap, "report_done") and not running:
+            raw = json.loads(b.eval(REPORT_JS % json.dumps(REPORT_SELECTORS)) or "{}")
+            return dict(base, state="completed", markdown=raw.get("markdown", ""))
+        if FAILED_TEXT.search(snap) and not running:
+            return dict(base, state="failed", reason="gemini reported a failure")
+        return dict(base, state="in_progress")
 
     def cancel(self, ident):
-        return self._call("POST", f"/interactions/{urllib.parse.quote(ident, safe='')}/cancel")
+        self.browser.close()
 
     def delete(self, ident):
-        return self._call("DELETE", f"/interactions/{urllib.parse.quote(ident, safe='')}")
+        raise DrError("gemini-web never deletes conversations; remove it in the Gemini UI")
 
     def status(self, raw):
-        return raw.get("status", "")
+        return raw.get("state", "")
 
     def parse(self, raw):
-        text = report_text(raw)
-        return text, raw.get("usage") or {}, extract_citations(text, raw)
+        text = raw.get("markdown", "")
+        return text, {}, extract_citations(text)
 
-
-def _text_part(raw):
-    """Text content block of the last model_output step (or last step)."""
-    steps = raw.get("steps") or []
-    outs = [s for s in steps if s.get("type") == "model_output"] or steps[-1:]
-    for step in reversed(outs):
-        for c in step.get("content") or []:
-            if c.get("type", "text") == "text":
-                return c
-    return {}
-
-
-def report_text(raw):
-    return _text_part(raw).get("text") or raw.get("output_text", "") or ""
+    def finish(self):
+        self.browser.close()
 
 
 def _expand(text, start, end, minlen=30, maxlen=400):
@@ -211,25 +372,9 @@ def _expand(text, start, end, minlen=30, maxlen=400):
     return text[ls: le if le >= 0 else len(text)].strip()[:maxlen] or span
 
 
-def extract_citations(text, raw):
-    """url_citation spans are UTF-8 BYTE offsets, end exclusive. Falls back to markdown links."""
-    b = text.encode("utf-8")
+def extract_citations(text):
+    """Markdown links in the report, each with its claim line."""
     out, seen = [], set()
-    for a in _text_part(raw).get("annotations") or []:
-        if a.get("type") != "url_citation" or not a.get("url"):
-            continue
-        s, e = a.get("start_index"), a.get("end_index")
-        if not isinstance(s, int) or not isinstance(e, int) or not 0 <= s <= e <= len(b):
-            continue
-        before = len(b[:s].decode("utf-8", "ignore"))
-        upto = len(b[:e].decode("utf-8", "ignore"))
-        claim = _expand(text, before, upto)
-        key = (claim, a["url"])
-        if key not in seen:
-            seen.add(key)
-            out.append({"claim_span": claim, "url": a["url"], "title": a.get("title", "")})
-    if out:
-        return out
     for m in re.finditer(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", text):
         claim = _expand(text, m.start(), m.end())
         key = (claim, m.group(2))
@@ -266,19 +411,6 @@ def load_run(runs_dir, run_id):
     return json.loads(p.read_text()), p.parent
 
 
-def estimate_cost(usage, prices):
-    """USD from token usage and operator-supplied prices_per_mtok; None when unpriced."""
-    if not prices or not usage:
-        return None
-    total = 0.0
-    for field, pkey in (("total_input_tokens", "input"), ("total_output_tokens", "output"),
-                        ("total_thought_tokens", "output"), ("total_tool_use_tokens", "input"),
-                        ("total_cached_tokens", "cached")):
-        if pkey in prices:
-            total += (usage.get(field) or 0) * float(prices[pkey]) / 1_000_000
-    return round(total, 4)
-
-
 def execute_run(engine, question, cfg, runs_dir, delete_remote=False,
                 sleep=time.sleep, clock=time.monotonic, rng=random.random, log=lambda m: None):
     run_id = new_run_id()
@@ -313,10 +445,11 @@ def execute_run(engine, question, cfg, runs_dir, delete_remote=False,
     write_json(rdir / "interaction.json", raw)
     text, usage, cites = engine.parse(raw) if raw else ("", {}, [])
     run.update(status=st, finished=now_iso(), usage=usage,
-               cost_estimate=estimate_cost(usage, cfg.get("prices_per_mtok")),
                report_md=text if st == "completed" else "",
                citations=cites if st == "completed" else [])
     write_json(rdir / "run.json", run)
+    if hasattr(engine, "finish"):
+        engine.finish()
     if st == "completed":
         (rdir / "report.md").write_text(text)
         if delete_remote:
@@ -463,6 +596,8 @@ def audit_run(run, rdir, judge, fetch, log=lambda m: None, judge_cmd=""):
 
 # ---------------------------------------------------------------- kb sink
 
+SOURCE_PREFIXES = ("gemini-web:", "gemini-interactions:")
+
 REQUIRED_FM = ("title", "project", "category", "source_type", "source", "trace_uri", "run_id",
                "producer_model", "confidence", "status", "needs_human_review", "sources",
                "half_life_days")
@@ -478,8 +613,8 @@ def validate_frontmatter(fm):
         errs.append("category must be research")
     if fm["source_type"] != "gemini-deep-research":
         errs.append("source_type must be gemini-deep-research")
-    if not str(fm["source"]).startswith("gemini-interactions:"):
-        errs.append("source must be gemini-interactions:<id>")
+    if not str(fm["source"]).startswith(SOURCE_PREFIXES):
+        errs.append("source must be gemini-web:<conversation> (or legacy gemini-interactions:<id>)")
     if fm["status"] != "inbox":
         errs.append("status must be inbox")
     if fm["needs_human_review"] is not True:
@@ -514,6 +649,10 @@ def title_of(run):
     return q if len(q) <= 90 else q[:87] + "..."
 
 
+def source_prefix(run):
+    return "gemini-interactions" if run.get("engine") == "gemini-deep-research" else "gemini-web"
+
+
 def build_frontmatter(run, audit, project, confidence=0.3):
     if audit is None:
         sources = list({c["url"]: {"url": c["url"], "fetched_at": None, "verdict": "UNAUDITED"}
@@ -522,7 +661,7 @@ def build_frontmatter(run, audit, project, confidence=0.3):
         sources = sources_from_audit(audit)
     return {
         "title": title_of(run), "project": project, "category": "research",
-        "source_type": "gemini-deep-research", "source": f"gemini-interactions:{run['interaction_id']}",
+        "source_type": "gemini-deep-research", "source": f"{source_prefix(run)}:{run['interaction_id']}",
         "trace_uri": run["raw_path"], "run_id": run["run_id"], "producer_model": run["agent"],
         "confidence": min(confidence, MAX_CONFIDENCE), "status": "inbox", "needs_human_review": True,
         "sources": sources,
@@ -569,40 +708,57 @@ def sink_kb(run, rdir, project, allow_unaudited, kb_bin, render_only=False, conf
     return out, p.stdout.strip()
 
 
-# ---------------------------------------------------------------- notebook sink
+# ---------------------------------------------------------------- notebook
 
-def sink_notebook(run, rdir, enabled, notebook_id=None, importer=None):
-    manual = ("The notebook sink is OFF by default and relies on the UNOFFICIAL notebooklm-py package\n"
-              "(undocumented Google endpoints; can break without notice; may violate Google terms).\n"
-              f"Manual path: open Gemini Notebook, add {rdir / 'report.md'} as a source, then add the\n"
-              "CONFIRMED URLs from audit.json. Gemini Notebook's own Deep Research covers the human path.")
-    if not enabled:
-        raise DrError(manual, EXIT_USAGE)
+def notebook_import(run, rdir, runner, notebook_id=None, sleep=time.sleep, clock=time.monotonic,
+                    step_timeout=120.0):
+    """Add the report text and the CONFIRMED URLs to a Gemini Notebook through Orca's browser."""
     ap = rdir / "audit.json"
     if not ap.is_file():
-        raise DrError("run is un-audited; the notebook sink needs audit.json")
+        raise DrError("run is un-audited; the notebook import needs audit.json")
     audit = json.loads(ap.read_text())
     urls = sorted({i["url"] for i in audit["items"] if i["verdict"] == "CONFIRMED"})
-    if importer is None:
-        if importlib.util.find_spec("notebooklm") is None:
-            raise DrError("notebooklm-py is not importable.\n" + manual, EXIT_USAGE)
-        importer = _notebooklm_import
     report = run["report_md"] or (rdir / "report.md").read_text()
-    return importer(title=title_of(run), report=report, urls=urls, notebook_id=notebook_id)
+    b = OrcaBrowser(runner)
 
+    def until(key, what, optional=False):
+        def probe():
+            s = b.snapshot()
+            if find_ref(s, "signed_out", NB) and not find_ref(s, key, NB):
+                raise DrError("Orca's browser is not signed in to Gemini Notebook: sign in at "
+                              f"{NOTEBOOK_URL} in Orca's default browser profile, then retry", EXIT_LOGIN)
+            return s if find_ref(s, key, NB) else None
+        if optional:
+            try:
+                return wait_for(probe, 8.0, sleep, clock, what=what)
+            except DrError as e:
+                if e.code == EXIT_LOGIN:
+                    raise
+                return None
+        return wait_for(probe, step_timeout, sleep, clock, what=what)
 
-def _notebooklm_import(title, report, urls, notebook_id):
-    import asyncio
-    from notebooklm import NotebookLMClient
+    def add(kind, text):
+        snap = until("add_source", "the add-source button", optional=True)
+        if snap:
+            b.click(find_ref(snap, "add_source", NB))
+        snap = until(kind, f"the {kind} source type")
+        b.click(find_ref(snap, kind, NB))
+        snap = until("source_text", "the source text box")
+        b.fill(find_ref(snap, "source_text", NB), text)
+        snap = until("insert", "the insert button")
+        b.click(find_ref(snap, "insert", NB))
 
-    async def go():
-        async with NotebookLMClient.from_storage() as client:
-            nb = notebook_id or (await client.notebooks.create(title)).id
-            await client.sources.add_text(nb, title, report)
-            for u in urls:
-                await client.sources.add_url(nb, u)
-            return {"notebook_id": nb, "urls_added": len(urls)}
-    return asyncio.run(go())
+    try:
+        b.open(f"{NOTEBOOK_URL}/notebook/{notebook_id}" if notebook_id else NOTEBOOK_URL)
+        if not notebook_id:
+            snap = until("new_notebook", "the new-notebook button")
+            b.click(find_ref(snap, "new_notebook", NB))
+        add("copied_text", report)
+        if urls:
+            add("websites", "\n".join(urls))
+        return {"notebook_url": b.url(), "urls_added": len(urls)}
+    finally:
+        b.close()
 
 
 # ---------------------------------------------------------------- cost
@@ -631,14 +787,14 @@ def cost_report(runs_dir):
 # ---------------------------------------------------------------- cli
 
 def build_parser():
-    ap = argparse.ArgumentParser(prog="dr", description="Deep research -> audit -> kb inbox. API key: env GEMINI_API_KEY.")
+    ap = argparse.ArgumentParser(prog="dr", description="Deep research -> audit -> kb inbox. Engine gemini-web drives gemini.google.com through Orca's browser; no API key.")
     ap.add_argument("--config")
     ap.add_argument("--runs-dir")
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run a deep research question")
     r.add_argument("question", nargs="?")
     r.add_argument("--question-file")
-    r.add_argument("--delete-remote", action="store_true", help="delete the stored interaction after download")
+    r.add_argument("--delete-remote", action="store_true", help="refused by gemini-web: conversations are never deleted")
     a = sub.add_parser("audit", help="claim-level citation audit")
     a.add_argument("run_id")
     k = sub.add_parser("sink", help="send an audited run to a sink")
@@ -648,15 +804,14 @@ def build_parser():
     kk.add_argument("--project", default="research")
     kk.add_argument("--allow-unaudited", action="store_true")
     kk.add_argument("--render-only", action="store_true", help="write the markdown, do not call kb")
-    kn = ks.add_parser("notebook", help="OFF by default; unofficial notebooklm-py")
-    kn.add_argument("run_id")
-    kn.add_argument("--enable-unofficial", action="store_true")
-    kn.add_argument("--notebook-id")
-    sub.add_parser("cost", help="per-run and cumulative usage")
+    n = sub.add_parser("notebook", help="add an audited run to Gemini Notebook through Orca's browser")
+    n.add_argument("run_id")
+    n.add_argument("--notebook-id", help="existing notebook id; default creates a new notebook")
+    sub.add_parser("cost", help="per-run and cumulative usage (legacy runs carry tokens)")
     return ap
 
 
-def main(argv=None, http=urllib_http):
+def main(argv=None, runner=None):
     args = build_parser().parse_args(argv)
     try:
         cfg = load_config(args.config)
@@ -669,7 +824,9 @@ def main(argv=None, http=urllib_http):
             q = Path(args.question_file).read_text() if args.question_file else args.question
             if not q or not q.strip():
                 raise DrError("give a question or --question-file", EXIT_USAGE)
-            run = execute_run(GeminiEngine(cfg, http=http), q.strip(), cfg, runs_dir, args.delete_remote, log=log)
+            if cfg["engine"] != "gemini-web":
+                raise DrError(f"unknown engine: {cfg['engine']}", EXIT_USAGE)
+            run = execute_run(GeminiWebEngine(cfg, runner=runner), q.strip(), cfg, runs_dir, args.delete_remote, log=log)
             print(json.dumps({k: run[k] for k in ("run_id", "status", "usage", "cost_estimate", "raw_path")}))
             return EXIT_OK if run["status"] == "completed" else EXIT_FAIL
         if args.cmd == "audit":
@@ -688,9 +845,13 @@ def main(argv=None, http=urllib_http):
             out, res = sink_kb(run, rdir, args.project, args.allow_unaudited, cfg["kb_bin"], args.render_only)
             print(json.dumps({"file": str(out), "kb": res}))
             return EXIT_OK
-        if args.cmd == "sink" and args.sink == "notebook":
+        if args.cmd == "notebook":
             run, rdir = load_run(runs_dir, args.run_id)
-            print(json.dumps(sink_notebook(run, rdir, args.enable_unofficial, args.notebook_id)))
+            if run["status"] != "completed":
+                raise DrError(f"run is {run['status']}, nothing to import")
+            res = notebook_import(run, rdir, runner or orca_runner(cfg["orca_bin"]), args.notebook_id,
+                                  step_timeout=float(cfg["step_timeout"]))
+            print(json.dumps(res))
             return EXIT_OK
         if args.cmd == "cost":
             print(json.dumps(cost_report(runs_dir), indent=2))

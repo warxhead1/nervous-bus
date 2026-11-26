@@ -1,0 +1,12 @@
+page: PAGE
+Google Gemini — https://gemini.google.com/app
+- generic
+  - main
+    - generic
+      - button "Upload & tools" [expanded=true, ref=e18]
+      - textbox "Enter a prompt for Gemini" [ref=e27]:
+  - menu "Menu options"
+    - menuitemcheckbox "Create image" [checked=false, ref=e31]
+    - menuitemcheckbox "Canvas" [checked=false, ref=e33]
+    - menuitemcheckbox "Deep research" [checked=false, ref=e34]
+      - StaticText "Deep research"

@@ -1,0 +1,11 @@
+page: PAGE
+Google Gemini — https://gemini.google.com/app
+- generic
+  - main
+    - region "Side Navigation" [ref=e1]
+      - button "Settings" [ref=e11]
+    - generic
+      - heading "Hi, I'm Gemini. Where should we start?" [level=1, ref=e23]
+      - button "Upload & tools" [expanded=false, ref=e18]
+      - textbox "Enter a prompt for Gemini" [ref=e27]:
+      - button "Open mode picker, currently Auto" [expanded=false, ref=e22]

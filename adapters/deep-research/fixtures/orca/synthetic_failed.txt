@@ -1,0 +1,6 @@
+page: PAGE
+Google Gemini — https://gemini.google.com/app/abc123def
+- generic
+  - main
+    - StaticText "Something went wrong and the research couldn't complete."
+    - textbox "Enter a prompt for Gemini" [ref=e27]:
