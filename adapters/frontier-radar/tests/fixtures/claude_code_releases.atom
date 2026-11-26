@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/" xml:lang="en-US">
+  <id>tag:github.com,2008:https://github.com/anthropics/claude-code/releases</id>
+  <link type="text/html" rel="alternate" href="https://github.com/anthropics/claude-code/releases"/>
+  <link type="application/atom+xml" rel="self" href="https://github.com/anthropics/claude-code/releases.atom"/>
+  <title>Release notes from claude-code</title>
+  <updated>2026-11-25T01:31:52Z</updated>
+  <entry>
+    <id>tag:github.com,2008:Repository/937253475/v2.1.332</id>
+    <updated>2026-11-25T01:32:14Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/anthropics/claude-code/releases/tag/v2.1.332"/>
+    <title>v2.1.332</title>
+    <content type="html">&lt;h2&gt;What&#39;s changed&lt;/h2&gt;
+&lt;ul&gt;
+&lt;li&gt;Added skills from MCP servers (beta). They show as &lt;code&gt;server:skill&lt;/code&gt; in the &lt;code&gt;/&lt;/code&gt; menu; other skills keep their names&lt;/li&gt;
+&lt;li&gt;Added a &lt;code&gt;PreSkillShellCommand&lt;/code&gt; hook event that can refuse a skill or command&#39;s inline shell commands as it loads; on 2.1.331 and old</content>
+    <author>
+      <name>claude-code-publisher[bot]</name>
+    </author>
+    <media:thumbnail height="30" width="30" url="https://avatars.githubusercontent.com/u/76263028?s=60&amp;v=4"/>
+  </entry>
+<entry>
+    <id>tag:github.com,2008:Repository/937253475/v2.1.331</id>
+    <updated>2026-11-23T21:34:41Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/anthropics/claude-code/releases/tag/v2.1.331"/>
+    <title>v2.1.331</title>
+    <content type="html">&lt;h2&gt;What&#39;s changed&lt;/h2&gt;
+&lt;ul&gt;
+&lt;li&gt;Added Code Mode support in terminal sessions on Amazon Bedrock, Google Cloud&#39;s Agent Platform, Microsoft Foundry and Claude Platform on AWS&lt;/li&gt;
+&lt;li&gt;Added &lt;code&gt;oidc.groups_jsonpath&lt;/code&gt; to the Claude apps gateway, to read groups from the matching entries of a list of objects with a small subset of JSONPath </content>
+    <author>
+      <name>claude-code-publisher[bot]</name>
+    </author>
+    <media:thumbnail height="30" width="30" url="https://avatars.githubusercontent.com/u/76263028?s=60&amp;v=4"/>
+  </entry>
+<entry>
+    <id>tag:github.com,2008:Repository/937253475/v2.1.330</id>
+    <updated>2026-11-20T22:32:56Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/anthropics/claude-code/releases/tag/v2.1.330"/>
+    <title>v2.1.330</title>
+    <content type="html">&lt;h2&gt;What&#39;s changed&lt;/h2&gt;
+&lt;ul&gt;
+&lt;li&gt;Added sign-in to organizations managed in Anthropic&#39;s Enterprise Admin Console: after &lt;code&gt;claude auth login&lt;/code&gt;, Claude Code applies the organization&#39;s settings and uses its cloud provider or gateway&lt;/li&gt;
+&lt;li&gt;Added easel, a built-in mod that draws charts when asked and under MCP metrics results, on Pr</content>
+    <author>
+      <name>claude-code-publisher[bot]</name>
+    </author>
+    <media:thumbnail height="30" width="30" url="https://avatars.githubusercontent.com/u/76263028?s=60&amp;v=4"/>
+  </entry>
+<entry>
+    <id>tag:github.com,2008:Repository/937253475/v2.1.329</id>
+    <updated>2026-11-19T22:14:41Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/anthropics/claude-code/releases/tag/v2.1.329"/>
+    <title>v2.1.329</title>
+    <content type="html">&lt;h2&gt;What&#39;s changed&lt;/h2&gt;
+&lt;ul&gt;
+&lt;li&gt;Added a trust dialog warning that says where a folder&#39;s hooks are declared&lt;/li&gt;
+&lt;li&gt;Added a warning in the conversation, in Claude Desktop and other non-interactive hosts, when hooks in managed settings fail to load&lt;/li&gt;
+&lt;li&gt;Added this session&#39;s scheduled tasks, &lt;code&gt;/loop&lt;/code&gt; wakeups, the </content>
+    <author>
+      <name>claude-code-publisher[bot]</name>
+    </author>
+    <media:thumbnail height="30" width="30" url="https://avatars.githubusercontent.com/u/76263028?s=60&amp;v=4"/>
+  </entry>
+</feed>

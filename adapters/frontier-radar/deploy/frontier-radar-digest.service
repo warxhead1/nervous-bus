@@ -1,0 +1,10 @@
+[Unit]
+Description=frontier-radar weekly digest (7 items max)
+
+[Service]
+Type=oneshot
+Environment=FRONTIER_RADAR_STATE=%h/.local/state/frontier-radar/radar.db
+# Add --kb once `kb ingest --help` lists --tier. Without it the command exits 3 and ingests nothing.
+ExecStart=%h/projects/nervous-bus/adapters/frontier-radar/frontier-radar digest --days 7 --max 7
+TimeoutStartSec=10min
+SyslogIdentifier=frontier-radar-digest

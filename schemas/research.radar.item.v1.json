@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/research.radar.item.v1.json",
+  "title": "research.radar.item v1",
+  "description": "Emitted by adapters/frontier-radar when a new real-world event (one primary artifact: canonical URL, GitHub owner/repo@tag, arXiv id or HF model id) is first stored (stage=new) or after typed triage (stage=triaged). Notification only: ids and the minimal facts needed to decide whether to fetch. Public sources only.",
+  "type": "object",
+  "required": ["event_key", "stage", "url", "title", "source_id", "domains", "first_seen_at"],
+  "additionalProperties": false,
+  "properties": {
+    "event_key": {
+      "type": "string",
+      "maxLength": 512,
+      "description": "Dedup key of the primary artifact, e.g. gh:owner/repo@tag, arxiv:2611.01234, hf:org/model, or the canonical URL."
+    },
+    "stage": {
+      "type": "string",
+      "enum": ["new", "triaged"],
+      "description": "new = first stored by poll; triaged = classified by the triage command."
+    },
+    "url": {"type": "string", "maxLength": 2048, "description": "Primary link for the event."},
+    "title": {"type": "string", "maxLength": 300},
+    "source_id": {"type": "string", "description": "Registry id (sources.toml) of the source that supplied the primary sighting."},
+    "domains": {
+      "type": "array",
+      "items": {"type": "string", "enum": ["harness", "memory", "research", "gamedev", "assets", "content", "ads", "markets", "models"]},
+      "description": "Domains from the registry for the sources that saw the event."
+    },
+    "first_seen_at": {"type": "string", "format": "date-time"},
+    "published_at": {"type": ["string", "null"], "format": "date-time"},
+    "signal": {"type": "integer", "minimum": 1, "maximum": 5, "description": "Highest registry signal among sightings."},
+    "mirror_count": {"type": "integer", "minimum": 0, "description": "Sightings tagged as mirrors, bots or press bridges of the primary."},
+    "score": {"type": "number", "description": "Deterministic score at emit time. Provisional until the T+72h engagement snapshot exists."},
+    "lane": {"type": ["string", "null"], "enum": ["digest", "review", "dropped", null], "description": "Triage outcome. Null while stage=new."},
+    "action": {"type": ["string", "null"], "enum": ["adopt", "trial", "watch", "ignore", null]},
+    "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1}
+  }
+}

@@ -1,0 +1,464 @@
+# Frontier radar source registry. Every endpoint was fetched in the 2026-11-26 frontier research run
+# unless its notes say otherwise. No source needs a paid key. Reddit is excluded (closed).
+#
+# kind: rss | atom | json-api | github-releases | github-search | hn-algolia | hf-daily-papers |
+#       hf-models | bsky-search | sitemap-lastmod | page-diff
+# role: primary = the source publishes the artifact; mirror = it links to or restates one.
+# domains: harness memory research gamedev assets content ads markets models
+# freshness_slo_days: alarm when the newest item is older than this.
+# Optional: enabled, min_interval_minutes (default 180), host_delay_s, include_regex, exclude_regex,
+#   min_engagement, path_regex, lookback_days, link_only, max_items.
+# URL placeholders: {date_minus_7d} expands to a YYYY-MM-DD date.
+
+[[source]]
+id = "claude-code-releases"
+name = "Claude Code GitHub releases"
+url = "https://github.com/anthropics/claude-code/releases.atom"
+kind = "github-releases"
+domains = ["harness"]
+signal = 5
+freshness_slo_days = 14
+role = "primary"
+notes = "Full notes in entry body; leads the docs RSS by about 6 min."
+
+[[source]]
+id = "claude-code-docs-changelog"
+name = "Claude Code docs changelog RSS"
+url = "https://code.claude.com/docs/en/changelog/rss.xml"
+kind = "rss"
+domains = ["harness"]
+signal = 4
+freshness_slo_days = 14
+role = "mirror"
+enabled = false
+notes = "Cross-check only: trails the releases atom by about 6 min and links docs pages, so it cannot dedup against tags."
+
+[[source]]
+id = "claude-platform-release-notes"
+name = "Claude Platform release notes"
+url = "https://platform.claude.com/docs/en/release-notes/overview.md"
+kind = "page-diff"
+domains = ["models", "harness"]
+signal = 5
+freshness_slo_days = 14
+role = "primary"
+notes = "Markdown with date headings; carries retirement dates."
+
+[[source]]
+id = "claude-llms-txt"
+name = "Claude Platform llms.txt index"
+url = "https://platform.claude.com/llms.txt"
+kind = "page-diff"
+domains = ["models", "harness"]
+signal = 5
+freshness_slo_days = 30
+role = "primary"
+notes = "A new per-model prompting page appears as an index diff."
+
+[[source]]
+id = "claude-prompting-best-practices"
+name = "Claude prompting best practices"
+url = "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices.md"
+kind = "page-diff"
+domains = ["harness", "models"]
+signal = 4
+freshness_slo_days = 60
+role = "primary"
+notes = "Per-model removal lists live in the model pages; this umbrella page changes on each model release."
+
+[[source]]
+id = "anthropic-sitemap"
+name = "Anthropic news, engineering and research (sitemap lastmod)"
+url = "https://www.anthropic.com/sitemap.xml"
+kind = "sitemap-lastmod"
+domains = ["harness", "models", "research", "memory"]
+signal = 5
+freshness_slo_days = 21
+role = "primary"
+path_regex = "/(news|engineering|research)/"
+lookback_days = 14
+notes = "No official feed. Some engineering posts live under /research/."
+
+[[source]]
+id = "anthropic-skills-commits"
+name = "anthropics/skills commits"
+url = "https://github.com/anthropics/skills/commits/main.atom"
+kind = "atom"
+domains = ["harness"]
+signal = 4
+freshness_slo_days = 60
+role = "primary"
+notes = ""
+
+[[source]]
+id = "openai-news"
+name = "OpenAI News"
+url = "https://openai.com/news/rss.xml"
+kind = "rss"
+domains = ["models", "harness"]
+signal = 4
+freshness_slo_days = 14
+role = "primary"
+exclude_regex = "(?i)customer stor|case study"
+notes = "Mixes launches with customer stories."
+
+[[source]]
+id = "openai-dev-changelog"
+name = "OpenAI Developers changelog"
+url = "https://developers.openai.com/changelog"
+kind = "page-diff"
+domains = ["models", "harness"]
+signal = 5
+freshness_slo_days = 21
+role = "primary"
+notes = "HTML; the .md variant returned 404."
+
+[[source]]
+id = "openai-api-changelog"
+name = "OpenAI API changelog"
+url = "https://developers.openai.com/api/docs/changelog"
+kind = "page-diff"
+domains = ["models"]
+signal = 4
+freshness_slo_days = 21
+role = "primary"
+notes = ""
+
+[[source]]
+id = "openai-latest-model"
+name = "OpenAI latest-model guide"
+url = "https://developers.openai.com/api/docs/guides/latest-model"
+kind = "page-diff"
+domains = ["harness", "models"]
+signal = 4
+freshness_slo_days = 60
+role = "primary"
+notes = "Vendor prompting guidance for the current model; diff shows removal lists."
+
+[[source]]
+id = "openai-deprecations"
+name = "OpenAI deprecations"
+url = "https://developers.openai.com/api/docs/deprecations.md"
+kind = "page-diff"
+domains = ["content", "models", "assets"]
+signal = 5
+freshness_slo_days = 30
+role = "primary"
+notes = "Media and model shutdown dates (Sora, gpt-image). Feed for the media deprecation watcher."
+
+[[source]]
+id = "codex-releases"
+name = "Codex GitHub releases"
+url = "https://github.com/openai/codex/releases.atom"
+kind = "github-releases"
+domains = ["harness"]
+signal = 4
+freshness_slo_days = 14
+role = "primary"
+exclude_regex = "(?i)-(alpha|nightly|preview|rc)"
+notes = "Alpha tags arrive several per day."
+
+[[source]]
+id = "codex-changelog"
+name = "Codex changelog"
+url = "https://learn.chatgpt.com/docs/changelog"
+kind = "page-diff"
+domains = ["harness"]
+signal = 4
+freshness_slo_days = 14
+role = "primary"
+notes = "308 from developers.openai.com/codex/changelog."
+
+[[source]]
+id = "gemini-api-changelog"
+name = "Google AI Studio / Gemini API changelog"
+url = "https://aistudio.google.com/docs/changelog"
+kind = "page-diff"
+domains = ["models", "content", "assets"]
+signal = 5
+freshness_slo_days = 21
+role = "primary"
+notes = "301 from ai.google.dev/gemini-api/docs/changelog."
+
+[[source]]
+id = "deepmind-blog"
+name = "Google DeepMind blog"
+url = "https://deepmind.google/blog/rss.xml"
+kind = "rss"
+domains = ["models", "research"]
+signal = 4
+freshness_slo_days = 21
+role = "primary"
+notes = ""
+
+[[source]]
+id = "gemini-cli-releases"
+name = "Gemini CLI releases"
+url = "https://github.com/google-gemini/gemini-cli/releases.atom"
+kind = "github-releases"
+domains = ["harness"]
+signal = 3
+freshness_slo_days = 21
+role = "primary"
+exclude_regex = "(?i)(nightly|preview)"
+notes = "Mixes nightly and preview tags."
+
+[[source]]
+id = "gh-topic-claude-code-plugin"
+name = "GitHub topic claude-code-plugin"
+url = "https://api.github.com/search/repositories?q=topic:claude-code-plugin+created:%3E{date_minus_7d}&sort=stars&per_page=20"
+kind = "github-search"
+domains = ["harness"]
+signal = 3
+freshness_slo_days = 14
+role = "mirror"
+min_engagement = 50
+host_delay_s = 7
+notes = "Unauthenticated search allows 10 requests/min. Volume needs the star filter."
+
+[[source]]
+id = "gh-topic-agent-skills"
+name = "GitHub topic agent-skills"
+url = "https://api.github.com/search/repositories?q=topic:agent-skills+created:%3E{date_minus_7d}&sort=stars&per_page=20"
+kind = "github-search"
+domains = ["harness"]
+signal = 3
+freshness_slo_days = 14
+role = "mirror"
+min_engagement = 100
+host_delay_s = 7
+notes = "Skills are mostly unproven; triage must not promote on stars alone."
+
+[[source]]
+id = "hf-daily-papers"
+name = "Hugging Face Daily Papers"
+url = "https://huggingface.co/api/daily_papers"
+kind = "hf-daily-papers"
+domains = ["research"]
+signal = 5
+freshness_slo_days = 7
+role = "mirror"
+min_engagement = 10
+notes = "Bridges paper to code through githubRepo and githubStars."
+
+[[source]]
+id = "arxiv-cs-ai"
+name = "arXiv cs.AI (agent filter)"
+url = "https://rss.arxiv.org/rss/cs.AI"
+kind = "rss"
+domains = ["research"]
+signal = 3
+freshness_slo_days = 7
+role = "primary"
+host_delay_s = 3
+include_regex = "(?i)\\b(agent|agentic|harness|skills?|tool use|mcp|coding agent|memory)\\b"
+notes = "Feeds update at midnight ET; arXiv allows 1 request per 3 s."
+
+[[source]]
+id = "arxiv-cs-se-agent"
+name = "arXiv cs.SE agent search"
+url = "https://export.arxiv.org/api/query?search_query=cat:cs.SE+AND+all:agent&sortBy=submittedDate&sortOrder=descending&max_results=30"
+kind = "atom"
+domains = ["research", "harness"]
+signal = 4
+freshness_slo_days = 7
+role = "primary"
+host_delay_s = 3
+notes = "Same terms as the RSS feed."
+
+[[source]]
+id = "hn-claude-code"
+name = "Hacker News: claude code"
+url = "https://hn.algolia.com/api/v1/search_by_date?query=claude%20code&tags=story&hitsPerPage=30"
+kind = "hn-algolia"
+domains = ["harness"]
+signal = 5
+freshness_slo_days = 7
+role = "mirror"
+min_engagement = 30
+notes = "Best cross-vendor launch detector. Items point to the primary URL and become mirrors of it."
+
+[[source]]
+id = "hn-ai-agents"
+name = "Hacker News: ai agents"
+url = "https://hn.algolia.com/api/v1/search_by_date?query=ai%20agents&tags=story&hitsPerPage=30"
+kind = "hn-algolia"
+domains = ["harness", "research"]
+signal = 4
+freshness_slo_days = 7
+role = "mirror"
+min_engagement = 50
+notes = ""
+
+[[source]]
+id = "bsky-claude-skills"
+name = "Bluesky: claude code skills"
+url = "https://api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=claude%20code%20skills&sort=latest&limit=25"
+kind = "bsky-search"
+domains = ["harness"]
+signal = 2
+freshness_slo_days = 14
+role = "mirror"
+link_only = true
+notes = "Use api.bsky.app (public.api.bsky.app returns 403). Early lead comes from vendor accounts and bots, which are tagged as mirrors."
+
+[[source]]
+id = "simonwillison"
+name = "Simon Willison"
+url = "https://simonwillison.net/atom/everything/"
+kind = "atom"
+domains = ["harness", "models", "research", "memory"]
+signal = 5
+freshness_slo_days = 3
+role = "mirror"
+notes = "Short posts that link to primaries."
+
+[[source]]
+id = "latent-space-ainews"
+name = "Latent Space AINews"
+url = "https://latent.space/feeds/news.xml"
+kind = "rss"
+domains = ["models", "harness", "research"]
+signal = 4
+freshness_slo_days = 7
+role = "mirror"
+notes = "Legacy news.smol.ai/rss.xml is dead (301)."
+
+[[source]]
+id = "interconnects"
+name = "Interconnects"
+url = "https://www.interconnects.ai/feed"
+kind = "rss"
+domains = ["models", "research"]
+signal = 4
+freshness_slo_days = 21
+role = "mirror"
+notes = ""
+
+[[source]]
+id = "lilianweng"
+name = "Lil'Log"
+url = "https://lilianweng.github.io/index.xml"
+kind = "rss"
+domains = ["research", "harness"]
+signal = 4
+freshness_slo_days = 120
+role = "mirror"
+notes = "Low frequency, high durability."
+
+[[source]]
+id = "terminal-bench-releases"
+name = "Terminal-Bench releases"
+url = "https://github.com/harbor-framework/terminal-bench/releases.atom"
+kind = "github-releases"
+domains = ["harness", "research"]
+signal = 4
+freshness_slo_days = 45
+role = "primary"
+notes = "Three major versions in 10 weeks."
+
+[[source]]
+id = "gamedeveloper"
+name = "Game Developer"
+url = "https://www.gamedeveloper.com/rss.xml"
+kind = "rss"
+domains = ["gamedev"]
+signal = 3
+freshness_slo_days = 7
+role = "mirror"
+include_regex = "(?i)\\b(ai|generative|agent|llm|unreal engine|unity|godot)\\b"
+notes = ""
+
+[[source]]
+id = "godot-news"
+name = "Godot Engine news"
+url = "https://godotengine.org/rss.xml"
+kind = "rss"
+domains = ["gamedev"]
+signal = 3
+freshness_slo_days = 30
+role = "primary"
+notes = ""
+
+[[source]]
+id = "hf-trending-image-to-3d"
+name = "HF trending image-to-3d models"
+url = "https://huggingface.co/api/models?pipeline_tag=image-to-3d&sort=trendingScore&limit=10"
+kind = "hf-models"
+domains = ["assets", "gamedev"]
+signal = 4
+freshness_slo_days = 14
+role = "mirror"
+max_age_days = 120
+notes = "Items key on the HF model id."
+
+[[source]]
+id = "hf-org-qwen"
+name = "HF Qwen org models"
+url = "https://huggingface.co/api/models?author=Qwen&sort=createdAt&direction=-1&limit=10"
+kind = "hf-models"
+domains = ["models", "assets"]
+signal = 4
+freshness_slo_days = 30
+role = "primary"
+max_age_days = 120
+notes = "Endpoint pattern verified through the pipeline_tag queries; the author param was not fetched in the research run."
+
+[[source]]
+id = "hf-org-deepseek"
+name = "HF DeepSeek org models"
+url = "https://huggingface.co/api/models?author=deepseek-ai&sort=createdAt&direction=-1&limit=10"
+kind = "hf-models"
+domains = ["models"]
+signal = 4
+freshness_slo_days = 45
+role = "primary"
+max_age_days = 120
+notes = "Same note as hf-org-qwen."
+
+[[source]]
+id = "hf-org-tencent"
+name = "HF Tencent models (Hunyuan)"
+url = "https://huggingface.co/api/models?author=tencent&sort=createdAt&direction=-1&limit=10"
+kind = "hf-models"
+domains = ["models", "assets", "gamedev"]
+signal = 4
+freshness_slo_days = 30
+role = "primary"
+max_age_days = 120
+notes = "Hunyuan3D and Hy models. Same note as hf-org-qwen."
+
+[[source]]
+id = "adexchanger"
+name = "AdExchanger"
+url = "https://www.adexchanger.com/feed/"
+kind = "rss"
+domains = ["ads"]
+signal = 3
+freshness_slo_days = 7
+role = "mirror"
+include_regex = "(?i)\\b(ai|agent|chatgpt|gemini|llm)\\b"
+notes = ""
+
+[[source]]
+id = "google-ads-dev-blog"
+name = "Google Ads Developer Blog"
+url = "http://feeds.feedburner.com/GoogleAdsDeveloperBlog"
+kind = "rss"
+domains = ["ads"]
+signal = 4
+freshness_slo_days = 45
+role = "primary"
+notes = "Blog moved on 2026-11-10; expect a redirect alarm and a new URL."
+
+[[source]]
+id = "quantocracy"
+name = "Quantocracy"
+url = "https://quantocracy.com/feed/"
+kind = "rss"
+domains = ["markets"]
+signal = 3
+freshness_slo_days = 10
+role = "mirror"
+include_regex = "(?i)\\b(ai|agent|llm|claude|gpt)\\b"
+notes = "302 to feedburner."

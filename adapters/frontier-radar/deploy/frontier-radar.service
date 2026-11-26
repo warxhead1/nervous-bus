@@ -1,0 +1,13 @@
+[Unit]
+Description=frontier-radar poll, rescore and triage (oneshot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=FRONTIER_RADAR_STATE=%h/.local/state/frontier-radar/radar.db
+ExecStart=%h/projects/nervous-bus/adapters/frontier-radar/frontier-radar poll
+ExecStart=%h/projects/nervous-bus/adapters/frontier-radar/frontier-radar triage
+TimeoutStartSec=30min
+Nice=10
+SyslogIdentifier=frontier-radar

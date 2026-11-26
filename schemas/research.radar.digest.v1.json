@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/research.radar.digest.v1.json",
+  "title": "research.radar.digest v1",
+  "description": "Emitted by adapters/frontier-radar when `frontier-radar digest` writes a weekly digest. Carries the item keys and counts, not the digest body.",
+  "type": "object",
+  "required": ["generated_at", "window_days", "max_items", "item_count", "event_keys"],
+  "additionalProperties": false,
+  "properties": {
+    "generated_at": {"type": "string", "format": "date-time"},
+    "window_days": {"type": "integer", "minimum": 1},
+    "max_items": {"type": "integer", "minimum": 1, "description": "Attention budget used for this digest."},
+    "item_count": {"type": "integer", "minimum": 0},
+    "event_keys": {"type": "array", "items": {"type": "string", "maxLength": 512}, "maxItems": 50},
+    "review_count": {"type": "integer", "minimum": 0, "description": "Low-confidence items parked in the review lane, not in the digest."},
+    "path": {"type": ["string", "null"], "description": "Basename of the digest file."},
+    "kb_ingested": {"type": "boolean"}
+  }
+}
