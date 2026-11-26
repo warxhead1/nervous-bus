@@ -1,0 +1,77 @@
+page: PAGE
+Google Gemini — https://gemini.google.com/app
+- generic
+  - main
+    - link "Gemini - new chat" [ref=e2]
+      - StaticText "Gemini"
+    - generic
+      - generic
+      - generic
+        - generic
+          - generic
+            - generic
+              - heading "Where should we start?" [level=1, ref=e137]
+                - StaticText "Where should we start?"
+              - group "Suggested prompts"
+                - generic
+                  - button "Troubleshooting my bidet install" [ref=e138]
+                    - StaticText "Troubleshooting my bidet install"
+                - generic
+                  - button "Modeling market shock diffusion" [ref=e139]
+                    - StaticText "Modeling market shock diffusion"
+                - generic
+                  - button "Design a poster based on my taste" [ref=e140]
+                    - StaticText "Design a poster based on my taste"
+          - generic
+            - status
+            - generic
+              - generic
+                - generic
+                  - button "Upload & tools" [expanded=true, ref=e132]
+                  - generic
+                    - textbox "Enter a prompt for Gemini" [ref=e141]: 
+
+                      - StaticText "Ask Gemini"
+                      - paragraph
+                        - LineBreak "\n"
+                  - generic
+                    - group
+                      - button "Open mode picker, currently Neon" [expanded=false, ref=e135]
+                        - StaticText "Neon"
+                    - generic
+                      - button "Dictate (^⇧D)" [ref=e142]
+              - group
+                - generic
+                  - button "Chat" [ref=e133]
+                    - StaticText "Chat"
+                  - button "Task" [ref=e134]
+                    - StaticText "Task"
+            - paragraph
+              - LineBreak "\n"
+    - button "Turn on temporary chat" [ref=e7]
+  - menu "Menu options" [ref=e143] focusable [tabindex]
+    - menuitem "Upload files. Documents, data, code files" [ref=e144]
+      - StaticText "Upload files"
+    - menuitem "Add from Drive. Sheets, Docs, Slides" [ref=e145]
+      - StaticText "Add from Drive"
+    - menuitem "More uploads" [expanded=false, ref=e146]
+      - StaticText "More uploads"
+    - separator
+    - menuitemcheckbox "Search Google" [checked=false, ref=e147]
+      - StaticText "Search Google"
+    - menuitemcheckbox "Create image" [checked=false, ref=e148]
+      - StaticText "Create image"
+    - menuitemcheckbox "Create video" [checked=false, ref=e149]
+      - StaticText "Create video"
+    - menuitemcheckbox "Create music" [checked=false, ref=e150]
+      - StaticText "Create music"
+    - menuitemcheckbox "Canvas" [checked=false, ref=e151]
+      - StaticText "Canvas"
+    - menuitemcheckbox "Deep research" [checked=false, ref=e152]
+      - StaticText "Deep research"
+    - menuitemcheckbox "Guided learning" [checked=false, ref=e153]
+      - StaticText "Guided learning"
+    - StaticText "Personal Intelligence"
+    - StaticText "Labs"
+    - generic
+      - switch "Personal Intelligence" [checked=true, ref=e154]

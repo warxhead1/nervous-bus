@@ -1,0 +1,53 @@
+page: PAGE
+Google Gemini — https://gemini.google.com/notebook/00000000-0000-0000-0000-000000000000
+- generic
+  - generic
+    - dialog
+      - heading "Sources" [level=2, ref=e181]
+      - paragraph
+        - StaticText "Add files that Gemini can reference in your notebook"
+      - button "Close" [ref=e182]
+      - generic "Upload file options"
+        - menuitem "Upload files. Documents, data, code files" [ref=e183]
+          - StaticText "Upload files"
+        - menuitem "Add from Drive. Sheets, Docs, Slides" [ref=e184]
+          - StaticText "Add from Drive"
+        - menuitem "Add websites" [ref=e185]
+          - StaticText "Add websites"
+        - menuitem "Copied text" [ref=e186]
+          - StaticText "Copied text"
+      - StaticText "Documents, images, videos, and files you add will appear here."
+    - dialog "Website URLs"
+      - heading "Website URLs" [level=2, ref=e190]
+      - paragraph
+        - StaticText "Paste in website URLs below to upload as a source."
+      - textbox "Paste any links" [ref=e191]
+      - list
+        - listitem [level=1]
+          - ListMarker "• "
+          - StaticText "To add multiple URLs, separate with a space or new line."
+        - listitem [level=1]
+          - ListMarker "• "
+          - StaticText "Only the visible text on the website will be imported at this time."
+        - listitem [level=1]
+          - ListMarker "• "
+          - StaticText "Paid articles are not supported."
+        - listitem [level=1]
+          - ListMarker "• "
+          - StaticText "Only the text transcript in YouTube will be imported at this time."
+        - listitem [level=1]
+          - ListMarker "• "
+          - StaticText "Only public YouTube videos are supported."
+        - listitem [level=1]
+          - ListMarker "• "
+          - StaticText "Recently uploaded videos may not be available to import."
+        - listitem [level=1]
+          - ListMarker "• "
+          - StaticText "If upload fails, "
+          - link "learn more" [ref=e192]
+          - StaticText " for common reasons."
+      - generic
+        - button "Cancel" [ref=e193]
+          - StaticText "Cancel"
+        - button "Insert" [disabled, ref=e194]
+          - StaticText "Insert"

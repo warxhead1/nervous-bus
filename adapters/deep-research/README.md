@@ -10,7 +10,7 @@ dr notebook <run_id>         # add the audited report to Gemini Notebook through
 dr cost                      # per-run and cumulative usage
 ```
 
-No API key is used or accepted. The engine drives gemini.google.com through `orca` browser subcommands, so Orca's browser (default profile) must be signed in to Google. Signed out, `dr run` exits 3 without submitting anything. `--delete-remote` is refused: conversations are never deleted.
+No API key is used or accepted. The engine drives gemini.google.com through `orca` browser subcommands, so the Orca browser profile `dr` opens tabs in must be signed in to Google. Tabs open in Orca's own default for the worktree. Set `browser_profile = "<id>"` in `~/.config/deep-research/config.toml` (ids from `orca tab profile list`) to pin another profile. Signed out, `dr run` exits 3 without submitting anything. `--delete-remote` is refused: conversations are never deleted.
 
 ## Runs
 
@@ -35,12 +35,14 @@ Frontmatter is validated before the file is written: `category: research`, `sour
 
 ## Gemini web UI selectors
 
-All labels, roles and regexes live in the `UI` and `NB` tables at the top of the engine in `dr.py`. Entries are tagged OBSERVED (read from a live snapshot) or UNVERIFIED (needs a signed-in snapshot). When the UI changes, edit the table only.
+All labels, roles and regexes live in the `UI` and `NB` tables at the top of the engine in `dr.py`. Every entry was read from a live signed-in snapshot (2026-11-26). When the UI changes, edit the table only.
 
 ## Notebook import
 
-`dr notebook <run_id>` opens notebook.google.com in Orca's browser, creates a notebook (or `--notebook-id`), adds the report text as a Copied text source, then the CONFIRMED URLs as a Websites source. It needs `dr audit` first. The NB selectors are UNVERIFIED.
+`dr notebook <run_id>` opens gemini.google.com/notebooks/create in Orca's browser, creates a notebook named `--title` (default `dr: <question>`), adds the report text as a Copied text source, then the CONFIRMED URLs as Websites sources, three per Insert because one Insert keeps only the first few. `--notebook-id` adds to an existing notebook, and `--no-report` adds only the URLs. It needs `dr audit` first.
+
+`dr run --attach <conversation-id> "<question>"` skips submission and polls a Gemini conversation that was already started.
 
 ## Tests
 
-`python3 -m pytest adapters/deep-research` (or `python3 tools/setup.py test deep-research`). `fixtures/orca/` holds Orca accessibility snapshots replayed by a fake runner (one real signed-out capture, the rest synthetic; see its README). No network, no browser.
+`python3 -m pytest adapters/deep-research` (or `python3 tools/setup.py test deep-research`). `fixtures/orca/` holds Orca accessibility snapshots replayed by a fake runner (real signed-in captures, scrubbed, plus one synthetic failure page; see its README). No network, no browser.

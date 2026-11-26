@@ -1,0 +1,25 @@
+page: PAGE
+Google Gemini — https://gemini.google.com/notebooks/splash?dest=create
+- generic
+  - main
+    - link "Gemini - new chat" [ref=e24]
+      - StaticText "Gemini"
+    - generic
+      - generic
+      - generic
+        - heading "Introducing notebooks" [level=1, ref=e151]
+        - paragraph
+          - StaticText "Level up your projects | Powered by "
+          - image "Gemini Notebook"
+        - heading "Group chats by topic" [level=2, ref=e152]
+        - heading "Upload up to 500 sources" [level=2, ref=e153]
+        - heading "Set custom instructions" [level=2, ref=e154]
+        - button "View my notebooks" [ref=e155]
+          - StaticText "View my notebooks"
+        - paragraph
+          - StaticText "Notebooks are available in both Gemini Apps and Gemini Notebook. Like Gemini Notebook, the files you add to your notebook as a source in Gemini Apps are not used directly for training our generative AI models. Chats with your notebook in Gemini Apps are saved according to your "
+          - link "Keep Activity" [ref=e156]
+          - StaticText " settings and used according to the "
+          - link "Gemini Apps Privacy Notice" [ref=e157]
+          - StaticText ", including to help improve our AI models. You can still add source files to your notebooks, even if your Keep Activity setting is off. "
+          - link "Learn more." [ref=e158]

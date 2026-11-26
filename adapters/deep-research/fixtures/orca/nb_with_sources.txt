@@ -1,0 +1,47 @@
+page: PAGE
+Google Gemini — https://gemini.google.com/notebook/00000000-0000-0000-0000-000000000000
+- generic
+  - main
+    - link "Gemini - new chat" [ref=e2]
+      - StaticText "Gemini"
+    - generic
+      - generic
+      - generic
+        - generic
+          - heading "Conversation with Gemini" [level=1, ref=e14]
+          - generic
+            - StaticText "📄"
+            - heading "dr e2e - CloudEvents" [level=1, ref=e135] focusable [tabindex]
+            - button "20 Sources" [ref=e136]
+              - generic [ref=e141] clickable [cursor:pointer]
+                - generic
+                  - generic
+                    - StaticText "20 Sources"
+            - generic
+              - heading "Past chats in this notebook" [level=2, ref=e137]
+                - StaticText "Past chats"
+              - generic [ref=e138] focusable [tabindex]
+                - StaticText "Notebook chats will appear here"
+          - generic
+            - status
+            - generic
+              - generic
+                - button "Upload & tools" [expanded=false, ref=e142]
+                - generic
+                  - textbox "Enter a prompt for Gemini" [ref=e146]: 
+
+                    - StaticText "Ask Gemini"
+                    - paragraph
+                      - LineBreak "\n"
+                - generic
+                  - group
+                    - button "Open mode picker, currently Neon" [expanded=false, ref=e143]
+                      - StaticText "Neon"
+                  - generic
+                    - button "Dictate (^⇧D)" [ref=e147]
+            - paragraph
+              - LineBreak "\n"
+    - link "Gemini Notebook button" [ref=e3]
+      - StaticText "Gemini Notebook "
+    - generic [ref=e4] focusable [tabindex]
+      - button "Notebook settings" [ref=e5]

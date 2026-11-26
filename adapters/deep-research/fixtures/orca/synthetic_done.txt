@@ -1,7 +1,0 @@
-page: PAGE
-Google Gemini — https://gemini.google.com/app/abc123def
-- generic
-  - main
-    - heading "CloudEvents required attributes" [level=1, ref=e70]
-    - button "Share & export" [ref=e71]
-    - textbox "Enter a prompt for Gemini" [ref=e27]:
