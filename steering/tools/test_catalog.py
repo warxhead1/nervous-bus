@@ -66,7 +66,7 @@ def run_steps(case, root, tmp):
     env.update({k: v.replace("{TMP}", str(tmp)) for k, v in case.get("env", {}).items()})
     for step in case["steps"]:
         args = [a.replace("{TMP}", str(tmp)) for a in step.get("args", [])]
-        stdin = json.dumps(step["stdin"]).replace("{TMP}", str(tmp)) if "stdin" in step else None
+        stdin = json.dumps(step["stdin"]).replace("{TMP}", json.dumps(str(tmp))[1:-1]) if "stdin" in step else None
         yield step, subprocess.run([sys.executable, str(root), *args], input=stdin, capture_output=True, text=True,
                                    cwd=tmp, env=env)
 

@@ -165,7 +165,7 @@ HARNESSES = [
 
 
 def rel(p):
-    return str(Path(p).relative_to(ROOT))
+    return Path(p).relative_to(ROOT).as_posix()
 
 
 def url(path):
@@ -449,7 +449,8 @@ def main(argv):
         return 0
     for p, t in outputs.items():
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(t)
+        with open(p, "w", encoding="utf-8", newline="\n") as f:
+            f.write(t)
     print(f"wrote {len(outputs)} files, {len(cat['pieces'])} pieces")
     return 0
 
