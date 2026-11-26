@@ -154,6 +154,14 @@ class Hook(unittest.TestCase):
             self.assertEqual(ny.main(["ack", "s1", "--via", "kiln", "--answer", "ship it"]), 0)
         ha.assert_called_once_with("s1", ["ship it"], ["x"], "kiln")
 
+    def test_a_failed_answer_keeps_the_ask_open(self):
+        self.run_hook(user("go"), tool_use(), tool_result(), text("**Needs you:**\n- x"))
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err, \
+                mock.patch.object(ny, "hearth_ack", return_value=False):
+            self.assertEqual(ny.main(["ack", "s1", "--answer", "ship it"]), 3)
+        self.assertIn("answer not sent", err.getvalue())
+        self.assertEqual(len(ny.load()), 1)
+
     def test_answers_need_one_target(self):
         self.run_hook(user("go"), tool_use(), tool_result(), text("**Needs you:**\n- x"))
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), \
