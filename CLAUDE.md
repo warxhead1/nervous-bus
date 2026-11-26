@@ -9,19 +9,13 @@ that need at-least-once delivery use XREADGROUP consumer groups.
 criteria, file-scope escalation, cross-repo bead pairing) — it is a separate document,
 not imported here, and its rules bind interactive sessions doing bead work too.
 
-## Architecture (one paragraph)
+## Architecture
 
-**Primary transport: Redis Streams.** `sdk/shell/nervous publish <channel> <json>`
-XADD's a CloudEvents-lite envelope to `nbus:<channel>` (e.g. `nbus:bus.notify.v1`)
-and to the fan-in stream `nbus:all`. The redis-mirror adapter (`adapters/redis-mirror/`)
-tails `~/.cache/nervous-bus/debug.jsonl` and mirrors file-only producers (tengine,
-home-automation.vision) into Redis. The zellij WASM plugin remains active for
-plugin-to-pane fan-out (zjstatus, nervous-board) but is best-effort — it never
-blocks the Redis write path. All producers write to `debug.jsonl` first (durable
-history), then fire-and-forget to Redis (sub-ms live delivery). Schema validation
-runs in both the shell SDK (on publish) and redis-mirror (on mirror); violations
-are dead-lettered to `nbus:bus.dead_letter`. Schemas in `schemas/<type>.v<n>.json`
-are authoritative and hot-reloaded by redis-mirror every 5 minutes.
+`sdk/shell/nervous publish <channel> <json>` writes the envelope to
+`~/.cache/nervous-bus/debug.jsonl` first, then XADDs it to `nbus:<channel>` and `nbus:all`.
+redis-mirror (`adapters/redis-mirror/`) mirrors file-only producers into Redis.
+The shell SDK and redis-mirror validate against `schemas/`, and violations go to
+`nbus:bus.dead_letter`.
 
 ## Critical rules
 
@@ -36,28 +30,18 @@ are authoritative and hot-reloaded by redis-mirror every 5 minutes.
   params, private integrations, internal diagnostics) belongs in the local overlay
   (`~/.config/nervous-bus/schemas/`, loaded alongside repo schemas and precedence-wins
   for the same channel). Install via `nervous schema install <path>`.
-  **NEVER `git add` a schema without checking `schemas/README.md` § "Known private
-  prefixes".** The `.gitignore` blocks the listed prefixes, but new private subsystems
-  are not blocked until added. When in doubt: overlay first, public repo never.
-  Current private prefixes: `tachyonos.*` (trading engine), `tengine.diag.*`
-  (internal diagnostics), `hearth.market.state.*` (tachyonos bridge, raw_signal
-  leak vector). Full list and rationale in `schemas/README.md`.
+  **Check `schemas/README.md` § "Known private prefixes" before `git add` on a schema.**
+  `.gitignore` and the `no-private-schema-leak` CI gate (`tools/private_schema_prefixes.txt`)
+  block only the listed prefixes. A new private subsystem gets added there first.
+  When in doubt: overlay first, public repo never.
 - **NEVER bypass `nervous publish`.** All publishers go through the SDK.
   Direct `zellij pipe` or raw `redis-cli XADD` calls break schema validation and
   observability. tachyonac-engine uses the Go nbus client (`internal/nbus/`), which
   wraps the same CloudEvents envelope format.
 
-  **SDK matrix:**
-  - **`sdk/shell/nervous`** — universal escape hatch. Any language can shell out.
-    All adapters in `adapters/*/` use this pattern. Always available.
-  - **`sdk/rust/`** — typed library for compiled producers/consumers. Scaffolded
-    (v0 wraps the shell SDK); v1 (native pipe + Listener, no subprocess hop)
-    tracked in nervous-bus-xnn. Prefer Rust for new in-process producers.
-  - **`sdk/python/nbus.py`** — back-compat shim; the listener moved into
-    deer-flow's `deer obs bus` subcommand. The file remains as a bash shim
-    because `~/.local/bin/deer-bus-listen` symlinks to it. Don't add new
-    Python code here — call `deer obs bus` or shell out to `nervous publish`.
-  - **`sdk/ts/`** — removed (no producers required it).
+  SDKs: prefer `sdk/rust/` for new in-process producers. `sdk/python/nbus.py` is a
+  back-compat shim kept because `~/.local/bin/deer-bus-listen` symlinks to it, so add
+  no Python there. `sdk/ts/` is removed.
 - **The plugin is dumb.** Routing only — no business logic, no schema validation
   in v1, no state beyond a small ring buffer. Validation happens at adapter edges.
 - **deer-flow is a consumer, not a peer.** It subscribes; it does not authenticate
@@ -83,15 +67,8 @@ python3 -c "import json,jsonschema; jsonschema.Draft202012Validator(json.load(op
 
 ## Beads
 
-All work is tracked in `.beads/`. Open work:
-
-```bash
-bd ready          # what's ready
-bd list --status=open
-```
-
-hearth-loom is configured to pick up nervous-bus beads. Sophisticated beads
-(machine-readable acceptance + file scope + verification) become PRs autonomously.
+hearth-loom picks up nervous-bus beads. A bead with machine-readable acceptance,
+file scope and verification becomes a PR autonomously.
 
 ## Standing dashboards (survive compaction — check before re-deriving)
 
