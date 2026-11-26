@@ -1,3 +1,7 @@
 Snapshots replayed by the fake Orca runner in `test_dr.py`.
 
-`signed_out_tools_menu.txt` is a real accessibility snapshot of gemini.google.com with the Upload & tools menu open, captured signed out (no account data). The `synthetic_*` files hand-follow that snapshot format for the signed-in states (plan, running, done, failed) that could not be captured while Orca's browser was signed out. Replace them with real captures when a signed-in run is available.
+All files except `synthetic_failed.txt` are real accessibility snapshots captured from a signed-in gemini.google.com on 2026-11-26, with the sidebar (chat titles) and account block removed and page and conversation ids replaced by placeholders. `signed_out_tools_menu.txt` was captured signed out. `report_dom_result.json` is the markdown that `REPORT_JS` extracted from the finished report. `done.txt` is cut after the report panel toolbar.
+
+`synthetic_failed.txt` is hand-written: no failed run was observed, so its text is a guess at Gemini's failure wording (`FAILED_TEXT`).
+
+Notebook flow, in order: `nb_splash` (first visit only), `nb_create_form`, `nb_create_form_filled`, `nb_empty_notebook`, `nb_sources_menu`, `nb_text_dialog` or `nb_links_dialog`, `nb_with_sources`.

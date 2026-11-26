@@ -1,0 +1,71 @@
+page: PAGE
+What is the CloudEvents spec's required attribute set? Cite the spec. - Google Gemini — https://gemini.google.com/app/abc123def
+- generic
+  - main
+    - link "Gemini - new chat" [ref=e42]
+      - StaticText "Gemini"
+    - generic
+      - generic
+      - generic
+        - generic
+          - heading "Conversation with Gemini" [level=1, ref=e160]
+          - generic
+            - generic
+              - heading "You said What is the CloudEvents spec's required attribute set? Cite the spec." [level=5, ref=e171]
+                - StaticText "You said What is the CloudEvents spec's required attribute set? Cite the spec."
+              - paragraph
+                - StaticText "What is the CloudEvents spec's required attribute set? Cite the spec."
+            - button "Copy prompt" [ref=e168]
+            - button "Edit" [ref=e169]
+            - generic
+              - heading "Gemini said" [level=6, ref=e172]
+              - generic
+                - paragraph
+                  - StaticText "Here's my plan to tackle that topic. Let me know if you need to make changes."
+                - generic
+                  - heading " CloudEvents Required Context Attributes " [level=3, ref=e177]
+                  - StaticText "Research Websites"
+                  - StaticText "(1) Locate the authoritative CNCF CloudEvents specification repository and official documentation to determine the current stable release version (e.g., v1.0.2 or any subsequent stable release) as well as any active working drafts.\n(2) Extract the complete list of required context attributes from the core CloudEvents specification, documenting for each attribute:\n(a) exact normative attribute name and data type\n(b) formal constraints, validation rules, and RFC 2119 requirements (such as non-empty string requirements, uniqueness scope, and URI-reference formatting)\n(c) official description and canonical examples provided in the spec\n(3) Record precise specification citations for every required attribute, including exact version tags, section headings, anchor links, and canonical repository URLs.\n(4) Review version history and official binding specifications (such as JSON event format and HTTP protocol binding) to verify whether the required attribute set changed across versions and note any serialization or transport-level rules affecting required attributes (such as binary vs. structured content modes)."
+                  - StaticText "Analyze Results"
+                  - StaticText "Create Report"
+                  - StaticText "Ready in a few mins"
+                  - button "Edit the research plan" [ref=e178]
+                    - StaticText "Edit plan"
+                  - button "Start research" [ref=e179]
+                    - StaticText "Start research"
+                  - button "Cancel" [ref=e180]
+                  - button " Try again without Deep Research " [ref=e181]
+                    - StaticText " Try again without Deep Research "
+              - button "Good response" [ref=e173]
+              - button "Bad response" [ref=e174]
+              - button "Copy" [ref=e175]
+              - button "Show more options" [ref=e176]
+          - generic
+            - status
+            - generic
+              - generic
+                - generic
+                  - button "Upload & tools" [expanded=false, ref=e15]
+                  - button "Deselect Deep research" [ref=e38]
+                    - StaticText "Deep research"
+                  - generic
+                    - textbox "Enter a prompt for Gemini" [ref=e23]: 
+
+                      - StaticText "What do you want to research?"
+                      - paragraph
+                        - LineBreak "\n"
+                  - generic
+                    - group
+                      - button "Open mode picker, currently Neon" [expanded=false, ref=e18]
+                        - StaticText "Neon"
+                    - generic
+                      - button "Dictate (^⇧D)" [ref=e24]
+                  - button "Sources, Google Search selected" [expanded=false, ref=e37]
+                    - StaticText "Sources"
+                  - button "Files" [ref=e39]
+                    - StaticText "Files"
+            - paragraph
+              - StaticText "Gemini is AI and can make mistakes."
+    - generic [ref=e164] focusable [tabindex]
+      - button "Open menu for conversation actions." [ref=e165]
+  - StaticText "Generating research plan"

@@ -56,6 +56,7 @@ def load_config(path=None):
     cfg = {
         "engine": "gemini-web",
         "orca_bin": "orca",
+        "browser_profile": "",  # Orca browser profile id for new tabs; empty = Orca's own default for the worktree
         "step_timeout": 120.0,
         "poll_initial": 15.0,
         "poll_max": 60.0,
@@ -108,72 +109,90 @@ class Engine(abc.ABC):
 # ------------------------------------------------------------ gemini-web
 #
 # Every label, role and regex the engine depends on lives in UI and NB. A UI
-# change is a one-place edit here. OBSERVED entries were read from a live
-# accessibility snapshot; UNVERIFIED entries need a signed-in snapshot to
-# confirm (Orca's browser was signed out when this was written).
+# change is a one-place edit here. Entries were read from live signed-in
+# accessibility snapshots (2026-11-26).
 
 GEMINI_URL = "https://gemini.google.com/app"
-NOTEBOOK_URL = "https://notebook.google.com"
 
 UI = {
-    # OBSERVED: signed-out pages show a "Sign in" button; signed-in pages do not.
+    # signed-out pages show a "Sign in" button; signed-in pages do not.
     "signed_out": ("button", r"^Sign in( to |$)"),
-    # OBSERVED
     "prompt": ("textbox", r"^Enter a prompt"),
-    # OBSERVED: opens a menu whose items include the Deep research checkbox.
+    # opens a menu whose items include the Deep research checkbox.
     "tools": ("button", r"^Upload & tools"),
-    # OBSERVED
     "deep_research": ("menuitemcheckbox", r"^Deep research"),
-    # UNVERIFIED
+    # chip that appears in the composer once Deep research is selected.
+    "deep_research_on": ("button", r"^Deselect Deep research"),
     "send": ("button", r"^Send message"),
-    # UNVERIFIED: the plan card shown before the research starts.
-    "start_research": ("button", r"^Start research"),
-    # UNVERIFIED: present only once the finished report is rendered.
-    "report_done": ("button", r"^(Share & export|Export to Docs)"),
-    # UNVERIFIED: present while research runs.
-    "running": ("button", r"^(Stop research|Cancel research)"),
-    # UNVERIFIED
-    "share_export": ("button", r"^Share & export"),
+    # the plan card shown before the research starts.
+    "start_research": ("button", r"^Start research$"),
+    # present only once the finished report is rendered (toolbar of the report panel).
+    "report_done": ("button", r"^Share & [Ee]xport"),
+    # present for the whole generation, plan included; the button is gone when the report is done.
+    "running": ("button", r"^Stop (response|research)"),
+    "share_export": ("button", r"^Share & [Ee]xport"),
     "export_docs": ("menuitem", r"^Export to Docs"),
 }
 
-# Gemini Notebook (notebook.google.com). OBSERVED: signed-out landing only.
+# Gemini Notebook, inside gemini.google.com (observed 2026-11-26). notebook.google.com is not used.
+NOTEBOOK_BASE = "https://gemini.google.com"
 NB = {
     "signed_out": ("button", r"^Sign in( to |$)"),
-    # UNVERIFIED
-    "new_notebook": ("button", r"^(Create new|New notebook|Create)"),
-    "add_source": ("button", r"^(Add source|Add sources|Upload a source)"),
-    "copied_text": ("button", r"^(Copied text|Pasted text|Paste text)"),
-    "websites": ("button", r"^(Website|Websites|Link)"),
-    "source_text": ("textbox", r".*"),
-    "insert": ("button", r"^(Insert|Add|Submit)$"),
+    # first visit shows an "Introducing notebooks" splash; this button leaves it.
+    "splash_continue": ("button", r"^View my notebooks"),
+    "name": ("textbox", r"^Name of the notebook"),
+    "create": ("button", r"^Create notebook$"),
+    # inside a notebook: opens the Sources dialog; labelled "N Sources" once the notebook has sources.
+    "add_source": ("button", r"^(Add sources?|\d+ Sources?)$"),
+    "copied_text": ("menuitem", r"^Copied text"),
+    "source_text": ("textbox", r"^Pasted text"),
+    "insert_text": ("button", r"^Add text$"),
+    "websites": ("menuitem", r"^Add websites"),
+    "source_links": ("textbox", r"^Paste any links"),
+    "insert_links": ("button", r"^Insert$"),
 }
+LINK_BATCH = 3
+NOTEBOOK_ID = re.compile(r"^https://gemini\.google\.com/notebook/([0-9a-f-]{20,})")
+
 FAILED_TEXT = re.compile(r"(Something went wrong|couldn.t complete|research (failed|was cancelled)|"
                          r"reached your .*limit)", re.I)
 CONVERSATION_URL = re.compile(r"^https://gemini\.google\.com/app/([A-Za-z0-9_-]+)")
 
-# UNVERIFIED container selectors, tried in order; the last is a broad fallback.
-REPORT_SELECTORS = ["deep-research-immersive-panel", "immersive-editor", "message-content", "main"]
+# OBSERVED: the finished report body inside the immersive panel. The panel also holds the
+# thinking log and both source lists, which are not part of the report. Fallbacks are broad.
+REPORT_SELECTORS = ["deep-research-immersive-panel structured-content-container",
+                    "deep-research-immersive-panel", "main"]
+# OBSERVED: inline citations are <sup data-turn-source-index=N> (1-based) into this list.
+USED_SOURCES_SELECTOR = ".used-sources browse-web-item a"
 
-# Converts the report DOM to markdown and keeps external links as [text](url).
-REPORT_JS = """(function(sels){
+# Converts the report DOM to markdown. Inline citation markers become [title](url) links
+# resolved through the "Sources used in the report" list; tables become pipe tables.
+REPORT_JS = """(function(sels,usedSel){
 var el=null;for(var i=0;i<sels.length&&!el;i++){var all=document.querySelectorAll(sels[i]);if(all.length)el=all[all.length-1];}
 if(!el)return JSON.stringify({markdown:''});
-function unwrap(h){try{var u=new URL(h,location.href);if(u.hostname.endsWith('google.com')&&u.pathname==='/url'){return u.searchParams.get('q')||h;}return u.href;}catch(e){return h;}}
+var used=Array.prototype.map.call(document.querySelectorAll(usedSel),function(a){
+var parts=a.innerText.split('\\n').map(function(x){return x.trim();}).filter(Boolean);
+return {url:a.href,title:(parts[1]||parts[0]||a.href).replace(/[\\[\\]]/g,'')};});
 function walk(n){
 if(n.nodeType===3)return n.textContent;
 if(n.nodeType!==1)return '';
 var t=n.tagName.toLowerCase();
-if(t==='script'||t==='style'||t==='button')return '';
+if(t==='script'||t==='style'||t==='button'||t==='sources-carousel'||t==='sources-carousel-inline')return '';
+if(t==='sup'){var ix=+n.getAttribute('data-turn-source-index');var u=used[ix-1];return u?' ['+u.title+']('+u.url+')':'';}
 var inner=Array.prototype.map.call(n.childNodes,walk).join('');
 if(/^h[1-6]$/.test(t))return '\\n\\n'+'#'.repeat(+t[1])+' '+inner.trim()+'\\n\\n';
 if(t==='p')return inner.trim()+'\\n\\n';
 if(t==='li')return '- '+inner.trim()+'\\n';
 if(t==='br')return '\\n';
-if(t==='a'&&n.href){var h=unwrap(n.href);if(/^https?:/.test(h)&&!/\\/\\/([a-z0-9-]+\\.)*google\\.com\\//.test(h))return '['+inner.trim()+']('+h+')';return inner;}
+if(t==='b'||t==='strong')return inner.trim()?'**'+inner.trim()+'**':'';
+if(t==='code')return inner.trim()?'`'+inner.trim()+'`':'';
+if(t==='td'||t==='th')return ' '+inner.replace(/\\s*\\n+\\s*/g,' ').replace(/\\|/g,'/').trim()+' |';
+if(t==='tr'){var row='|'+inner+'\\n';if(n.querySelector('th'))row+='|'+Array.prototype.map.call(n.children,function(){return ' --- |';}).join('')+'\\n';return row;}
+if(t==='table')return '\\n\\n'+inner+'\\n';
+if(t==='a'&&n.href&&/^https?:/.test(n.href)&&!/\\/\\/([a-z0-9-]+\\.)*google\\.com\\//.test(n.href))return '['+inner.trim()+']('+n.href+')';
 return inner;}
 return JSON.stringify({markdown:walk(el).replace(/\\n{3,}/g,'\\n\\n').trim()});
-})(%s)"""
+})(%s,%s)"""
 
 SNAP_LINE = re.compile(r'^\s*- (?P<role>[A-Za-z]+)(?: "(?P<name>(?:[^"\\]|\\.)*)")?(?P<rest>.*)$')
 REF = re.compile(r"ref=(e\d+)")
@@ -218,8 +237,8 @@ def orca_runner(orca_bin="orca"):
 class OrcaBrowser:
     """Thin wrapper over orca's browser subcommands. `runner(args) -> stdout`."""
 
-    def __init__(self, runner, page=None):
-        self.runner, self.page = runner, page
+    def __init__(self, runner, page=None, profile=""):
+        self.runner, self.page, self.profile = runner, page, profile
 
     def _json(self, args):
         out = json.loads(self.runner(list(args) + ["--json"]) or "{}")
@@ -233,7 +252,8 @@ class OrcaBrowser:
         return ["--page", self.page]
 
     def open(self, url):
-        self.page = self._json(["tab", "create", "--url", url])["browserPageId"]
+        args = ["tab", "create", "--url", url] + (["--profile", self.profile] if self.profile else [])
+        self.page = self._json(args)["browserPageId"]
         return self.page
 
     def goto(self, url):
@@ -288,7 +308,7 @@ class GeminiWebEngine(Engine):
         self.cfg = cfg
         self.sleep, self.clock = sleep, clock
         self.runner = runner or orca_runner(cfg.get("orca_bin", "orca"))
-        self.browser = OrcaBrowser(self.runner)
+        self.browser = OrcaBrowser(self.runner, profile=cfg.get("browser_profile", ""))
         self.step_timeout = float(cfg.get("step_timeout", 120.0))
 
     def _until(self, key, what):
@@ -300,6 +320,10 @@ class GeminiWebEngine(Engine):
                               "in Orca's default browser profile, then retry", EXIT_LOGIN)
             return s if find_ref(s, key) else None
         return wait_for(probe, self.step_timeout, self.sleep, self.clock, what=what)
+
+    def attach(self, ident):
+        """Resume polling a conversation that was already submitted (crash recovery)."""
+        return ident
 
     def start(self, question):
         try:
@@ -318,7 +342,7 @@ class GeminiWebEngine(Engine):
         b.click(find_ref(snap, "tools"))
         snap = self._until("deep_research", "the tools menu entry")
         b.click(find_ref(snap, "deep_research"))
-        snap = self._until("prompt", "the prompt box")
+        snap = self._until("deep_research_on", "the research-mode chip (mode not selected)")
         b.fill(find_ref(snap, "prompt"), question)
         snap = self._until("send", "the send button")
         b.click(find_ref(snap, "send"))
@@ -339,7 +363,7 @@ class GeminiWebEngine(Engine):
             return dict(base, state="failed", reason="signed out")
         running = find_ref(snap, "running")
         if find_ref(snap, "report_done") and not running:
-            raw = json.loads(b.eval(REPORT_JS % json.dumps(REPORT_SELECTORS)) or "{}")
+            raw = json.loads(b.eval(REPORT_JS % (json.dumps(REPORT_SELECTORS), json.dumps(USED_SOURCES_SELECTOR))) or "{}")
             return dict(base, state="completed", markdown=raw.get("markdown", ""))
         if FAILED_TEXT.search(snap) and not running:
             return dict(base, state="failed", reason="gemini reported a failure")
@@ -412,11 +436,11 @@ def load_run(runs_dir, run_id):
 
 
 def execute_run(engine, question, cfg, runs_dir, delete_remote=False,
-                sleep=time.sleep, clock=time.monotonic, rng=random.random, log=lambda m: None):
+                sleep=time.sleep, clock=time.monotonic, rng=random.random, log=lambda m: None, attach=None):
     run_id = new_run_id()
     rdir = run_path(runs_dir, run_id)
     started = now_iso()
-    ident = engine.start(question)
+    ident = engine.attach(attach) if attach else engine.start(question)
     run = {
         "run_id": run_id, "question": question, "engine": engine.name,
         "agent": getattr(engine, "agent", ""), "interaction_id": ident,
@@ -514,6 +538,8 @@ def parse_judge_output(out):
     out = out.strip()
     try:
         obj = json.loads(out)
+        if isinstance(obj, list):  # newer claude CLIs emit the whole event stream as an array
+            obj = next((e for e in reversed(obj) if isinstance(e, dict) and e.get("type") == "result"), {})
         if isinstance(obj, dict) and "result" in obj and "verdict" not in obj:
             out = str(obj["result"])
     except json.JSONDecodeError:
@@ -711,7 +737,7 @@ def sink_kb(run, rdir, project, allow_unaudited, kb_bin, render_only=False, conf
 # ---------------------------------------------------------------- notebook
 
 def notebook_import(run, rdir, runner, notebook_id=None, sleep=time.sleep, clock=time.monotonic,
-                    step_timeout=120.0):
+                    step_timeout=120.0, profile="", title=None, include_report=True):
     """Add the report text and the CONFIRMED URLs to a Gemini Notebook through Orca's browser."""
     ap = rdir / "audit.json"
     if not ap.is_file():
@@ -719,14 +745,15 @@ def notebook_import(run, rdir, runner, notebook_id=None, sleep=time.sleep, clock
     audit = json.loads(ap.read_text())
     urls = sorted({i["url"] for i in audit["items"] if i["verdict"] == "CONFIRMED"})
     report = run["report_md"] or (rdir / "report.md").read_text()
-    b = OrcaBrowser(runner)
+    title = title or ("dr: " + " ".join(run["question"].split())[:60])
+    b = OrcaBrowser(runner, profile=profile)
 
     def until(key, what, optional=False):
         def probe():
             s = b.snapshot()
             if find_ref(s, "signed_out", NB) and not find_ref(s, key, NB):
-                raise DrError("Orca's browser is not signed in to Gemini Notebook: sign in at "
-                              f"{NOTEBOOK_URL} in Orca's default browser profile, then retry", EXIT_LOGIN)
+                raise DrError("Orca's browser is not signed in to Gemini: sign in at "
+                              f"{NOTEBOOK_BASE} in the Orca browser profile dr uses, then retry", EXIT_LOGIN)
             return s if find_ref(s, key, NB) else None
         if optional:
             try:
@@ -737,26 +764,49 @@ def notebook_import(run, rdir, runner, notebook_id=None, sleep=time.sleep, clock
                 return None
         return wait_for(probe, step_timeout, sleep, clock, what=what)
 
-    def add(kind, text):
-        snap = until("add_source", "the add-source button", optional=True)
+    def add(kind, field, insert, text):
+        snap = until("add_source", "the add-sources button", optional=True)
         if snap:
             b.click(find_ref(snap, "add_source", NB))
         snap = until(kind, f"the {kind} source type")
         b.click(find_ref(snap, kind, NB))
-        snap = until("source_text", "the source text box")
-        b.fill(find_ref(snap, "source_text", NB), text)
-        snap = until("insert", "the insert button")
-        b.click(find_ref(snap, "insert", NB))
+        snap = until(field, "the source text box")
+        b.fill(find_ref(snap, field, NB), text)
+        sleep(1.0)  # the insert button stays disabled for a moment after the text lands
+        snap = until(insert, "the insert button")
+        b.click(find_ref(snap, insert, NB))
+        wait_for(lambda: find_ref(b.snapshot(), field, NB) is None, step_timeout, sleep, clock,
+                 what="the source dialog to close")
 
     try:
-        b.open(f"{NOTEBOOK_URL}/notebook/{notebook_id}" if notebook_id else NOTEBOOK_URL)
-        if not notebook_id:
-            snap = until("new_notebook", "the new-notebook button")
-            b.click(find_ref(snap, "new_notebook", NB))
-        add("copied_text", report)
-        if urls:
-            add("websites", "\n".join(urls))
-        return {"notebook_url": b.url(), "urls_added": len(urls)}
+        if notebook_id:
+            b.open(f"{NOTEBOOK_BASE}/notebook/{notebook_id}")
+        else:
+            b.open(f"{NOTEBOOK_BASE}/notebooks/create")
+
+            def create_form():
+                sn = b.snapshot()
+                if find_ref(sn, "name", NB):
+                    return sn
+                if find_ref(sn, "signed_out", NB):
+                    raise DrError("Orca's browser is not signed in to Gemini: sign in at "
+                                  f"{NOTEBOOK_BASE} in the Orca browser profile dr uses, then retry", EXIT_LOGIN)
+                if find_ref(sn, "splash_continue", NB):  # first-visit "Introducing notebooks" splash
+                    b.click(find_ref(sn, "splash_continue", NB))
+                return None
+            snap = wait_for(create_form, step_timeout, sleep, clock, what="the notebook name box")
+            b.fill(find_ref(snap, "name", NB), title)
+            snap = until("create", "the create button")
+            b.click(find_ref(snap, "create", NB))
+            wait_for(lambda: NOTEBOOK_ID.match(b.url() or ""), step_timeout, sleep, clock,
+                     what="the new notebook's URL")
+        if include_report:
+            add("copied_text", "source_text", "insert_text", report)
+        # Observed: one Insert keeps only the first few links, so paste them in small batches
+        # (space-separated: a newline-joined paste imported fewer).
+        for i in range(0, len(urls), LINK_BATCH):
+            add("websites", "source_links", "insert_links", " ".join(urls[i:i + LINK_BATCH]))
+        return {"notebook_url": b.url(), "urls_added": len(urls), "title": None if notebook_id else title}
     finally:
         b.close()
 
@@ -794,6 +844,7 @@ def build_parser():
     r = sub.add_parser("run", help="run a deep research question")
     r.add_argument("question", nargs="?")
     r.add_argument("--question-file")
+    r.add_argument("--attach", metavar="CONVERSATION_ID", help="skip submitting; poll an already-started Gemini conversation")
     r.add_argument("--delete-remote", action="store_true", help="refused by gemini-web: conversations are never deleted")
     a = sub.add_parser("audit", help="claim-level citation audit")
     a.add_argument("run_id")
@@ -807,6 +858,8 @@ def build_parser():
     n = sub.add_parser("notebook", help="add an audited run to Gemini Notebook through Orca's browser")
     n.add_argument("run_id")
     n.add_argument("--notebook-id", help="existing notebook id; default creates a new notebook")
+    n.add_argument("--no-report", action="store_true", help="add only the confirmed URLs (use after a partial import)")
+    n.add_argument("--title", help="title for a new notebook; default is derived from the question")
     sub.add_parser("cost", help="per-run and cumulative usage (legacy runs carry tokens)")
     return ap
 
@@ -826,7 +879,7 @@ def main(argv=None, runner=None):
                 raise DrError("give a question or --question-file", EXIT_USAGE)
             if cfg["engine"] != "gemini-web":
                 raise DrError(f"unknown engine: {cfg['engine']}", EXIT_USAGE)
-            run = execute_run(GeminiWebEngine(cfg, runner=runner), q.strip(), cfg, runs_dir, args.delete_remote, log=log)
+            run = execute_run(GeminiWebEngine(cfg, runner=runner), q.strip(), cfg, runs_dir, args.delete_remote, log=log, attach=args.attach)
             print(json.dumps({k: run[k] for k in ("run_id", "status", "usage", "cost_estimate", "raw_path")}))
             return EXIT_OK if run["status"] == "completed" else EXIT_FAIL
         if args.cmd == "audit":
@@ -850,7 +903,8 @@ def main(argv=None, runner=None):
             if run["status"] != "completed":
                 raise DrError(f"run is {run['status']}, nothing to import")
             res = notebook_import(run, rdir, runner or orca_runner(cfg["orca_bin"]), args.notebook_id,
-                                  step_timeout=float(cfg["step_timeout"]))
+                                  step_timeout=float(cfg["step_timeout"]), profile=cfg["browser_profile"],
+                                  title=args.title, include_report=not args.no_report)
             print(json.dumps(res))
             return EXIT_OK
         if args.cmd == "cost":

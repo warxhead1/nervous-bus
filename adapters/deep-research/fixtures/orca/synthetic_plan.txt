@@ -1,8 +1,0 @@
-page: PAGE
-Google Gemini — https://gemini.google.com/app/abc123def
-- generic
-  - main
-    - heading "Research plan" [level=2, ref=e50]
-    - button "Edit plan" [ref=e51]
-    - button "Start research" [ref=e52]
-    - textbox "Enter a prompt for Gemini" [ref=e27]:

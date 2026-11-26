@@ -1,0 +1,19 @@
+page: PAGE
+Google Gemini — https://gemini.google.com/notebook/00000000-0000-0000-0000-000000000000
+- generic
+  - generic
+    - dialog
+      - heading "Sources" [level=2, ref=e181]
+      - paragraph
+        - StaticText "Add files that Gemini can reference in your notebook"
+      - button "Close" [ref=e182]
+      - generic "Upload file options"
+        - menuitem "Upload files. Documents, data, code files" [ref=e183]
+          - StaticText "Upload files"
+        - menuitem "Add from Drive. Sheets, Docs, Slides" [ref=e184]
+          - StaticText "Add from Drive"
+        - menuitem "Add websites" [ref=e185]
+          - StaticText "Add websites"
+        - menuitem "Copied text" [ref=e186]
+          - StaticText "Copied text"
+      - StaticText "Documents, images, videos, and files you add will appear here."

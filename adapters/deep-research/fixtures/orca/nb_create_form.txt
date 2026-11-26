@@ -1,0 +1,19 @@
+page: PAGE
+Google Gemini — https://gemini.google.com/notebooks/create
+- generic
+  - main
+    - link "Gemini - new chat" [ref=e24]
+      - StaticText "Gemini"
+    - generic
+      - generic
+      - generic
+        - heading "What are you working on?" [level=1, ref=e159]
+        - form
+          - generic
+            - textbox "Name of the notebook" [required, ref=e162]
+        - button "Organize your ideas Group chats by topic and ground on your sources." [ref=e160]
+          - StaticText "Organize your ideas"
+          - StaticText "Group chats by topic and ground on your sources."
+        - button "Study and learn Get custom lessons and track your progress." [ref=e161]
+          - StaticText "Study and learn"
+          - StaticText "Get custom lessons and track your progress."

@@ -29,6 +29,10 @@ def snap(name, **sub):
     return t
 
 
+SMALL_REPORT = ("# AAIF report\n\nAgent Skills was donated on 2026-10-22 to the AAIF by Anthropic ([src](https://example.org/a)).\n\n"
+                "The AAIF hosts 10 projects now ([src](https://example.org/b)) ([a](https://example.org/a)).\n")
+
+
 class Clock:
     def __init__(self):
         self.t, self.sleeps = 0.0, []
@@ -50,12 +54,14 @@ class FakeOrca:
         ("ready", r"^Send message"): "plan",
         ("plan", r"^Start research"): "running",
     }
-    SNAP = {"composer": "synthetic_composer", "tools_menu": "synthetic_tools_menu",
-            "composer_dr": "synthetic_composer", "ready": "synthetic_ready_to_send",
-            "plan": "synthetic_plan", "done": "synthetic_done", "failed": "synthetic_failed",
-            "running": "synthetic_running"}
+    # Real signed-in captures (scrubbed); "failed" is the only synthetic one (no real failure was observed).
+    SNAP = {"composer": "composer", "tools_menu": "tools_menu",
+            "composer_dr": "composer_dr", "ready": "ready_to_send",
+            "plan": "plan", "done": "done", "failed": "synthetic_failed",
+            "running": "running"}
 
-    def __init__(self, end="done", running_polls=2, first="composer", first_snap=None):
+    def __init__(self, end="done", running_polls=2, first="composer", first_snap=None, report=None):
+        self.report = report or SMALL_REPORT
         self.phase, self.end, self.running_polls, self.calls = first, end, running_polls, []
         self.first_snap, self.tabs_open = first_snap, 0
         self.filled = None
@@ -82,7 +88,7 @@ class FakeOrca:
         if cmd == "eval":
             expr = args[args.index("--expression") + 1]
             if "walk" in expr:
-                return json.dumps({"ok": True, "result": {"result": (FIX / "synthetic_report_dom_result.json").read_text()}})
+                return json.dumps({"ok": True, "result": {"result": json.dumps({"markdown": self.report})}})
             url = "https://gemini.google.com/app"
             if self.phase in ("plan", "running", "done", "failed"):
                 url += "/abc123def"
@@ -100,7 +106,7 @@ class FakeOrca:
         return snap(self.SNAP[self.phase])
 
     def _click(self, ref):
-        cur = self._snapshot() if self.phase != "running" else snap("synthetic_running")
+        cur = self._snapshot() if self.phase != "running" else snap("running")
         for role, name, r in dr.parse_snapshot(cur):
             if r == ref:
                 for (ph, pat), nxt in self.FLOW.items():
@@ -154,7 +160,7 @@ def test_run_completes_and_persists(tmp_path):
 def test_start_follows_the_ui_order(tmp_path):
     _, fake, _ = run_it(tmp_path)
     clicks = [c for c in fake.calls if c[0] == "click"]
-    assert [c[2] for c in clicks] == ["@e18", "@e34", "@e41", "@e52"]  # tools, deep research, send, start
+    assert [c[2] for c in clicks] == ["@e132", "@e152", "@e40", "@e179"]  # tools, deep research, send, start
     assert fake.calls[0][:3] == ["tab", "create", "--url"] and fake.calls[0][3].startswith("https://gemini.google.com")
 
 
@@ -206,7 +212,7 @@ def test_signed_out_is_a_login_error_not_a_hang(tmp_path):
 def test_missing_ui_element_times_out_with_its_name(tmp_path):
     class Stuck(FakeOrca):
         def _snapshot(self):
-            return snap("synthetic_composer")  # tools click never opens a menu
+            return snap("composer")  # tools click never opens a menu
         def _click(self, ref):
             pass
     clk = Clock()
@@ -225,11 +231,56 @@ def test_cli_has_no_key_argument():
     assert "--key" not in helptext and "api-key" not in helptext
 
 
+def test_signed_in_captures_map_to_every_ui_key():
+    def has(name, key, table=None):
+        return dr.find_ref(snap(name), key, table)
+    assert has("composer", "prompt") and has("composer", "tools") and not has("composer", "signed_out")
+    assert has("tools_menu", "deep_research")
+    assert has("composer_dr", "deep_research_on") and not has("composer", "deep_research_on")
+    assert has("ready_to_send", "send")
+    assert has("plan", "start_research") and not has("plan", "running")
+    assert has("running", "running") and not has("running", "report_done")
+    assert has("done", "report_done") and has("done", "share_export") and not has("done", "running")
+
+
+def test_real_report_capture_runs_end_to_end(tmp_path):
+    report = json.loads((FIX / "report_dom_result.json").read_text())["markdown"]
+    fake = FakeOrca(report=report)
+    clk = Clock()
+    eng = dr.GeminiWebEngine(CFG, runner=fake, sleep=clk.sleep, clock=clk.now)
+    run = dr.execute_run(eng, "q", CFG, tmp_path, sleep=clk.sleep, clock=clk.now, rng=lambda: 0.5)
+    assert run["status"] == "completed"
+    assert report.startswith("# CloudEvents Specification Required Attribute Set")
+    assert len(run["citations"]) == 21 and len({c["url"] for c in run["citations"]}) == 20
+    assert all(c["url"].startswith("https://") for c in run["citations"])
+
+
+def test_attach_skips_submission(tmp_path):
+    fake = FakeOrca(first="running")
+    clk = Clock()
+    eng = dr.GeminiWebEngine(CFG, runner=fake, sleep=clk.sleep, clock=clk.now)
+    run = dr.execute_run(eng, "q", CFG, tmp_path, sleep=clk.sleep, clock=clk.now, rng=lambda: 0.5, attach="abc123def")
+    assert run["status"] == "completed" and run["interaction_id"] == "abc123def"
+    assert not any(c[0] in ("fill",) for c in fake.calls)
+    assert fake.calls[0][:3] == ["tab", "create", "--url"] and fake.calls[0][3].endswith("/app/abc123def")
+
+
+def test_browser_profile_is_passed_to_new_tabs(tmp_path):
+    fake = FakeOrca()
+    clk = Clock()
+    eng = dr.GeminiWebEngine(dict(CFG, browser_profile="prof-1"), runner=fake, sleep=clk.sleep, clock=clk.now)
+    eng.start("q")
+    assert fake.calls[0][:5] == ["tab", "create", "--url", "https://gemini.google.com/app", "--profile"]
+    assert fake.calls[0][5] == "prof-1"
+    fake2 = FakeOrca()
+    dr.GeminiWebEngine(CFG, runner=fake2, sleep=clk.sleep, clock=clk.now).start("q")
+    assert "--profile" not in fake2.calls[0]
+
+
 # ------------------------------------------------------------ citations / usage
 
 def test_citation_claim_widens_to_its_line():
-    text = (FIX / "synthetic_report_dom_result.json").read_text()
-    cites = dr.extract_citations(json.loads(text)["markdown"])
+    cites = dr.extract_citations(SMALL_REPORT)
     assert cites[0]["claim_span"].startswith("Agent Skills was donated on 2026-10-22")
     assert cites[1]["claim_span"] == cites[2]["claim_span"]
 
@@ -504,19 +555,27 @@ def test_validate_accepts_both_source_prefixes_and_rejects_others():
 
 # ------------------------------------------------------------ notebook import
 
-NB_SNAPS = {
-    "home": '- button "Create new" [ref=e1]\n',
-    "sources": '- button "Add source" [ref=e2]\n',
-    "types": '- button "Copied text" [ref=e3]\n- button "Websites" [ref=e4]\n',
-    "text": '- textbox "Paste text here" [ref=e5]\n- button "Insert" [ref=e6]\n',
-}
-
-
 class FakeNotebook:
-    def __init__(self, signed_out=False):
-        self.calls, self.phase, self.filled, self.signed_out = [], "home", [], signed_out
-        self.tabs = 0
-        self.kind = None
+    """Replays the real Gemini Notebook captures; a click on the right element advances the phase."""
+
+    SNAP = {"splash": "nb_splash", "create_form": "nb_create_form",
+            "create_filled": "nb_create_form_filled", "empty": "nb_empty_notebook",
+            "sources_menu": "nb_sources_menu", "text_dialog": "nb_text_dialog",
+            "links_dialog": "nb_links_dialog", "with_sources": "nb_with_sources"}
+    FLOW = {
+        ("splash", r"^View my notebooks"): "create_form",
+        ("create_filled", r"^Create notebook"): "empty",
+        ("empty", r"^Add sources"): "sources_menu",
+        ("with_sources", r"^\d+ Sources"): "sources_menu",
+        ("sources_menu", r"^Copied text"): "text_dialog",
+        ("sources_menu", r"^Add websites"): "links_dialog",
+        ("text_dialog", r"^Add text"): "with_sources",
+        ("links_dialog", r"^Insert"): "with_sources",
+    }
+
+    def __init__(self, signed_out=False, first="create_form"):
+        self.calls, self.phase, self.signed_out = [], first, signed_out
+        self.filled, self.tabs, self.created = [], 0, False
 
     def __call__(self, args):
         self.calls.append(list(args))
@@ -529,19 +588,27 @@ class FakeNotebook:
             return json.dumps({"ok": True, "result": {}})
         if cmd == "snapshot":
             if self.signed_out:
-                return '- button "Sign in to Gemini Notebook" [ref=e40]\n'
-            return NB_SNAPS[self.phase]
+                return '- button "Sign in to Gemini" [ref=e40]\n'
+            return snap(self.SNAP[self.phase])
         if cmd == "click":
             ref = args[args.index("--element") + 1]
-            self.phase = {"@e1": "sources", "@e2": "types", "@e3": "text", "@e4": "text", "@e6": "sources"}[ref]
-            if ref in ("@e3", "@e4"):
-                self.kind = ref
-            return json.dumps({"ok": True, "result": {}})
+            for role, name, r in dr.parse_snapshot(snap(self.SNAP[self.phase])):
+                if r == ref:
+                    for (ph, pat), nxt in self.FLOW.items():
+                        if ph == self.phase and re.search(pat, name):
+                            self.phase = nxt
+                            self.created = self.created or nxt == "empty"
+                            return json.dumps({"ok": True, "result": {}})
+            raise AssertionError(f"click on unknown ref {ref} in {self.phase}")
         if cmd == "fill":
-            self.filled.append((self.kind, args[args.index("--value") + 1]))
+            self.filled.append((self.phase, args[args.index("--value") + 1]))
+            if self.phase == "create_form":
+                self.phase = "create_filled"
             return json.dumps({"ok": True, "result": {}})
         if cmd == "eval":
-            return json.dumps({"ok": True, "result": {"result": "https://notebook.google.com/notebook/nb9"}})
+            url = "https://gemini.google.com/notebook/00000000-0000-0000-0000-000000000000" \
+                if self.created or self.phase not in ("create_form", "create_filled") else "https://gemini.google.com/notebooks/create"
+            return json.dumps({"ok": True, "result": {"result": url}})
         raise AssertionError(args)
 
 
@@ -551,23 +618,64 @@ def test_notebook_requires_audit(tmp_path):
         dr.notebook_import(run, rdir, FakeNotebook())
 
 
-def test_notebook_adds_report_then_only_confirmed_urls(tmp_path):
+def audited_two_urls(tmp_path):
     run, rdir = completed_run(tmp_path)
     dr.audit_run(run, rdir, lambda c, p: ("CONFIRMED", "") if "donated" in c else ("REFUTED", ""),
                  fake_fetch({"https://example.org/a": "a", "https://example.org/b": "b"}))
-    fake = FakeNotebook()
-    clk = Clock()
-    got = dr.notebook_import(run, rdir, fake, sleep=clk.sleep, clock=clk.now, step_timeout=30)
-    assert got == {"notebook_url": "https://notebook.google.com/notebook/nb9", "urls_added": 1}
-    assert fake.filled[0][1].startswith("# AAIF report")
-    assert fake.filled[1][1] == "https://example.org/a"
+    return run, rdir
+
+
+def test_notebook_creates_titled_notebook_then_adds_report_and_confirmed_urls(tmp_path):
+    run, rdir = audited_two_urls(tmp_path)
+    fake, clk = FakeNotebook(), Clock()
+    got = dr.notebook_import(run, rdir, fake, sleep=clk.sleep, clock=clk.now, step_timeout=30, title="my title")
+    assert got["urls_added"] == 1 and got["title"] == "my title"
+    assert got["notebook_url"].startswith("https://gemini.google.com/notebook/")
+    assert fake.filled[0] == ("create_form", "my title")
+    assert fake.filled[1][0] == "text_dialog" and fake.filled[1][1].startswith("# AAIF report")
+    assert fake.filled[2] == ("links_dialog", "https://example.org/a")
+    assert fake.calls[0][:4] == ["tab", "create", "--url", "https://gemini.google.com/notebooks/create"]
     assert fake.tabs == 0
 
 
+def test_notebook_default_title_comes_from_the_question(tmp_path):
+    run, rdir = audited_two_urls(tmp_path)
+    fake, clk = FakeNotebook(), Clock()
+    dr.notebook_import(run, rdir, fake, sleep=clk.sleep, clock=clk.now, step_timeout=30)
+    assert fake.filled[0][1] == "dr: What is AAIF?"
+
+
+def test_notebook_first_visit_splash_is_dismissed(tmp_path):
+    run, rdir = audited_two_urls(tmp_path)
+    fake, clk = FakeNotebook(first="splash"), Clock()
+    dr.notebook_import(run, rdir, fake, sleep=clk.sleep, clock=clk.now, step_timeout=30)
+    assert fake.filled[0][0] == "create_form"
+
+
+def test_notebook_existing_id_skips_creation_and_can_skip_report(tmp_path):
+    run, rdir = audited_two_urls(tmp_path)
+    fake, clk = FakeNotebook(first="with_sources"), Clock()
+    got = dr.notebook_import(run, rdir, fake, notebook_id="abc", sleep=clk.sleep, clock=clk.now,
+                             step_timeout=30, include_report=False)
+    assert fake.calls[0][3] == "https://gemini.google.com/notebook/abc"
+    assert [f[0] for f in fake.filled] == ["links_dialog"] and got["title"] is None
+
+
+def test_notebook_links_go_in_small_space_separated_batches(tmp_path):
+    run, rdir = audited_two_urls(tmp_path)
+    urls = [f"https://example.org/p{i}" for i in range(7)]
+    (rdir / "audit.json").write_text(json.dumps({"items": [{"url": u, "verdict": "CONFIRMED"} for u in urls]}))
+    fake, clk = FakeNotebook(first="with_sources"), Clock()
+    dr.notebook_import(run, rdir, fake, notebook_id="abc", sleep=clk.sleep, clock=clk.now,
+                       step_timeout=30, include_report=False)
+    batches = [v.split(" ") for ph, v in fake.filled]
+    assert [len(x) for x in batches] == [3, 3, 1] and sum(batches, []) == urls
+    assert not any("\n" in v for _, v in fake.filled)
+
+
 def test_notebook_signed_out_is_a_login_error(tmp_path):
-    run, rdir = audited(tmp_path)
-    fake = FakeNotebook(signed_out=True)
-    clk = Clock()
+    run, rdir = audited_two_urls(tmp_path)
+    fake, clk = FakeNotebook(signed_out=True), Clock()
     with pytest.raises(dr.DrError) as e:
         dr.notebook_import(run, rdir, fake, sleep=clk.sleep, clock=clk.now, step_timeout=30)
     assert e.value.code == dr.EXIT_LOGIN and not fake.filled and fake.tabs == 0

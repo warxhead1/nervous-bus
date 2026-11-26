@@ -1,0 +1,49 @@
+page: PAGE
+Google Gemini — https://gemini.google.com/app
+- generic
+  - main
+    - generic
+      - generic
+      - generic
+        - generic
+          - generic
+            - heading "Where should we start?" [level=1, ref=e19]
+              - StaticText "Where should we start?"
+            - group "Suggested prompts"
+              - generic
+                - button "Retail options strategy pockets" [ref=e20]
+                  - StaticText "Retail options strategy pockets"
+              - generic
+                - button "Find the subject that I'm best at" [ref=e21]
+                  - StaticText "Find the subject that I'm best at"
+                - button "Dismiss suggestion" [ref=e41]
+              - generic
+                - button "Brainstorm consulting names" [ref=e22]
+                  - StaticText "Brainstorm consulting names"
+          - generic
+            - status
+            - generic
+              - generic
+                - generic
+                  - button "Upload & tools" [expanded=false, ref=e15]
+                  - button "Deselect Deep research" [ref=e38]
+                    - StaticText "Deep research"
+                  - generic
+                    - textbox "Enter a prompt for Gemini" [ref=e23]: probe draft text
+                      - paragraph
+                        - StaticText "probe draft text"
+                  - generic
+                    - group
+                      - button "Open mode picker, currently Neon" [expanded=false, ref=e18]
+                        - StaticText "Neon"
+                    - generic
+                      - generic
+                        - button "Dictate (^⇧D)" [ref=e24]
+                      - button "Send message" [ref=e40]
+                  - button "Sources, Google Search selected" [expanded=false, ref=e37]
+                    - StaticText "Sources"
+                  - button "Files" [ref=e39]
+                    - StaticText "Files"
+            - paragraph
+              - LineBreak "\n"
+    - button "Turn on temporary chat" [ref=e5]
