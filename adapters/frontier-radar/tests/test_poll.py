@@ -288,3 +288,14 @@ def test_real_fetcher_over_loopback_conditional_get_redirect_and_user_agent():
         srv.shutdown()
     assert all(h["User-Agent"] == USER_AGENT for _, h in _Handler.hits)
     assert "@" not in USER_AGENT and "eric" not in USER_AGENT.lower()
+
+
+def test_malformed_feed_is_a_source_error_and_the_poll_continues():
+    store = Store(":memory:")
+    bad = src("bad-feed", "rss", "https://example.test/bad")
+    f = FakeFetcher({"https://example.test/bad": b"<html><body>not a feed", RELEASES: fixture("claude_code_releases.atom")})
+    results = poll_all([bad, releases_src()], store, f, no_wait_throttle(), NOW)
+    by_id = {r.source_id: r for r in results}
+    assert by_id["bad-feed"].outcome == "error"
+    assert "parse error" in by_id["bad-feed"].detail
+    assert len(by_id["claude-code-releases"].new_events) == 4

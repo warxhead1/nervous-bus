@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import xml.etree.ElementTree as ET
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -145,7 +146,7 @@ def poll_source(src: Source, store: Store, fetcher: Fetcher, throttle: Throttle,
             newest = max(dates) if dates else None
             keyed = [(i, "") for i in _gate(src, raw, now, default_max_age)]
             outcome = "ok"
-    except (ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError, ET.ParseError) as e:
         store.save_source_state(src.id, last_status=f"parse error: {e}")
         store.raise_alarm(src.id, "error", f"parse error: {e}", now)
         return PollResult(src.id, "error", detail=f"parse error: {e}")
