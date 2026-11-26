@@ -1491,6 +1491,26 @@ def cmd_remediation(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
     print(_fmt_table(rows))
 
 
+def _trend_cmd(fetch, args: argparse.Namespace, conn: sqlite3.Connection, **kw) -> None:
+    try:
+        rows = fetch(conn, by=args.by, since=args.since, change=args.change,
+                     project=args.project, **kw)
+    except (LookupError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps(rows, indent=2) if args.json else _fmt_table(rows))
+
+
+def cmd_steering_hits(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
+    import steering_trends
+    _trend_cmd(steering_trends.steering_hit_rows, args, conn, plugin=args.plugin, check=args.check)
+
+
+def cmd_stretch_opens(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
+    import steering_trends
+    _trend_cmd(steering_trends.stretch_open_rows, args, conn)
+
+
 def cmd_steering_verdicts(args: argparse.Namespace, conn: sqlite3.Connection) -> None:
     """Print the latest verdicts file; --refresh recomputes from this DB (no write)."""
     import steering_audit
@@ -1641,6 +1661,24 @@ def build_parser() -> argparse.ArgumentParser:
     sp_sv.add_argument("--refresh", action="store_true", help="Recompute from the DB instead of reading the file")
     sp_sv.add_argument("--json", "-j", action="store_true", help="JSON output")
 
+    # steering-hits / stretch-opens — trend lines from the detectors' aggregate tables
+    sp_sh = sub.add_parser(
+        "steering-hits", help="Steering plugin hits per day/session: sentence length, rule counts, lost items")
+    sp_sh.add_argument("--by", choices=["day", "session", "project", "check", "rule"], default="day")
+    sp_sh.add_argument("--since", help="First day, YYYY-MM-DD")
+    sp_sh.add_argument("--change", help="Ruling change day, YYYY-MM-DD: split rows into before/after")
+    sp_sh.add_argument("--project", "-p", help="Filter by project")
+    sp_sh.add_argument("--plugin", help="Filter by plugin")
+    sp_sh.add_argument("--check", help="Filter by check (prose-guard, prose-compare, reply-score, copy-audit)")
+    sp_sh.add_argument("--json", "-j", action="store_true", help="JSON output")
+
+    sp_so = sub.add_parser("stretch-opens", help="Turns where the reader opened a stretchtext stretch")
+    sp_so.add_argument("--by", choices=["day", "project", "form"], default="day")
+    sp_so.add_argument("--since", help="First day, YYYY-MM-DD")
+    sp_so.add_argument("--change", help="Change day, YYYY-MM-DD: split rows into before/after")
+    sp_so.add_argument("--project", "-p", help="Filter by project")
+    sp_so.add_argument("--json", "-j", action="store_true", help="JSON output")
+
     return p
 
 
@@ -1673,6 +1711,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             "dispatch": cmd_dispatch,
             "remediation": cmd_remediation,
             "steering-verdicts": cmd_steering_verdicts,
+            "steering-hits": cmd_steering_hits,
+            "stretch-opens": cmd_stretch_opens,
         }
         handler = dispatch.get(args.command)
         if handler is None:
