@@ -22,7 +22,11 @@ import json
 import os
 import re
 import sys
+from collections import Counter
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from steering_hits import log_hit  # the plugin's own writer, next to this file
 
 PROSE = {".md", ".mdx", ".txt", ".rst"}
 NOT_OURS = re.compile(r"^(LICEN[CS]E|NOTICE|COPYING|THIRD_PARTY|CHANGELOG)", re.I)
@@ -100,27 +104,43 @@ def glue_dash(raw):
 
 
 def score(mod, src, added=None):
-    """Findings on the added lines of src: ({kind: [(line, note, excerpt)]}, words added)."""
+    """Findings on the added lines of src: ({kind: [(line, note, excerpt)], "rules": Counter, "stats": {...}}, words added)."""
     raw = src.splitlines()
     if added is not None:                    # blank what the edit did not add; keep fences so code stays code
         src = "\n".join(l if n in added or FENCE.match(l) else "" for n, l in enumerate(raw, 1))
     src = QUOTED.sub("QUOTE", src)           # the checker counts a quote as one word too
     src = "\n".join("" if l.lstrip().startswith(">") else l for l in src.split("\n"))   # a block quote is a quote
     out = {k: [] for k in KINDS}
+    rules = out["rules"] = Counter()
     for f in mod.check(src, False):
         if f.rule in TELLS:
             out["tell"].append((f.line, f.message.split(":")[0], f.excerpt))
+            rules[f.rule] += 1
         elif f.rule == "word" and f.message.split("'")[1] in STOCK:
             out["tell"].append((f.line, f.message, f.excerpt))
+            rules["word"] += 1
         elif f.rule == "sentence-length":
             n = int(f.message.split()[0])
             if n > LONG:
                 out["very_long" if n > VERY_LONG else "long"].append((f.line, f"{n} words", f.excerpt))
+                rules["sentence-length"] += 1
         elif f.rule == "semicolon":              # the checker reports a line once; count each join in it
-            out["semicolon"] += [(f.line, "semicolon", f.excerpt)] * len(MID_SEMI.findall(raw[f.line - 1]))
+            joins = len(MID_SEMI.findall(raw[f.line - 1]))
+            out["semicolon"] += [(f.line, "semicolon", f.excerpt)] * joins
+            rules["semicolon"] += joins
         elif f.rule == "dash" and glue_dash(raw[f.line - 1]):
             out["dash"].append((f.line, "dash", f.excerpt))
-    return out, sum(len(p.split()) for _, p in mod.paragraphs(mod.strip_markdown(src)))
+            rules["dash"] += 1
+    words = sum(len(p.split()) for _, p in mod.paragraphs(mod.strip_markdown(src)))
+    out["stats"] = stats_of(mod, src, words)
+    return out, words
+
+
+def stats_of(mod, text, words=None):
+    s = mod.summary(text)
+    if words is None:
+        words = sum(len(p.split()) for _, p in mod.paragraphs(mod.strip_markdown(text)))
+    return {"words": words, "avg_sentence": s["avg_words_per_sentence"], "max_sentence": s["max_words_per_sentence"]}
 
 
 def fires(found, words):
@@ -191,13 +211,68 @@ def report(where, found, advice):
     return 2
 
 
-def document(ev):
+LOST = {"fidelity-number": "numbers", "fidelity-url": "urls", "fidelity-quote": "quotes", "fidelity-certainty": "hedges"}
+LOST_NAMES = {"numbers": "number(s)", "urls": "URL(s)", "code": "code span(s)", "flags": "CLI flag(s)",
+              "quotes": "quote(s)", "hedges": "hedge(s)"}
+REWRITE_MIN_WORDS = 6                        # an edit of a shorter span is a value change, not a rewrite
+CODE_TOKEN = re.compile(r"code `(.*?)` from")
+
+
+def lost_kind(finding):
+    if finding.rule in LOST:
+        return LOST[finding.rule]
+    m = CODE_TOKEN.match(finding.message)
+    return "flags" if m and m.group(1).startswith("-") else "code"
+
+
+def rel(path, ev):
     try:
-        path = Path(ev["tool_input"]["file_path"])
-        if (path.suffix.lower() not in PROSE or NOT_OURS.match(path.name) or VENDORED & set(path.parts) or NOTES & {p.name for p in list(path.parents)[:2]}
-                or not path.is_file() or path.stat().st_size > 400_000):
+        return str(path.resolve().relative_to(Path(ev.get("cwd") or os.getcwd()).resolve()))
+    except Exception:
+        return str(path)
+
+
+def compare_pairs(pairs, ev, surface, shown):
+    """Compare (old, new) text pairs, log a prose-compare record (a clean pass too), return (findings, lost counts)."""
+    mod = load_checker()
+    findings = [f for o, n in pairs for f in mod.compare_texts(o, n)]
+    lost = Counter(lost_kind(f) for f in findings)
+    stats = stats_of(mod, "\n\n".join(n for _, n in pairs))
+    log_hit("prose-compare", surface, ev, "report" if findings else "none", len(findings), Counter(f.rule for f in findings), shown,
+            stats, {k: lost.get(k, 0) for k in LOST_NAMES})
+    return findings, lost
+
+
+def rewrite_check(ev, path):
+    """Report what an Edit or MultiEdit took out of existing prose. Pure additions and short value edits are skipped."""
+    try:
+        ti = ev.get("tool_input", {})
+        if ev.get("tool_name") not in ("Edit", "MultiEdit"):
             return 0
-        src = path.read_text(encoding="utf-8", errors="replace")
+        pairs = [(e.get("old_string", ""), e.get("new_string", "")) for e in (ti.get("edits") or [ti])]
+        pairs = [(o, n) for o, n in pairs if len(o.split()) >= REWRITE_MIN_WORDS and n.strip() and o.strip() not in n]
+        if not pairs:
+            return 0
+        findings, lost = compare_pairs(pairs, ev, "doc", rel(path, ev))
+        if not findings:
+            return 0
+    except Exception:
+        return 0
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    parts = ", ".join(f"{lost[k]} {LOST_NAMES[k]}" for k in LOST_NAMES if lost.get(k))
+    print(f"plain-prose {path.name}: this rewrite lost {len(findings)} fact(s) the old text had: {parts}.", file=sys.stderr)
+    for f in findings[:6]:
+        print(f"  {f.message}", file=sys.stderr)
+    print("Put each one back, or leave it out if the cut was on purpose. The write stands. Method: ste80-humanizer skill.",
+          file=sys.stderr)
+    return 2
+
+
+def added_check(ev, path, src):
+    try:
         added = added_lines(ev, src)
         if added is not None and not added:
             return 0
@@ -211,8 +286,22 @@ def document(ev):
         return 0
     seen[str(path)] = seen.get(str(path), 0) + 1
     write_state(ev, seen)
+    log_hit("prose-guard", "doc", ev, "report", sum(len(found[k]) for k in KINDS), found["rules"], rel(path, ev), found["stats"])
     return report(f"{path.name}: this edit added", found,
                   "Leave it if it is a quote, a list of data, or text the reader asked for in this form.")
+
+
+def document(ev):
+    try:
+        path = Path(ev["tool_input"]["file_path"])
+        if (path.suffix.lower() not in PROSE or NOT_OURS.match(path.name) or VENDORED & set(path.parts) or NOTES & {p.name for p in list(path.parents)[:2]}
+                or not path.is_file() or path.stat().st_size > 400_000):
+            return 0
+        src = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return 0
+    first = rewrite_check(ev, path)
+    return max(first, added_check(ev, path, src))
 
 
 def message(ev):
@@ -234,12 +323,111 @@ def message(ev):
         return 0
     seen["message sent back"] = True
     write_state(ev, seen)
+    command = ev["tool_input"]["command"]
+    surface = "pr" if re.search(r"\bgh\s+pr\b", command) else "issue" if re.search(r"\bgh\s+issue\b", command) else "commit"
+    log_hit("prose-guard", surface, ev, "block", sum(len(found[k]) for k in KINDS), found["rules"], "", found["stats"])
     return report("message: the text this command publishes has", found,
                   "The command did not run. Rewrite the text and run it again. "
                   "To publish it as it is, run the same command again.")
 
 
+USAGE = """usage:
+  prose-guard check [--surface doc|commit|pr|issue|reply] [--compare ORIGINAL] [--session ID] [--cwd DIR] [--json] [FILE|-]
+  prose-guard score [--session ID] [--cwd DIR] [--json] [FILE|-]
+  prose-guard            (Claude Code hook: reads the hook event on stdin)
+
+check  scores the text for AI tells and heavy sentences. With --compare it also reports the facts
+       (numbers, code, flags, URLs, quotes, hedges) that ORIGINAL had and the text lost.
+       Exit 0 clean, 1 report (findings, nothing to stop), 2 block (a heavy commit, pr or issue text), 64 unreadable input.
+score  logs and prints words, average and maximum sentence length and rule counts for a reply. Exit 0.
+Both append hit records to $AGENT_STEERING_HITS (off: AGENT_STEERING_LOG=0). Methods: ste80-humanizer skill.
+"""
+
+
+def read_arg(name):
+    if name in (None, "-"):
+        return sys.stdin.read()
+    return Path(name).read_text(encoding="utf-8", errors="replace")
+
+
+def cli(argv):
+    import argparse
+    import contextlib
+    ap = argparse.ArgumentParser(prog="prose-guard", usage=USAGE, add_help=False)
+    ap.add_argument("command", choices=("check", "score"))
+    ap.add_argument("file", nargs="?")
+    ap.add_argument("--surface", default=None, choices=("doc", "commit", "pr", "issue", "reply"))
+    ap.add_argument("--compare", metavar="ORIGINAL")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--session", default="", help="session id for the hit record")
+    ap.add_argument("--cwd", default=None, help="working directory for the hit record (default: the current one)")
+    ap.add_argument("-h", "--help", action="store_true")
+    a = ap.parse_intermixed_args(argv)
+    if a.help:
+        print(USAGE)
+        return 0
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        text = read_arg(a.file)
+        original = read_arg(a.compare) if a.compare else None
+    except OSError as exc:
+        print(f"prose-guard: {exc}", file=sys.stderr)
+        return 64
+    ev = {"cwd": a.cwd or os.getcwd(), "session_id": a.session}
+    if a.command == "score":
+        from prose_score import score_reply
+        result = score_reply(text, ev, "reply") or {"words": 0, "avg_sentence": 0, "max_sentence": 0, "findings": 0, "rules": {}}
+        if a.json:
+            print(json.dumps(result))
+        else:
+            print(f"words {result['words']}, average sentence {result['avg_sentence']}, longest {result['max_sentence']}, "
+                  f"{result['findings']} finding(s)")
+            for rule, n in sorted(result["rules"].items(), key=lambda x: -x[1]):
+                print(f"  {rule}: {n}")
+        return 0
+    surface = a.surface or "doc"
+    if surface == "reply":
+        from prose_score import prose_of
+        text = prose_of(text)
+    mod = load_checker()
+    found, words = score(mod, text)
+    fired = fires(found, words)
+    shown = a.file if a.file not in (None, "-") else ""
+    block = fired and surface in ("commit", "pr", "issue")
+    if fired:
+        log_hit("prose-guard", surface, ev, "block" if block else "report", sum(len(found[k]) for k in KINDS), found["rules"], shown,
+                found["stats"])
+    lost, compared = Counter(), []
+    if original is not None:
+        compared, lost = compare_pairs([(original, text)], ev, surface, shown)
+    if a.json:
+        print(json.dumps({
+            "surface": surface, "action": "block" if block else "report" if fired or compared else "none", "fires": fired,
+            "findings": {k: [{"line": l, "note": n, "excerpt": e} for l, n, e in found[k]] for k in KINDS},
+            "rules": dict(found["rules"]), **found["stats"],
+            "compare": None if original is None else {"lost": {k: lost.get(k, 0) for k in LOST_NAMES},
+                                                      "findings": [{"line": f.line, "rule": f.rule, "message": f.message} for f in compared]}}))
+    else:
+        if fired:
+            with contextlib.redirect_stderr(sys.stdout):
+                report(f"{shown or 'text'}: this text has", found, "Leave it if it is a quote, a list of data, or text the reader asked for in this form.")
+        if compared:
+            print(f"plain-prose {shown or 'text'}: the rewrite lost {len(compared)} fact(s) the original had.")
+            for f in compared[:6]:
+                print(f"  {f.message}")
+        if not fired and not compared:
+            print("clean")
+    if block:
+        return 2
+    return 1 if fired or compared else 0
+
+
 def main():
+    if len(sys.argv) > 1:
+        if sys.argv[1] in ("-h", "--help"):
+            print(USAGE)
+            return 0
+        return cli(sys.argv[1:])
     if os.environ.get("PLAIN_PROSE_DISABLE") == "1":
         return 0
     try:

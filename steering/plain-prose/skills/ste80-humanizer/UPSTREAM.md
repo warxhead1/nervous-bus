@@ -1,7 +1,7 @@
 # Upstream
 
 This directory is a copy of [Dodaios/ste80-humanizer](https://github.com/Dodaios/ste80-humanizer)
-at commit `0d6f7994a581205aba615e0663a4c509d8a35c7d` (version 4.0.0, MIT).
+at commit `dc94757522792c4af70371a81a01465a6079ec28` (version 4.1.0, MIT).
 
 Copied as they are: `SKILL.md`, `references/`, `scripts/ste_check.py`, `LICENSE`,
 `THIRD_PARTY_NOTICES.md`. Left out: the README, the image, the evals and the
