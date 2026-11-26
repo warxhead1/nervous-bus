@@ -33,6 +33,19 @@ The [zellij](https://zellij.dev) WASM plugin (`plugin/`) provides optional in-te
 
 ---
 
+## Steering plugins for Claude Code
+
+Looking for the coding-agent plugins, not the bus? `steering/` holds nine self-contained Claude Code plugins (prose, dispatch, evidence, and others). You can take one without the rest of this repo:
+
+```bash
+claude plugin marketplace add warxhead1/nervous-bus --sparse .claude-plugin steering/plain-prose
+claude plugin install plain-prose@nervous-bus
+```
+
+Each plugin has its own README with the incident behind the rule, what its hooks do, and the other install paths. Start at [steering/README.md](steering/README.md#take-just-one-plugin).
+
+---
+
 ## Why
 
 Projects that live side-by-side on a developer's machine generate rich internal state, but that state is invisible across project boundaries. Nervous-bus exposes a typed, named-channel pub/sub so:

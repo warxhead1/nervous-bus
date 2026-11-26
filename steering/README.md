@@ -3,6 +3,23 @@
 Rulings for coding agents, each packaged as a Claude Code plugin with the check
 that enforces it. Each one earned its place through a real incident.
 
+## Take just one plugin
+
+Every plugin is self-contained: its hooks run only files inside its own folder, through `${CLAUDE_PLUGIN_ROOT}`, and nothing reads another plugin or the bus. Each folder has a README with the incident behind the rule, the hooks and their kill switches. Pick a path by what you want to download.
+
+| you want | command | what you download |
+|---|---|---|
+| one plugin, from this repo | `claude plugin marketplace add warxhead1/nervous-bus --sparse .claude-plugin steering/<name>`, then `claude plugin install <name>@nervous-bus` | the repo's top-level files and `steering/<name>/` only |
+| one plugin, from a copy you control | `steering/tools/export <name> ./out`, then `claude plugin marketplace add ./out` and `claude plugin install <name>@<name>-standalone` | what you copied, nothing else |
+| every steering plugin, no bus | `steering/tools/export --all ./out`, then `claude plugin marketplace add ./out` and `claude plugin install <name>@steering` | the nine plugins |
+| a pinned version | add `#<tag-or-branch>` to the repo: `claude plugin marketplace add warxhead1/nervous-bus#<ref>` | the whole repo at that ref |
+| the skill alone, any agent | `npx skills add https://github.com/warxhead1/nervous-bus/tree/main/steering/<name>/skills/<skill> -a claude-code` | a clone of the repo, then the one skill copied out. No hooks |
+| everything | `claude plugin marketplace add warxhead1/nervous-bus` | the whole repo |
+
+`steering/tools/export` copies only the chosen plugins and the LICENSE, and writes a `marketplace.json` for them. To publish the output yourself, commit it to its own repository or branch and add that.
+
+The plugin docs ([marketplace add and `#ref`](https://code.claude.com/docs/en/plugins/install.md#add-a-marketplace), [`--sparse` and `sparsePaths`](https://code.claude.com/docs/en/plugins/marketplace-reference.md#fields-by-type)) describe the marketplace paths. The `npx skills` tree-URL form is from the [skills CLI](https://github.com/vercel-labs/skills/blob/main/docs/commands.md). A skill alone does not carry the hook, so it holds only the rule an agent has to remember.
+
 ```bash
 claude plugin marketplace add warxhead1/nervous-bus
 claude plugin install human-attention@nervous-bus
@@ -10,15 +27,15 @@ claude plugin install human-attention@nervous-bus
 
 | plugin | what it does |
 |---|---|
-| `human-attention` | Few words on screen; the design carries the meaning. Ships a skill, a copy audit, a hook that reports the copy an edit adds to a UI file, and a session-start ruling. |
-| `evidence-before-done` | A claim of done carries what was observed. Ships a skill, a rubric for judging a screen, a hook that reports stubs and suppressions an edit adds, and a hook that sends the agent back once if it changed a UI file and never looked at the result. |
-| `keep-moving` | No stalling on a wait, no rerunning what cannot change. Ships a skill and a hook that blocks the third identical build or test run when nothing changed. |
-| `model-tiering` | Dispatch only when it pays, and name the model. Ships a skill and a hook that blocks a dispatch with no model. |
-| `isolated-dispatch` | Every agent that edits gets its own worktree; uncommitted work that is not yours is read, never hidden. Ships a skill, a hook that blocks an editing dispatch with no isolation, and a hook that blocks a bare `git stash`, `pop`, `drop`, or `clear`. |
-| `remediation-ladder` | Fix the cause at the highest rung: eliminate, automate, then inform. Ships a skill and a hook that blocks a command that skips a check (`--no-verify`, `HUSKY=0`, a guard's kill switch set inline). |
-| `falsify-your-gate` | A check counts only after you have seen it fail. Ships a skill and a hook that reports a test an edit adds that cannot fail. |
-| `plain-prose` | Prose a person reads once: one idea per sentence, plain words, no AI tells. Ships the `ste80-humanizer` skill (a copy of [Dodaios/ste80-humanizer](https://github.com/Dodaios/ste80-humanizer), MIT), a hook that reports heavy prose an edit adds to a document and sends a heavy commit message or pull request body back once before it is published, and a session-start ruling. |
-| `ub-mode` | Make it work, then make it right, measured: CRAP (complexity the tests miss), duplicated code, and mutation testing. Ships a skill and `ub-gate`, which runs [unclebob](https://github.com/unclebob/ub-mode)'s crapper, dryer, and mutator at pinned versions with no network, plus a faster exact duplicate search that also checks new code against the whole repo. |
+| [`human-attention`](human-attention/README.md) | Few words on screen; the design carries the meaning. Ships a skill, a copy audit, a hook that reports the copy an edit adds to a UI file, and a session-start ruling. |
+| [`evidence-before-done`](evidence-before-done/README.md) | A claim of done carries what was observed. Ships a skill, a rubric for judging a screen, a hook that reports stubs and suppressions an edit adds, and a hook that sends the agent back once if it changed a UI file and never looked at the result. |
+| [`keep-moving`](keep-moving/README.md) | No stalling on a wait, no rerunning what cannot change. Ships a skill and a hook that blocks the third identical build or test run when nothing changed. |
+| [`model-tiering`](model-tiering/README.md) | Dispatch only when it pays, and name the model. Ships a skill and a hook that blocks a dispatch with no model. |
+| [`isolated-dispatch`](isolated-dispatch/README.md) | Every agent that edits gets its own worktree; uncommitted work that is not yours is read, never hidden. Ships a skill, a hook that blocks an editing dispatch with no isolation, and a hook that blocks a bare `git stash`, `pop`, `drop`, or `clear`. |
+| [`remediation-ladder`](remediation-ladder/README.md) | Fix the cause at the highest rung: eliminate, automate, then inform. Ships a skill and a hook that blocks a command that skips a check (`--no-verify`, `HUSKY=0`, a guard's kill switch set inline). |
+| [`falsify-your-gate`](falsify-your-gate/README.md) | A check counts only after you have seen it fail. Ships a skill and a hook that reports a test an edit adds that cannot fail. |
+| [`plain-prose`](plain-prose/README.md) | Prose a person reads once: one idea per sentence, plain words, no AI tells. Ships the `ste80-humanizer` skill (a copy of [Dodaios/ste80-humanizer](https://github.com/Dodaios/ste80-humanizer), MIT), a hook that reports heavy prose an edit adds to a document and sends a heavy commit message or pull request body back once before it is published, and a session-start ruling. |
+| [`ub-mode`](ub-mode/README.md) | Make it work, then make it right, measured: CRAP (complexity the tests miss), duplicated code, and mutation testing. Ships a skill and `ub-gate`, which runs [unclebob](https://github.com/unclebob/ub-mode)'s crapper, dryer, and mutator at pinned versions with no network, plus a faster exact duplicate search that also checks new code against the whole repo. |
 
 ## How a rule reaches the agent
 
