@@ -103,26 +103,15 @@ exclude_regex = "(?i)customer stor|case study"
 notes = "Mixes launches with customer stories."
 
 [[source]]
-id = "openai-dev-changelog"
-name = "OpenAI Developers changelog"
-url = "https://developers.openai.com/changelog"
+id = "openai-api-changelog"
+name = "OpenAI API changelog"
+url = "https://developers.openai.com/api/docs/changelog"
 kind = "page-diff"
 domains = ["models", "harness"]
 signal = 5
 freshness_slo_days = 21
 role = "primary"
-notes = "HTML; the .md variant returned 404."
-
-[[source]]
-id = "openai-api-changelog"
-name = "OpenAI API changelog"
-url = "https://developers.openai.com/api/docs/changelog"
-kind = "page-diff"
-domains = ["models"]
-signal = 4
-freshness_slo_days = 21
-role = "primary"
-notes = ""
+notes = "HTML. developers.openai.com/changelog 301s here; merged the old openai-dev-changelog entry."
 
 [[source]]
 id = "openai-latest-model"
@@ -454,7 +443,7 @@ notes = "Blog moved on 2026-11-10; expect a redirect alarm and a new URL."
 [[source]]
 id = "quantocracy"
 name = "Quantocracy"
-url = "https://quantocracy.com/feed/"
+url = "http://feeds.feedburner.com/Quantocracy"
 kind = "rss"
 domains = ["markets"]
 signal = 3
