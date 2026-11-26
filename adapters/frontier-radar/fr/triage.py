@@ -13,7 +13,8 @@ from pathlib import Path
 from .store import Store
 
 HERE = Path(__file__).resolve().parent.parent
-DEFAULT_CMD = 'claude -p --model haiku --output-format json --tools ""'
+DEFAULT_CMD = ('claude -p --model haiku --output-format json --tools "" --strict-mcp-config '
+               '--disable-slash-commands --no-session-persistence')
 DEFAULT_MIN_CONFIDENCE = 0.6
 TIMEOUT_S = 180
 
@@ -67,6 +68,11 @@ def build_prompt(template: str, profile: str, schema: dict, event: dict, sightin
 def extract_json(stdout: str) -> dict:
     """Accept raw JSON, the claude -p envelope ({"result": "..."}), or JSON inside a code fence."""
     data = json.loads(stdout)
+    if isinstance(data, list):
+        finals = [e for e in data if isinstance(e, dict) and e.get("type") == "result"]
+        if not finals:
+            raise ValueError("no result event in claude output")
+        data = finals[-1]
     if isinstance(data, dict) and "result" in data and isinstance(data["result"], str) and "claim" not in data:
         text = data["result"]
         m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S) or re.search(r"(\{.*\})", text, re.S)
@@ -86,11 +92,9 @@ def run_command(cmd: str, prompt: str, timeout: int = TIMEOUT_S) -> str:
 
 
 def lane_for(result: dict, min_confidence: float) -> str:
-    if result["action"] == "ignore":
-        return "dropped"
     if result["confidence"] < min_confidence:
         return "review"
-    return "digest"
+    return "dropped" if result["action"] == "ignore" else "digest"
 
 
 def triage(store: Store, now: datetime, cmd: str | None = None, limit: int = 25,

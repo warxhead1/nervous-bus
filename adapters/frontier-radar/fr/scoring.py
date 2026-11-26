@@ -102,7 +102,7 @@ def rescore(store: Store, now: datetime, fetch_json) -> dict:
         if eng:
             store.add_snapshot(ev["event_key"], label, now, eng)
             taken += 1
-        elif label == "t72" or age >= SNAPSHOT_AGES[1][1]:
+        elif label == "t72":
             store.add_snapshot(ev["event_key"], label, now, {})
     changed = refresh_scores(store)
     return {"snapshots": taken, "rescored": changed}

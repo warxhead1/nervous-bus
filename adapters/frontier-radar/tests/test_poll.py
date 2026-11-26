@@ -227,6 +227,19 @@ def test_sitemap_first_run_honors_lookback_then_reports_lastmod_changes():
     assert r.new_events == ["https://anthropic.example/news/old-post"]
 
 
+def test_sitemap_bulk_lastmod_bump_is_not_news():
+    store = Store(":memory:")
+    url = "https://www.anthropic.example/sitemap.xml"
+    s = src("anthropic", "sitemap-lastmod", url, signal=5, path_regex="/news/", lookback_days=30, max_items=50)
+    bulk = "".join(f"<url><loc>https://www.anthropic.example/news/p{i}</loc><lastmod>2026-11-13T09:00:00Z</lastmod></url>"
+                   for i in range(30))
+    real = "<url><loc>https://www.anthropic.example/news/real</loc><lastmod>2026-11-25T09:00:00Z</lastmod></url>"
+    xml = f"<urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'>{bulk}{real}</urlset>".encode()
+    r = poll_source(s, store, FakeFetcher({url: xml}), no_wait_throttle(), NOW)
+    assert r.new_events == ["https://anthropic.example/news/real"]
+    assert "bulk" in r.detail
+
+
 def test_real_sitemap_fixture_parses_into_news_items():
     store = Store(":memory:")
     url = "https://www.anthropic.com/sitemap.xml"

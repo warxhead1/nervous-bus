@@ -1,0 +1,9 @@
+[Unit]
+Description=frontier-radar digest weekly
+
+[Timer]
+OnCalendar=Mon *-*-* 07:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

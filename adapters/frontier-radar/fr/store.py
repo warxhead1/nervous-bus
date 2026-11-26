@@ -116,8 +116,6 @@ class Store:
         """Store one sighting. Returns (event_key, is_new_event)."""
         key = key or event_key(item.url)
         role = "primary" if src.role == "primary" else ("bot-mirror" if item.bot else "mirror")
-        if item.bot:
-            role = "bot-mirror"
         seen_url = item.discussion_url or item.url
         row = self.db.execute("SELECT * FROM events WHERE event_key=?", (key,)).fetchone()
         domains = list(src.domains)

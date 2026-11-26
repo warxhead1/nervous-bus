@@ -1,0 +1,12 @@
+[Unit]
+Description=frontier-radar engagement rescore (T+24h and T+72h snapshots)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=FRONTIER_RADAR_STATE=%h/.local/state/frontier-radar/radar.db
+ExecStart=%h/projects/nervous-bus/adapters/frontier-radar/frontier-radar rescore
+TimeoutStartSec=15min
+Nice=10
+SyslogIdentifier=frontier-radar-rescore

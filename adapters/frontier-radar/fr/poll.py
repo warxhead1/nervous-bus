@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
@@ -21,6 +22,7 @@ DEFAULT_MAX_AGE_DAYS = 30
 FAIL_ALARM_AFTER = 3
 PAGE_LINES_KEPT = 5000
 ADDED_LINES_IN_SUMMARY = 20
+BULK_LASTMOD_PER_DAY = 10
 
 
 @dataclass
@@ -71,7 +73,12 @@ def _sitemap_items(src: Source, store: Store, resp: Response, now: datetime) -> 
         slug = urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1].replace("-", " ")
         out.append((Item(url=url, title=slug or url, published_at=lastmod), ""))
     store.save_sitemap(src.id, rows)
-    return out, "ok"
+    per_day = Counter(it.published_at.date() for it, _ in out if it.published_at)
+    bulk = {d for d, n in per_day.items() if n > BULK_LASTMOD_PER_DAY}
+    kept = [(it, k) for it, k in out if not (it.published_at and it.published_at.date() in bulk)]
+    kept.sort(key=lambda p: p[0].published_at or now, reverse=True)
+    note = f"bulk lastmod ignored: {len(out) - len(kept)} urls on {len(bulk)} day(s)" if bulk else "ok"
+    return kept[:src.max_items], note
 
 
 def _gate(src: Source, items: list[Item], now: datetime, default_max_age: int) -> list[Item]:
@@ -143,7 +150,8 @@ def poll_source(src: Source, store: Store, fetcher: Fetcher, throttle: Throttle,
         store.raise_alarm(src.id, "error", f"parse error: {e}", now)
         return PollResult(src.id, "error", detail=f"parse error: {e}")
 
-    res = PollResult(src.id, "baseline" if outcome == "baseline" else "ok")
+    res = PollResult(src.id, "baseline" if outcome == "baseline" else "ok",
+                     detail="" if outcome in ("ok", "baseline", "changed") else outcome)
     for item, key in keyed:
         ekey, is_new = store.record_sighting(src, item, now, key or None)
         res.sightings += 1
