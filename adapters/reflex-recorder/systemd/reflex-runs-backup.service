@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily online backup of reflex runs.db (keeps 3)
+
+[Service]
+Type=oneshot
+ExecStart=%h/.pyenv/versions/3.11.13/bin/python3 %h/projects/nervous-bus/adapters/reflex-recorder/runs_backup.py
+Nice=10
