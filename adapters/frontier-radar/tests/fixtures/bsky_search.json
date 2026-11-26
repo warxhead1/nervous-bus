@@ -1,0 +1,298 @@
+{
+ "posts": [
+  {
+   "uri": "at://did:plc:jvx6mtyblgqqayllyth67yz4/app.bsky.feed.post/3n3a6sfg36m2r",
+   "cid": "bafyreiaxztk7gviamek3sdn7gajxr7osf7m44g6ur7lge4tq3gq5uvs7cq",
+   "author": {
+    "handle": "kiberblick.bsky.social"
+   },
+   "record": {
+    "$type": "app.bsky.feed.post",
+    "createdAt": "2026-11-26T17:22:38.655Z",
+    "embed": {
+     "$type": "app.bsky.embed.external",
+     "external": {
+      "description": "Skills over MCP startet als Beta in Claude und Claude Code, Tasks und Elicitation sind fertig. Was Server-Teams davon haben und was Admins pr\u00fcfen sollten.",
+      "thumb": {
+       "$type": "blob",
+       "ref": {
+        "$link": "bafkreic3ukjbxb5ci4i7hljb35pufsdvyca2uqkbhpqheavtqoyautb6bm"
+       },
+       "mimeType": "image/png",
+       "size": 196351
+      },
+      "title": "MCP-Server liefern jetzt eigene Skills mit - KIberblick",
+      "uri": "https://kiberblick.de/aktuell/2026/2026-11-26-mcp-server-liefern-skills-mit/"
+     }
+    },
+    "facets": [
+     {
+      "features": [
+       {
+        "$type": "app.bsky.richtext.facet#link",
+        "uri": "https://kiberblick.de/aktuell/2026/2026-11-26-mcp-server-liefern-skills-mit/"
+       }
+      ],
+      "index": {
+       "byteEnd": 257,
+       "byteStart": 181
+      }
+     }
+    ],
+    "langs": [
+     "de"
+    ],
+    "text": "MCP-Server liefern jetzt eigene Skills mit: Werkzeuge und Gebrauchsanweisung kommen aus einer Hand. Was Skills over MCP, Tasks und Elicitation f\u00fcr Server-Teams und Admins hei\u00dfen. https://kiberblick.de/aktuell/2026/2026-11-26-mcp-server-liefern-skills-mit/"
+   },
+   "embed": {
+    "external": {
+     "uri": "https://kiberblick.de/aktuell/2026/2026-11-26-mcp-server-liefern-skills-mit/",
+     "title": "MCP-Server liefern jetzt eigene Skills mit - KIberblick",
+     "description": "Skills over MCP startet als Beta in Claude und Claude Code, Tasks und Elicitation sind fertig. Was Server-Teams davon haben und was Admins pr\u00fcfen sollten.",
+     "thumb": "https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:jvx6mtyblgqqayllyth67yz4/bafkreic3ukjbxb5ci4i7hljb35pufsdvyca2uqkbhpqheavtqoyautb6bm"
+    },
+    "$type": "app.bsky.embed.external#view"
+   },
+   "bookmarkCount": 0,
+   "repostCount": 0,
+   "likeCount": 0,
+   "quoteCount": 0,
+   "indexedAt": "2026-11-26T17:22:40.043Z"
+  },
+  {
+   "uri": "at://did:plc:55nugrv736sbwlhzbaa7vjoh/app.bsky.feed.post/3n3a4vqvkj222",
+   "cid": "bafyreicq6nqfrbju77fvjv5rxqcdipc2kjlyba5vzirg2kccjtwt63lmim",
+   "author": {
+    "handle": "coolprobn.bsky.social"
+   },
+   "record": {
+    "$type": "app.bsky.feed.post",
+    "createdAt": "2026-11-26T16:48:43.927Z",
+    "embed": {
+     "$type": "app.bsky.embed.external",
+     "external": {
+      "description": "Your AI writes Rails tests fast. Are they worth keeping? AI coding agents can write hundreds of Rails tests in minutes. But more tests don't necessarily mean...",
+      "thumb": {
+       "$type": "blob",
+       "ref": {
+        "$link": "bafkreib3znvnuajzlng36gxpgwe2u2s34cxx7neddx4ffof3zl237rublu"
+       },
+       "mimeType": "image/jpeg",
+       "size": 240528
+      },
+      "title": "/minitest-expert - the Rails testing skill for AI agents",
+      "uri": "https://coolprobn.gumroad.com/l/minitest-expert"
+     }
+    },
+    "facets": [
+     {
+      "features": [
+       {
+        "$type": "app.bsky.richtext.facet#link",
+        "uri": "https://coolprobn.gumroad.com/l/minitest-expert"
+       }
+      ],
+      "index": {
+       "byteEnd": 74,
+       "byteStart": 37
+      }
+     }
+    ],
+    "langs": [
+     "en"
+    ],
+    "reply": {
+     "parent": {
+      "cid": "bafyreiakikwme55rlvsadl7utavphfxzxwerldqntccjmt37osr45dduc4",
+      "uri": "at://did:plc:55nugrv736sbwlhzbaa7vjoh/app.bsky.feed.post/3n3a4vqswjk22"
+     },
+     "root": {
+      "cid": "bafyreiakikwme55rlvsadl7utavphfxzxwerldqntccjmt37osr45dduc4",
+      "uri": "at://did:plc:55nugrv736sbwlhzbaa7vjoh/app.bsky.feed.post/3n3a4vqswjk22"
+     }
+    },
+    "text": "Grab the minitest-expert skill here: coolprobn.gumroad.com/l/minitest-e...\n\nWorks with Claude Code, Cursor and any other AI coding agent that supports Agent Skills."
+   },
+   "embed": {
+    "external": {
+     "uri": "https://coolprobn.gumroad.com/l/minitest-expert",
+     "title": "/minitest-expert - the Rails testing skill for AI agents",
+     "description": "Your AI writes Rails tests fast. Are they worth keeping? AI coding agents can write hundreds of Rails tests in minutes. But more tests don't necessarily mean...",
+     "thumb": "https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:55nugrv736sbwlhzbaa7vjoh/bafkreib3znvnuajzlng36gxpgwe2u2s34cxx7neddx4ffof3zl237rublu"
+    },
+    "$type": "app.bsky.embed.external#view"
+   },
+   "bookmarkCount": 0,
+   "repostCount": 0,
+   "likeCount": 0,
+   "quoteCount": 0,
+   "indexedAt": "2026-11-26T16:48:47.251Z"
+  },
+  {
+   "uri": "at://did:plc:hzebgrkbc42iyxsrmwsdjnej/app.bsky.feed.post/3n3a33jktbe2s",
+   "cid": "bafyreidyy6452faibem6i6hsouxhul34fwgezmtp65mq4gpe3sjoifcctu",
+   "author": {
+    "handle": "throwable.bsky.social"
+   },
+   "record": {
+    "$type": "app.bsky.feed.post",
+    "createdAt": "2026-11-26T16:16:10+00:00",
+    "facets": [
+     {
+      "features": [
+       {
+        "$type": "app.bsky.richtext.facet#link",
+        "uri": "https://github.com/jardisTools/dev-skills"
+       }
+      ],
+      "index": {
+       "byteEnd": 233,
+       "byteStart": 187
+      }
+     }
+    ],
+    "langs": [
+     "ja"
+    ],
+    "text": "\ud83d\udce6 jardis/dev-skills v1.52.2\n\nComposer plugin that installs Jardis Skills and aggregates AGENTS.md for AI-assisted development (Claude Code, Codex, Cursor, GitHub Copilot, Gemini CLI)\n\n\ud83d\udd17 https://github.com/jardisTools/dev-skills"
+   },
+   "bookmarkCount": 0,
+   "repostCount": 0,
+   "likeCount": 0,
+   "quoteCount": 0,
+   "indexedAt": "2026-11-26T16:16:10.249Z"
+  },
+  {
+   "uri": "at://did:plc:qomkdnxrqw3gkbytdxea5z65/app.bsky.feed.post/3n37vjbqbhu2c",
+   "cid": "bafyreifyshyoascp7jquh7ydooxsfnbfijcre6s3dywordbfdfmpdtlnby",
+   "author": {
+    "handle": "druce.ai"
+   },
+   "record": {
+    "$type": "app.bsky.feed.post",
+    "createdAt": "2026-11-26T14:36:28.930311Z",
+    "embed": {
+     "$type": "app.bsky.embed.external",
+     "external": {
+      "description": "Skills over MCP, in beta in Claude and Claude Code, lets MCP servers ship workflow instructions with their tools, so connecting a server means approving both.",
+      "thumb": {
+       "$type": "blob",
+       "ref": {
+        "$link": "bafkreib756yfbe6rxq3ekbh7zepye2uxf6d4ivydxx5tajz5hnuvdvu3ze"
+       },
+       "mimeType": "image/png",
+       "size": 273750
+      },
+      "title": "Skills over MCP changes what teams approve | VentureBeat",
+      "uri": "https://venturebeat.com/technology/mcp-servers-can-now-deliver-ai-agent-skills-changing-what-companies-approve-when-they-connect-one"
+     }
+    },
+    "text": "Anthropic launches Skills over MCP public beta in Claude and Claude Code, letting MCP servers deliver reusable agent workflow instructions alongside tools"
+   },
+   "embed": {
+    "external": {
+     "uri": "https://venturebeat.com/technology/mcp-servers-can-now-deliver-ai-agent-skills-changing-what-companies-approve-when-they-connect-one",
+     "title": "Skills over MCP changes what teams approve | VentureBeat",
+     "description": "Skills over MCP, in beta in Claude and Claude Code, lets MCP servers ship workflow instructions with their tools, so connecting a server means approving both.",
+     "thumb": "https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:qomkdnxrqw3gkbytdxea5z65/bafkreib756yfbe6rxq3ekbh7zepye2uxf6d4ivydxx5tajz5hnuvdvu3ze"
+    },
+    "$type": "app.bsky.embed.external#view"
+   },
+   "bookmarkCount": 0,
+   "repostCount": 0,
+   "likeCount": 0,
+   "quoteCount": 0,
+   "indexedAt": "2026-11-26T14:36:30.244Z"
+  },
+  {
+   "uri": "at://did:plc:shvwbxopy7nkqebf4z6ep3rl/app.bsky.feed.post/3n37t62zeng2f",
+   "cid": "bafyreiaszxyb4fc4oguizl4nn355vwtj45idcu57yg5k6gadfj5ccii6pi",
+   "author": {
+    "handle": "midu.dev"
+   },
+   "record": {
+    "$type": "app.bsky.feed.post",
+    "createdAt": "2026-11-26T13:54:25.374Z",
+    "embed": {
+     "$type": "app.bsky.embed.images",
+     "images": [
+      {
+       "alt": "Una interfaz oscura muestra un icono naranja de lista y una figura pixelada. El t\u00edtulo dice Gu\u00eda pr\u00e1ctica para publicar con Claude Code; el texto explica c\u00f3mo usar /ship y ajustar las preferencias de seguimiento, con un tono informativo.",
+       "aspectRatio": {
+        "height": 716,
+        "width": 1274
+       },
+       "image": {
+        "$type": "blob",
+        "ref": {
+         "$link": "bafkreif4fetrhxw364cp5w26cfi6xnrphy66ijeluidbdu5x22dpun64fy"
+        },
+        "mimeType": "image/png",
+        "size": 84074
+       }
+      }
+     ]
+    },
+    "facets": [
+     {
+      "features": [
+       {
+        "$type": "app.bsky.richtext.facet#link",
+        "uri": "https://claude.dev/blog/the-work-after-you-open-a-pr/"
+       }
+      ],
+      "index": {
+       "byteEnd": 196,
+       "byteStart": 170
+      }
+     }
+    ],
+    "langs": [
+     "es"
+    ],
+    "text": "Gu\u00eda oficial de Antrhopic sobre c\u00f3mo desplegar c\u00f3digo a producci\u00f3n usando Claude Code: mejores pr\u00e1cticas, automatizaci\u00f3n de revisiones y skills. \u00a1Muy interesante! claude.dev/blog/the-wor..."
+   },
+   "embed": {
+    "images": [
+     {
+      "thumb": "https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:shvwbxopy7nkqebf4z6ep3rl/bafkreif4fetrhxw364cp5w26cfi6xnrphy66ijeluidbdu5x22dpun64fy",
+      "fullsize": "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:shvwbxopy7nkqebf4z6ep3rl/bafkreif4fetrhxw364cp5w26cfi6xnrphy66ijeluidbdu5x22dpun64fy",
+      "alt": "Una interfaz oscura muestra un icono naranja de lista y una figura pixelada. El t\u00edtulo dice Gu\u00eda pr\u00e1ctica para publicar con Claude Code; el texto explica c\u00f3mo usar /ship y ajustar las preferencias de seguimiento, con un tono informativo.",
+      "aspectRatio": {
+       "height": 716,
+       "width": 1274
+      }
+     }
+    ],
+    "$type": "app.bsky.embed.images#view"
+   },
+   "bookmarkCount": 0,
+   "repostCount": 1,
+   "likeCount": 3,
+   "quoteCount": 0,
+   "indexedAt": "2026-11-26T13:54:26.147Z"
+  },
+  {
+   "uri": "at://did:plc:ewsx7eeussuk62hxcuxajyzd/app.bsky.feed.post/3n37ssyiw5c2m",
+   "cid": "bafyreieyvkesmojxd42v6amptg2xz4phlrsbumh4y4767uac67fccewusa",
+   "author": {
+    "handle": "merangababu.bsky.social"
+   },
+   "record": {
+    "$type": "app.bsky.feed.post",
+    "createdAt": "2026-11-26T13:48:13.906Z",
+    "langs": [
+     "en"
+    ],
+    "text": "Beacon gives your AI coding agents a memory. It records sessions across Claude Code, Cursor, Codex and 20+ tools, then turns fixes into reusable skills. #1 on Product Hunt Nov 2, open source, free. Fix once, remember everywhere."
+   },
+   "bookmarkCount": 0,
+   "repostCount": 0,
+   "likeCount": 2,
+   "quoteCount": 0,
+   "indexedAt": "2026-11-26T13:48:14.152Z"
+  }
+ ],
+ "cursor": "eyJzIjpbMTc5NTY5MTYxMzAwMCwiZGlkOnBsYzpoemViZ3JrYmM0Mml5eHNybXdzZGpuZWoiLCIzbjM3azZmd3BzbjJwIl19",
+ "hitsTotal": 7183
+}

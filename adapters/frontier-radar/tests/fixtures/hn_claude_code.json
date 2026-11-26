@@ -1,0 +1,126 @@
+{
+ "exhaustive": {
+  "nbHits": false,
+  "typo": false
+ },
+ "exhaustiveNbHits": false,
+ "exhaustiveTypo": false,
+ "hits": [
+  {
+   "_tags": [
+    "story",
+    "author_localix",
+    "story_50657255"
+   ],
+   "author": "localix",
+   "created_at": "2026-11-26T17:10:11Z",
+   "created_at_i": 1795713011,
+   "num_comments": 0,
+   "objectID": "50657255",
+   "points": 1,
+   "story_id": 50657255,
+   "title": "Keep Claude Code's prompt cache warm over lunch, if your breaks pay",
+   "updated_at": "2026-11-26T17:11:59Z",
+   "url": "https://github.com/localixai/tokendoctor/blob/main/site/content/docs/keepalive.md"
+  },
+  {
+   "_tags": [
+    "story",
+    "author_derstruct",
+    "story_50656688",
+    "show_hn"
+   ],
+   "author": "derstruct",
+   "created_at": "2026-11-26T16:09:36Z",
+   "created_at_i": 1795709376,
+   "num_comments": 0,
+   "objectID": "50656688",
+   "points": 1,
+   "story_id": 50656688,
+   "story_text": "Neui is an AI agent and a web framework built as one stack. The core is a server-driven Go web framework (<a href=\"https:&#x2F;&#x2F;github.com&#x2F;doors-dev&#x2F;doors\" rel=\"nofollow\">https:&#x2F;&#x2F;github.com&#x2F;doors-dev&#x2F;doors</a>); neui (<a href=\"https:&#x2F;&#x2F;github.com&#x2F;doors-dev&#x2F;neui\" rel=\"nofollow\">https:&#x2F;&#x2F;github.com&#x2F;doors-dev&#x2F;neui</a>) turns each page into an agent harness.<p>FEATURES:<p><i>The agent sees &amp; operates UI.</i>\nAnnotate what agent can access (links, inputs, buttons), so agent sees it and can assist user with UI operations or even automate it with scripting.<p><pre><code>   ~&gt;neui.Use{ Desc:&quot;submit the form&quot; } &lt;button&gt;Submit&lt;&#x2F;button&gt;\n</code></pre>\nor expose context data for the agent:<p><pre><code>   &lt;div class=&quot;card&quot;&gt;\n       ~neui.Data{Text: &quot;the product shown in the card&quot;, Object: product}\n       ...\n   &lt;&#x2F;div&gt;\n\n</code></pre>\n<i>Dynamic tools, right in the markup</i><p>Same way as you render a button to the user, you give the agent a tool. No endpoints or lifecycle management needed.<p><pre><code>  ~(if user.IsAdmin() {\n      ~neui.Tool[Refund, Receipt]{\n          Name: &quot;refund&quot;,\n          Desc: &quot;Refund the order&quot;,\n          Handler: orders.Refund,\n      }\n  })\n</code></pre>\n<i>Work environment</i><p>Isolated file workspaces and sandboxed scripting (&quot;code mode&quot;) out of the box.<p><i>Agentic apps</i><p>When a user needs something your UI doesn&#x27;t have, agent builds it on demand.<p>Complete chat experience<p>Thread list, history, message edits, full-text search, a message queue and automatic compaction.<p>Batteries included<p>MCP connector, web search and .xlsx tools, rich building blocks library for generative apps.<p>COMPARED TO COPILOT KIT:<p>- Agent thread runs on the server, so browser can&#x27;t rewrite the history&#x2F;tools to use your LLM backend + less traffic and faster tool-loops<p>- System prompt and provided tool list do not change during operation - it caches and stays hot (because it&#x27;s usually the same for all your users!)<p>- Pull-based, targeted UI sync; agent monitors only parts of UI that are relevant to the task (compared to full state attached to any user message)<p>- Neui is already a harness with its own sandbox - just bring your model.<p>- For generative UI agent writes a small app on specialized micro framework; agent doesn&#x27;t need to answer each click or load user input&#x2F;API responses into context<p>- CON: Is not stack-agnostic, like AG-UI stuff<p>TRY IT:<p>The repo has a demo app with all of this:<p><pre><code>  git clone https:&#x2F;&#x2F;github.com&#x2F;doors-dev&#x2F;neui &amp;&amp; cd neui\n  DEEPSEEK_API_KEY=... go run .&#x2F;examples&#x2F;business-systems&#x2F;backoffice\n</code></pre>\nThen open http:&#x2F;&#x2F;localhost:8095. Claude, GPT, Gemini, DeepSeek and any OpenAI-compatible provider will work.<p>STATUS:<p>Both doors and neui are Apache-2.0. I released the first version about 3 weeks ago, so it&#x27;s early and I am still optimizing some system instructions. Neui itself took me 3 months, on top of the 2 years I spent on the framework underneath (it&#x27;s awesome, btw), which made it possible.",
+   "title": "Show HN: Neui \u2013 Go web apps with a built-in AI agent",
+   "updated_at": "2026-11-26T16:14:28Z",
+   "url": "https://github.com/doors-dev/neui"
+  },
+  {
+   "_tags": [
+    "story",
+    "author_dima7711",
+    "story_50655639",
+    "show_hn"
+   ],
+   "author": "dima7711",
+   "children": [
+    50655641,
+    50655953
+   ],
+   "created_at": "2026-11-26T14:25:08Z",
+   "created_at_i": 1795703108,
+   "num_comments": 1,
+   "objectID": "50655639",
+   "points": 6,
+   "story_id": 50655639,
+   "title": "Show HN: Silent dictation for Claude Code via on-device lip reading",
+   "updated_at": "2026-11-26T17:17:29Z",
+   "url": "https://github.com/batanus/lip-dictation"
+  },
+  {
+   "_tags": [
+    "story",
+    "author_suhailparad",
+    "story_50655460",
+    "ask_hn"
+   ],
+   "author": "suhailparad",
+   "children": [
+    50655464
+   ],
+   "created_at": "2026-11-26T14:07:33Z",
+   "created_at_i": 1795702053,
+   "num_comments": 0,
+   "objectID": "50655460",
+   "points": 1,
+   "story_id": 50655460,
+   "story_text": "Bao is a tiny panda that floats on your desktop and shows, live, what Claude Code is doing: thinking, reading, typing, running commands, waiting for you, asking for permission, or done. It calls out on the moments that matter.",
+   "title": "Bao \u2013 A Desktop Pet for Claude",
+   "updated_at": "2026-11-26T14:08:57Z"
+  },
+  {
+   "_tags": [
+    "story",
+    "author_me2too",
+    "story_50655243"
+   ],
+   "author": "me2too",
+   "created_at": "2026-11-26T13:43:14Z",
+   "created_at_i": 1795700594,
+   "num_comments": 0,
+   "objectID": "50655243",
+   "points": 4,
+   "story_id": 50655243,
+   "title": "Back up your Claude Code sessions and use them on any machine",
+   "updated_at": "2026-11-26T17:29:30Z",
+   "url": "https://session-vault.dev/"
+  }
+ ],
+ "hitsPerPage": 8,
+ "nbHits": 10238,
+ "nbPages": 125,
+ "page": 0,
+ "params": "query=claude+code&tags=story&hitsPerPage=8&advancedSyntax=true&analyticsTags=backend",
+ "processingTimeMS": 17,
+ "processingTimingsMS": {
+  "_request": {
+   "queue": 52,
+   "roundTrip": 16
+  },
+  "fetch": {
+   "query": 2,
+   "scanning": 13,
+   "total": 16
+  },
+  "total": 17
+ },
+ "query": "claude code",
+ "serverTimeMS": 70
+}
