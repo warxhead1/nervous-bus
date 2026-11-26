@@ -16,7 +16,7 @@ Agent prose reads as heavy: long sentences that pack cause, condition and fix to
 | `prose-guard` | PreToolUse on Bash | scores a `git commit` message and the body of a `gh pr` or `gh issue` command before it runs, and blocks (exit 2) a heavy one once. The next such command runs unchecked, so the same text or a rewrite always goes through | same switch |
 | `cue` | UserPromptSubmit | adds the rule to context when the prompt asks for writing | `STEERING_CUES_DISABLE=1` |
 
-In progress, pull request pending: a Stop hook that scores the agent's chat reply, and a hit log of what the guard reported. Neither is in the plugin yet.
+A Stop hook (`hooks/reply-score`) scores the agent's final reply and prints nothing. Every check also appends counts, never text, to a local hit log at `$AGENT_STEERING_HITS` (default `~/.local/state/agent-steering/hits.jsonl`; off: `AGENT_STEERING_LOG=0`). An edit that rewrites prose is checked for lost numbers, code, flags, URLs, quotes and hedges with upstream's `--compare`.
 
 ## What this adds to upstream
 
@@ -87,7 +87,7 @@ Each piece below works alone. Nothing here needs Claude Code, and nothing needs 
 
 | check | what it takes | effect | event and matcher | off |
 |---|---|---|---|---|
-| [`prose-guard`](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/prose-guard) | One JSON object on stdin, as Claude Code sends to a hook. `session_id`, `hook_event_name`, `tool_name` (Write, Edit, MultiEdit) and `tool_input` with `file_path` and `content` or `old_string`/`new_string`, or `tool_name` (Bash) and `tool_input.command` for a `git commit` or `gh pr`/`gh issue` command. Exit 0 allows. Exit 2 means the text is heavy (a document edit is reported and stands; a commit or PR command is sent back once), with the message on stderr. Bad input or a kill switch always exits 0. Keep with it: `ste_check.py`. | report and block-once | PostToolUse; PreToolUse on Write\|Edit\|MultiEdit; Bash | `PLAIN_PROSE_DISABLE=1` |
+| [`prose-guard`](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/prose-guard) | One JSON object on stdin, as Claude Code sends to a hook. `session_id`, `hook_event_name`, `tool_name` (Write, Edit, MultiEdit) and `tool_input` with `file_path` and `content` or `old_string`/`new_string`, or `tool_name` (Bash) and `tool_input.command` for a `git commit` or `gh pr`/`gh issue` command. Exit 0 allows. Exit 2 means the text is heavy (a document edit is reported and stands; a commit or PR command is sent back once), with the message on stderr. Bad input or a kill switch always exits 0. Keep with it: `ste_check.py`, `steering_hits.py`, `prose_score.py`. | report and block-once | PostToolUse; PreToolUse on Write\|Edit\|MultiEdit; Bash | `PLAIN_PROSE_DISABLE=1` |
 | [`ste_check.py`](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/scripts/ste_check.py) | `ste_check.py [--strict] [--json] FILE...`, or `-` for stdin. Prints findings with line numbers; with `--json`, a JSON list. | cli | run by hand |  |
 | [`cue`](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/cue) | One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0. Keep with it: `cues.json`. | context | UserPromptSubmit | `STEERING_CUES_DISABLE=1` |
 

@@ -22,7 +22,8 @@
       "files": [
         "steering/human-attention/skills/human-attention/SKILL.md",
         "steering/human-attention/skills/human-attention/scripts/copy-audit",
-        "steering/human-attention/skills/human-attention/scripts/copy-audit-hook"
+        "steering/human-attention/skills/human-attention/scripts/copy-audit-hook",
+        "steering/human-attention/skills/human-attention/scripts/steering_hits.py"
       ],
       "purpose": "The `human-attention` method as an Agent Skills folder (SKILL.md and its references).",
       "requires": [],
@@ -30,7 +31,8 @@
       "file_urls": [
         "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/SKILL.md",
         "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/scripts/copy-audit",
-        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/scripts/copy-audit-hook"
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/scripts/copy-audit-hook",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/scripts/steering_hits.py"
       ]
     },
     {
@@ -45,7 +47,8 @@
       "kill_switch": "COPY_AUDIT_DISABLE=1",
       "input": "One JSON object on stdin, as Claude Code sends to a hook. `tool_name` (Write, Edit, MultiEdit) and `tool_input` with `file_path` and `content` or `old_string`/`new_string`. Exit 0 allows. Exit 2 means the edit added too much copy; the write stands, with the message on stderr. Bad input or a kill switch always exits 0.",
       "requires": [
-        "steering/human-attention/skills/human-attention/scripts/copy-audit"
+        "steering/human-attention/skills/human-attention/scripts/copy-audit",
+        "steering/human-attention/skills/human-attention/scripts/steering_hits.py"
       ],
       "smoke": {
         "files": {
@@ -69,7 +72,8 @@
       },
       "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/scripts/copy-audit-hook",
       "require_urls": [
-        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/scripts/copy-audit"
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/scripts/copy-audit",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/human-attention/skills/human-attention/scripts/steering_hits.py"
       ]
     },
     {
@@ -781,7 +785,9 @@
       "kill_switch": "PLAIN_PROSE_DISABLE=1",
       "input": "One JSON object on stdin, as Claude Code sends to a hook. `session_id`, `hook_event_name`, `tool_name` (Write, Edit, MultiEdit) and `tool_input` with `file_path` and `content` or `old_string`/`new_string`, or `tool_name` (Bash) and `tool_input.command` for a `git commit` or `gh pr`/`gh issue` command. Exit 0 allows. Exit 2 means the text is heavy (a document edit is reported and stands; a commit or PR command is sent back once), with the message on stderr. Bad input or a kill switch always exits 0.",
       "requires": [
-        "steering/plain-prose/skills/ste80-humanizer/scripts/ste_check.py"
+        "steering/plain-prose/skills/ste80-humanizer/scripts/ste_check.py",
+        "steering/plain-prose/hooks/steering_hits.py",
+        "steering/plain-prose/hooks/prose_score.py"
       ],
       "smoke": {
         "env": {
@@ -803,7 +809,9 @@
       },
       "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/prose-guard",
       "require_urls": [
-        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/scripts/ste_check.py"
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/scripts/ste_check.py",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/steering_hits.py",
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/prose_score.py"
       ]
     },
     {

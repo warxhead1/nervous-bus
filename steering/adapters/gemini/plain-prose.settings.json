@@ -24,6 +24,17 @@
         "matcher": "write_file|replace"
       }
     ],
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness gemini --event Stop \"$STEERING_HOME/plain-prose/hooks/reply-score\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "BeforeAgent": [
       {
         "hooks": [

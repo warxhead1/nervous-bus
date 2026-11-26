@@ -24,6 +24,16 @@
       "matcher": "write"
     },
     {
+      "name": "plain-prose-reply-score-Stop",
+      "trigger": "Stop",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event Stop \"$STEERING_HOME/plain-prose/hooks/reply-score\""
+      },
+      "timeout": 5,
+      "enabled": true
+    },
+    {
       "name": "plain-prose-cue-UserPromptSubmit",
       "trigger": "UserPromptSubmit",
       "action": {
