@@ -4,7 +4,7 @@ Testing the merged rules from `ste80-humanizer` and the new readability constrai
 
 ## Adding literal verbs, cause-result items, and silent ordering closes four gaps without touching upstream files
 
-Keeping [the upstream skill](file:///home/eric/data2/worktrees/nervous-bus/humanizerv2/steering/plain-prose/skills/ste80-humanizer/SKILL.md) untouched preserves clean syncs with `Dodaios/ste80-humanizer`, while updating [ruling.md](../hooks/ruling.md) and [cues.json](../hooks/cues.json) delivers the new constraints where sessions actually see them.
+Keeping [the upstream skill](../skills/ste80-humanizer/SKILL.md) untouched preserves clean syncs with `Dodaios/ste80-humanizer`, while updating [ruling.md](../hooks/ruling.md) and [cues.json](../hooks/cues.json) delivers the new constraints where sessions actually see them.
 
 | Constraint added | Why `ste80-humanizer` missed it | Resolution applied |
 |---|---|---|
