@@ -1,0 +1,9 @@
+page: PAGE
+Google Gemini — https://gemini.google.com/app
+- generic
+  - main
+    - generic
+      - button "Upload & tools" [expanded=false, ref=e18]
+      - textbox "Enter a prompt for Gemini" [ref=e27]: QUESTION
+      - button "Deep research" [ref=e40]
+      - button "Send message" [ref=e41]

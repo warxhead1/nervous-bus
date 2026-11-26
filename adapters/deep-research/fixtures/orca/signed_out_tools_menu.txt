@@ -1,0 +1,110 @@
+page: 5a70f459-4128-4454-9261-c055457de8f7
+Google Gemini — https://gemini.google.com/app
+- generic
+  - main
+    - link "Gemini - new chat" [ref=e2]
+      - StaticText "Gemini"
+    - region "Side Navigation" [ref=e1]
+      - generic
+        - button "Close sidebar" [expanded=true, ref=e10]
+        - navigation "Main actions menu" [ref=e8]
+          - generic
+        - generic
+          - navigation "Additional actions menu" [ref=e9]
+            - generic
+              - link "Images" [ref=e14]
+                - StaticText "Images"
+          - generic
+            - link "Sign in" [ref=e15]
+            - StaticText " to save activity"
+        - group
+          - generic
+            - button "Settings" [ref=e11]
+              - StaticText "Settings"
+          - button "Sign in" [ref=e12]
+            - StaticText "Sign in"
+          - button "Get App" [ref=e13]
+            - StaticText "Get App"
+    - generic
+      - generic
+      - generic
+        - generic
+          - generic
+            - generic
+              - heading "Hi, I'm Gemini. Where should we start?" [level=1, ref=e23]
+                - StaticText "Hi, I'm Gemini. Where should we start?"
+              - group "Suggested prompts"
+                - generic
+                  - button "Walk me through a hard conversation" [ref=e24]
+                    - StaticText "Walk me through a hard conversation"
+                - generic
+                  - button "Find hidden gems in my neighborhood" [ref=e25]
+                    - StaticText "Find hidden gems in my neighborhood"
+                - generic
+                  - button "Troubleshoot my home internet" [ref=e26]
+                    - StaticText "Troubleshoot my home internet"
+          - generic
+            - status
+            - generic
+              - generic
+                - generic
+                  - button "Upload & tools" [expanded=true, ref=e18]
+                  - generic
+                    - textbox "Enter a prompt for Gemini" [ref=e27]: 
+
+                      - StaticText "Ask Gemini"
+                      - paragraph
+                        - LineBreak "\n"
+                  - generic
+                    - group
+                      - button "Open mode picker, currently Auto" [expanded=false, ref=e22]
+                        - StaticText "Auto"
+                    - generic
+                      - button "Dictate (^⇧D)" [ref=e28]
+              - generic
+                - group
+                  - generic
+                    - button "Chat" [ref=e19]
+                      - StaticText "Chat"
+                    - button "Task" [ref=e20]
+                      - StaticText "Task"
+            - paragraph
+              - link "Google Terms Opens in a new window" [ref=e16]
+                - StaticText "Google Terms"
+                - StaticText "Opens in a new window"
+              - StaticText " and the "
+              - link "Google Privacy Policy Opens in a new window" [ref=e17]
+                - StaticText "Google Privacy Policy"
+                - StaticText "Opens in a new window"
+              - StaticText " apply. Gemini is AI and can make mistakes."
+    - link "About Gemini link" [ref=e3]
+      - StaticText "About Gemini"
+    - link "Subscriptions link" [ref=e4]
+      - StaticText "Subscriptions"
+    - link "For Business link" [ref=e5]
+      - StaticText "For Business"
+    - button "Get App" [ref=e6]
+      - StaticText "Get App"
+    - button "Sign in" [ref=e7]
+      - StaticText "Sign in"
+  - menu "Menu options"
+    - generic
+      - menu "Upload file options"
+        - menuitem "Upload files. Documents, data, code files" [disabled, ref=e35]
+          - StaticText "Upload files"
+        - menuitem "Add from Drive. Sheets, Docs, Slides" [disabled, ref=e36]
+          - StaticText "Add from Drive"
+      - button "More uploads" [expanded=false, disabled, ref=e30]
+        - StaticText "More uploads"
+    - separator
+    - menuitemcheckbox "Create image" [checked=false, disabled, ref=e31]
+      - StaticText "Create image"
+    - menuitemcheckbox "Create video" [checked=false, disabled, ref=e32]
+      - StaticText "Create video"
+    - menuitemcheckbox "Canvas" [checked=false, disabled, ref=e33]
+      - StaticText "Canvas"
+    - menuitemcheckbox "Deep research" [checked=false, disabled, ref=e34]
+      - StaticText "Deep research"
+    - button "Sign in to try tools Add files, create & more" [ref=e29]
+      - StaticText "Sign in to try tools"
+      - StaticText "Add files, create & more"

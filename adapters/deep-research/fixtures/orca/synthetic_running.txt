@@ -1,0 +1,7 @@
+page: PAGE
+Google Gemini — https://gemini.google.com/app/abc123def
+- generic
+  - main
+    - StaticText "Researching websites"
+    - button "Stop research" [ref=e60]
+    - textbox "Enter a prompt for Gemini" [ref=e27]:

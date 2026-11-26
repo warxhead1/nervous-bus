@@ -1,10 +1,11 @@
-"""Offline tests for dr: recorded fixtures, no network."""
-import importlib.util
+"""Offline tests for dr: recorded Orca snapshots, no browser, no network."""
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -15,41 +16,17 @@ dr = importlib.util.module_from_spec(spec)
 sys.modules["dr"] = dr
 spec.loader.exec_module(dr)
 
-FIX = HERE / "fixtures"
-FAKE_KEY = "AIzaSyFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE12"
+FIX = HERE / "fixtures" / "orca"
+PAGE = "page-1"
+CFG = {"engine": "gemini-web", "poll_initial": 5.0, "poll_max": 30.0, "timeout": 100.0,
+       "step_timeout": 30.0, "orca_bin": "orca"}
 
 
-def fixture(name):
-    return json.loads((FIX / name).read_text())
-
-
-class FakeHttp:
-    """Scripted Interactions API. polls = list of fixture dicts returned in order (last repeats)."""
-
-    def __init__(self, polls, create_id="int_abc123", fail_delete=False):
-        self.polls, self.calls, self.create_id, self.fail_delete = list(polls), [], create_id, fail_delete
-
-    def __call__(self, method, url, headers, body, timeout):
-        self.calls.append((method, url, dict(headers), body))
-        path = url.split("/v1beta", 1)[1]
-        if method == "POST" and path == "/interactions":
-            return 200, json.dumps({"id": self.create_id, "status": "in_progress"}).encode()
-        if method == "GET":
-            item = self.polls.pop(0) if len(self.polls) > 1 else self.polls[0]
-            return 200, json.dumps(item).encode()
-        if method == "POST" and path.endswith("/cancel"):
-            return 200, b"{}"
-        if method == "DELETE":
-            return (500, b"boom") if self.fail_delete else (200, b"{}")
-        return 404, b"{}"
-
-
-CFG = {"agent": "deep-research-preview-04-2026", "api_revision": "2026-05-20", "poll_initial": 5.0,
-       "poll_max": 30.0, "timeout": 100.0, "prices_per_mtok": {}}
-
-
-def engine(http, cfg=None):
-    return dr.GeminiEngine(cfg or CFG, http=http, env={"GEMINI_API_KEY": FAKE_KEY})
+def snap(name, **sub):
+    t = (FIX / f"{name}.txt").read_text().replace("PAGE", PAGE)
+    for k, v in sub.items():
+        t = t.replace(k, v)
+    return t
 
 
 class Clock:
@@ -64,99 +41,183 @@ class Clock:
         return self.t
 
 
-def run_it(tmp_path, polls, cfg=None, **kw):
-    http = FakeHttp(polls, **{k: v for k, v in kw.items() if k == "fail_delete"})
+class FakeOrca:
+    """Replays recorded snapshots. A click on the right element advances the phase."""
+
+    FLOW = {  # (phase, clicked name regex) -> next phase
+        ("composer", r"^Upload & tools"): "tools_menu",
+        ("tools_menu", r"^Deep research"): "composer_dr",
+        ("ready", r"^Send message"): "plan",
+        ("plan", r"^Start research"): "running",
+    }
+    SNAP = {"composer": "synthetic_composer", "tools_menu": "synthetic_tools_menu",
+            "composer_dr": "synthetic_composer", "ready": "synthetic_ready_to_send",
+            "plan": "synthetic_plan", "done": "synthetic_done", "failed": "synthetic_failed",
+            "running": "synthetic_running"}
+
+    def __init__(self, end="done", running_polls=2, first="composer", first_snap=None):
+        self.phase, self.end, self.running_polls, self.calls = first, end, running_polls, []
+        self.first_snap, self.tabs_open = first_snap, 0
+        self.filled = None
+
+    def __call__(self, args):
+        self.calls.append(list(args))
+        cmd = args[0]
+        if cmd == "tab" and args[1] == "create":
+            self.tabs_open += 1
+            return json.dumps({"ok": True, "result": {"browserPageId": PAGE}})
+        if cmd == "tab" and args[1] == "close":
+            self.tabs_open -= 1
+            return json.dumps({"ok": True, "result": {}})
+        assert "--page" in args and args[args.index("--page") + 1] == PAGE, args
+        if cmd == "snapshot":
+            return self._snapshot()
+        if cmd == "click":
+            self._click(args[args.index("--element") + 1])
+            return json.dumps({"ok": True, "result": {}})
+        if cmd == "fill":
+            self.filled = args[args.index("--value") + 1]
+            self.phase = "ready"
+            return json.dumps({"ok": True, "result": {}})
+        if cmd == "eval":
+            expr = args[args.index("--expression") + 1]
+            if "walk" in expr:
+                return json.dumps({"ok": True, "result": {"result": (FIX / "synthetic_report_dom_result.json").read_text()}})
+            url = "https://gemini.google.com/app"
+            if self.phase in ("plan", "running", "done", "failed"):
+                url += "/abc123def"
+            return json.dumps({"ok": True, "result": {"result": url}})
+        raise AssertionError(f"unexpected orca call {args}")
+
+    def _snapshot(self):
+        if self.first_snap and self.phase == "composer":
+            return self.first_snap
+        if self.phase == "running":
+            if self.running_polls <= 0:
+                self.phase = self.end
+            else:
+                self.running_polls -= 1
+        return snap(self.SNAP[self.phase])
+
+    def _click(self, ref):
+        cur = self._snapshot() if self.phase != "running" else snap("synthetic_running")
+        for role, name, r in dr.parse_snapshot(cur):
+            if r == ref:
+                for (ph, pat), nxt in self.FLOW.items():
+                    if ph == self.phase and re.search(pat, name):
+                        self.phase = nxt
+                        return
+                return
+        raise AssertionError(f"click on unknown ref {ref}")
+
+
+def run_it(tmp_path, end="done", running_polls=2, cfg=None, runner=None, **kw):
+    fake = runner or FakeOrca(end=end, running_polls=running_polls)
     clk = Clock()
-    run = dr.execute_run(engine(http, cfg), "What is AAIF?", cfg or CFG, tmp_path,
-                         delete_remote=kw.get("delete_remote", False), sleep=clk.sleep,
-                         clock=clk.now, rng=lambda: 0.5)
-    return run, http, clk
+    eng = dr.GeminiWebEngine(cfg or CFG, runner=fake, sleep=clk.sleep, clock=clk.now)
+    run = dr.execute_run(eng, "What is AAIF?", cfg or CFG, tmp_path, delete_remote=kw.get("delete_remote", False),
+                         sleep=clk.sleep, clock=clk.now, rng=lambda: 0.5)
+    return run, fake, clk
+
+
+# ------------------------------------------------------------ snapshot parsing
+
+def test_real_signed_out_snapshot_is_recognised():
+    s = (FIX / "signed_out_tools_menu.txt").read_text()
+    assert dr.find_ref(s, "signed_out")
+    assert dr.find_ref(s, "prompt") == "@e27"
+    assert dr.find_ref(s, "deep_research") == "@e34"
+    assert dr.find_ref(s, "tools") == "@e18"
+    assert not dr.find_ref(s, "start_research")
+
+
+def test_ui_table_is_the_only_place_with_labels():
+    src = (HERE / "dr.py").read_text()
+    body = src.split("class GeminiWebEngine")[1].split("def _expand")[0]
+    assert "Start research" not in body and "Deep research" not in body
 
 
 # ------------------------------------------------------------ engine / polling
 
 def test_run_completes_and_persists(tmp_path):
-    run, http, clk = run_it(tmp_path, [fixture("in_progress.json"), fixture("in_progress.json"), fixture("completed.json")])
+    run, fake, clk = run_it(tmp_path)
     rdir = tmp_path / run["run_id"]
-    assert run["status"] == "completed"
-    assert json.loads((rdir / "interaction.json").read_text())["id"] == "int_abc123"
+    assert run["status"] == "completed" and run["engine"] == "gemini-web"
+    assert run["interaction_id"] == "abc123def"
     assert (rdir / "report.md").read_text().startswith("# AAIF report")
-    assert run["usage"]["total_tokens"] == 1035000
+    assert json.loads((rdir / "interaction.json").read_text())["conversation"] == "abc123def"
     assert [c["url"] for c in run["citations"]] == ["https://example.org/a", "https://example.org/b", "https://example.org/a"]
-    create = http.calls[0]
-    assert create[0] == "POST" and json.loads(create[3]) == {
-        "input": "What is AAIF?", "agent": "deep-research-preview-04-2026", "background": True,
-        "agent_config": {"type": "deep-research"}}
+    assert fake.filled == "What is AAIF?"
+    assert fake.tabs_open == 0  # tab closed at the end
 
 
-def test_key_is_a_header_never_in_url_or_run_dir(tmp_path):
-    run, http, _ = run_it(tmp_path, [fixture("completed.json")])
-    for method, url, headers, body in http.calls:
-        assert FAKE_KEY not in url and "key=" not in url
-        assert headers["x-goog-api-key"] == FAKE_KEY
-        assert headers["Api-Revision"] == "2026-05-20"
-        assert body is None or FAKE_KEY.encode() not in body
-    for p in tmp_path.rglob("*"):
-        if p.is_file():
-            assert FAKE_KEY not in p.read_text()
+def test_start_follows_the_ui_order(tmp_path):
+    _, fake, _ = run_it(tmp_path)
+    clicks = [c for c in fake.calls if c[0] == "click"]
+    assert [c[2] for c in clicks] == ["@e18", "@e34", "@e41", "@e52"]  # tools, deep research, send, start
+    assert fake.calls[0][:3] == ["tab", "create", "--url"] and fake.calls[0][3].startswith("https://gemini.google.com")
+
+
+def test_no_api_key_anywhere(tmp_path):
+    _, fake, _ = run_it(tmp_path)
+    assert not any("key" in " ".join(c).lower() for c in fake.calls)
+    src = (HERE / "dr.py").read_text()
+    assert "GEMINI_API_KEY" not in src and "generativelanguage" not in src and "x-goog-api-key" not in src
 
 
 def test_backoff_grows_and_caps(tmp_path):
-    polls = [fixture("in_progress.json")] * 7 + [fixture("completed.json")]
-    _, _, clk = run_it(tmp_path, polls)
-    assert clk.sleeps[:3] == [5.0, 7.5, 11.25]
-    assert max(clk.sleeps) == 30.0 and clk.sleeps == sorted(clk.sleeps)
+    _, _, clk = run_it(tmp_path, running_polls=8)
+    polls = [s for s in clk.sleeps if s >= 5.0]
+    assert polls[:3] == [5.0, 7.5, 11.25]
+    assert max(polls) == 30.0 and polls == sorted(polls)
 
 
-def test_timeout_cancels_and_marks_timeout(tmp_path):
-    run, http, _ = run_it(tmp_path, [fixture("in_progress.json")], cfg=dict(CFG, timeout=60.0))
+def test_timeout_closes_tab_and_marks_timeout(tmp_path):
+    run, fake, _ = run_it(tmp_path, running_polls=10_000, cfg=dict(CFG, timeout=60.0))
     assert run["status"] == "timeout"
-    assert any(c[0] == "POST" and c[1].endswith("/interactions/int_abc123/cancel") for c in http.calls)
+    assert fake.tabs_open == 0
     assert run["report_md"] == "" and not (tmp_path / run["run_id"] / "report.md").exists()
 
 
 def test_failed_run_has_no_report(tmp_path):
-    run, _, _ = run_it(tmp_path, [fixture("failed.json")])
+    run, _, _ = run_it(tmp_path, end="failed")
     assert run["status"] == "failed" and run["citations"] == []
     assert (tmp_path / run["run_id"] / "interaction.json").exists()
     assert not (tmp_path / run["run_id"] / "report.md").exists()
 
 
-def test_delete_remote_after_download(tmp_path):
-    run, http, _ = run_it(tmp_path, [fixture("completed.json")], delete_remote=True)
-    assert run["remote_deleted"] is True
-    assert (tmp_path / run["run_id"] / "interaction.json").exists()
-    assert http.calls[-1][0] == "DELETE"
-
-
-def test_delete_remote_failure_keeps_run(tmp_path):
-    run, _, _ = run_it(tmp_path, [fixture("completed.json")], delete_remote=True, fail_delete=True)
+def test_conversation_is_never_deleted(tmp_path):
+    run, fake, _ = run_it(tmp_path, delete_remote=True)
     assert run["status"] == "completed" and run["remote_deleted"] is False
+    assert not any(c[0] in ("delete", "dialog") for c in fake.calls)
 
 
-def test_no_delete_by_default(tmp_path):
-    _, http, _ = run_it(tmp_path, [fixture("completed.json")])
-    assert all(c[0] != "DELETE" for c in http.calls)
-
-
-def test_missing_key_refused():
+def test_signed_out_is_a_login_error_not_a_hang(tmp_path):
+    fake = FakeOrca(first_snap=(FIX / "signed_out_tools_menu.txt").read_text())
+    clk = Clock()
+    eng = dr.GeminiWebEngine(CFG, runner=fake, sleep=clk.sleep, clock=clk.now)
     with pytest.raises(dr.DrError) as e:
-        dr.GeminiEngine(CFG, http=FakeHttp([]), env={})
-    assert e.value.code == dr.EXIT_NOKEY
+        eng.start("q")
+    assert e.value.code == dr.EXIT_LOGIN and "sign in" in str(e.value).lower()
+    assert not any(c[0] == "fill" for c in fake.calls)  # nothing submitted
+    assert fake.tabs_open == 0
 
 
-@pytest.mark.parametrize("agent", ["", "latest", "deep-research-latest"])
-def test_unpinned_agent_refused(agent):
-    with pytest.raises(dr.DrError):
-        dr.GeminiEngine(dict(CFG, agent=agent), http=FakeHttp([]), env={"GEMINI_API_KEY": FAKE_KEY})
+def test_missing_ui_element_times_out_with_its_name(tmp_path):
+    class Stuck(FakeOrca):
+        def _snapshot(self):
+            return snap("synthetic_composer")  # tools click never opens a menu
+        def _click(self, ref):
+            pass
+    clk = Clock()
+    eng = dr.GeminiWebEngine(CFG, runner=Stuck(), sleep=clk.sleep, clock=clk.now)
+    with pytest.raises(dr.DrError, match="tools menu entry"):
+        eng.start("q")
 
 
-def test_http_error_message_never_contains_key():
-    def bad(method, url, headers, body, timeout):
-        return 400, f"bad request key={FAKE_KEY}".encode()
-    with pytest.raises(dr.DrError) as e:
-        engine(bad).start("q")
-    assert FAKE_KEY not in str(e.value) and "[REDACTED]" in str(e.value)
+def test_orca_missing_binary_message():
+    with pytest.raises(dr.DrError, match="not found"):
+        dr.orca_runner("/nonexistent/orca-xyz")(["status"])
 
 
 def test_cli_has_no_key_argument():
@@ -166,36 +227,17 @@ def test_cli_has_no_key_argument():
 
 # ------------------------------------------------------------ citations / usage
 
-def test_citation_offsets_are_bytes_not_chars():
-    raw = fixture("completed.json")
-    text = dr.report_text(raw)
-    cites = dr.extract_citations(text, raw)
-    assert cites[0]["claim_span"] == "was donated on 2026-10-22 to the AAIF by Anthropic."
-    assert cites[1]["claim_span"] == "The AAIF hosts 10 projects now."
+def test_citation_claim_widens_to_its_line():
+    text = (FIX / "synthetic_report_dom_result.json").read_text()
+    cites = dr.extract_citations(json.loads(text)["markdown"])
+    assert cites[0]["claim_span"].startswith("Agent Skills was donated on 2026-10-22")
+    assert cites[1]["claim_span"] == cites[2]["claim_span"]
 
 
-def test_out_of_range_annotation_dropped():
-    raw = fixture("completed.json")
-    for a in raw["steps"][1]["content"][0]["annotations"]:
-        a["end_index"] = 10_000
-    cites = dr.extract_citations(dr.report_text(raw), raw)
-    assert [c["url"] for c in cites] == ["https://example.org/lf"]  # markdown-link fallback
-
-
-def test_cost_estimate_only_with_configured_prices(tmp_path):
-    run, _, _ = run_it(tmp_path, [fixture("completed.json")])
-    assert run["cost_estimate"] is None
-    cfg = dict(CFG, prices_per_mtok={"input": 2.0, "output": 10.0})
-    run, _, _ = run_it(tmp_path, [fixture("completed.json")], cfg=cfg)
-    assert run["cost_estimate"] == pytest.approx(1.0 * 2 + 0.02 * 10 + 0.005 * 2 + 0.01 * 10)
-
-
-def test_cost_cumulative(tmp_path):
-    run_it(tmp_path, [fixture("completed.json")])
-    run_it(tmp_path, [fixture("completed.json")], cfg=dict(CFG, prices_per_mtok={"input": 1.0, "output": 1.0}))
+def test_cost_lists_runs_without_prices(tmp_path):
+    run_it(tmp_path)
     rep = dr.cost_report(tmp_path)
-    assert rep["total"]["runs"] == 2 and rep["total"]["total_tokens"] == 2 * 1035000
-    assert rep["total"]["unpriced_runs"] == 1 and rep["total"]["cost_estimate"] == pytest.approx(1.035)
+    assert rep["total"]["runs"] == 1 and rep["total"]["unpriced_runs"] == 1
 
 
 def test_cost_empty_dir(tmp_path):
@@ -205,7 +247,7 @@ def test_cost_empty_dir(tmp_path):
 # ------------------------------------------------------------ audit
 
 def completed_run(tmp_path):
-    run, _, _ = run_it(tmp_path, [fixture("completed.json")])
+    run, _, _ = run_it(tmp_path)
     return run, tmp_path / run["run_id"]
 
 
@@ -363,7 +405,7 @@ def test_kb_sink_never_ingests_promoted(tmp_path):
 
 
 def test_kb_sink_failed_run_refused(tmp_path):
-    run, _, _ = run_it(tmp_path, [fixture("failed.json")])
+    run, _, _ = run_it(tmp_path, end="failed")
     with pytest.raises(dr.DrError, match="failed"):
         dr.sink_kb(run, tmp_path / run["run_id"], "research", True, "kb")
 
@@ -376,9 +418,9 @@ def test_frontmatter_contract(tmp_path):
         assert k in fm, k
     assert fm["project"] == "myproj" and fm["category"] == "research"
     assert fm["source_type"] == "gemini-deep-research"
-    assert fm["source"] == "gemini-interactions:int_abc123"
+    assert fm["source"] == "gemini-web:abc123def"
     assert fm["trace_uri"] == run["raw_path"] and Path(fm["trace_uri"]).exists()
-    assert fm["run_id"] == run["run_id"] and fm["producer_model"] == "deep-research-preview-04-2026"
+    assert fm["run_id"] == run["run_id"] and fm["producer_model"] == "gemini-web-deep-research"
     assert fm["confidence"] <= 0.4 and fm["status"] == "inbox"
     assert fm["needs_human_review"] is True and fm["half_life_days"] == 90
     assert {s["url"] for s in fm["sources"]} == {"https://example.org/a", "https://example.org/b"}
@@ -395,7 +437,7 @@ def test_render_only_never_calls_kb(tmp_path):
 
 def good_fm():
     return {"title": "t", "project": "research", "category": "research", "source_type": "gemini-deep-research",
-            "source": "gemini-interactions:x", "trace_uri": "/p", "run_id": "r", "producer_model": "m",
+            "source": "gemini-web:x", "trace_uri": "/p", "run_id": "r", "producer_model": "m",
             "confidence": 0.3, "status": "inbox", "needs_human_review": True, "sources": [], "half_life_days": 90}
 
 
@@ -426,66 +468,140 @@ def test_build_frontmatter_clamps_confidence(tmp_path):
     assert dr.build_frontmatter(run, audit, "p", confidence=0.9)["confidence"] == 0.4
 
 
-# ------------------------------------------------------------ notebook sink
+# ------------------------------------------------------------ legacy runs
 
-def test_notebook_off_by_default_prints_manual_steps(tmp_path):
-    run, rdir = audited(tmp_path)
-    calls = []
-    with pytest.raises(dr.DrError) as e:
-        dr.sink_notebook(run, rdir, False, importer=lambda **kw: calls.append(kw))
-    assert not calls
-    assert e.value.code == dr.EXIT_USAGE and "UNOFFICIAL" in str(e.value) and "Deep Research" in str(e.value)
+def legacy_run(tmp_path):
+    rdir = tmp_path / "20260101T000000Z-0001"
+    rdir.mkdir(parents=True)
+    (rdir / "interaction.json").write_text("{}")
+    (rdir / "report.md").write_text("# old\n\nA claim long enough to matter ([s](https://example.org/a)).\n")
+    run = {"run_id": rdir.name, "question": "old q", "engine": "gemini-deep-research",
+           "agent": "deep-research-preview-04-2026", "interaction_id": "int_old", "started": "t",
+           "finished": "2026-01-01T00:00:00Z", "status": "completed", "usage": {"total_tokens": 7},
+           "cost_estimate": 0.5, "raw_path": str(rdir / "interaction.json"),
+           "report_md": (rdir / "report.md").read_text(), "citations": []}
+    dr.write_json(rdir / "run.json", run)
+    return rdir
+
+
+def test_legacy_interactions_run_still_loads_audits_and_renders(tmp_path):
+    rdir = legacy_run(tmp_path)
+    run, _ = dr.load_run(tmp_path, rdir.name)
+    run["citations"] = dr.extract_citations(run["report_md"])
+    audit = dr.audit_run(run, rdir, lambda c, p: ("CONFIRMED", "ok"), lambda u: (200, "x"))
+    assert audit["summary"]["claims"]["CONFIRMED"] == 1
+    out, _ = dr.sink_kb(run, rdir, "research", False, "unused", render_only=True)
+    assert parse_fm(out)["source"] == "gemini-interactions:int_old"
+    assert dr.cost_report(tmp_path)["total"]["total_tokens"] == 7
+
+
+def test_validate_accepts_both_source_prefixes_and_rejects_others():
+    for ok in ("gemini-web:abc", "gemini-interactions:abc"):
+        dr.validate_frontmatter(dict(good_fm(), source=ok))
+    with pytest.raises(dr.DrError):
+        dr.validate_frontmatter(dict(good_fm(), source="manual:abc"))
+
+
+# ------------------------------------------------------------ notebook import
+
+NB_SNAPS = {
+    "home": '- button "Create new" [ref=e1]\n',
+    "sources": '- button "Add source" [ref=e2]\n',
+    "types": '- button "Copied text" [ref=e3]\n- button "Websites" [ref=e4]\n',
+    "text": '- textbox "Paste text here" [ref=e5]\n- button "Insert" [ref=e6]\n',
+}
+
+
+class FakeNotebook:
+    def __init__(self, signed_out=False):
+        self.calls, self.phase, self.filled, self.signed_out = [], "home", [], signed_out
+        self.tabs = 0
+        self.kind = None
+
+    def __call__(self, args):
+        self.calls.append(list(args))
+        cmd = args[0]
+        if cmd == "tab" and args[1] == "create":
+            self.tabs += 1
+            return json.dumps({"ok": True, "result": {"browserPageId": PAGE}})
+        if cmd == "tab":
+            self.tabs -= 1
+            return json.dumps({"ok": True, "result": {}})
+        if cmd == "snapshot":
+            if self.signed_out:
+                return '- button "Sign in to Gemini Notebook" [ref=e40]\n'
+            return NB_SNAPS[self.phase]
+        if cmd == "click":
+            ref = args[args.index("--element") + 1]
+            self.phase = {"@e1": "sources", "@e2": "types", "@e3": "text", "@e4": "text", "@e6": "sources"}[ref]
+            if ref in ("@e3", "@e4"):
+                self.kind = ref
+            return json.dumps({"ok": True, "result": {}})
+        if cmd == "fill":
+            self.filled.append((self.kind, args[args.index("--value") + 1]))
+            return json.dumps({"ok": True, "result": {}})
+        if cmd == "eval":
+            return json.dumps({"ok": True, "result": {"result": "https://notebook.google.com/notebook/nb9"}})
+        raise AssertionError(args)
 
 
 def test_notebook_requires_audit(tmp_path):
     run, rdir = completed_run(tmp_path)
     with pytest.raises(dr.DrError, match="un-audited"):
-        dr.sink_notebook(run, rdir, True, importer=lambda **kw: kw)
+        dr.notebook_import(run, rdir, FakeNotebook())
 
 
-def test_notebook_passes_only_confirmed_urls(tmp_path):
+def test_notebook_adds_report_then_only_confirmed_urls(tmp_path):
     run, rdir = completed_run(tmp_path)
     dr.audit_run(run, rdir, lambda c, p: ("CONFIRMED", "") if "donated" in c else ("REFUTED", ""),
                  fake_fetch({"https://example.org/a": "a", "https://example.org/b": "b"}))
-    got = dr.sink_notebook(run, rdir, True, notebook_id="nb1", importer=lambda **kw: kw)
-    assert got["urls"] == ["https://example.org/a"] and got["notebook_id"] == "nb1"
-    assert got["report"].startswith("# AAIF report")
+    fake = FakeNotebook()
+    clk = Clock()
+    got = dr.notebook_import(run, rdir, fake, sleep=clk.sleep, clock=clk.now, step_timeout=30)
+    assert got == {"notebook_url": "https://notebook.google.com/notebook/nb9", "urls_added": 1}
+    assert fake.filled[0][1].startswith("# AAIF report")
+    assert fake.filled[1][1] == "https://example.org/a"
+    assert fake.tabs == 0
 
 
-def test_notebook_without_package_prints_manual(tmp_path, monkeypatch):
+def test_notebook_signed_out_is_a_login_error(tmp_path):
     run, rdir = audited(tmp_path)
-    monkeypatch.setattr(dr.importlib.util, "find_spec", lambda name: None)
-    with pytest.raises(dr.DrError, match="not importable"):
-        dr.sink_notebook(run, rdir, True)
+    fake = FakeNotebook(signed_out=True)
+    clk = Clock()
+    with pytest.raises(dr.DrError) as e:
+        dr.notebook_import(run, rdir, fake, sleep=clk.sleep, clock=clk.now, step_timeout=30)
+    assert e.value.code == dr.EXIT_LOGIN and not fake.filled and fake.tabs == 0
 
 
 # ------------------------------------------------------------ cli
 
 def test_cli_end_to_end_run_audit_render(tmp_path, capsys, monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
     cfgp = tmp_path / "c.toml"
     judge = tmp_path / "judge.sh"
     judge.write_text('#!/bin/sh\ncat >/dev/null\necho \'{"verdict": "CONFIRMED", "reason": "s"}\'\n')
     judge.chmod(0o755)
     cfgp.write_text(f'poll_initial = 0.0\npoll_max = 0.0\njudge_cmd = "{judge}"\n')
     runs = tmp_path / "runs"
-    http = FakeHttp([fixture("completed.json")])
     base = ["--config", str(cfgp), "--runs-dir", str(runs)]
-    assert dr.main(base + ["run", "q?"], http=http) == 0
+    monkeypatch.setattr(dr.time, "sleep", lambda s: None)
+    assert dr.main(base + ["run", "q?"], runner=FakeOrca()) == 0
     run_id = json.loads(capsys.readouterr().out)["run_id"]
     monkeypatch.setattr(dr, "fetch_page", lambda url, t, m: (200, "page"))
     assert dr.main(base + ["audit", run_id]) == 0
     assert json.loads(capsys.readouterr().out)["claims"]["CONFIRMED"] == 2
     assert dr.main(base + ["sink", "kb", run_id, "--render-only"]) == 0
     assert Path(json.loads(capsys.readouterr().out)["file"]).exists()
+    assert dr.main(base + ["notebook", run_id], runner=FakeNotebook()) == 0
+    assert json.loads(capsys.readouterr().out)["urls_added"] == 2
     assert dr.main(base + ["cost"]) == 0
     assert json.loads(capsys.readouterr().out)["total"]["runs"] == 1
 
 
-def test_cli_missing_key_exit_code(tmp_path, monkeypatch, capsys):
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    rc = dr.main(["--runs-dir", str(tmp_path), "run", "q"], http=FakeHttp([]))
-    assert rc == dr.EXIT_NOKEY and "GEMINI_API_KEY" in capsys.readouterr().err
+def test_cli_signed_out_exit_code(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(dr.time, "sleep", lambda s: None)
+    fake = FakeOrca(first_snap=(FIX / "signed_out_tools_menu.txt").read_text())
+    rc = dr.main(["--runs-dir", str(tmp_path), "run", "q"], runner=fake)
+    assert rc == dr.EXIT_LOGIN and "not signed in" in capsys.readouterr().err
 
 
 def test_cli_rejects_path_traversal_run_id(tmp_path, capsys):
@@ -493,6 +609,5 @@ def test_cli_rejects_path_traversal_run_id(tmp_path, capsys):
 
 
 def test_wrapper_script_help():
-    p = subprocess.run([str(HERE / "dr"), "--help"], capture_output=True, text=True,
-                       env={**os.environ, "GEMINI_API_KEY": ""})
-    assert p.returncode == 0 and "sink" in p.stdout
+    p = subprocess.run([str(HERE / "dr"), "--help"], capture_output=True, text=True)
+    assert p.returncode == 0 and "notebook" in p.stdout
