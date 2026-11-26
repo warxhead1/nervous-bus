@@ -17,16 +17,20 @@ or a list) from elsewhere, e.g. tools/trigger_cases/. Each skill is found under
 Pair it with a clean --config-dir: without one the home config and every skill
 installed there load too, and a miss cannot be told from a skill that was never
 offered. --streams DIR keeps each run's raw stream so that can be checked.
+--max-runs and --max-cost-usd stop starting runs at the cap and mark the result partial.
+Each run is pass, miss, error or timeout; rates cover finished runs only.
 --dry-run prints the plan and the request count and calls nothing.
 """
 import argparse
 import concurrent.futures as cf
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -82,23 +86,111 @@ def skills_called(stream):
     return called
 
 
+def parse_stream(stdout, returncode):
+    """Return (status, called, cost). status is "error" when the run produced no usable result."""
+    result = None
+    for line in stdout.splitlines():
+        try:
+            o = json.loads(line)
+        except ValueError:
+            continue
+        if o.get("type") == "result":
+            result = o
+    cost = float((result or {}).get("total_cost_usd") or 0)
+    if returncode != 0 or result is None or result.get("is_error"):
+        return "error", set(), cost
+    return "ok", skills_called(stdout), cost
+
+
 def run_one(args, prompt, plugin_dirs, cwd, tag=""):
     cmd = [args.claude, "-p", prompt, "--model", args.model, "--max-turns", "2",
            "--output-format", "stream-json", "--verbose", "--allowedTools", "Skill"]
+    if args.max_cost_usd:
+        cmd += ["--max-budget-usd", str(args.max_cost_usd)]
     for d in plugin_dirs:
         cmd += ["--plugin-dir", str(d)]
+    env = dict(os.environ)
+    if args.config_dir:
+        env["CLAUDE_CONFIG_DIR"] = args.config_dir
     try:
-        env = dict(os.environ)
-        if args.config_dir:
-            env["CLAUDE_CONFIG_DIR"] = args.config_dir
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout, cwd=cwd,
                            stdin=subprocess.DEVNULL, env=env)
-        if args.streams:
-            Path(args.streams).mkdir(parents=True, exist_ok=True)
-            (Path(args.streams) / f"{tag}.jsonl").write_text(p.stdout)
-        return skills_called(p.stdout)
     except subprocess.TimeoutExpired:
-        return None
+        return "timeout", set(), 0.0
+    if args.streams:
+        Path(args.streams).mkdir(parents=True, exist_ok=True)
+        (Path(args.streams) / f"{tag}.jsonl").write_text(p.stdout)
+    return parse_stream(p.stdout, p.returncode)
+
+
+def collect(args, jobs, dirs, cwd):
+    """Run jobs under the run and cost caps. Returns (rows, partial); skipped rows never started."""
+    lock = threading.Lock()
+    state = {"started": 0, "cost": 0.0}
+
+    def go(i, skill, want, q, r):
+        with lock:
+            if (args.max_runs and state["started"] >= args.max_runs) or \
+               (args.max_cost_usd and state["cost"] >= args.max_cost_usd):
+                return "skipped", set(), 0.0
+            state["started"] += 1
+        status, called, cost = run_one(args, q, dirs, cwd, f"{skill}-{'pos' if want else 'neg'}-{i:03d}-r{r}")
+        with lock:
+            state["cost"] += cost
+        return status, called, cost
+
+    rows = []
+    with cf.ThreadPoolExecutor(args.jobs) as ex:
+        futs = {ex.submit(go, i, *j): j for i, j in enumerate(jobs)}
+        for fut in cf.as_completed(futs):
+            skill, want, q, _ = futs[fut]
+            status, called, cost = fut.result()
+            hit = skill in called if status == "ok" else None
+            if status == "ok":
+                status = "pass" if hit == want else "miss"
+            rows.append({"skill": skill, "should": want, "prompt": q, "status": status, "hit": hit,
+                         "called": sorted(called) if hit is not None else None, "cost_usd": cost})
+            print({"pass": ".", "miss": ".", "error": "E", "timeout": "T", "skipped": "-"}[status],
+                  end="", file=sys.stderr, flush=True)
+    return rows, any(r["status"] == "skipped" for r in rows)
+
+
+def tally(rows):
+    """Per skill: hits over finished runs only; errors, timeouts and skips are counted apart."""
+    out = {}
+    for r in rows:
+        t = out.setdefault(r["skill"], dict(pos_hit=0, pos_n=0, neg_hit=0, neg_n=0, error=0, timeout=0, skipped=0))
+        if r["hit"] is None:
+            t[r["status"]] += 1
+        else:
+            k = "pos" if r["should"] else "neg"
+            t[k + "_n"] += 1
+            t[k + "_hit"] += r["hit"]
+    return out
+
+
+def _fisher_one_sided(n, k):
+    """P(all k hits fall in the first of two n-run arms) when both arms share one hit rate."""
+    return math.comb(n, k) / math.comb(2 * n, k)
+
+
+def min_detectable(n, alpha=0.05):
+    """Smallest (hits, baseline_hits, p): k/n vs 0/n with one-sided Fisher p < alpha; None if no k works."""
+    for k in range(1, n + 1):
+        p = _fisher_one_sided(n, k)
+        if p < alpha:
+            return k, 0, p
+    return None
+
+
+def resolution(n, alpha=0.05):
+    m = min_detectable(n, alpha)
+    if m is None:
+        return (f"resolution: with --runs {n}, one case cannot reach p<{alpha} "
+                f"(even {n}/{n} vs 0/{n} gives p={_fisher_one_sided(n, n):.3f}); pool cases or raise --runs")
+    k, b, p = m
+    return (f"resolution: with --runs {n}, one case reaches p<{alpha} only at {k}/{n} vs {b}/{n} "
+            f"(p={p:.3f}); smaller gaps are noise")
 
 
 def main():
@@ -116,6 +208,9 @@ def main():
     ap.add_argument("--cases", action="append", help="case file or dir (repeatable); default: steering plugin evals")
     ap.add_argument("--skill-root", action="append", help="where --cases skills live (repeatable; default ~/.claude/skills)")
     ap.add_argument("--limit", type=int, default=0, help="run only the first N prompts (a smoke run)")
+    ap.add_argument("--max-runs", type=int, default=0, help="start at most N runs, then stop and mark the result partial")
+    ap.add_argument("--max-cost-usd", type=float, default=0.0, help="stop starting runs once reported spend reaches this; "
+                    "also passed to each call as --max-budget-usd")
     ap.add_argument("--dry-run", action="store_true", help="print the plan and request count; call nothing")
     ap.add_argument("--streams", help="dir to keep each run's raw stream-json in")
     args = ap.parse_args()
@@ -141,31 +236,26 @@ def main():
             print(f"{skill:24} should={pos} should_not={neg}")
         print(f"requests: {len(jobs)} ({len(cases)} prompts x {args.runs} runs, up to 2 turns each), "
               f"model {args.model}, cwd {cwd}")
+        print(resolution(args.runs))
         return
-    rows = []
-    with cf.ThreadPoolExecutor(args.jobs) as ex:
-        futs = {ex.submit(run_one, args, q, dirs, cwd, f"{skill}-{'pos' if want else 'neg'}-{i:03d}-r{r}"):
-                (skill, want, q) for i, (skill, want, q, r) in enumerate(jobs)}
-        for fut in cf.as_completed(futs):
-            skill, want, q = futs[fut]
-            called = fut.result()
-            rows.append({"skill": skill, "should": want, "prompt": q,
-                         "called": sorted(called) if called is not None else None,
-                         "hit": None if called is None else skill in called})
-            print("." if called is not None else "T", end="", file=sys.stderr, flush=True)
+    rows, partial = collect(args, jobs, dirs, cwd)
     print(file=sys.stderr)
-    print(f"{'skill':24} trigger        false-trigger  timeouts")
-    for skill in sorted({r["skill"] for r in rows}):
-        pos = [r for r in rows if r["skill"] == skill and r["should"] and r["hit"] is not None]
-        neg = [r for r in rows if r["skill"] == skill and not r["should"] and r["hit"] is not None]
-        to = sum(r["hit"] is None for r in rows if r["skill"] == skill)
-        rate = lambda L: f"{sum(r['hit'] for r in L)}/{len(L)}" if L else "-"
-        print(f"{skill:24} {rate(pos):14} {rate(neg):14} {to}")
+    print(f"{'skill':24} trigger        false-trigger  errors  timeouts  skipped")
+    rate = lambda h, n: f"{h}/{n}" if n else "-"
+    for skill, t in sorted(tally(rows).items()):
+        print(f"{skill:24} {rate(t['pos_hit'], t['pos_n']):14} {rate(t['neg_hit'], t['neg_n']):14} "
+              f"{t['error']:<7} {t['timeout']:<9} {t['skipped']}")
+    print("rates count only runs that finished; errors and timeouts are not misses")
+    if partial:
+        print(f"PARTIAL: stopped at the cap ({args.max_runs or '-'} runs, ${args.max_cost_usd or '-'}); "
+              f"{sum(r['status'] == 'skipped' for r in rows)} of {len(rows)} runs never started")
+    print(f"cost: ${sum(r['cost_usd'] for r in rows):.2f}")
+    print(resolution(args.runs))
     for r in sorted(rows, key=lambda r: (r["skill"], r["should"])):
-        if r["hit"] is not None and r["hit"] != r["should"]:
+        if r["status"] == "miss":
             print(f"  MISS {r['skill']} ({'should' if r['should'] else 'should not'}; called {r['called']}): {r['prompt'][:90]}")
     if args.out:
-        Path(args.out).write_text(json.dumps(rows, indent=1))
+        Path(args.out).write_text(json.dumps({"partial": partial, "rows": rows}, indent=1))
 
 
 if __name__ == "__main__":

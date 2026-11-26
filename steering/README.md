@@ -50,6 +50,16 @@ claude plugin eval steering/remediation-ladder --scaffold \
 (`remediation-ladder/evals/blocked-release`); it has been run once per arm,
 which shows the harness works and nothing more.
 
+`claude plugin eval` and `trigger-eval` answer different questions. Use
+`claude plugin eval` to ask whether the plugin changes what the agent does: it
+runs each case with and without the plugin and grades the files left behind.
+Use `trigger-eval` to ask whether a skill gets loaded for a prompt: it checks
+only for a Skill tool call, runs one arm, and has no baseline. It records each
+run as pass, miss, error, or timeout and rates only finished runs. `--max-runs`
+and `--max-cost-usd` stop it cleanly and mark the result partial. It prints the
+smallest gap `--runs` can resolve: at 3 runs one case cannot reach p<0.05, and
+at 5 it needs 4/5 against 0/5.
+
 ## Adding one
 
 A ruling belongs here when it reads correctly to someone who has never seen the
