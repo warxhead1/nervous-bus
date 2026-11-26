@@ -185,7 +185,16 @@ _CORRECTION_CUE_CI_RE = re.compile(
     r"|\bnever\s+(?:do|use|run)\s+that\s+again\b"
     r"|\brevert\s+(?:that|this)\b"
     r"|\bundo\s+(?:that|this)\b"
-    r"|\bstill\s+(?:broken|failing|wrong|not working)\b",
+    r"|\bstill\s+(?:broken|failing|wrong|not working)\b"
+    r"|\bstop\s+(?:it|\w+ing)\b"
+    r"|\bi\s+(?:told|asked)\s+you\b"
+    r"|\bi\s+never\s+(?:told|said|asked)\b"
+    r"|\bwhat\s+is\s+wrong\s+with\s+you\b"
+    r"|\b(?:why|how)\s+the\s+(?:hell|fuck)\b"
+    r"|\byou\s+(?:killed|deleted|wiped|broke|ignored|lied)\b"
+    r"|\byou\s+(?:said|claimed)\s+(?:this|it|that)\s+was\b"
+    r"|\byou\s+(?:are|were)\s+still\s+doing\b"
+    r"|\byou\s+didn'?t\s+(?:set|verify|check|file|read|test)\b",
     re.IGNORECASE,
 )
 
@@ -273,7 +282,8 @@ THEME_KEYWORDS: dict[str, re.Pattern] = {
         r"\bidle\s+waiting\b|\bforce\s+a\s+cron\s+tick\b|"
         r"\byou\s+keep\s+(?:stopping|pausing|waiting|delaying|stalling)\b|"
         r"\bwhy\s+are\s+you\s+(?:waiting|sitting|delaying|stalling)\b|"
-        r"\bstop\s+(?:pausing|delaying|stalling)\b",
+        r"\bstop\s+(?:pausing|delaying|stalling)\b|"
+        r"\bwhy\s+did\s+(?:we|you)\s+stop\b|\bstop(?:ped)?\s+yourself\b",
         re.IGNORECASE,
     ),
     "band_aid_fix": re.compile(
@@ -289,12 +299,15 @@ THEME_KEYWORDS: dict[str, re.Pattern] = {
     "stale_claim": re.compile(
         r"\byou\s+said\s+(?:it\s+was\s+)?done\b|\bnot\s+actually\s+done\b|"
         r"\bstill\s+(?:broken|failing)\b|\bdidn'?t\s+verify\b|\byou\s+claimed\b|"
-        r"\bdoesn'?t\s+work\b|\bnot\s+true\b",
+        r"\bdoesn'?t\s+work\b|\bnot\s+true\b|\bmeasurably\s+false\b|"
+        r"\bstop\s+stating\b|\byou\s+(?:said|claimed)\s+(?:this|it|that)\s+was\s+(?:fixed|done|working)\b|"
+        r"\bstill\s+shows\s+the\s+old\b",
         re.IGNORECASE,
     ),
     "destructive_op": re.compile(
         r"\brm\s+-rf\b|\bdeleted\b|\bdestroyed\b|\bwiped\b|\byou\s+(?:just\s+)?deleted\b|"
-        r"\bforce\s+delete\b|\breset\s+--hard\b",
+        r"\bforce\s+delete\b|\breset\s+--hard\b|\byou\s+killed\b|\bkilled\s+my\b|"
+        r"\bgot\s+wiped\b",
         re.IGNORECASE,
     ),
     "secrets": re.compile(
@@ -345,6 +358,8 @@ THEME_KEYWORDS: dict[str, re.Pattern] = {
         r"\bdon'?t\s+ask\s+me\b|\bstop\s+asking\b|"
         r"\bmy\s+go[\s-]?ahead\b|\bwhy\s+do\s+you\s+need\s+(?:my|me)\b|"
         r"\byou\s+don'?t\s+need\s+(?:my\s+)?(?:permission|approval|sign[\s-]?off)\b|"
+        r"\bstop\s+making\s+me\b|\bonus\s+on\s+me\b|\bdo\s+it\s+yourself\b|"
+        r"\bi\s+told\s+you\s+to\s+just\b|"
         r"\bstop\s+asking\s+(?:for\s+)?(?:permission|approval)\b",
         re.IGNORECASE,
     ),
@@ -674,3 +689,22 @@ def _resolve_run(
         run_id, project, _st, _en = min(candidates, key=lambda t: t[2])
         return run_id, project
     return None, None
+
+
+def scan_transcripts(root: Path) -> dict[str, int]:
+    """Signature -> number of human turns under *root* (any ``*.jsonl`` tree),
+    with no run join. Shows what the detector sees in a transcript archive
+    when runs.db holds none of its sessions."""
+    counts: dict[str, int] = {}
+    for path in sorted(root.rglob("*.jsonl")):
+        for _ts, text, after_interrupt in _iter_claude_turns(path):
+            for sig in classify_turn(text, after_interrupt):
+                counts[sig] = counts.get(sig, 0) + 1
+    return counts
+
+
+if __name__ == "__main__":
+    import sys
+
+    target = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_TRANSCRIPT_ROOT
+    print(json.dumps(scan_transcripts(target), sort_keys=True))

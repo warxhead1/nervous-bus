@@ -36,6 +36,7 @@ from detectors.user_correction import (
     classify_turn,
     match_themes,
     _strip_envelope,
+    scan_transcripts,
 )
 
 
@@ -175,6 +176,54 @@ class TestClassifyTurn(unittest.TestCase):
         for text in ("why do you need my go ahead, just run it",
                      "Why are you asking again, you don't need my permission"):
             self.assertIn("ask_operator_for_automatable", classify_turn(text), text)
+
+
+class TestRealTurnShapes(unittest.TestCase):
+    """Synthetic turns shaped like corrections measured in live transcripts
+    on 2026-11-26 that the first cue vocabulary missed."""
+
+    def test_corrections_land_on_the_rule_themes(self):
+        cases = {
+            "you killed my other sessions, never do that again": "destructive_op",
+            "stop stating things that are measurably false": "stale_claim",
+            "You didn't set your monitor correctly, the job already finished": "monitor_accuracy",
+            "stop making me do redundant setup, you can do it yourself": "ask_operator_for_automatable",
+            "how the hell did you stop yourself, nothing is happening": "idle_dispatch",
+            "I told you to just launch the agent, don't ask me": "ask_operator_for_automatable",
+            "you said this was fixed but the login page still shows the old error": "stale_claim",
+        }
+        for text, theme in cases.items():
+            self.assertIn(theme, classify_turn(text), text)
+
+    def test_generic_stop_complaint_is_unthemed_not_dropped(self):
+        self.assertEqual(classify_turn("Please stop interrupting me for trivia"), ["unthemed"])
+
+    def test_near_misses_stay_silent(self):
+        for text in (
+            "we don't want to stop until the benchmark is green",
+            "the log says the worker was killed by the OOM reaper at 12:00",
+            "Add a monitor setting to the dashboard header",
+            "the doc says the report is measurably false-positive free",
+            "rm -rf build/ is the cleanup step in the Makefile",
+        ):
+            self.assertEqual(classify_turn(text), [], text)
+
+    def test_injected_envelopes_and_pasted_logs_never_reach_the_classifier(self):
+        wrapped = "<system-reminder>stop using sudo, you killed it</system-reminder>"
+        self.assertEqual(_strip_envelope(wrapped), "")
+        relay = "Another claude session sent a message: you killed my worktree, stop it"
+        self.assertEqual(_strip_envelope(relay), "")
+
+
+class TestScanTranscripts(unittest.TestCase):
+    def test_counts_signatures_without_any_run(self):
+        root = Path(tempfile.mkdtemp())
+        _write_transcript(root, "s1", [
+            _user_line("you killed my session, never do that again", "2026-11-26T00:00:00Z"),
+            _user_line("<system-reminder>stop it, you killed it</system-reminder>", "2026-11-26T00:01:00Z"),
+            _user_line("add a chart", "2026-11-26T00:02:00Z"),
+        ])
+        self.assertEqual(scan_transcripts(root), {"destructive_op": 1})
 
 
 class TestDetectorClaudeSource(unittest.TestCase):
