@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""crucible: git-style dispatcher. `crucible <group> ...` runs the executable
+named `crucible-<group>` found beside this file, then on PATH."""
+import json
+import os
+import sys
+
+
+def _dirs():
+    here = os.path.dirname(os.path.realpath(__file__))
+    out = [here]
+    out += [d for d in os.environ.get("PATH", "").split(os.pathsep) if d]
+    return out
+
+
+def find(group):
+    name = "crucible-" + group
+    for d in _dirs():
+        p = os.path.join(d, name)
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def groups():
+    seen = set()
+    for d in _dirs():
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for n in names:
+            p = os.path.join(d, n)
+            if n.startswith("crucible-") and os.path.isfile(p) and os.access(p, os.X_OK):
+                seen.add(n[len("crucible-"):])
+    return sorted(seen)
+
+
+def main(argv):
+    if len(argv) < 2 or argv[1] in ("-h", "--help"):
+        print(json.dumps({"usage": "crucible <group> [args...]", "groups": groups()}))
+        return 0 if len(argv) >= 2 else 2
+    path = find(argv[1])
+    if path is None:
+        print(json.dumps({"error": "unknown group", "group": argv[1], "groups": groups()}))
+        return 2
+    os.execv(path, [path] + argv[2:])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
