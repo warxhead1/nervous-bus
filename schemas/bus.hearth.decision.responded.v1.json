@@ -6,7 +6,12 @@
   "type": "object",
   "required": [
     "decision_id",
+    "project",
+    "session_id",
+    "kind",
     "status",
+    "via",
+    "answered_by",
     "responded_at"
   ],
   "properties": {

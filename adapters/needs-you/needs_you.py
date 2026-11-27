@@ -446,8 +446,33 @@ def _hearth_bases() -> list[str]:
     return ["http://localhost:8420", "https://localhost:8421"]
 
 
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _ssl_context_for(url: str) -> ssl.SSLContext:
+    """Disable TLS verification only for localhost bases; verify remote hosts."""
+    ctx = ssl.create_default_context()
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    if host in _LOCAL_HOSTS:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _error_text(body: dict | None) -> str:
+    if not isinstance(body, dict):
+        return ""
+    for key in ("error", "message", "detail"):
+        val = body.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
 def _is_kind_unsupported(status: int | None, body: dict | None) -> bool:
-    return status in (400, 422)
+    if status not in (400, 422):
+        return False
+    return bool(re.search(r"\bkind\b", _error_text(body), re.I))
 
 
 def entry_to_decision_payload(entry: dict) -> dict:
@@ -457,7 +482,6 @@ def entry_to_decision_payload(entry: dict) -> dict:
     title = (first if len(items) == 1 else (entry.get("summary") or first))[:200]
     say = (entry.get("summary") or first)[:140]
     context = "\n".join(f"- {item}" for item in items)
-    parts = [{"id": f"p{i}", "label": item} for i, item in enumerate(items, 1)]
     metadata: dict = {
         "source": "needs-you",
         "cwd": entry.get("cwd", ""),
@@ -481,7 +505,6 @@ def entry_to_decision_payload(entry: dict) -> dict:
         "title": title,
         "say": say,
         "context": context,
-        "parts": parts,
         "audience": "owner",
         "metadata": metadata,
     }
@@ -535,9 +558,6 @@ class _HearthClient:
     def __init__(self, timeout: float = CLI_TIMEOUT, total_budget: float | None = None):
         self.timeout = timeout
         self.deadline = (time.monotonic() + total_budget) if total_budget is not None else None
-        self._ctx = ssl.create_default_context()
-        self._ctx.check_hostname = False
-        self._ctx.verify_mode = ssl.CERT_NONE
         self._base: str | None = None
         self._token: str | None = None
 
@@ -560,7 +580,7 @@ class _HearthClient:
             headers["Authorization"] = f"Bearer {token}"
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=timeout, context=self._ctx) as r:
+            with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context_for(url)) as r:
                 raw = r.read()
                 try:
                     parsed = json.loads(raw) if raw else {}
@@ -668,6 +688,9 @@ def replay_pending(client: _HearthClient, skip_session: str = "") -> int:
             if 200 <= st < 300:
                 write_entry({**e, "decision_id": did, "synced": True, "pending_sync": False})
                 replayed += 1
+            else:
+                msg = _error_text(body) or str(body or "")
+                print(f"needs-you: hearth rejected replay of {did} (HTTP {st}): {msg}", file=sys.stderr)
         else:
             st, body = client.post(
                 f"/api/decisions/{urllib.parse.quote(did, safe='')}/withdraw",
@@ -678,6 +701,9 @@ def replay_pending(client: _HearthClient, skip_session: str = "") -> int:
             if (200 <= st < 300) or st in (404, 409):
                 prune_entry(sid)
                 replayed += 1
+            else:
+                msg = _error_text(body) or str(body or "")
+                print(f"needs-you: hearth rejected withdraw replay of {did} (HTTP {st}): {msg}", file=sys.stderr)
     return replayed
 
 
@@ -695,8 +721,11 @@ def sync_entry_to_hearth(entry: dict, timeout: float = HOOK_TIMEOUT) -> str:
         if _is_kind_unsupported(st, body):
             write_entry(entry)
             return "fallback_kind"
+        if st is not None:
+            msg = _error_text(body) or str(body or "")
+            print(f"needs-you: hearth rejected {did} (HTTP {st}): {msg}", file=sys.stderr)
         write_entry({**entry, "decision_id": did, "synced": False, "pending_sync": True})
-        return "cached_offline"
+        return "error_http" if st is not None else "cached_offline"
     st, body = client.post(
         f"/api/decisions/{urllib.parse.quote(did, safe='')}/withdraw",
         {"reason": "needs-you: nothing"},
@@ -708,8 +737,11 @@ def sync_entry_to_hearth(entry: dict, timeout: float = HOOK_TIMEOUT) -> str:
     if _is_kind_unsupported(st, body):
         write_entry(entry)
         return "fallback_kind"
+    if st is not None:
+        msg = _error_text(body) or str(body or "")
+        print(f"needs-you: hearth rejected withdraw of {did} (HTTP {st}): {msg}", file=sys.stderr)
     write_entry({**entry, "decision_id": did, "items": [], "synced": False, "pending_sync": True})
-    return "cached_offline_withdraw"
+    return "error_http_withdraw" if st is not None else "cached_offline_withdraw"
 
 
 def publish(entry: dict) -> None:
@@ -878,18 +910,15 @@ def cmd_list(include_acked: bool) -> int:
 def hearth_ack(session_id: str, answers: list[str] | None = None, items: list[str] | None = None,
                via: str = "cli") -> bool:
     """Legacy fallback: POST /api/attention/{id}/ack?via=<via>. True only on 2xx."""
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
     bases = _hearth_bases()
 
     def call(base, path, body, token=None):
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        req = urllib.request.Request(base.rstrip("/") + path, json.dumps(body).encode(),
-                                     headers, method="POST")
-        with urllib.request.urlopen(req, timeout=5, context=ctx) as r:
+        url = base.rstrip("/") + path
+        req = urllib.request.Request(url, json.dumps(body).encode(), headers, method="POST")
+        with urllib.request.urlopen(req, timeout=5, context=_ssl_context_for(url)) as r:
             return r.status, r.read()
 
     for base in bases:
@@ -1050,7 +1079,8 @@ def cmd_migrate(dry_run: bool = False, max_age_days: float = MIGRATE_MAX_AGE_DAY
                           file=sys.stderr)
                     return 1
                 if not (200 <= st < 300):
-                    print(f"needs-you migrate: unexpected HTTP {st} for {sid}", file=sys.stderr)
+                    msg = _error_text(body) or str(body or "")
+                    print(f"needs-you migrate: unexpected HTTP {st} for {sid}: {msg}", file=sys.stderr)
                     return 1
                 write_entry({**e, "decision_id": did, "synced": True, "pending_sync": False})
             posted += 1

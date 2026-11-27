@@ -58,25 +58,6 @@ REQUESTED_GOLDEN = {
         "metadata": {"source": "needs-you", "name": "demo-branch"},
         "created_at": "2026-11-26T18:05:00Z",
     },
-    "errand_with_parts": {
-        "decision_id": "ny-sess-003",
-        "correlation_id": "ny-sess-003",
-        "project": "demo-app",
-        "session_id": "sess-003",
-        "kind": "errand",
-        "relay_mode": "session_text",
-        "title": "Two follow-up items",
-        "say": "Two follow-up items",
-        "context": "- Review release notes\n- Tag v1.2.0",
-        "parts": [
-            {"id": "p1", "label": "Review release notes"},
-            {"id": "p2", "label": "Tag v1.2.0"},
-        ],
-        "audience": "owner",
-        "status": "pending",
-        "metadata": {"source": "needs-you"},
-        "created_at": "2026-11-26T18:06:00Z",
-    },
     "question_multiselect": {
         "decision_id": "askq-toolu-001",
         "correlation_id": "askq-toolu-001",
@@ -261,13 +242,101 @@ def test_live_hearth_today_shapes_still_validate() -> None:
         live_responded = {
             "decision_id": "dec-live-001",
             "correlation_id": "dec-live-001",
+            "project": "demo-app",
+            "session_id": None,
+            "kind": "choice",
             "status": "answered",
             "option_id": "a",
             "answers": None,
             "text": None,
+            "via": legacy_via,
             "answered_by": "phone",
             "responded_at": "2026-11-26T18:05:00Z",
         }
-        if legacy_via is not None:
-            live_responded["via"] = legacy_via
         resp_v.validate(live_responded)
+
+
+def test_requested_schema_caps_match_hearth() -> None:
+    """M4: schema caps match Hearth's decision_parts.rs and decision_links.rs."""
+    v = _validator("bus.hearth.decision.requested")
+    base_parts = {
+        "decision_id": "dec-caps-1",
+        "correlation_id": "dec-caps-1",
+        "project": "demo-app",
+        "kind": "choice",
+        "title": "Pick parts",
+    }
+    # MAX_PARTS = 8
+    nine_parts = [
+        {"id": f"p{i}", "label": f"Part {i}", "options": [{"id": "a", "label": "A"}]}
+        for i in range(9)
+    ]
+    with pytest.raises(ValidationError):
+        v.validate({**base_parts, "parts": nine_parts})
+
+    # MAX_ID = 64 on part id and option id
+    with pytest.raises(ValidationError):
+        v.validate({
+            **base_parts,
+            "parts": [{"id": "x" * 65, "label": "Part", "options": [{"id": "a", "label": "A"}]}],
+        })
+    with pytest.raises(ValidationError):
+        v.validate({
+            **base_parts,
+            "parts": [{"id": "", "label": "Part", "options": [{"id": "a", "label": "A"}]}],
+        })
+    with pytest.raises(ValidationError):
+        v.validate({
+            **base_parts,
+            "options": [{"id": "o" * 65, "label": "Option"}],
+        })
+
+    # MAX_MEDIA = 4, MAX_MEDIA_REF = 1024
+    with pytest.raises(ValidationError):
+        v.validate({
+            **base_parts,
+            "parts": [{
+                "id": "p1",
+                "label": "Part",
+                "media": [f"https://example.test/{i}.png" for i in range(5)],
+                "options": [{"id": "a", "label": "A"}],
+            }],
+        })
+    with pytest.raises(ValidationError):
+        v.validate({
+            **base_parts,
+            "parts": [{
+                "id": "p1",
+                "label": "Part",
+                "media": ["https://example.test/" + "a" * 1020],
+                "options": [{"id": "a", "label": "A"}],
+            }],
+        })
+
+    # session_id <= 128, artifacts <= 20
+    with pytest.raises(ValidationError):
+        v.validate({**REQUESTED_GOLDEN["choice"], "session_id": "s" * 129})
+    with pytest.raises(ValidationError):
+        v.validate({**REQUESTED_GOLDEN["choice"], "artifacts": [f"art-{i}" for i in range(21)]})
+
+    # Errand must have no options and no parts
+    with pytest.raises(ValidationError):
+        v.validate({
+            **REQUESTED_GOLDEN["errand_empty_shape"],
+            "parts": [{"id": "p1", "label": "Bullet"}],
+        })
+    with pytest.raises(ValidationError):
+        v.validate({
+            **REQUESTED_GOLDEN["errand_empty_shape"],
+            "options": [{"id": "a", "label": "A"}],
+        })
+
+
+def test_responded_requires_contract_fields() -> None:
+    """NIT 1: responded.v1 requires all fields contract §3 lists as always present."""
+    v = _validator("bus.hearth.decision.responded")
+    base = RESPONDED_GOLDEN["errand_done"]
+    for field in ("decision_id", "project", "session_id", "kind", "status", "via", "answered_by", "responded_at"):
+        dropped = {k: val for k, val in base.items() if k != field}
+        with pytest.raises(ValidationError, match=field):
+            v.validate(dropped)

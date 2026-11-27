@@ -36,8 +36,9 @@ SAMPLES = {
 HEARTH = {
     "bus.hearth.decision.requested": {"decision_id": "dec-1", "correlation_id": "dec-1", "project": "p", "title": "t",
         "options": [{"id": "a", "label": "A"}], "recommended": "a"},
-    "bus.hearth.decision.responded": {"decision_id": "dec-1", "correlation_id": "dec-1", "status": "answered",
-        "option_id": "a", "answers": None, "text": None, "answered_by": "owner", "responded_at": "2026-11-26T00:00:00Z"},
+    "bus.hearth.decision.responded": {"decision_id": "dec-1", "correlation_id": "dec-1", "project": "p",
+        "session_id": None, "kind": "choice", "status": "answered", "option_id": "a", "answers": None,
+        "text": None, "via": "kiln", "answered_by": "owner", "responded_at": "2026-11-26T00:00:00Z"},
 }
 
 

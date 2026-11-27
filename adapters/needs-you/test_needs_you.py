@@ -504,6 +504,9 @@ class _FakeHearth:
                     if parent.reject_upsert and body.get("upsert"):
                         self._send(422, {"error": "upsert not supported"})
                         return
+                    if body.get("kind") == "errand" and (body.get("options") or body.get("parts")):
+                        self._send(400, {"error": "errand must have no options and no parts"})
+                        return
                     did = body.get("decision_id") or "dec-auto"
                     if did in parent.decisions and not (body.get("upsert") and body.get("kind") == "errand"):
                         self._send(200, parent.decisions[did])
@@ -599,15 +602,16 @@ class FakeHearthDecisions(unittest.TestCase):
         srv = _FakeHearth()
         self.addCleanup(srv.close)
         with mock.patch.dict(os.environ, {"HEARTH_API_URL": srv.url, "HEARTH_API_TOKEN": ""}):
-            # 1. Upsert with 2 bullets -> one part per bullet, kind=errand, upsert=True, id=ny-s1
+            # 1. Upsert with 2 bullets -> no parts, bullets in context, kind=errand, upsert=True, id=ny-s1
             self.assertIsNone(self._run_hook("s1", "Finished build.\n\n**Needs you:**\n- merge PR #5\n- tag release"))
             row = srv.decisions["ny-s1"]
             self.assertEqual(row["kind"], "errand")
             self.assertIs(row["upsert"], True)
             self.assertEqual(row["relay_mode"], "session_text")
             self.assertEqual(row["session_id"], "s1")
-            self.assertEqual([p["label"] for p in row["parts"]], ["merge PR #5", "tag release"])
+            self.assertFalse(row.get("parts"))
             self.assertIn("- merge PR #5", row["context"])
+            self.assertIn("- tag release", row["context"])
             self.assertEqual(self.published.call_count, 1)
             cached = json.loads((self.tmp / "sessions" / "s1.json").read_text())
             self.assertTrue(cached["synced"])
@@ -617,7 +621,8 @@ class FakeHearthDecisions(unittest.TestCase):
             self.assertIsNone(self._run_hook("s1", "Updated.\n\n**Needs you:**\n- approve deploy"))
             row = srv.decisions["ny-s1"]
             self.assertIs(row["upsert"], True)
-            self.assertEqual([p["label"] for p in row["parts"]], ["approve deploy"])
+            self.assertFalse(row.get("parts"))
+            self.assertEqual(row["context"], "- approve deploy")
             self.assertEqual(self.published.call_count, 2)
 
             # 3. Needs you: nothing withdraws ny-s1 and prunes cache
@@ -629,7 +634,8 @@ class FakeHearthDecisions(unittest.TestCase):
             # 4. Posting again after settlement reopens ny-s1 as pending via upsert:true
             self.assertIsNone(self._run_hook("s1", "New ask.\n\n**Needs you:**\n- reopen check"))
             self.assertEqual(srv.decisions["ny-s1"]["status"], "pending")
-            self.assertEqual([p["label"] for p in srv.decisions["ny-s1"]["parts"]], ["reopen check"])
+            self.assertFalse(srv.decisions["ny-s1"].get("parts"))
+            self.assertEqual(srv.decisions["ny-s1"]["context"], "- reopen check")
 
     def test_offline_cache_and_replay_on_next_successful_run(self):
         # Allocate a closed port so Hearth is unreachable
@@ -656,7 +662,8 @@ class FakeHearthDecisions(unittest.TestCase):
             self._run_hook("s-online", "**Needs you:**\n- ship it")
             self.assertIn("ny-s-online", srv.decisions)
             self.assertIn("ny-s-offline", srv.decisions)
-            self.assertEqual(srv.decisions["ny-s-offline"]["parts"][0]["label"], "review draft")
+            self.assertFalse(srv.decisions["ny-s-offline"].get("parts"))
+            self.assertEqual(srv.decisions["ny-s-offline"]["context"], "- review draft")
             replayed_cache = json.loads((self.tmp / "sessions" / "s-offline.json").read_text())
             self.assertTrue(replayed_cache["synced"])
             self.assertFalse(replayed_cache["pending_sync"])
@@ -725,13 +732,15 @@ class FakeHearthDecisions(unittest.TestCase):
             self.assertEqual(len(srv.attention_acks), 1)
             self.assertIn("/api/attention/s-fb/ack?via=terminal", srv.attention_acks[0][0])
 
-    def test_upsert_422_falls_back_cleanly(self):
-        srv = _FakeHearth(reject_upsert=True)
+    def test_upsert_422_naming_kind_falls_back_cleanly(self):
+        srv = _FakeHearth(reject_errand=False)
         self.addCleanup(srv.close)
-        with mock.patch.dict(os.environ, {"HEARTH_API_URL": srv.url, "HEARTH_API_TOKEN": "tok"}):
-            self.assertIsNone(self._run_hook("s-up422", "**Needs you:**\n- fallback on 422"))
+        with mock.patch.object(
+            ny._HearthClient, "post", return_value=(422, {"error": "unknown kind: errand"})
+        ), mock.patch.dict(os.environ, {"HEARTH_API_URL": srv.url, "HEARTH_API_TOKEN": "tok"}):
+            self.assertIsNone(self._run_hook("s-up422", "**Needs you:**\n- fallback on 422 kind"))
             cached = json.loads((self.tmp / "sessions" / "s-up422.json").read_text())
-            self.assertEqual(cached["items"], ["fallback on 422"])
+            self.assertEqual(cached["items"], ["fallback on 422 kind"])
             self.assertFalse(cached.get("pending_sync", False))
             self.assertEqual(self.published.call_count, 1)
             rec = json.loads((self.tmp / "hook.log").read_text().splitlines()[-1])
@@ -805,7 +814,8 @@ class FakeHearthDecisions(unittest.TestCase):
             self.assertEqual(row["kind"], "errand")
             self.assertIs(row["upsert"], True)
             self.assertEqual(row["session_id"], agy_id)
-            self.assertEqual([p["label"] for p in row["parts"]], ["verify agy upsert"])
+            self.assertFalse(row.get("parts"))
+            self.assertEqual(row["context"], "- verify agy upsert")
             self.assertEqual(self.published.call_count, 1)
 
             with mock.patch.object(ny.subprocess, "run"), redirect_stdout(io.StringIO()):
@@ -829,6 +839,88 @@ class FakeHearthDecisions(unittest.TestCase):
             self.assertEqual(ny.main(["migrate"]), 1)
         self.assertIn("does not support errand", err.getvalue())
         self.assertTrue((self.tmp / "sessions" / "recent-2.json").exists())
+
+    def test_errand_payload_has_no_parts_and_validates_against_requested_schema(self):
+        jsonschema = __import__("jsonschema")
+        schema = json.loads(
+            (Path(__file__).parents[2] / "schemas/bus.hearth.decision.requested.v1.json").read_text()
+        )
+        validator = jsonschema.Draft202012Validator(schema)
+        entry = {
+            "session_id": "s-contract",
+            "project": "demo",
+            "cwd": "/repo",
+            "items": ["merge PR #5", "tag release"],
+            "summary": "Two items ready",
+            "orca_terminal": "term_1",
+            "name": "demo-branch",
+            "cache": None,
+            "ts": 1764180000.0,
+            "acked": False,
+        }
+        payload = ny.entry_to_decision_payload(entry)
+        self.assertFalse(payload.get("parts"), "errand payload must carry no parts")
+        self.assertFalse(payload.get("options"), "errand payload must carry no options")
+        self.assertIn("- merge PR #5", payload["context"])
+        self.assertIn("- tag release", payload["context"])
+        validator.validate({**payload, "correlation_id": payload["decision_id"]})
+
+        # Fake server enforces Hearth's real 400 message when parts are sent on an errand.
+        srv = _FakeHearth()
+        self.addCleanup(srv.close)
+        with mock.patch.dict(os.environ, {"HEARTH_API_URL": srv.url, "HEARTH_API_TOKEN": "tok"}):
+            client = ny._HearthClient(timeout=1.0)
+            st, body = client.post("/api/decisions", {
+                **payload,
+                "parts": [{"id": "p1", "label": "merge PR #5"}],
+            })
+            self.assertEqual(st, 400)
+            self.assertEqual(body, {"error": "errand must have no options and no parts"})
+
+            st_ok, row = client.post("/api/decisions", payload)
+            self.assertEqual(st_ok, 200)
+            validator.validate(row)
+            recovered = ny.decision_to_entry(row)
+            self.assertEqual(recovered["items"], ["merge PR #5", "tag release"])
+
+    def test_non_kind_4xx_logs_loudly_and_keeps_pending_sync(self):
+        self.assertTrue(ny._is_kind_unsupported(400, {"error": "kind must be choice, errand, question or permission"}))
+        self.assertTrue(ny._is_kind_unsupported(422, {"error": "unsupported kind: errand"}))
+        self.assertFalse(ny._is_kind_unsupported(400, {"error": "errand must have no options and no parts"}))
+        self.assertFalse(ny._is_kind_unsupported(422, {"error": "upsert not supported"}))
+        self.assertFalse(ny._is_kind_unsupported(400, {}))
+
+        srv = _FakeHearth(reject_upsert=True)
+        self.addCleanup(srv.close)
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"HEARTH_API_URL": srv.url, "HEARTH_API_TOKEN": "tok"}), \
+                redirect_stderr(err):
+            self.assertIsNone(self._run_hook("s-err422", "**Needs you:**\n- check error handling"))
+        self.assertIn("422", err.getvalue())
+        self.assertIn("upsert not supported", err.getvalue())
+        cached = json.loads((self.tmp / "sessions" / "s-err422.json").read_text())
+        self.assertTrue(cached["pending_sync"])
+        self.assertFalse(cached["synced"])
+        rec = json.loads((self.tmp / "hook.log").read_text().splitlines()[-1])
+        self.assertNotEqual(rec["sync"], "fallback_kind")
+
+    def test_tls_verification_disabled_only_for_localhost(self):
+        import ssl
+        for local_url in (
+            "https://localhost:8421/api/decisions",
+            "https://127.0.0.1:8421/api/decisions",
+            "https://[::1]:8421/api/decisions",
+        ):
+            ctx = ny._ssl_context_for(local_url)
+            self.assertEqual(ctx.verify_mode, ssl.CERT_NONE, local_url)
+            self.assertFalse(ctx.check_hostname, local_url)
+        for remote_url in (
+            "https://hearth.example.com:8421/api/decisions",
+            "https://10.0.0.5:8421/api/decisions",
+        ):
+            ctx = ny._ssl_context_for(remote_url)
+            self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED, remote_url)
+            self.assertTrue(ctx.check_hostname, remote_url)
 
 
 if __name__ == "__main__":
