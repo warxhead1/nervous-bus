@@ -447,16 +447,24 @@ def _hearth_bases() -> list[str]:
 
 
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_LOCAL_SSL_CTX: ssl.SSLContext | None = None
+_REMOTE_SSL_CTX: ssl.SSLContext | None = None
 
 
 def _ssl_context_for(url: str) -> ssl.SSLContext:
     """Disable TLS verification only for localhost bases; verify remote hosts."""
-    ctx = ssl.create_default_context()
+    global _LOCAL_SSL_CTX, _REMOTE_SSL_CTX
     host = (urllib.parse.urlparse(url).hostname or "").lower()
     if host in _LOCAL_HOSTS:
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-    return ctx
+        if _LOCAL_SSL_CTX is None:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            _LOCAL_SSL_CTX = ctx
+        return _LOCAL_SSL_CTX
+    if _REMOTE_SSL_CTX is None:
+        _REMOTE_SSL_CTX = ssl.create_default_context()
+    return _REMOTE_SSL_CTX
 
 
 def _error_text(body: dict | None) -> str:
@@ -579,8 +587,9 @@ class _HearthClient:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        ctx = _ssl_context_for(url) if url.startswith("https://") else None
         try:
-            with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context_for(url)) as r:
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
                 raw = r.read()
                 try:
                     parsed = json.loads(raw) if raw else {}
