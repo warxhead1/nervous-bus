@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "required": [
+    "label_id"
+  ],
+  "properties": {
+    "label_id": {
+      "type": "string",
+      "pattern": "^lbl-"
+    }
+  }
+}

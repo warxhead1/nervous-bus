@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "required": [
+    "q_id",
+    "route",
+    "finding"
+  ],
+  "properties": {
+    "q_id": {
+      "type": "string",
+      "pattern": "^q-"
+    },
+    "route": {
+      "type": "string",
+      "enum": [
+        "lookup",
+        "lab"
+      ]
+    },
+    "finding": {
+      "type": "string",
+      "minLength": 1
+    },
+    "finding_path": {
+      "type": "string"
+    }
+  }
+}

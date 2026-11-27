@@ -2,7 +2,7 @@
 entity; decisions named by a later `supersedes` become superseded."""
 
 ID_KEYS = {
-    "question": "q_id", "decision": "d_id", "assumption": "a_id", "label": "lbl_id",
+    "question": "q_id", "decision": "d_id", "assumption": "a_id", "label": "label_id",
     "investigation": "inv_id", "experiment": "exp_id", "finding": "f_id", "bet": "bet_id",
     "audit": "aud_id", "claim": "claim_id", "token": "token_id", "sitting": "sit_id",
     "lane": "l_id", "probe": "probe_id", "node": "key",
@@ -27,7 +27,18 @@ def fold(records):
         e["state"] = verb
         e["last_ts"] = r["ts"]
         e["records"].append(r["id"])
-        e["body"].update(r.get("body", {}))
+        body = r.get("body", {})
+        e["body"].update(body)
+        if kind == "label" and verb == "edited":
+            edit = body.get("edit")
+            if edit == "rename" and "to" in body:
+                e["body"]["text"] = body["to"]
+            elif edit == "retag" and "to" in body:
+                e["body"]["kind"] = body["to"]
+            elif edit == "retire":
+                e["state"] = "retired"
+            elif edit == "merge":
+                e["state"] = "merged"
     for e in list(ents.values()):
         sup = e["body"].get("supersedes") if e["kind"] == "decision" else None
         if sup and sup in ents:

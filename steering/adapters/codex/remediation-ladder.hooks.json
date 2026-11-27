@@ -12,6 +12,18 @@
         "matcher": "Bash"
       }
     ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness codex --event PostToolUse \"$STEERING_HOME/remediation-ladder/hooks/cue\"",
+            "timeout": 5
+          }
+        ],
+        "matcher": "Bash|apply_patch"
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [

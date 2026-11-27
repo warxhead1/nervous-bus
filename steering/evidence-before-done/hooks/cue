@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook: when the prompt matches a cue, put the rule in context.
+"""UserPromptSubmit and PostToolUse hook: when a prompt or tool output matches a cue, put the rule in context.
 
 A skill description is matched against the task, so a rule about HOW to work is
-rarely loaded when it applies. This prints the rule at the moment the prompt
-calls for it. Cues live in cues.json next to this file:
+rarely loaded when it applies. This prints the rule at the moment the prompt or
+tool output calls for it. Cues live in cues.json next to this file:
     [{"pattern": "<regex, case-insensitive>", "say": "<text added to context>"}]
+Optional fields for PostToolUse cues:
+    "event": "PostToolUse", "tools": ["Bash", ...], "match": "input"|"response"|"any"
 Text the harness wrote (task notifications, reminders, command output, a
-continued-session summary) is not the user asking, so it is not matched.
+continued-session summary) is not the user asking, so UserPromptSubmit ignores it.
 Kill switch: STEERING_CUES_DISABLE=1.
 """
 import json
@@ -17,6 +19,7 @@ from pathlib import Path
 
 WRAPPED = re.compile(r"<(task-notification|system-reminder|local-command-[a-z]+|command-[a-z]+|bash-[a-z]+)>.*?</\1>", re.S)
 NOT_THE_USER = ("[SYSTEM NOTIFICATION", "This session is being continued from a previous conversation")
+MAX_CHARS = 65536
 
 
 def spoken(prompt):
@@ -26,16 +29,94 @@ def spoken(prompt):
     return WRAPPED.sub("", prompt)
 
 
+def _flatten(obj, parts, budget):
+    if budget[0] <= 0 or obj is None:
+        return
+    if isinstance(obj, str):
+        chunk = obj[:budget[0]]
+        parts.append(chunk)
+        budget[0] -= len(chunk)
+    elif isinstance(obj, list):
+        for item in obj:
+            _flatten(item, parts, budget)
+            if budget[0] <= 0:
+                break
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _flatten(v, parts, budget)
+            if budget[0] <= 0:
+                break
+
+
+def _tool_input_text(tool, ti):
+    """Extract only newly written or executed text (skip old_string so removals do not fire)."""
+    if not isinstance(ti, dict):
+        return ""
+    parts, budget = [], [MAX_CHARS]
+    if tool == "Edit":
+        _flatten(ti.get("file_path"), parts, budget)
+        _flatten(ti.get("new_string"), parts, budget)
+    elif tool == "MultiEdit":
+        _flatten(ti.get("file_path"), parts, budget)
+        for e in ti.get("edits") or []:
+            if isinstance(e, dict):
+                _flatten(e.get("new_string"), parts, budget)
+    else:
+        _flatten(ti, parts, budget)
+    return "\n".join(parts)
+
+
+def _tool_response_text(ev):
+    parts, budget = [], [MAX_CHARS]
+    for k in ("tool_response", "tool_output", "output", "result", "response"):
+        if k in ev:
+            _flatten(ev.get(k), parts, budget)
+            break
+    return "\n".join(parts)
+
+
 def main():
     if os.environ.get("STEERING_CUES_DISABLE") == "1":
         return 0
     try:
-        prompt = spoken(json.load(sys.stdin).get("prompt") or "")
+        ev = json.load(sys.stdin)
         cues = json.loads(Path(__file__).with_name("cues.json").read_text())
     except Exception:
         return 0
+    is_post = ev.get("hook_event_name") == "PostToolUse" or ("tool_name" in ev and "prompt" not in ev)
     said = []
+    if is_post:
+        tool = ev.get("tool_name") or ""
+        inp_text = _tool_input_text(tool, ev.get("tool_input"))
+        resp_text = _tool_response_text(ev)
+        any_text = (inp_text + "\n" + resp_text)[:MAX_CHARS]
+        for cue in cues:
+            if cue.get("event") != "PostToolUse":
+                continue
+            tools = cue.get("tools")
+            if tools and tool not in tools:
+                continue
+            mode = cue.get("match", "any")
+            hay = inp_text if mode == "input" else (resp_text if mode == "response" else any_text)
+            if not hay:
+                continue
+            try:
+                if re.search(cue["pattern"], hay, re.I) and cue["say"] not in said:
+                    said.append(cue["say"])
+            except Exception:
+                continue
+        if said:
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": "\n".join(said),
+                }
+            }))
+        return 0
+    prompt = spoken(ev.get("prompt") or "")
     for cue in cues:
+        if cue.get("event", "UserPromptSubmit") != "UserPromptSubmit":
+            continue
         try:
             if re.search(cue["pattern"], prompt, re.I) and cue["say"] not in said:
                 said.append(cue["say"])

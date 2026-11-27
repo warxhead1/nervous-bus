@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "required": [
+    "label_id",
+    "key",
+    "kind",
+    "text"
+  ],
+  "properties": {
+    "label_id": {
+      "type": "string",
+      "pattern": "^lbl-"
+    },
+    "key": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "say": {
+      "type": "string"
+    },
+    "def": {
+      "type": "string"
+    },
+    "origin": {
+      "type": "string"
+    },
+    "locked": {
+      "type": "boolean"
+    }
+  }
+}

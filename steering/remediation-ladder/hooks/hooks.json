@@ -8,10 +8,22 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/hooks/cue", "timeout": 5 }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/hooks/cue", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/hooks/cue",
+            "timeout": 5
+          }
         ]
       }
     ]

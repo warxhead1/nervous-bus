@@ -14,8 +14,10 @@ description: >
 
 ## Do not stall
 
-- A wait is never the only thing happening. Before you wait, name the
-  independent work that can run now and start it.
+- A wait is never the only thing happening. Start a slow build, test, or deploy
+  in the background (`run_in_background: true` or `&`), then immediately work on
+  the independent open items (such as `TODO.md` tasks) while it runs. Do not
+  block waiting for the build to finish first.
 - One blocked item does not block the rest.
 - If the user asked for the outcome, the steps toward it are approved. Ask only
   when the choice is theirs: money, scope, policy, or something hard to undo.

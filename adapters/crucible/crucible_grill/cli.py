@@ -1,4 +1,4 @@
-"""crucible grill: ask | tree | draft | cards | sit | post | answer | take | flip | due.
+"""crucible grill: ask | tree | draft | cards | sit | post | answer | take | flip | settle | due.
 
 Every verb prints one JSON object. Exit: 0 done, 1 negative result (lint, refusal), 2 usage,
 3 waiting on the owner, 5 environment (hearth unreachable, no ledger)."""
@@ -6,8 +6,10 @@ import argparse
 import datetime
 import hashlib
 import json
+import os
 import sys
 
+from crucible_label.cli import rename_label
 from crucible_ledger.fold import fold
 from crucible_ledger.store import LedgerError, find_root
 from crucible_ledger.ulid import ulid
@@ -478,7 +480,8 @@ def cmd_answer(a):
         opt = next(o for o in asked["parts"][0]["options"] if o["id"] == picks[first])
         m = lint.HOLE.fullmatch(opt["label"])
         if m:
-            ctx.add("label.edited", {"lbl_id": m.group(1), "text": hit[1]}, by="owner", via=via)
+            rename_label(ctx.led, m.group(1), hit[1], by="owner", via=via, q_id=a.q)
+            ctx.reload()
         else:
             raw = "call it " + hit[1]
     else:
@@ -539,6 +542,35 @@ def cmd_flip(a):
 
 def _cmp(op, a, b):
     return {">": a > b, "<": a < b, ">=": a >= b, "<=": a <= b, "==": a == b}.get(op, False)
+
+
+def cmd_settle(a):
+    ctx = ctx_for(a)
+    q = ctx.q(a.q)
+    if os.path.isfile(a.finding):
+        with open(a.finding, encoding="utf-8") as f:
+            finding_text = f.read().strip()
+        finding_path = a.finding
+    else:
+        finding_text = a.finding.strip()
+        finding_path = None
+    if not finding_text:
+        fail("finding is empty", 2, q=a.q)
+    if q["state"] == "settled" and q["settled"]:
+        prev = q["settled"]
+        if prev.get("route") != a.route:
+            fail("question already settled on a different route", 1, expected=prev.get("route"), got=a.route, q=a.q)
+        return out({"state": "settled", "q": a.q, "route": prev["route"], "already": True,
+                    "record": q["settled_record"]})
+    if q["state"] != "routed":
+        fail("only a routed question can be settled", 1, state=q["state"], q=a.q)
+    if q["route"] and q["route"] != a.route:
+        fail("route does not match how the question was routed", 1, expected=q["route"], got=a.route, q=a.q)
+    body = {"q_id": a.q, "route": a.route, "finding": finding_text}
+    if finding_path is not None:
+        body["finding_path"] = finding_path
+    rec = ctx.add("question.settled", body, via=a.via)
+    return out({"state": "settled", "q": a.q, "route": a.route, "already": False, "record": rec["id"]})
 
 
 def cmd_due(a):
@@ -624,6 +656,11 @@ def parser():
     s = add("flip", "reverse a taken decision")
     s.add_argument("d")
     s.add_argument("--option")
+    s.add_argument("--via", default="grill")
+    s = add("settle", "settle a routed lookup or lab question with its finding")
+    s.add_argument("q")
+    s.add_argument("--route", required=True, choices=("lookup", "lab"))
+    s.add_argument("--finding", required=True, help="finding text or path to a file holding it")
     s.add_argument("--via", default="grill")
     s = add("due", "deferred questions and decisions whose review fired")
     s.add_argument("--now")

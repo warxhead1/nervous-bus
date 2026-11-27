@@ -10,6 +10,16 @@
           }
         ],
         "matcher": "apply_patch"
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness codex --event PostToolUse \"$STEERING_HOME/evidence-before-done/hooks/cue\"",
+            "timeout": 5
+          }
+        ],
+        "matcher": "Bash"
       }
     ],
     "UserPromptSubmit": [

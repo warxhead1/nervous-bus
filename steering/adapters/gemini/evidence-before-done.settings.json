@@ -10,6 +10,16 @@
           }
         ],
         "matcher": "write_file|replace"
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness gemini --event PostToolUse \"$STEERING_HOME/evidence-before-done/hooks/cue\"",
+            "timeout": 5
+          }
+        ],
+        "matcher": "run_shell_command"
       }
     ],
     "BeforeAgent": [

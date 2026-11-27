@@ -1,0 +1,4 @@
+{"plugins": ["model-tiering", "isolated-dispatch"], "max_turns": 40, "timeout": 900,
+ "tools": ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "Skill", "Agent", "Task", "TaskOutput"],
+ "score_for": {"model-tiering": ["model_set", "fixed_on_main"],
+               "isolated-dispatch": ["isolated", "fixed_on_main"]}}

@@ -22,6 +22,16 @@
           }
         ],
         "matcher": "Write|Edit|MultiEdit"
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$STEERING_HOME/keep-moving/hooks/cue\"",
+            "timeout": 5
+          }
+        ],
+        "matcher": "Bash|Read"
       }
     ],
     "UserPromptSubmit": [

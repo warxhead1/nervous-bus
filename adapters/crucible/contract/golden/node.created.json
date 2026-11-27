@@ -1,0 +1,12 @@
+{
+ "id": "01JD0000000000000000000020",
+ "v": 1,
+ "ts": "2026-11-27T19:12:00Z",
+ "type": "node.created",
+ "game": "demo",
+ "by": "crucible",
+ "via": "init",
+ "body": {
+  "key": "root"
+ }
+}

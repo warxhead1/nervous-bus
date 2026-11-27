@@ -1,0 +1,14 @@
+{
+ "id": "01JD0000000000000000000019",
+ "v": 1,
+ "ts": "2026-11-27T19:11:00Z",
+ "type": "question.triaged",
+ "game": "demo",
+ "by": "crucible",
+ "via": "grill",
+ "body": {
+  "q_id": "q-01JD0000000000000000000002",
+  "route": "lookup",
+  "clause": "class.fact"
+ }
+}

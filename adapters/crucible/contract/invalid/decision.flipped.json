@@ -1,0 +1,12 @@
+{
+ "id": "01JD0000000000000000000016",
+ "v": 1,
+ "ts": "2026-11-27T19:09:00Z",
+ "type": "decision.flipped",
+ "game": "demo",
+ "by": "owner",
+ "via": "kiln-tap",
+ "body": {
+  "d_id": "not-a-decision-id"
+ }
+}

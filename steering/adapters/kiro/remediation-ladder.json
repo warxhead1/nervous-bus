@@ -13,6 +13,17 @@
       "matcher": "shell"
     },
     {
+      "name": "remediation-ladder-cue-PostToolUse",
+      "trigger": "PostToolUse",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event PostToolUse \"$STEERING_HOME/remediation-ladder/hooks/cue\""
+      },
+      "timeout": 5,
+      "enabled": true,
+      "matcher": "shell|write"
+    },
+    {
       "name": "remediation-ladder-cue-UserPromptSubmit",
       "trigger": "UserPromptSubmit",
       "action": {

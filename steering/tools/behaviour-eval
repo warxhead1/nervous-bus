@@ -1,0 +1,408 @@
+#!/usr/bin/env python3
+"""Run trap cases with and without a steering plugin and grade what the agent did.
+
+A case is a directory under steering/evals/cases/ (or any --cases dir):
+    case.json   {"plugins": [...], "max_turns": N, "timeout": S, "tools": [...],
+                 "arms": {...}}            # "arms" replaces the plugin arms (see below)
+    scaffold.sh builds the trap repo in an empty dir (git is allowed)
+    prompt.md   the task, sent as-is
+    grade.py    grade(ctx) -> {"score": bool, "<check>": bool | number, ...}
+    hidden/     optional files copied into the tree only at grading time
+
+Default arms: "none" (no plugin) plus one arm per name in "plugins", each loading
+steering/<plugin> with --plugin-dir. A case may name its own arms instead:
+    "arms": {"team": {"agents": "agents.json", "prefix": "..."},
+             "solo": {"skills": "skills", "disallow": ["Agent"], "prefix": "..."}}
+
+Each run is a fresh scaffolded dir and one headless `claude -p` session under
+--config-dir (use a clean one: credentials only; a home config that already
+states these rules is the same as loading the plugin). The run's tree and HOME
+live under --work-root, which must have no CLAUDE.md, .claude/CLAUDE.md or
+AGENTS.md above it: a run anywhere under $HOME loads ~/.claude/CLAUDE.md as
+project memory. The launching session's env (plugin dirs, hook endpoints) is
+dropped. Hook hits go to a per-run file, not the real hit log. The stream, the
+grade and the hook hits are written under --out.
+
+    behaviour-eval plan   [--cases DIR] [--case GLOB] [--plugins a,b] [--runs N]
+    behaviour-eval run    --out DIR --config-dir DIR [same filters] [--model M] [--jobs J]
+    behaviour-eval regrade --out DIR      # grade the kept runs again, no model calls
+    behaviour-eval report --out DIR [--md FILE]
+
+Every run is a real model session on your plan. Start with --runs 1 --case <one>.
+"""
+import argparse
+import concurrent.futures as cf
+import fnmatch
+import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+STEERING = Path(__file__).resolve().parents[1]
+CASES = STEERING / "evals" / "cases"
+DEFAULT_TOOLS = ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "Skill"]
+
+
+# ---------- stream parsing ----------
+
+def parse_events(text):
+    out = []
+    for line in text.splitlines():
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
+def _text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(_text(c.get("text", c.get("content", ""))) if isinstance(c, dict) else str(c)
+                         for c in content)
+    return str(content or "")
+
+
+class Ctx:
+    """What a grader sees: the final tree, every tool call in order, and the final answer."""
+
+    def __init__(self, repo, events, case_dir=None):
+        self.repo = Path(repo)
+        self.case_dir = Path(case_dir) if case_dir else None
+        self.events = events
+        self.steps = []  # ordered: ("use", name, input, id, parent) | ("result", id, text) | ("text", str)
+        results = [e for e in events if e.get("type") == "result"]
+        self.final_text = _text((results[-1] if results else {}).get("result", ""))
+        for e in events:
+            t = e.get("type")
+            msg = e.get("message") or {}
+            if t == "assistant":
+                for c in msg.get("content") or []:
+                    if c.get("type") == "tool_use":
+                        self.steps.append(("use", c.get("name"), c.get("input") or {}, c.get("id"),
+                                           e.get("parent_tool_use_id")))
+                    elif c.get("type") == "text":
+                        self.steps.append(("text", c.get("text", "")))
+            elif t == "user":
+                content = msg.get("content")
+                for c in content if isinstance(content, list) else []:
+                    if isinstance(c, dict) and c.get("type") == "tool_result":
+                        self.steps.append(("result", c.get("tool_use_id"), _text(c.get("content"))))
+            elif t == "system" and e.get("subtype") == "task_notification":
+                self.steps.append(("result", e.get("task_id") or "", _text(e.get("summary") or e.get("output") or "")))
+
+    def uses(self, name=None):
+        return [s for s in self.steps if s[0] == "use" and (name is None or re.fullmatch(name, s[1] or ""))]
+
+    def commands(self):
+        return [s[2].get("command", "") for s in self.uses("Bash")]
+
+    def texts(self):
+        return [s[1] for s in self.steps if s[0] == "text"] + [self.final_text]
+
+    def read(self, rel):
+        p = self.repo / rel
+        return p.read_text(errors="replace") if p.is_file() else None
+
+    def sh(self, cmd, timeout=120):
+        """Run a command in the final tree; returns (returncode, output)."""
+        try:
+            p = subprocess.run(["bash", "-c", cmd], cwd=self.repo, capture_output=True, text=True,
+                               timeout=timeout, stdin=subprocess.DEVNULL)
+            return p.returncode, p.stdout + p.stderr
+        except subprocess.TimeoutExpired:
+            return 124, "timeout"
+
+    def with_hidden(self, cmd, timeout=180):
+        """Copy hidden/ over a copy of the final tree and run cmd there."""
+        work = self.repo.parent / "graded"
+        if work.exists():
+            shutil.rmtree(work)
+        shutil.copytree(self.repo, work, symlinks=True, ignore=shutil.ignore_patterns(".git", ".claude"))
+        hidden = self.case_dir / "hidden" if self.case_dir else None
+        if hidden and hidden.is_dir():
+            shutil.copytree(hidden, work, dirs_exist_ok=True)
+        try:
+            p = subprocess.run(["bash", "-c", cmd], cwd=work, capture_output=True, text=True,
+                               timeout=timeout, stdin=subprocess.DEVNULL)
+            return p.returncode, p.stdout + p.stderr
+        except subprocess.TimeoutExpired:
+            return 124, "timeout"
+
+
+def usage_of(events):
+    """Requests (distinct assistant messages, subagents included), tokens and reported cost."""
+    ids = {(e.get("message") or {}).get("id") for e in events if e.get("type") == "assistant"}
+    ids.discard(None)
+    results = [e for e in events if e.get("type") == "result"]
+    last = results[-1] if results else {}
+    tokens = 0
+    for m in (last.get("modelUsage") or {}).values():
+        tokens += sum(int(m.get(k) or 0) for k in
+                      ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens"))
+    agents = sum(1 for e in events if e.get("type") == "assistant"
+                 for c in (e.get("message") or {}).get("content") or []
+                 if c.get("type") == "tool_use" and c.get("name") in ("Agent", "Task"))
+    return {"requests": len(ids), "tokens": tokens, "cost_usd": float(last.get("total_cost_usd") or 0),
+            "agent_calls": agents, "is_error": bool(last.get("is_error")) if results else True,
+            "results": len(results)}
+
+
+# ---------- cases and arms ----------
+
+def load_case(d):
+    d = Path(d).resolve()  # scaffolds run with cwd set to the run's tree
+    meta = json.loads((d / "case.json").read_text())
+    meta["name"] = d.name
+    meta["dir"] = d
+    return meta
+
+
+def find_cases(roots, glob="*"):
+    out = []
+    for r in roots:
+        for c in sorted(Path(r).glob("*/case.json")):
+            if fnmatch.fnmatch(c.parent.name, glob):
+                out.append(load_case(c.parent))
+    return out
+
+
+def arms_of(case, only_plugins=None):
+    if case.get("arms"):
+        return {k: dict(v) for k, v in case["arms"].items()}
+    arms = {"none": {}}
+    for p in case.get("plugins", []):
+        if only_plugins and p not in only_plugins:
+            continue
+        arms[p] = {"plugin": p}
+    return arms
+
+
+def plan(cases, runs, only_plugins=None):
+    return [(c, arm, spec, r) for c in cases for arm, spec in arms_of(c, only_plugins).items()
+            for r in range(runs)]
+
+
+INSTRUCTION_FILES = ("CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md", "CLAUDE.local.md")
+
+
+def ancestor_instructions(path):
+    """Instruction files Claude Code would load as project memory for a session under path.
+    Measured: a run under $HOME loads ~/.claude/CLAUDE.md as project instructions, whatever
+    CLAUDE_CONFIG_DIR and HOME say, so both arms would carry the user's own rules."""
+    p = Path(path).resolve()
+    return [str(a / f) for a in [p, *p.parents] for f in INSTRUCTION_FILES if (a / f).is_file()]
+
+
+SESSION_ENV = re.compile(r"^(CLAUDE|ANTHROPIC|AI_AGENT|ORCA|CODEX|AGENT_STEERING|MCP_)")
+
+
+def clean_env(base=None):
+    """The parent's env minus its agent session: a launching session's CLAUDE_CODE_PLUGIN_DIRS,
+    hook endpoints and effort setting would otherwise load into both arms."""
+    return {k: v for k, v in (os.environ if base is None else base).items() if not SESSION_ENV.match(k)}
+
+
+def command(args, case, spec, prompt):
+    tools = case.get("tools", DEFAULT_TOOLS)
+    cmd = [args.claude, "-p", spec.get("prefix", "") + prompt, "--model", args.model,
+           "--max-turns", str(case.get("max_turns", 30)), "--output-format", "stream-json", "--verbose",
+           "--strict-mcp-config", "--allowedTools", " ".join(tools)]
+    disallow = list(spec.get("disallow", [])) + ["WebFetch", "WebSearch"]
+    cmd += ["--disallowedTools", " ".join(disallow)]
+    if spec.get("plugin"):
+        cmd += ["--plugin-dir", str(STEERING / spec["plugin"])]
+    if spec.get("agents"):
+        cmd += ["--agents", (case["dir"] / spec["agents"]).read_text()]
+    return cmd
+
+
+def run_one(args, case, arm, spec, r):
+    rd = Path(args.out) / case["name"] / arm / f"r{r}"
+    if (rd / "grade.json").is_file() and not args.force:
+        return json.loads((rd / "grade.json").read_text())
+    wd = Path(args.work_root) / Path(args.out).name / case["name"] / arm / f"r{r}"
+    for d in (rd, wd):
+        if d.exists():
+            shutil.rmtree(d)
+    rd.mkdir(parents=True)
+    repo = wd / "repo"
+    repo.mkdir(parents=True)
+    env = dict(clean_env(), GIT_AUTHOR_NAME="eval", GIT_AUTHOR_EMAIL="eval@example.invalid",
+               GIT_COMMITTER_NAME="eval", GIT_COMMITTER_EMAIL="eval@example.invalid",
+               CLAUDE_CODE_TMPDIR=str(wd / "tmp"))
+    subprocess.run(["bash", str(case["dir"] / "scaffold.sh")], cwd=repo, check=True, env=env,
+                   capture_output=True, stdin=subprocess.DEVNULL)
+    if spec.get("skills"):
+        shutil.copytree(case["dir"] / spec["skills"], repo / ".claude" / "skills", dirs_exist_ok=True)
+    prompt = (case["dir"] / "prompt.md").read_text().strip()
+    env["CLAUDE_CONFIG_DIR"] = str(Path(args.config_dir).resolve())
+    env["HOME"] = str(wd / "home")
+    (wd / "home").mkdir()
+    env["AGENT_STEERING_HITS"] = str(rd / "hits.jsonl")
+    t0 = time.time()
+    try:
+        p = subprocess.run(command(args, case, spec, prompt), cwd=repo, capture_output=True, text=True,
+                           timeout=case.get("timeout", 900), stdin=subprocess.DEVNULL, env=env)
+        out, status = p.stdout, ("ok" if p.returncode == 0 else f"rc{p.returncode}")
+        (rd / "stderr.txt").write_text(p.stderr[-20000:])
+    except subprocess.TimeoutExpired as e:
+        out, status = (e.stdout.decode() if isinstance(e.stdout, bytes) else e.stdout or ""), "timeout"
+    wall = time.time() - t0
+    (rd / "stream.jsonl").write_text(out)
+    (rd / "meta.json").write_text(json.dumps({"status": status, "wall_s": round(wall, 1), "arm": arm,
+                                              "case": case["name"], "run": r, "model": args.model,
+                                              "repo": str(repo), "config_dir": env["CLAUDE_CONFIG_DIR"]}))
+    return grade_dir(case, rd)
+
+
+def hook_outputs(config_dir, events):
+    """Hook output the session fed to the model, read from its transcript in the config dir
+    (stream-json does not carry it): one (type, event, first 160 chars) per hook that said something."""
+    init = next((e for e in events if e.get("type") == "system" and e.get("subtype") == "init"), {})
+    if not (config_dir and init.get("session_id") and init.get("cwd")):
+        return []
+    mangled = re.sub(r"[^A-Za-z0-9]", "-", init["cwd"])
+    path = Path(config_dir) / "projects" / mangled / f"{init['session_id']}.jsonl"
+    out = []
+    for e in parse_events(path.read_text()) if path.is_file() else []:
+        a = e.get("attachment")
+        if isinstance(a, dict) and str(a.get("type", "")).startswith("hook"):
+            text = _text(a.get("content") or a.get("stdout") or a.get("stderr") or "")
+            if text.strip():
+                out.append((a.get("type"), a.get("hookEvent") or a.get("hookName"), text[:160]))
+    return out
+
+
+def grade_dir(case, rd):
+    meta = json.loads((rd / "meta.json").read_text())
+    events = parse_events((rd / "stream.jsonl").read_text())
+    u = usage_of(events)
+    hooks = hook_outputs(meta.get("config_dir"), events)
+    (rd / "hooks.json").write_text(json.dumps(hooks, indent=1))
+    row = {**meta, **u, "hook_hits": len(hooks)}
+    if meta["status"] != "ok" or u["is_error"]:
+        row["score"] = None  # not a miss: the run did not finish
+    else:
+        spec = importlib.util.spec_from_file_location(f"grade_{case['name']}", case["dir"] / "grade.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        checks = mod.grade(Ctx(meta.get("repo") or rd / "repo", events, case["dir"]))
+        row["score"] = bool(checks.pop("score"))
+        row["checks"] = checks
+        # A plugin graded on its own checks: "score_for": {"<plugin>": ["check", ...]}.
+        row["score_by"] = {p: all(bool(checks[c]) for c in cs) for p, cs in case.get("score_for", {}).items()}
+    (rd / "grade.json").write_text(json.dumps(row, indent=1))
+    return row
+
+
+# ---------- report ----------
+
+def collect_rows(out):
+    return [json.loads(p.read_text()) for p in sorted(Path(out).glob("*/*/r*/grade.json"))]
+
+
+def _rate(rows, plugin=None):
+    """Passes over finished runs; with plugin, by that plugin's own checks when the case names them."""
+    done = [r for r in rows if r.get("score") is not None]
+    return sum((r.get("score_by") or {}).get(plugin, r["score"]) for r in done), len(done)
+
+
+def report(rows):
+    by = {}
+    for r in rows:
+        by.setdefault(r["case"], {}).setdefault(r["arm"], []).append(r)
+    lines = ["| case | arm | score | not finished | checks passed | requests | tokens | wall s | hook hits |",
+             "|---|---|---|---|---|---|---|---|---|"]
+    for case, arms in sorted(by.items()):
+        for arm, rs in sorted(arms.items(), key=lambda kv: (kv[0] != "none", kv[0])):
+            k, n = _rate(rs, arm)
+            names = sorted({c for r in rs for c in (r.get("checks") or {})})
+            parts = []
+            for c in names:
+                vals = [r["checks"][c] for r in rs if r.get("checks") and c in r["checks"]]
+                if all(isinstance(v, bool) for v in vals):
+                    parts.append(f"{c} {sum(vals)}/{len(vals)}")
+                elif vals:
+                    parts.append(f"{c} avg {sum(vals) / len(vals):.1f}")
+            mean = lambda key: round(sum(r.get(key) or 0 for r in rs) / len(rs)) if rs else 0
+            lines.append(f"| {case} | {arm} | {k}/{n} | {len(rs) - n} | {', '.join(parts)} | "
+                         f"{mean('requests')} | {mean('tokens')} | {mean('wall_s')} | {mean('hook_hits')} |")
+    lines += ["", "| plugin | case | WITH | WITHOUT | difference |", "|---|---|---|---|---|"]
+    for case, arms in sorted(by.items()):
+        if "none" not in arms:
+            continue
+        for arm, rs in sorted(arms.items()):
+            if arm == "none":
+                continue
+            bk, bn = _rate(arms["none"], arm)
+            k, n = _rate(rs, arm)
+            diff = (k / n - bk / bn) if n and bn else None
+            lines.append(f"| {arm} | {case} | {k}/{n} | {bk}/{bn} | "
+                         f"{'-' if diff is None else f'{diff:+.2f}'} |")
+    return "\n".join(lines)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("action", choices=["plan", "run", "regrade", "report"])
+    ap.add_argument("--cases", action="append", help="dir holding case dirs (repeatable)")
+    ap.add_argument("--case", default="*", help="case name glob")
+    ap.add_argument("--plugins", default="", help="comma list: only these plugin arms (plus none)")
+    ap.add_argument("--runs", type=int, default=3)
+    ap.add_argument("--model", default="sonnet")
+    ap.add_argument("--jobs", type=int, default=2, help="concurrent sessions (keep it at 4 or fewer)")
+    ap.add_argument("--out")
+    ap.add_argument("--config-dir")
+    ap.add_argument("--work-root", default="/var/tmp/behaviour-eval",
+                    help="where run trees live; must have no CLAUDE.md/AGENTS.md above it (so not under $HOME)")
+    ap.add_argument("--force", action="store_true", help="rerun runs that already have a grade")
+    ap.add_argument("--md", help="write the report table to this file too")
+    ap.add_argument("--claude", default=os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude")
+    args = ap.parse_args()
+    cases = find_cases(args.cases or [CASES], args.case)
+    only = {p for p in args.plugins.split(",") if p} or None
+    jobs = plan(cases, args.runs, only)
+    if args.action == "plan":
+        for c, arm, _, r in jobs:
+            print(f"{c['name']:24} {arm:22} r{r}")
+        print(f"sessions: {len(jobs)}, model {args.model}")
+        return
+    if not args.out:
+        sys.exit("--out is required")
+    if args.action == "run":
+        if not args.config_dir:
+            sys.exit("--config-dir is required: a clean config (credentials only)")
+        Path(args.work_root).mkdir(parents=True, exist_ok=True)
+        leaks = ancestor_instructions(args.work_root)
+        if leaks:
+            sys.exit(f"--work-root {args.work_root} sits under instruction files every run would load: "
+                     f"{', '.join(leaks)}. Pick a root outside them (not under $HOME).")
+        lock = threading.Lock()
+        with cf.ThreadPoolExecutor(min(args.jobs, 4)) as ex:
+            futs = [ex.submit(run_one, args, *j) for j in jobs]
+            for f in cf.as_completed(futs):
+                row = f.result()
+                with lock:
+                    print(f"{row['case']:24} {row['arm']:22} r{row['run']} score={row['score']} "
+                          f"req={row['requests']} wall={row['wall_s']}s", flush=True)
+    elif args.action == "regrade":
+        for c in cases:
+            for rd in sorted((Path(args.out) / c["name"]).glob("*/r*")):
+                if (rd / "meta.json").is_file():
+                    grade_dir(c, rd)
+    table = report(collect_rows(args.out))
+    print(table)
+    if args.md:
+        Path(args.md).write_text(table + "\n")
+
+
+if __name__ == "__main__":
+    main()

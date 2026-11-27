@@ -1,0 +1,19 @@
+{
+ "id": "01JD0000000000000000000011",
+ "v": 1,
+ "ts": "2026-11-27T19:05:00Z",
+ "type": "label.proposed",
+ "game": "demo",
+ "by": "owner",
+ "via": "cli",
+ "body": {
+  "label_id": "lbl-01JD0000000000000000000012",
+  "key": "res.k7f3",
+  "kind": "resource",
+  "text": "Salvage",
+  "say": "salvage",
+  "def": "Material recovered from a site",
+  "origin": "owner",
+  "locked": true
+ }
+}

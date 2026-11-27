@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "required": [
+    "l_id",
+    "d_id",
+    "lane_hours"
+  ],
+  "properties": {
+    "l_id": {
+      "type": "string",
+      "pattern": "^l-"
+    },
+    "d_id": {
+      "type": "string",
+      "pattern": "^d-"
+    },
+    "lane_hours": {
+      "type": "number",
+      "minimum": 0
+    },
+    "reason": {
+      "type": "string"
+    }
+  }
+}
