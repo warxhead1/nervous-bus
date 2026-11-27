@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "required": ["q_id", "mode", "class", "door", "parts"],
+  "properties": {
+    "q_id": {"type": "string", "pattern": "^q-"},
+    "sitting": {"type": "string"},
+    "mode": {"type": "string", "enum": ["batch", "live", "single"]},
+    "class": {"type": "string", "enum": ["owner", "lead"]},
+    "door": {"type": "string", "enum": ["one-way", "two-way"]},
+    "weight": {"type": "string"},
+    "radius": {"type": "integer", "minimum": 0},
+    "pips": {"type": "integer", "minimum": 0},
+    "parts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "options"],
+        "properties": {
+          "id": {"type": "string"},
+          "text": {"type": "string"},
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "label"],
+              "properties": {
+                "id": {"type": "string"},
+                "label": {"type": "string"},
+                "rec": {"type": "boolean"},
+                "changes": {"type": "string"},
+                "evidence": {"type": "array", "items": {"type": "string"}}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

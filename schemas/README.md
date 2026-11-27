@@ -33,6 +33,7 @@ the overlay, never here.
 | Prefix | Owner | Why private |
 |---|---|---|
 | `tachyonos.*` | tachyonac-engine | Trading / prediction-market: PnL, positions, trades, venue & order data |
+| `gamelab.*` | crucible | Game studio events whose fields or enums carry game vocabulary. Public `crucible.*` carries ids, enums and counts only |
 | `tengine.diag.*` | tengine | Internal diagnostics: WT telemetry, scheduling internals, TSDL activation details |
 | `hearth.market.state.*` | hearth | Bridges tachyonos signals to hearth; `raw_signal` field can carry private tachyonos payload |
 

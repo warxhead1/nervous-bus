@@ -27,3 +27,70 @@ kind = "activity"
 [[channel]]
 match = "hearth.ember.insight.v1"
 min_gap_hours = 24
+
+# kb edit commands (update, archive, move, relate, attach, bulk) emit only when
+# someone runs that command. Ingest emits kb.entry.created.v2, which stays live.
+[[channel]]
+match = "kb.entry.updated.v1"
+kind = "activity"
+
+[[channel]]
+match = "kb.entry.archived.v1"
+kind = "activity"
+
+[[channel]]
+match = "kb.entry.unarchived.v1"
+kind = "activity"
+
+[[channel]]
+match = "kb.entry.moved.v1"
+kind = "activity"
+
+[[channel]]
+match = "kb.entry.deleted.v1"
+kind = "activity"
+
+[[channel]]
+match = "kb.entry.vetted.v1"
+kind = "activity"
+
+[[channel]]
+match = "kb.entry.superseded.v1"
+kind = "activity"
+
+[[channel]]
+match = "kb.related.*"
+kind = "activity"
+
+[[channel]]
+match = "kb.attachment.*"
+kind = "activity"
+
+[[channel]]
+match = "kb.bulk.*"
+kind = "activity"
+
+# deer-flow emits these from commands someone starts by hand: `deer verify`
+# (claim.verified) and the stack-tuner cycle (stage.start, stage.done).
+[[channel]]
+match = "deer-flow.claim.verified.v1"
+kind = "activity"
+
+[[channel]]
+match = "deer-flow.stack-tuner.*"
+kind = "activity"
+
+# The gamedev progress report is pushed by hand from the gamedev project.
+[[channel]]
+match = "bus.gamedev.progress.*"
+kind = "activity"
+
+# hearth-loom publishes lifecycle and shared-session events on bead
+# transitions it drives and loomie sessions it runs; an empty dispatch queue is silent.
+[[channel]]
+match = "bus.bead.lifecycle.v1"
+kind = "activity"
+
+[[channel]]
+match = "loom.shared-session.v1"
+kind = "activity"

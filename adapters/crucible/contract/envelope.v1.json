@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "crucible ledger record envelope v1",
+  "type": "object",
+  "required": ["id", "v", "ts", "type", "game", "by", "via", "body"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"},
+    "v": {"const": 1},
+    "ts": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"},
+    "type": {
+      "type": "string",
+      "pattern": "^(node|question|decision|assumption|label|investigation|experiment|finding|bet|audit|claim|token|sitting|lane|probe)\\.[a-z][a-z_]*$"
+    },
+    "game": {"type": "string", "minLength": 1},
+    "by": {"type": "string", "minLength": 1},
+    "via": {"type": "string", "minLength": 1},
+    "body": {"type": "object"}
+  }
+}

@@ -1,0 +1,36 @@
+{
+ "id": "01JD0000000000000000000009",
+ "v": 1,
+ "ts": "2026-11-27T19:04:00Z",
+ "type": "decision.settled",
+ "game": "demo",
+ "by": "owner",
+ "via": "hearth",
+ "body": {
+  "d_id": "d-01JD0000000000000000000010",
+  "q_id": "q-01JD0000000000000000000002",
+  "chosen": {
+   "p1": "b"
+  },
+  "authority": "owner",
+  "door": "two-way",
+  "touches": [
+   "economy.rate"
+  ],
+  "constrains": [],
+  "review_when": [
+   {
+    "metric": "max_strategy_winrate",
+    "op": ">",
+    "value": "band"
+   }
+  ],
+  "implements": {
+   "rules": {
+    "economy.rate": 4
+   },
+   "lanes": []
+  },
+  "supersedes": null
+ }
+}
