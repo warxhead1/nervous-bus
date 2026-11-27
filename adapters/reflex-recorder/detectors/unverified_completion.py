@@ -29,6 +29,16 @@ of unverified delegated agents.
 EDIT_THRESHOLD guards against trivial touch-ups where running the suite would be
 overkill; the pattern of interest is substantive code change shipped unverified.
 
+TRANSCRIPT TIER
+===============
+The bus summary keeps only a verb for a Bash call since 2026-10-04, so the event
+tier cannot tell `python3 -m pytest` from `python3 script.py`: after that date it
+fired on 71% of runs that verified and 75% of those that did not. When a run's
+session transcript resolves, the detector reads it instead. It flags a run whose
+transcript shows >= EDIT_THRESHOLD code edits (Edit/Write/MultiEdit to a code
+path) and no verifying Bash command, judged on the FULL command text, after the
+last of those edits. A run with no transcript falls back to the event tier.
+
 REMEDIATION LADDER
 ==================
 AUTOMATE: a per-agent pre-finish gate that requires a build/test invocation (or an
@@ -42,22 +52,44 @@ import sqlite3
 from typing import Optional
 
 from detectors.base import BaseDetector, PatternCandidate
+from pathlib import Path
+
 from detectors.dispatch_lineage import (
+    is_code_path,
     load_run_events,
     segment_by_worktree,
 )
 from detectors.verification import build_verifier
+from transcript_steps import StepCache, run_refs
 
 # Minimum distinct Edit/Write calls in a delegated segment for an unverified
 # finish to be worth flagging. 1-2 edits is often a doc tweak or trivial fix;
 # >=3 substantive code edits with no test run is the shape we care about.
 EDIT_THRESHOLD = 3
 
+_EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+
+
+def transcript_verdict(steps, project: str, is_verify):
+    """(code_edits, verified_after_last_edit) for one run's transcript steps."""
+    edits = [s for s in steps if s.tool in _EDIT_TOOLS and is_code_path(s.file_path)]
+    if not edits:
+        return 0, True
+    last = max(s.t0 for s in edits)
+    verified = any(
+        s.tool == "Bash" and s.t0 >= last and is_verify(s.command, project)
+        for s in steps
+    )
+    return len(edits), verified
+
 
 class UnverifiedCompletionDetector(BaseDetector):
     """Detect delegated agents that shipped code edits with no build/test (F1)."""
 
     DETECTOR_NAME = "unverified_completion"
+
+    #: Transcript roots for tests; None uses the live and mirror roots.
+    transcript_roots: Optional[list[Path]] = None
 
     def detect(
         self, conn: sqlite3.Connection, since_ts: Optional[str] = None
@@ -79,8 +111,23 @@ class UnverifiedCompletionDetector(BaseDetector):
         runs = [(r[0], r[1]) for r in runs_cur.fetchall()]
         is_verify = build_verifier()
 
+        closed = {r for r, _p in runs}
+        refs = {
+            ref.run_id: ref
+            for ref in run_refs(conn, since_ts=since_ts, roots=self.transcript_roots)
+            if ref.run_id in closed and ref.transcript is not None
+        }
+        cache = StepCache()
+
         candidates: list[PatternCandidate] = []
         for run_id, project in runs:
+            ref = refs.get(run_id)
+            steps = cache.steps_for(ref) if ref else []
+            if steps:
+                n_edits, verified = transcript_verdict(steps, project, is_verify)
+                if n_edits >= EDIT_THRESHOLD and not verified:
+                    candidates.append(self._transcript_candidate(project, run_id, n_edits, ref))
+                continue
             events = load_run_events(conn, run_id)
             if not events:
                 continue
@@ -143,3 +190,32 @@ class UnverifiedCompletionDetector(BaseDetector):
             ))
 
         return candidates
+
+    def _transcript_candidate(self, project, run_id, n_edits, ref) -> PatternCandidate:
+        return PatternCandidate(
+            project=project,
+            pattern_name="unverified_completion",
+            signature=f"{project}:{self.DETECTOR_NAME}",
+            detector=self.DETECTOR_NAME,
+            occurrences=1,
+            evidence=[
+                f"project={project}",
+                f"run_id={run_id}",
+                f"agent={ref.agent_label}",
+                f"code_edits={n_edits} no_verify_after_last_edit",
+                "tier=transcript",
+            ],
+            run_ids=[run_id],
+            proposed_remediation=(
+                "AUTOMATE: this agent made code edits and ran NO build/test after "
+                "the last one. Add a pre-finish gate requiring a build/test run (or "
+                "an explicit recorded 'no test applicable') before a code-modifying "
+                "agent reports done."
+            ),
+            extra={
+                "unverified_agents": 1,
+                "total_unverified_code_edits": n_edits,
+                "remediation_rung": "automate",
+                "tier": "transcript",
+            },
+        )

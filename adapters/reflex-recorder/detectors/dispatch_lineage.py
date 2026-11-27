@@ -470,13 +470,20 @@ def session_run_ids(conn, since_ts: Optional[str] = None) -> dict[str, list[str]
     return out
 
 
-def load_session_events(conn, run_ids: list[str]) -> list[dict]:
+_DISPATCH_RE = re.compile(r'"tool_name"\s*:\s*"(?:%s)"' % "|".join(DISPATCH_TOOLS))
+
+
+def load_session_events(conn, run_ids: list[str], require_dispatch: bool = False) -> list[dict]:
     """Pool every run's events for one session, ordered globally by time.
 
     Per-run `seq` resets to 1 in each idle-split run, so it cannot order a pooled
     session. We order by event_ts (the recorder's wall-clock) and reassign a
     monotonic synthetic `seq` so downstream cohort grouping / backscans see one
     coherent timeline.
+
+    With `require_dispatch`, a session whose raw events never name an Agent/Task
+    tool returns [] without parsing any of them: such a session has no cohort, and
+    most sessions have none.
     """
     if not run_ids:
         return []
@@ -486,8 +493,11 @@ def load_session_events(conn, run_ids: list[str]) -> list[dict]:
         f"WHERE run_id IN ({placeholders}) ORDER BY event_ts, seq",
         run_ids,
     )
+    rows = cur.fetchall()
+    if require_dispatch and not any(_DISPATCH_RE.search(raw) for _ts, raw in rows):
+        return []
     out: list[dict] = []
-    for i, (event_ts, raw_json) in enumerate(cur.fetchall()):
+    for i, (event_ts, raw_json) in enumerate(rows):
         try:
             raw = json.loads(raw_json)
         except (json.JSONDecodeError, ValueError):

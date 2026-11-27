@@ -335,6 +335,33 @@ def classify_run(
     return buckets
 
 
+def purge_stale_unclassified(conn: sqlite3.Connection) -> int:
+    """Delete `unclassified` hit rows a later pass would not write.
+
+    The row is written while a run is unlabeled. Once the run is labeled
+    clean/landed/corrected, is a phantom, or has gained a failure bucket, the
+    row is wrong and inflates the unclassified count. Idempotent; returns the
+    number of rows deleted.
+    """
+    clean = ",".join(f"'{o}'" for o in sorted(_CLEAN_OUTCOMES))
+    cur = conn.execute(
+        f"""
+        DELETE FROM detector_hits
+        WHERE detector = 'failure_taxonomy'
+          AND signature LIKE '%:{UNCLASSIFIED}'
+          AND run_id IN (
+            SELECT r.run_id FROM runs r
+            WHERE (r.labeled_at IS NOT NULL AND r.outcome IN ({clean}))
+               OR r.event_count <= {PHANTOM_EVENT_CEILING}
+               OR EXISTS (
+                    SELECT 1 FROM detector_hits o
+                    WHERE o.run_id = r.run_id AND o.detector = 'failure_taxonomy'
+                      AND o.signature NOT LIKE '%:{UNCLASSIFIED}'))
+        """
+    )
+    return cur.rowcount or 0
+
+
 # ── Detector ──────────────────────────────────────────────────────────────────
 
 class FailureTaxonomyDetector(BaseDetector):
@@ -347,6 +374,11 @@ class FailureTaxonomyDetector(BaseDetector):
 
     DETECTOR_NAME = "failure_taxonomy"
     KIND = KIND_CLASSIFIER
+
+    def run(self, conn=None, since_ts=None):
+        c = conn if conn is not None else self._conn
+        purge_stale_unclassified(c)
+        return super().run(conn, since_ts)
 
     def detect(
         self, conn: sqlite3.Connection, since_ts: Optional[str] = None

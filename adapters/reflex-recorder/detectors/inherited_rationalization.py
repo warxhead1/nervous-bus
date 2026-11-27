@@ -79,7 +79,7 @@ class InheritedRationalizationDetector(BaseDetector):
         candidates: list[PatternCandidate] = []
 
         for session_id, run_ids in session_run_ids(conn, since_ts=since_ts).items():
-            events = load_session_events(conn, run_ids)
+            events = load_session_events(conn, run_ids, require_dispatch=True)
             if not events:
                 continue
             outcomes = derive_subagent_outcomes(events, is_verify=is_verify)
