@@ -4,14 +4,15 @@
 The nightly pass finds a lane's thrash hours after it could have been stopped.
 This runs param_sweep_thrash, foreground_wait and gate_bound_loosened on the
 runs of one session (or the given run ids) and prints each hit it has not
-printed before. The caller delivers the lines to the lead. Which caller does
-that (a hook or a terminal relay) is not decided yet.
+printed before. live_hook.py is the caller that delivers the lines to the lead
+as hook context. With --publish each new hit also goes to the bus as
+reflex.live.hit.v1 through `nervous publish`.
 
 Read-only on runs.db: it calls detect(), never run(), so nothing is persisted
 there. The only write is the seen-hits state file, which dedupes across calls.
 
     live_check.py (--session ID | --run-id R ...) [--since-hours 6] [--db D]
-                  [--state F] [--json]
+                  [--state F] [--json] [--publish]
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+import bus_publish
 from detectors.foreground_wait import ForegroundWaitDetector
 from detectors.gate_bound_loosened import GateBoundLoosenedDetector
 from detectors.param_sweep_thrash import ParamSweepThrashDetector
@@ -31,6 +33,7 @@ LIVE_DETECTORS = (ParamSweepThrashDetector, ForegroundWaitDetector, GateBoundLoo
 DEFAULT_DB = Path.home() / ".cache" / "nervous-bus" / "reflex" / "runs.db"
 DEFAULT_STATE = Path.home() / ".cache" / "nervous-bus" / "reflex" / "live-seen.json"
 SEEN_CAP = 5000
+HIT_CHANNEL = "reflex.live.hit.v1"
 
 
 def session_runs(conn: sqlite3.Connection, session_id: str, since_hours: float) -> list[str]:
@@ -103,6 +106,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--db", type=Path, default=DEFAULT_DB)
     ap.add_argument("--state", type=Path, default=DEFAULT_STATE)
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--publish", action="store_true")
     a = ap.parse_args(argv)
     if not a.db.exists():
         print(f"live_check: no DB at {a.db}", file=sys.stderr)
@@ -115,6 +119,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     hits = live_hits(conn, run_ids, seen)
     if hits:
         _save_seen(a.state, keys + [f"{h['run_id']}|{h['detector']}|{h['signature']}" for h in hits])
+    if a.publish:
+        for h in hits:
+            event = {"session_id": a.session or "unscoped", "run_id": h["run_id"],
+                     "project": h["project"] or "", "detector": h["detector"],
+                     "signature": h["signature"][:500]}
+            if h.get("remediation"):
+                event["remediation"] = h["remediation"][:1000]
+            bus_publish.publish(HIT_CHANNEL, event, source="/reflex-recorder/live-check")
     for line in ([json.dumps(h) for h in hits] if a.json else format_hits(hits)):
         print(line)
     return 0

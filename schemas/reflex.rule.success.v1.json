@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/reflex.rule.success.v1.json",
+  "title": "reflex.rule.success v1",
+  "description": "A steering rule change that worked: in a completed before/after window, the hit rate of the rule's target detector or correction theme fell by a set share of its before rate. Emitted once per rule, target and commit by the steering verdicts run. Carries rule ids, target labels, commit SHA and rates only, never rule content.",
+  "type": "object",
+  "required": ["rule", "target", "commit", "at", "before_per_100", "after_per_100", "drop"],
+  "properties": {
+    "rule": {"type": "string", "minLength": 1, "maxLength": 200},
+    "target": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Detector name, or theme:<name> for a user_correction theme."},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"},
+    "at": {"type": "string", "format": "date-time", "description": "Time of the rule change."},
+    "before_per_100": {"type": "number", "exclusiveMinimum": 0},
+    "after_per_100": {"type": "number", "minimum": 0},
+    "drop": {"type": "number", "minimum": 0, "maximum": 1, "description": "Share of the before rate that went away."}
+  },
+  "additionalProperties": false
+}

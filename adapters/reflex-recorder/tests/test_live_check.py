@@ -72,3 +72,56 @@ def test_cli_prints_a_hit_once_across_calls(tmp_path, capsys, monkeypatch):
     assert first.startswith("[reflex] foreground_wait on run RW (demo):")
     assert live_check.main(argv) == 0
     assert capsys.readouterr().out == ""
+
+
+def test_publish_sends_each_new_hit_once_in_schema_shape(tmp_path, monkeypatch):
+    from jsonschema import Draft202012Validator
+    schema = json.loads((Path(__file__).resolve().parents[3] / "schemas"
+                         / "reflex.live.hit.v1.json").read_text())
+    sent = []
+    monkeypatch.setattr(live_check.bus_publish, "publish",
+                        lambda ch, p, **kw: sent.append((ch, p)) or True)
+    db = _db(tmp_path / "runs.db")
+    argv = ["--db", str(db), "--state", str(tmp_path / "seen.json"), "--session", "lead-1",
+            "--since-hours", str(24 * 365 * 30), "--publish"]
+    live_check.main(argv)
+    first = len(sent)
+    assert first
+    live_check.main(argv)
+    assert len(sent) == first
+    assert {c for c, _ in sent} == {"reflex.live.hit.v1"}
+    for _, payload in sent:
+        Draft202012Validator(schema).validate(payload)
+        assert payload["session_id"] == "lead-1"
+
+
+def test_hook_returns_hit_lines_as_context_only_for_agent_calls():
+    import live_hook
+
+    class R:
+        returncode = 0
+        stdout = "[reflex] foreground_wait on run RW (demo): x\n"
+
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return R()
+
+    assert live_hook.context_for({"tool_name": "Bash", "session_id": "s"}, run=run) == ""
+    assert live_hook.context_for({"tool_name": "Agent"}, run=run) == ""
+    assert calls == []
+    assert live_hook.context_for({"tool_name": "Agent", "session_id": "s"}, run=run).startswith("[reflex]")
+    assert "--session" in calls[0] and "s" in calls[0] and "--publish" in calls[0]
+    R.returncode = 1
+    assert live_hook.context_for({"tool_name": "Task", "session_id": "s"}, run=run) == ""
+
+
+def test_hook_main_prints_hook_json(monkeypatch, capsys):
+    import io
+    import live_hook
+    monkeypatch.setattr(live_hook, "context_for", lambda event, **kw: "[reflex] line")
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"tool_name":"Agent","session_id":"s"}'))
+    assert live_hook.main() == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["hookSpecificOutput"]["additionalContext"] == "[reflex] line"
