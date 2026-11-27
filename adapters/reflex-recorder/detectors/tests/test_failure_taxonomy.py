@@ -252,6 +252,38 @@ class TestFailureTaxonomyDetectorEndToEnd(unittest.TestCase):
         _insert_run(self.conn, "run-phantom", event_count=1, close_reason="ended")
         self.assertEqual(FailureTaxonomyDetector(self.conn).run(), [])
 
+    def test_purge_deletes_unclassified_rows_a_later_label_made_wrong(self):
+        for rid, kw in (("a", dict(outcome="clean", labeled_at="2026-01-01T00:00:00Z")),
+                        ("b", dict(event_count=1)),
+                        ("c", dict()),                     # still unlabeled: row stays
+                        ("d", dict(outcome="thrashed", labeled_at="2026-01-01T00:00:00Z"))):
+            _insert_run(self.conn, rid, **kw)
+            self.conn.execute(
+                "INSERT INTO detector_hits (run_id, detector, signature, project, ts) "
+                "VALUES (?, 'failure_taxonomy', 'proj:failure_taxonomy:unclassified', 'proj', ?)",
+                (rid, _now_utc()))
+        # run d later gained a bucket row
+        self.conn.execute(
+            "INSERT INTO detector_hits (run_id, detector, signature, project, ts) "
+            "VALUES ('d', 'failure_taxonomy', 'proj:failure_taxonomy:planning_failure', 'proj', ?)",
+            (_now_utc(),))
+        from detectors.failure_taxonomy import purge_stale_unclassified
+        self.assertEqual(purge_stale_unclassified(self.conn), 3)
+        self.assertEqual(purge_stale_unclassified(self.conn), 0)
+        left = {r[0] for r in self.conn.execute(
+            "SELECT run_id FROM detector_hits WHERE signature LIKE '%:unclassified'")}
+        self.assertEqual(left, {"c"})
+
+    def test_run_purges_before_classifying(self):
+        _insert_run(self.conn, "e", outcome="landed", labeled_at="2026-01-01T00:00:00Z")
+        self.conn.execute(
+            "INSERT INTO detector_hits (run_id, detector, signature, project, ts) "
+            "VALUES ('e', 'failure_taxonomy', 'proj:failure_taxonomy:unclassified', 'proj', ?)",
+            (_now_utc(),))
+        FailureTaxonomyDetector(self.conn).run()
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM detector_hits WHERE signature LIKE '%:unclassified'").fetchone()[0], 0)
+
     def test_phantom_with_a_signal_is_still_classified(self):
         _insert_run(self.conn, "run-p", event_count=1)
         _seed_detector_hit(self.conn, "run-p", "guard_denial")

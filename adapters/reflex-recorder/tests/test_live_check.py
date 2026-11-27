@@ -95,26 +95,66 @@ def test_publish_sends_each_new_hit_once_in_schema_shape(tmp_path, monkeypatch):
         assert payload["session_id"] == "lead-1"
 
 
-def test_hook_returns_hit_lines_as_context_only_for_agent_calls():
+def test_hook_hands_back_earlier_scan_output_and_spawns_the_next(tmp_path):
     import live_hook
-
-    class R:
-        returncode = 0
-        stdout = "[reflex] foreground_wait on run RW (demo): x\n"
-
     calls = []
 
-    def run(cmd, **kw):
+    def spawn(cmd, **kw):
         calls.append(cmd)
-        return R()
 
-    assert live_hook.context_for({"tool_name": "Bash", "session_id": "s"}, run=run) == ""
-    assert live_hook.context_for({"tool_name": "Agent"}, run=run) == ""
+    ev = {"tool_name": "Agent", "session_id": "s"}
+    ctx = lambda e: live_hook.context_for(e, spawn=spawn, pending=tmp_path)  # noqa: E731
+    assert ctx({"tool_name": "Bash", "session_id": "s"}) == ""
+    assert ctx({"tool_name": "Agent"}) == ""
     assert calls == []
-    assert live_hook.context_for({"tool_name": "Agent", "session_id": "s"}, run=run).startswith("[reflex]")
+    assert ctx(ev) == ""                      # first call: nothing yet, scan spawned
     assert "--session" in calls[0] and "s" in calls[0] and "--publish" in calls[0]
-    R.returncode = 1
-    assert live_hook.context_for({"tool_name": "Task", "session_id": "s"}, run=run) == ""
+    out = Path(calls[0][calls[0].index("--out") + 1])
+    assert ctx(ev) == "" and len(calls) == 1  # scan still running: no second spawn
+    out.with_name(out.name + ".part").unlink()
+    out.write_text("[reflex] foreground_wait on run RW (demo): x\n")
+    assert ctx(ev).startswith("[reflex]")     # delivered once, next scan spawned
+    assert len(calls) == 2
+    assert ctx({"tool_name": "Task", "session_id": "s"}) == ""
+
+
+def test_hook_is_fast_on_a_slow_scan(tmp_path):
+    import time
+    import live_hook
+    t0 = time.perf_counter()
+    live_hook.context_for({"tool_name": "Agent", "session_id": "s"},
+                          spawn=lambda *a, **k: time.sleep(0), pending=tmp_path)
+    assert time.perf_counter() - t0 < 1.0
+
+
+def test_unchanged_runs_are_not_rescanned(tmp_path, capsys, monkeypatch):
+    db = _db(tmp_path / "runs.db")
+    scans = []
+    real = live_check.live_hits
+    monkeypatch.setattr(live_check, "live_hits",
+                        lambda conn, ids, seen, **kw: scans.append(list(ids)) or real(conn, ids, seen, **kw))
+    monkeypatch.setattr(live_check, "LIVE_DETECTORS", (ForegroundWaitDetector,))
+    monkeypatch.setattr(ForegroundWaitDetector, "transcript_roots", [])
+    argv = ["--db", str(db), "--state", str(tmp_path / "seen.json"), "--run-id", "RW"]
+    live_check.main(argv)
+    live_check.main(argv)
+    assert scans == [["RW"], []]
+    sqlite3.connect(db).execute("UPDATE runs SET event_count = event_count + 1").connection.commit()
+    live_check.main(argv)
+    assert scans[-1] == ["RW"]
+
+
+def test_out_file_appears_only_when_there_are_lines(tmp_path, monkeypatch):
+    db = _db(tmp_path / "runs.db")
+    monkeypatch.setattr(live_check, "LIVE_DETECTORS", (ForegroundWaitDetector,))
+    monkeypatch.setattr(ForegroundWaitDetector, "transcript_roots", [])
+    out = tmp_path / "o.out"
+    argv = ["--db", str(db), "--state", str(tmp_path / "seen.json"), "--run-id", "RW", "--out", str(out)]
+    live_check.main(argv)
+    assert out.read_text().startswith("[reflex] foreground_wait")
+    out.unlink()
+    live_check.main(argv)
+    assert not out.exists() and not (tmp_path / "o.out.part").exists()
 
 
 def test_hook_main_prints_hook_json(monkeypatch, capsys):
