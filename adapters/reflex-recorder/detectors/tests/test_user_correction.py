@@ -87,6 +87,17 @@ def _user_line(text_or_list, ts, is_meta=False, is_compact=False):
     }
 
 
+def _queued_line(prompt, ts, kind="human", mode="prompt"):
+    return {
+        "type": "attachment",
+        "timestamp": ts,
+        "attachment": {
+            "type": "queued_command", "prompt": prompt, "commandMode": mode,
+            "origin": {"kind": kind}, "timestamp": ts,
+        },
+    }
+
+
 class TestStripEnvelope(unittest.TestCase):
     def test_pure_wrapper_strips_to_empty(self):
         self.assertEqual(_strip_envelope("<bash-input>ls -la</bash-input>"), "")
@@ -279,6 +290,25 @@ class TestDetectorClaudeSource(unittest.TestCase):
         by_sig = {c.signature: c for c in self._detector().run()}
         self.assertEqual(set(by_sig), {"interrupted", "unthemed"})
         self.assertEqual(by_sig["interrupted"].run_ids, ["run-1"])
+
+    def test_queued_human_turn_is_the_mid_flight_channel(self):
+        _insert_run(
+            self.conn, "run-1", "synthetic", "claude-code", "sess-1",
+            "2026-09-20T00:00:00Z", "2026-09-20T01:00:00Z",
+        )
+        _write_transcript(self.transcript_root, "sess-1", [
+            _queued_line("the dashboard is still blank after the restart",
+                         "2026-09-20T00:10:00Z"),
+            _queued_line("What is the best open model right now?", "2026-09-20T00:11:00Z"),
+            _queued_line("You have 1 orchestration message. Run `orca orchestration check`.",
+                         "2026-09-20T00:12:00Z"),
+            _queued_line("<task-notification>again and again</task-notification>",
+                         "2026-09-20T00:13:00Z", kind="task-notification",
+                         mode="task-notification"),
+        ])
+        by_sig = {c.signature: c for c in self._detector().run()}
+        self.assertEqual(set(by_sig), {"mid_flight"})
+        self.assertEqual(by_sig["mid_flight"].run_ids, ["run-1"])
 
     def test_orchestrated_minimax_prompts_are_not_human_turns(self):
         _insert_run(
