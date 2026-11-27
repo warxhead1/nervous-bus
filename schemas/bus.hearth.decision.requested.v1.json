@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/bus.hearth.decision.requested.v1.json",
   "title": "bus.hearth.decision.requested v1",
-  "description": "An agent needs the owner's call. Emitted by hearth when a decision is posted. Carries either options or parts, never both: up to 8 parts, at most 6 options in any list. Free text is allowed here because hearth is the owner-facing surface; crucible.* channels never carry it.",
+  "description": "An agent needs the owner's call. Emitted by hearth on create and on upsert of an agent_decisions row. Supports choice, errand, question, and permission kinds. Carries either options or parts, never both.",
   "type": "object",
   "required": [
     "decision_id",
@@ -12,17 +12,55 @@
   ],
   "properties": {
     "decision_id": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
     },
     "correlation_id": {
       "type": "string",
       "description": "Equals decision_id; clears the card"
     },
     "project": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "choice",
+        "errand",
+        "question",
+        "permission"
+      ],
+      "default": "choice"
+    },
+    "relay_mode": {
+      "type": "string",
+      "enum": [
+        "session_text",
+        "orca_ask_driver",
+        "permission_keystroke",
+        "none"
+      ],
+      "default": "session_text"
     },
     "title": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
+    },
+    "say": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 140,
+      "description": "Spoken one-line form of the title for voice and watch"
     },
     "context": {
       "type": "string"
@@ -46,6 +84,13 @@
           },
           "description": {
             "type": "string"
+          },
+          "say": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 140
           }
         },
         "additionalProperties": true
@@ -58,8 +103,7 @@
         "type": "object",
         "required": [
           "id",
-          "label",
-          "options"
+          "label"
         ],
         "properties": {
           "id": {
@@ -71,8 +115,22 @@
           "description": {
             "type": "string"
           },
+          "say": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 140
+          },
           "recommended": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "multi_select": {
+            "type": "boolean",
+            "default": false
           },
           "media": {
             "type": "array",
@@ -99,6 +157,13 @@
                 },
                 "description": {
                   "type": "string"
+                },
+                "say": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 140
                 }
               },
               "additionalProperties": true
@@ -108,43 +173,89 @@
         },
         "additionalProperties": true
       },
-      "maxItems": 8
+      "maxItems": 20
     },
     "recommended": {
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "default_after": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": [
+        "string",
+        "null"
+      ],
       "format": "date-time"
     },
     "links": {
       "type": "array",
       "items": {
-        "type": "string"
-      }
-    }
-  },
-  "oneOf": [
-    {
-      "required": [
-        "options"
-      ],
-      "not": {
-        "required": [
-          "parts"
+        "type": [
+          "string",
+          "object"
         ]
       }
     },
-    {
-      "required": [
-        "parts"
+    "artifacts": {
+      "type": "array"
+    },
+    "audience": {
+      "type": "string",
+      "enum": [
+        "owner",
+        "members",
+        "all"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "answered",
+        "defaulted",
+        "withdrawn",
+        "expired"
+      ]
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Producer data (at most 4 KB) that surfaces may read but must never require"
+    },
+    "viewer_url": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "type": [
+        "string",
+        "null"
       ],
-      "not": {
-        "required": [
-          "options"
-        ]
+      "format": "date-time"
+    }
+  },
+  "not": {
+    "required": [
+      "options",
+      "parts"
+    ],
+    "properties": {
+      "options": {
+        "minItems": 1
+      },
+      "parts": {
+        "minItems": 1
       }
     }
-  ],
+  },
   "additionalProperties": true
 }

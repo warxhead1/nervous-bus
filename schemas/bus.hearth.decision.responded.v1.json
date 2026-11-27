@@ -2,27 +2,49 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "nervous-bus/schemas/bus.hearth.decision.responded.v1.json",
   "title": "bus.hearth.decision.responded v1",
-  "description": "A decision was settled. Emitted on the owner's respond call, and lazily when a read passes default_after (status defaulted, option = recommended).",
+  "description": "A decision was settled. Published on every settlement: answered, defaulted, withdrawn, or expired. Every surface drops the card when this event arrives for its decision_id.",
   "type": "object",
   "required": [
     "decision_id",
-    "correlation_id",
     "status",
     "responded_at"
   ],
   "properties": {
     "decision_id": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
     },
     "correlation_id": {
       "type": "string"
+    },
+    "project": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "session_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "choice",
+        "errand",
+        "question",
+        "permission"
+      ]
     },
     "status": {
       "type": "string",
       "enum": [
         "answered",
         "defaulted",
-        "withdrawn"
+        "withdrawn",
+        "expired"
       ]
     },
     "option_id": {
@@ -37,13 +59,47 @@
         "null"
       ],
       "additionalProperties": {
-        "type": "string"
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "text": {
       "type": [
         "string",
         "null"
+      ]
+    },
+    "done": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "via": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "kiln",
+        "kiln-android",
+        "hearth-web",
+        "hearth-android",
+        "watch",
+        "slack",
+        "terminal",
+        "push",
+        "chat",
+        null
       ]
     },
     "answered_by": {
