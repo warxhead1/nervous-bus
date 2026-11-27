@@ -964,6 +964,31 @@
       ]
     },
     {
+      "id": "grill/ruling",
+      "kind": "ruling",
+      "plugin": "grill",
+      "path": "steering/rulings/grill.md",
+      "purpose": "Hard questions, not many: a design question goes to `crucible grill ask`, and only taste, money or direction reaches the owner. Plain markdown to paste into AGENTS.md, GEMINI.md, a Kiro steering file or a system prompt.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/rulings/grill.md"
+    },
+    {
+      "id": "grill/skill",
+      "kind": "skill",
+      "plugin": "grill",
+      "path": "steering/grill/skills/grill",
+      "entry": "steering/grill/skills/grill/SKILL.md",
+      "files": [
+        "steering/grill/skills/grill/SKILL.md"
+      ],
+      "purpose": "The `grill` method as an Agent Skills folder (SKILL.md and its references).",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/grill/skills/grill",
+      "file_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/grill/skills/grill/SKILL.md"
+      ]
+    },
+    {
       "id": "adapter/shim",
       "kind": "adapter",
       "plugin": null,

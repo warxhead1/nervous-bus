@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/reflex.live.hit.v1.json",
+  "title": "reflex.live.hit v1",
+  "description": "A reflex detector hit found on a session's runs while its lane is still running (live_check). One event per new run, detector and signature. Carries ids, the detector name, its signature and fix text only, never transcript content.",
+  "type": "object",
+  "required": ["session_id", "run_id", "detector", "signature"],
+  "properties": {
+    "session_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    "run_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    "project": {"type": "string", "maxLength": 200},
+    "detector": {"type": "string", "minLength": 1, "maxLength": 100},
+    "signature": {"type": "string", "maxLength": 500},
+    "remediation": {"type": "string", "maxLength": 1000}
+  },
+  "additionalProperties": false
+}

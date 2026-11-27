@@ -1,0 +1,41 @@
+{
+ "id": "01JD0000000000000000000003",
+ "v": 1,
+ "ts": "2026-11-27T19:00:00Z",
+ "type": "question.asked",
+ "game": "demo",
+ "by": "crucible",
+ "via": "hearth",
+ "body": {
+  "q_id": "q-01JD0000000000000000000002",
+  "sitting": "sit-01JD0000000000000000000004",
+  "mode": "batch",
+  "class": "owner",
+  "door": "two-way",
+  "weight": "divergent",
+  "radius": 14,
+  "parts": [
+   {
+    "id": "p1",
+    "text": "{{l:lbl-01JD0000000000000000000005}}",
+    "options": [
+     {
+      "id": "a",
+      "label": "{{l:lbl-01JD0000000000000000000006}}",
+      "rec": true,
+      "changes": "data only",
+      "evidence": [
+       "lab://f-01JD0000000000000000000007"
+      ]
+     },
+     {
+      "id": "b",
+      "label": "{{l:lbl-01JD0000000000000000000008}}",
+      "changes": "2 lanes"
+     }
+    ]
+   }
+  ],
+  "pips": 2
+ }
+}

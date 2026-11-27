@@ -218,6 +218,9 @@ class OpenRun:
             tool = activity["tool_name"]
             self.tool_histogram[tool] = self.tool_histogram.get(tool, 0) + 1
 
+        if activity.get("event") == "ended" and isinstance(activity.get("status"), str):
+            self.features["terminal_status"] = activity["status"]
+
         # PART C: fold token + tool-error features
         fold_token_features(self.features, activity)
         fold_skill_features(self.features, activity)

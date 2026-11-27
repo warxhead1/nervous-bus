@@ -14,7 +14,13 @@ IOSchedulingClass=idle
 TimeoutStartSec=15min
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=%h/.cache/nervous-bus
-ExecStart=/usr/bin/python3 %h/projects/nervous-bus/adapters/codegraph-sync/sync.py
+# The code runs from a private clone of origin/main that the unit refreshes
+# itself, so the shared checkout's branch, freeze or dirty tree never matters.
+# A failed fetch (offline) keeps the last good clone.
+Environment=SRC=%h/.local/share/nervous-bus/codegraph-sync-src
+ExecStartPre=/bin/sh -c 'test -d "$SRC/.git" || git clone --quiet --depth 1 https://github.com/warxhead1/nervous-bus.git "$SRC"'
+ExecStartPre=-/bin/sh -c 'git -C "$SRC" fetch --quiet --depth 1 origin main && git -C "$SRC" checkout --quiet --detach FETCH_HEAD'
+ExecStart=/usr/bin/python3 ${SRC}/adapters/codegraph-sync/sync.py
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nervous-codegraph-sync

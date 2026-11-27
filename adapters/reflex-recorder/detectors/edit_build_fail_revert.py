@@ -57,6 +57,7 @@ Usage
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 import os
 import re
 import sqlite3
@@ -143,10 +144,16 @@ def _parse_summary(s: str) -> dict:
     """Parse a tool_summary or tool_response_summary string into a dict.
 
     Returns {} on failure. The field is always a JSON string (possibly truncated).
-    If it's valid JSON, return the parsed dict; otherwise return {}.
+    If it's valid JSON, return the parsed dict; otherwise return {}. The result
+    is shared between callers through a cache, so treat it as read-only.
     """
     if not s:
         return {}
+    return _parse_summary_cached(s)
+
+
+@lru_cache(maxsize=1 << 17)
+def _parse_summary_cached(s: str) -> dict:
     try:
         result = json.loads(s)
         if isinstance(result, dict):

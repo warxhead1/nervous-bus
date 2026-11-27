@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/crucible.bet.resolved.v1.json",
+  "title": "crucible.bet.resolved v1",
+  "description": "A prediction bet was revealed. Ids, enums, counts and timings only: no question or label text rides the bus. A consumer that needs text reads the ledger.",
+  "type": "object",
+  "required": [
+    "game",
+    "bet_id",
+    "bettor_kind",
+    "abs_error"
+  ],
+  "properties": {
+    "game": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,47}$"
+    },
+    "bet_id": {
+      "type": "string",
+      "pattern": "^b-[0-9A-HJKMNP-TV-Z]{26}(\\.[0-9]+)?$"
+    },
+    "bettor_kind": {
+      "type": "string",
+      "enum": [
+        "owner",
+        "agent",
+        "blind"
+      ]
+    },
+    "abs_error": {
+      "type": "number",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

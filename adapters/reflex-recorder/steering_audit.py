@@ -586,7 +586,7 @@ def main() -> int:
         # Deterministic verdicts ride the same daily run. Non-fatal: a missing
         # runs.db or rules tree must not take the digest down with it.
         try:
-            steering_verdicts.run(out_dir=a.out_dir)
+            steering_verdicts.run(out_dir=a.out_dir, publish=True)
         except Exception as exc:
             print(f"steering-audit: verdicts skipped: {exc}", file=sys.stderr)
     if a.json:

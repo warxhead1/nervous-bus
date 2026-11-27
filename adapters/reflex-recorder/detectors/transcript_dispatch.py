@@ -36,7 +36,7 @@ def parse_transcript_dispatches(lines) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for line in lines:
         # Cheap prefilter before json.loads: these files are megabytes.
-        if '"tool_use"' not in line and '"agentId"' not in line:
+        if '"agentId"' not in line and '"Agent"' not in line and '"Task"' not in line:
             continue
         try:
             obj = json.loads(line)

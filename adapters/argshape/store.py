@@ -19,6 +19,7 @@ SCHEMA_VERSION = 1
 
 DEFAULT_CONFIG = {
     "mode": "correct",
+    "isoshape": "off",           # "correct": rewrite guard-denied shell shapes in isolated lanes into a script file
     "bins": {},                  # per-binary mode override, e.g. {"git": "advise"}
     "sql": "correct",            # mode ceiling for SQL identifier/value corrections
     "sql_active_learning": True, # on a column error, query the catalog via the same connection

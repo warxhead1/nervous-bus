@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "required": ["d_id", "q_id", "chosen", "authority", "door"],
+  "properties": {
+    "d_id": {"type": "string", "pattern": "^d-"},
+    "q_id": {"type": "string", "pattern": "^q-"},
+    "chosen": {"type": "object"},
+    "authority": {"type": "string", "enum": ["owner", "lead"]},
+    "door": {"type": "string", "enum": ["one-way", "two-way"]},
+    "touches": {"type": "array", "items": {"type": "string"}},
+    "constrains": {"type": "array", "items": {"type": "string"}},
+    "review_when": {"type": "array", "items": {"type": "object"}},
+    "implements": {"type": "object"},
+    "supersedes": {"type": ["string", "null"]}
+  }
+}

@@ -39,6 +39,8 @@ from detectors.failure_taxonomy import (
     THRASH_EVENT_COUNT_FLOOR,
 )
 
+UNCLASSIFIED_SHARE_CEILING = 0.35
+
 
 _RUNS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -237,13 +239,73 @@ class TestFailureTaxonomyDetectorEndToEnd(unittest.TestCase):
     def test_unclassified_case(self):
         """Acceptance gate: a run with no mapped signal is tagged unclassified,
         never forced into one of the four buckets."""
-        _insert_run(self.conn, "run-u1", project="proj", outcome="clean",
-                    labeled_at="2026-01-01T00:00:00Z", event_count=5)
+        _insert_run(self.conn, "run-u1", project="proj", event_count=5)
         detector = FailureTaxonomyDetector(self.conn)
         candidates = detector.run()
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0].extra["bucket"], UNCLASSIFIED)
         self.assertIn("run-u1", candidates[0].run_ids)
+
+    def test_confirmed_clean_and_phantom_runs_are_not_counted(self):
+        _insert_run(self.conn, "run-clean", outcome="landed",
+                    labeled_at="2026-01-01T00:00:00Z", event_count=40)
+        _insert_run(self.conn, "run-phantom", event_count=1, close_reason="ended")
+        self.assertEqual(FailureTaxonomyDetector(self.conn).run(), [])
+
+    def test_purge_deletes_unclassified_rows_a_later_label_made_wrong(self):
+        for rid, kw in (("a", dict(outcome="clean", labeled_at="2026-01-01T00:00:00Z")),
+                        ("b", dict(event_count=1)),
+                        ("c", dict()),                     # still unlabeled: row stays
+                        ("d", dict(outcome="thrashed", labeled_at="2026-01-01T00:00:00Z"))):
+            _insert_run(self.conn, rid, **kw)
+            self.conn.execute(
+                "INSERT INTO detector_hits (run_id, detector, signature, project, ts) "
+                "VALUES (?, 'failure_taxonomy', 'proj:failure_taxonomy:unclassified', 'proj', ?)",
+                (rid, _now_utc()))
+        # run d later gained a bucket row
+        self.conn.execute(
+            "INSERT INTO detector_hits (run_id, detector, signature, project, ts) "
+            "VALUES ('d', 'failure_taxonomy', 'proj:failure_taxonomy:planning_failure', 'proj', ?)",
+            (_now_utc(),))
+        from detectors.failure_taxonomy import purge_stale_unclassified
+        self.assertEqual(purge_stale_unclassified(self.conn), 3)
+        self.assertEqual(purge_stale_unclassified(self.conn), 0)
+        left = {r[0] for r in self.conn.execute(
+            "SELECT run_id FROM detector_hits WHERE signature LIKE '%:unclassified'")}
+        self.assertEqual(left, {"c"})
+
+    def test_run_purges_before_classifying(self):
+        _insert_run(self.conn, "e", outcome="landed", labeled_at="2026-01-01T00:00:00Z")
+        self.conn.execute(
+            "INSERT INTO detector_hits (run_id, detector, signature, project, ts) "
+            "VALUES ('e', 'failure_taxonomy', 'proj:failure_taxonomy:unclassified', 'proj', ?)",
+            (_now_utc(),))
+        FailureTaxonomyDetector(self.conn).run()
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM detector_hits WHERE signature LIKE '%:unclassified'").fetchone()[0], 0)
+
+    def test_phantom_with_a_signal_is_still_classified(self):
+        _insert_run(self.conn, "run-p", event_count=1)
+        _seed_detector_hit(self.conn, "run-p", "guard_denial")
+        out = FailureTaxonomyDetector(self.conn).run()
+        self.assertEqual([c.extra["bucket"] for c in out], [CONSTRAINT_FAILURE])
+
+    def test_unclassified_share_of_fixture_stays_under_ceiling(self):
+        """Shape mix sampled from real runs: most signal-free runs are
+        confirmed-clean or phantom and must not reach the unclassified bucket."""
+        stamp = "2026-01-01T00:00:00Z"
+        shapes = (
+            [dict(outcome="clean", labeled_at=stamp, event_count=30)] * 38
+            + [dict(outcome="landed", labeled_at=stamp, event_count=8)] * 4
+            + [dict(event_count=1, close_reason="ended")] * 20
+            + [dict(event_count=25)] * 30          # unlabeled real runs
+            + [dict(outcome="thrashed", labeled_at=stamp, event_count=60)] * 8
+        )
+        for i, kw in enumerate(shapes):
+            _insert_run(self.conn, f"fx-{i}", **kw)
+        out = FailureTaxonomyDetector(self.conn).run()
+        unclassified = sum(c.occurrences for c in out if c.extra["bucket"] == UNCLASSIFIED)
+        self.assertLessEqual(unclassified / len(shapes), UNCLASSIFIED_SHARE_CEILING)
 
     def test_verification_failure_end_to_end(self):
         _insert_run(self.conn, "run-v1", project="proj", outcome="reverted",

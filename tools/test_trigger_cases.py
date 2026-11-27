@@ -35,7 +35,7 @@ def test_dry_run_links_only_the_skills_under_test(tmp_path):
     assert p.returncode == 0, p.stderr
     assert "alpha                    should=2 should_not=1" in p.stdout
     assert "requests: 12 (4 prompts x 3 runs" in p.stdout
-    cwd = Path(p.stdout.split("cwd ", 1)[1].splitlines()[0].strip())
+    cwd = Path(p.stdout.rsplit("cwd ", 1)[1].splitlines()[0].strip())
     linked = sorted(x.name for x in (cwd / ".claude" / "skills").iterdir())
     assert linked == ["alpha", "beta"]
     assert (cwd / ".claude" / "skills" / "alpha").resolve() == (root / "alpha").resolve()

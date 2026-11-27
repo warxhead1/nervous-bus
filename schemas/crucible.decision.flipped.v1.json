@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/crucible.decision.flipped.v1.json",
+  "title": "crucible.decision.flipped v1",
+  "description": "A taken decision was flipped. Ids, enums, counts and timings only: no question or label text rides the bus. A consumer that needs text reads the ledger.",
+  "type": "object",
+  "required": [
+    "game",
+    "decision_id",
+    "via"
+  ],
+  "properties": {
+    "game": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,47}$"
+    },
+    "decision_id": {
+      "type": "string",
+      "pattern": "^d-[0-9A-HJKMNP-TV-Z]{26}(\\.[0-9]+)?$"
+    },
+    "via": {
+      "type": "string",
+      "enum": [
+        "kiln-tap",
+        "kiln-voice",
+        "kiln-edit",
+        "hearth",
+        "chat",
+        "cli",
+        "agent"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

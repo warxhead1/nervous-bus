@@ -248,35 +248,21 @@ class RebuildCacheMissDetector(BaseDetector):
         # pull ALL events for runs that have at least one cargo event.
         since_clause = "AND r.started >= ?" if since_ts else ""
         params: list = [since_ts] if since_ts else []
-        candidate_run_ids: list[str] = [
-            row[0]
-            for row in conn.execute(
-                f"""
-                SELECT DISTINCT re.run_id
-                FROM run_events re
-                JOIN runs r ON r.run_id = re.run_id
-                WHERE re.raw_json LIKE '%cargo%'
-                  AND r.close_reason IS NOT NULL
-                  {since_clause}
-                """,
-                params,
-            ).fetchall()
-        ]
-
-        if not candidate_run_ids:
-            return []
-
-        placeholders = ",".join("?" * len(candidate_run_ids))
+        # One pass over run_events. Only a cargo event needs its raw_json; every
+        # other event contributes just its timestamp (the next-event gap), so the
+        # CASE keeps the big JSON blobs out of Python.
         rows = conn.execute(
             f"""
-            SELECT re.run_id, re.seq, re.event_ts, re.raw_json,
+            SELECT re.run_id, re.seq, re.event_ts,
+                   CASE WHEN re.raw_json LIKE '%cargo%' THEN re.raw_json END,
                    r.project, r.worktree
             FROM run_events re
             JOIN runs r ON r.run_id = re.run_id
-            WHERE re.run_id IN ({placeholders})
+            WHERE r.close_reason IS NOT NULL
+              {since_clause}
             ORDER BY re.run_id, re.seq
             """,
-            candidate_run_ids,
+            params,
         ).fetchall()
 
         # ── Step 2: group by run_id and compute inter-event gaps ──────────────
@@ -291,6 +277,8 @@ class RebuildCacheMissDetector(BaseDetector):
 
         for run_id, events in by_run.items():
             for i, (seq, ts, raw, project, worktree) in enumerate(events):
+                if raw is None:
+                    continue
                 cmd = _extract_command(raw)
                 if not cmd:
                     continue

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/crucible.decision.settled.v1.json",
+  "title": "crucible.decision.settled v1",
+  "description": "A decision was settled. Ids, enums, counts and timings only: no question or label text rides the bus. A consumer that needs text reads the ledger.",
+  "type": "object",
+  "required": [
+    "game",
+    "decision_id",
+    "authority",
+    "door",
+    "class",
+    "supersedes"
+  ],
+  "properties": {
+    "game": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,47}$"
+    },
+    "decision_id": {
+      "type": "string",
+      "pattern": "^d-[0-9A-HJKMNP-TV-Z]{26}(\\.[0-9]+)?$"
+    },
+    "authority": {
+      "type": "string",
+      "enum": [
+        "owner",
+        "lead"
+      ]
+    },
+    "door": {
+      "type": "string",
+      "enum": [
+        "one-way",
+        "two-way"
+      ]
+    },
+    "class": {
+      "type": "string",
+      "enum": [
+        "fact",
+        "measurable",
+        "lead",
+        "owner",
+        "money"
+      ]
+    },
+    "supersedes": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^d-[0-9A-HJKMNP-TV-Z]{26}(\\.[0-9]+)?$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

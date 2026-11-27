@@ -150,6 +150,10 @@ schemas/tengine.diag.*.json
 # hearth.market.state.* — bridges tachyonos signals into hearth; raw_signal
 #   field can carry private tachyonos payload.
 schemas/hearth.market.state.*.json
+#
+# gamelab.* - game studio events (crucible) with game words in field names or
+#   enums. Public crucible.* schemas carry ids, enums and counts only.
+schemas/gamelab.*.json
 
 # plugin eval output
 steering/*/evals/results/

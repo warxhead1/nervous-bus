@@ -4,15 +4,15 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**383 channels** across 5 clusters.
+**400 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
-| [Session Lifecycle](#session-lifecycle) | 24 | agent session lifecycle, heartbeats, thread/run start-stop |
+| [Session Lifecycle](#session-lifecycle) | 25 | agent session lifecycle, heartbeats, thread/run start-stop |
 | [Autobench](#autobench) | 54 | autobench.* evolution loop (case/judge/improver/budget/...) |
-| [Hearth](#hearth) | 53 | hearth-loom PR pipeline, bead lifecycle, loom executions |
+| [Hearth](#hearth) | 55 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
-| [Cross-cutting](#cross-cutting) | 210 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
+| [Cross-cutting](#cross-cutting) | 224 | bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast |
 
 ## Session Lifecycle
 
@@ -23,6 +23,7 @@ _agent session lifecycle, heartbeats, thread/run start-stop_
 | `agent.attention.v1` | agent.attention v1 |
 | `agent.cli.correction.v1` | agent.cli.correction v1 |
 | `agent.message.v1` | agent.message v1 |
+| `agent.opencode.session.v1` | agent.opencode.session v1 |
 | `agent.session.heartbeat.v1` | agent.session.heartbeat v1 |
 | `agent.session.linked.v1` | agent.session.linked v1 |
 | `agent.session.snapshot.v1` | agent.session.snapshot v1 |
@@ -125,6 +126,8 @@ _hearth-loom PR pipeline, bead lifecycle, loom executions_
 | `bus.beads.kanban.snapshot.v1` | Beads kanban board snapshot |
 | `bus.hearth.approval.responded.v1` | bus.hearth.approval.responded v1 |
 | `bus.hearth.bead.changes.v1` | bus.hearth.bead.changes v1 |
+| `bus.hearth.decision.requested.v1` | bus.hearth.decision.requested v1 |
+| `bus.hearth.decision.responded.v1` | bus.hearth.decision.responded v1 |
 | `bus.hearth.dispatch.requested.v1` | bus.hearth.dispatch.requested v1 |
 | `bus.hearth.session.activity.v1` | bus.hearth.session.activity v1 |
 | `bus.hearth.session.ended.v1` | bus.hearth.session.ended v1 |
@@ -299,6 +302,18 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `codegraph.index.synced.v1` | codegraph.index.synced v1 |
 | `codemap.graph.rebuilt.v1` | codemap.graph.rebuilt v1 |
 | `codemap.public_api.changed.v1` | codemap.public_api.changed v1 |
+| `crucible.art.check.v1` | crucible.art.check v1 |
+| `crucible.audit.finished.v1` | crucible.audit.finished v1 |
+| `crucible.bet.resolved.v1` | crucible.bet.resolved v1 |
+| `crucible.decision.flipped.v1` | crucible.decision.flipped v1 |
+| `crucible.decision.settled.v1` | crucible.decision.settled v1 |
+| `crucible.gate.result.v1` | crucible.gate.result v1 |
+| `crucible.investigation.finished.v1` | crucible.investigation.finished v1 |
+| `crucible.label.edited.v1` | crucible.label.edited v1 |
+| `crucible.lane.state.v1` | crucible.lane.state v1 |
+| `crucible.question.asked.v1` | crucible.question.asked v1 |
+| `crucible.question.settled.v1` | crucible.question.settled v1 |
+| `crucible.sitting.closed.v1` | crucible.sitting.closed v1 |
 | `deer-flow.agent.message.v1` | deer-flow.agent.message v1 |
 | `deer-flow.agent.thread.v1` | deer-flow.agent.thread v1 |
 | `deer-flow.audit.recommendation.snapshot.v1` | deer-flow.audit.recommendation.snapshot v1 |
@@ -427,6 +442,8 @@ _bus internals, kb, GPU kernels, funsearch, system/pulse, per-project broadcast_
 | `orca.worker.lifecycle.v1` | orca.worker.lifecycle v1 |
 | `pulse.kernel.snapshot.v1` | pulse.kernel.snapshot v1 |
 | `pulse.render.quality.v1` | pulse.render.quality v1 |
+| `reflex.live.hit.v1` | reflex.live.hit v1 |
+| `reflex.rule.success.v1` | reflex.rule.success v1 |
 | `research.radar.digest.v1` | research.radar.digest v1 |
 | `research.radar.item.v1` | research.radar.item v1 |
 | `shader.preadmit.evaluated.v1` | shader.preadmit.evaluated.v1 v1 |

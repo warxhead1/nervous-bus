@@ -1,0 +1,20 @@
+{
+ "id": "01JD0000000000000000000001",
+ "v": 1,
+ "ts": "2026-11-27T19:03:41Z",
+ "type": "question.answered",
+ "game": "demo",
+ "by": "owner",
+ "via": "kiln-tap",
+ "body": {
+  "q_id": "q-01JD0000000000000000000002",
+  "kind": "pick",
+  "picks": {
+   "p1": "b"
+  },
+  "was_recommended": false,
+  "latency_ms": 41200,
+  "typed_chars": 0,
+  "probe": false
+ }
+}
