@@ -89,18 +89,7 @@
         "string",
         "null"
       ],
-      "enum": [
-        "kiln",
-        "kiln-android",
-        "hearth-web",
-        "hearth-android",
-        "watch",
-        "slack",
-        "terminal",
-        "push",
-        "chat",
-        null
-      ]
+      "description": "Answering surface (canonical: kiln, kiln-android, hearth-web, hearth-android, watch, slack, terminal, push, chat; legacy surfaces such as web, phone, cli also accepted)"
     },
     "answered_by": {
       "type": [

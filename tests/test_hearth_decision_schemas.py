@@ -214,12 +214,60 @@ def test_requested_rejects_invalid_kind_relay_and_say_length() -> None:
         v.validate({**base, "parts": [{"id": "p1", "label": "P"}]})
 
 
-def test_responded_rejects_invalid_status_and_via() -> None:
+def test_responded_rejects_invalid_status_and_missing_required() -> None:
     v = _validator("bus.hearth.decision.responded")
     base = RESPONDED_GOLDEN["errand_done"]
     with pytest.raises(ValidationError):
         v.validate({**base, "status": "pending"})
     with pytest.raises(ValidationError):
-        v.validate({**base, "via": "unknown-surface"})
-    with pytest.raises(ValidationError):
         v.validate({"decision_id": "ny-1", "status": "answered"})
+
+
+def test_live_hearth_today_shapes_still_validate() -> None:
+    """Today's live Hearth row_json and responded_event (no kind/relay_mode/metadata,
+    both options and empty parts present, legacy via) must never dead-letter."""
+    req_v = _validator("bus.hearth.decision.requested")
+    live_requested = {
+        "decision_id": "dec-live-001",
+        "correlation_id": "dec-live-001",
+        "project": "demo-app",
+        "title": "Legacy choice decision",
+        "context": "",
+        "options": [
+            {"id": "a", "label": "Option A", "description": ""},
+            {"id": "b", "label": "Option B", "description": ""},
+        ],
+        "recommended": "a",
+        "default_after": None,
+        "links": [],
+        "audience": "all",
+        "status": "pending",
+        "option_id": None,
+        "parts": [],
+        "answers": None,
+        "comments": [],
+        "text": None,
+        "answered_by": None,
+        "created_at": "2026-11-26T18:00:00Z",
+        "responded_at": None,
+        "session_id": None,
+        "artifacts": [],
+        "viewer_url": "https://example.test/decisions/dec-live-001",
+    }
+    req_v.validate(live_requested)
+
+    resp_v = _validator("bus.hearth.decision.responded")
+    for legacy_via in (None, "web", "phone", "cli"):
+        live_responded = {
+            "decision_id": "dec-live-001",
+            "correlation_id": "dec-live-001",
+            "status": "answered",
+            "option_id": "a",
+            "answers": None,
+            "text": None,
+            "answered_by": "phone",
+            "responded_at": "2026-11-26T18:05:00Z",
+        }
+        if legacy_via is not None:
+            live_responded["via"] = legacy_via
+        resp_v.validate(live_responded)
