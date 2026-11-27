@@ -98,6 +98,10 @@ def parse_stream(stdout, returncode):
         if o.get("type") == "result":
             result = o
     cost = float((result or {}).get("total_cost_usd") or 0)
+    if result is not None and result.get("subtype") == "error_max_turns":
+        # Our own two-turn cap ended a run that kept working. The load decision came in the first
+        # turn, so it counts.
+        return "ok", skills_called(stdout), cost
     if returncode != 0 or result is None or result.get("is_error"):
         return "error", set(), cost
     return "ok", skills_called(stdout), cost
@@ -123,7 +127,10 @@ def clean_env(base=None):
 
 
 def run_one(args, prompt, plugin_dirs, cwd, tag=""):
-    cmd = [args.claude, "-p", prompt, "--model", args.model, "--max-turns", "2",
+    if getattr(args, "rescore", False):  # score the kept stream again; no model call
+        f = Path(args.streams) / f"{tag}.jsonl"
+        return parse_stream(f.read_text(), 0) if f.is_file() else ("error", set(), 0.0)
+    cmd =[args.claude, "-p", prompt, "--model", args.model, "--max-turns", "2",
            "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--allowedTools", "Skill"]
     if args.max_cost_usd:
         cmd += ["--max-budget-usd", str(args.max_cost_usd)]
@@ -239,6 +246,8 @@ def main():
                     "also passed to each call as --max-budget-usd")
     ap.add_argument("--dry-run", action="store_true", help="print the plan and request count; call nothing")
     ap.add_argument("--streams", help="dir to keep each run's raw stream-json in")
+    ap.add_argument("--rescore", action="store_true", help="score the streams kept in --streams again, "
+                    "with the same cases and --runs; calls nothing")
     args = ap.parse_args()
     only = {s for s in args.plugins.split(",") if s}
     cases = load_cases(only, args.cases)

@@ -103,6 +103,20 @@ def test_budget_flag_reaches_the_cli(monkeypatch):
     assert "--max-budget-usd" in seen[0] and "2.5" in seen[0]
 
 
+def test_own_turn_cap_is_not_an_error(monkeypatch):
+    out = "\n".join([stream("s", with_result=False),
+                     json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True})])
+    rows, _ = run(monkeypatch, [proc(out, rc=1)])
+    assert rows[0]["status"] == "pass" and rows[0]["hit"] is True
+
+
+def test_rescore_reads_kept_streams(tmp_path):
+    (tmp_path / "s-pos-000-r0.jsonl").write_text(stream("s"))
+    a = args(rescore=True, streams=str(tmp_path))
+    assert te.run_one(a, "q", [], "/nonexistent", "s-pos-000-r0")[:2] == ("ok", {"s"})
+    assert te.run_one(a, "q", [], "/nonexistent", "missing")[0] == "error"
+
+
 def test_run_does_not_inherit_the_launching_session(monkeypatch):
     seen = []
     monkeypatch.setenv("CLAUDE_CODE_PLUGIN_DIRS", "/some/session/plugin")

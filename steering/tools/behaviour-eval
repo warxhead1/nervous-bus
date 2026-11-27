@@ -330,6 +330,8 @@ def report(rows):
                 vals = [r["checks"][c] for r in rs if r.get("checks") and c in r["checks"]]
                 if all(isinstance(v, bool) for v in vals):
                     parts.append(f"{c} {sum(vals)}/{len(vals)}")
+                elif vals:
+                    parts.append(f"{c} avg {sum(vals) / len(vals):.1f}")
             mean = lambda key: round(sum(r.get(key) or 0 for r in rs) / len(rs)) if rs else 0
             lines.append(f"| {case} | {arm} | {k}/{n} | {len(rs) - n} | {', '.join(parts)} | "
                          f"{mean('requests')} | {mean('tokens')} | {mean('wall_s')} | {mean('hook_hits')} |")
