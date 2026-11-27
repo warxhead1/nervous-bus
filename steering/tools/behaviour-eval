@@ -16,9 +16,12 @@ steering/<plugin> with --plugin-dir. A case may name its own arms instead:
 
 Each run is a fresh scaffolded dir and one headless `claude -p` session under
 --config-dir (use a clean one: credentials only; a home config that already
-states these rules is the same as loading the plugin). Hook hits go to a per-run
-file, not the real hit log. The stream, the grade and the hook hits are written
-next to the run's tree under --out.
+states these rules is the same as loading the plugin). The run's tree and HOME
+live under --work-root, which must have no CLAUDE.md, .claude/CLAUDE.md or
+AGENTS.md above it: a run anywhere under $HOME loads ~/.claude/CLAUDE.md as
+project memory. The launching session's env (plugin dirs, hook endpoints) is
+dropped. Hook hits go to a per-run file, not the real hit log. The stream, the
+grade and the hook hits are written under --out.
 
     behaviour-eval plan   [--cases DIR] [--case GLOB] [--plugins a,b] [--runs N]
     behaviour-eval run    --out DIR --config-dir DIR [same filters] [--model M] [--jobs J]
@@ -155,7 +158,7 @@ def usage_of(events):
 # ---------- cases and arms ----------
 
 def load_case(d):
-    d = Path(d)
+    d = Path(d).resolve()  # scaffolds run with cwd set to the run's tree
     meta = json.loads((d / "case.json").read_text())
     meta["name"] = d.name
     meta["dir"] = d
@@ -187,6 +190,17 @@ def plan(cases, runs, only_plugins=None):
             for r in range(runs)]
 
 
+INSTRUCTION_FILES = ("CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md", "CLAUDE.local.md")
+
+
+def ancestor_instructions(path):
+    """Instruction files Claude Code would load as project memory for a session under path.
+    Measured: a run under $HOME loads ~/.claude/CLAUDE.md as project instructions, whatever
+    CLAUDE_CONFIG_DIR and HOME say, so both arms would carry the user's own rules."""
+    p = Path(path).resolve()
+    return [str(a / f) for a in [p, *p.parents] for f in INSTRUCTION_FILES if (a / f).is_file()]
+
+
 SESSION_ENV = re.compile(r"^(CLAUDE|ANTHROPIC|AI_AGENT|ORCA|CODEX|AGENT_STEERING|MCP_)")
 
 
@@ -214,19 +228,24 @@ def run_one(args, case, arm, spec, r):
     rd = Path(args.out) / case["name"] / arm / f"r{r}"
     if (rd / "grade.json").is_file() and not args.force:
         return json.loads((rd / "grade.json").read_text())
-    if rd.exists():
-        shutil.rmtree(rd)
-    repo = rd / "repo"
+    wd = Path(args.work_root) / Path(args.out).name / case["name"] / arm / f"r{r}"
+    for d in (rd, wd):
+        if d.exists():
+            shutil.rmtree(d)
+    rd.mkdir(parents=True)
+    repo = wd / "repo"
     repo.mkdir(parents=True)
     env = dict(clean_env(), GIT_AUTHOR_NAME="eval", GIT_AUTHOR_EMAIL="eval@example.invalid",
                GIT_COMMITTER_NAME="eval", GIT_COMMITTER_EMAIL="eval@example.invalid",
-               CLAUDE_CODE_TMPDIR=str(rd / "tmp"))
+               CLAUDE_CODE_TMPDIR=str(wd / "tmp"))
     subprocess.run(["bash", str(case["dir"] / "scaffold.sh")], cwd=repo, check=True, env=env,
                    capture_output=True, stdin=subprocess.DEVNULL)
     if spec.get("skills"):
         shutil.copytree(case["dir"] / spec["skills"], repo / ".claude" / "skills", dirs_exist_ok=True)
     prompt = (case["dir"] / "prompt.md").read_text().strip()
     env["CLAUDE_CONFIG_DIR"] = str(Path(args.config_dir).resolve())
+    env["HOME"] = str(wd / "home")
+    (wd / "home").mkdir()
     env["AGENT_STEERING_HITS"] = str(rd / "hits.jsonl")
     t0 = time.time()
     try:
@@ -239,7 +258,8 @@ def run_one(args, case, arm, spec, r):
     wall = time.time() - t0
     (rd / "stream.jsonl").write_text(out)
     (rd / "meta.json").write_text(json.dumps({"status": status, "wall_s": round(wall, 1), "arm": arm,
-                                              "case": case["name"], "run": r, "model": args.model}))
+                                              "case": case["name"], "run": r, "model": args.model,
+                                              "repo": str(repo)}))
     return grade_dir(case, rd)
 
 
@@ -255,9 +275,11 @@ def grade_dir(case, rd):
         spec = importlib.util.spec_from_file_location(f"grade_{case['name']}", case["dir"] / "grade.py")
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        checks = mod.grade(Ctx(rd / "repo", events, case["dir"]))
+        checks = mod.grade(Ctx(meta.get("repo") or rd / "repo", events, case["dir"]))
         row["score"] = bool(checks.pop("score"))
         row["checks"] = checks
+        # A plugin graded on its own checks: "score_for": {"<plugin>": ["check", ...]}.
+        row["score_by"] = {p: all(bool(checks[c]) for c in cs) for p, cs in case.get("score_for", {}).items()}
     (rd / "grade.json").write_text(json.dumps(row, indent=1))
     return row
 
@@ -268,9 +290,10 @@ def collect_rows(out):
     return [json.loads(p.read_text()) for p in sorted(Path(out).glob("*/*/r*/grade.json"))]
 
 
-def _rate(rows):
+def _rate(rows, plugin=None):
+    """Passes over finished runs; with plugin, by that plugin's own checks when the case names them."""
     done = [r for r in rows if r.get("score") is not None]
-    return sum(r["score"] for r in done), len(done)
+    return sum((r.get("score_by") or {}).get(plugin, r["score"]) for r in done), len(done)
 
 
 def report(rows):
@@ -281,7 +304,7 @@ def report(rows):
              "|---|---|---|---|---|---|---|---|---|"]
     for case, arms in sorted(by.items()):
         for arm, rs in sorted(arms.items(), key=lambda kv: (kv[0] != "none", kv[0])):
-            k, n = _rate(rs)
+            k, n = _rate(rs, arm)
             names = sorted({c for r in rs for c in (r.get("checks") or {})})
             parts = []
             for c in names:
@@ -295,11 +318,11 @@ def report(rows):
     for case, arms in sorted(by.items()):
         if "none" not in arms:
             continue
-        bk, bn = _rate(arms["none"])
         for arm, rs in sorted(arms.items()):
             if arm == "none":
                 continue
-            k, n = _rate(rs)
+            bk, bn = _rate(arms["none"], arm)
+            k, n = _rate(rs, arm)
             diff = (k / n - bk / bn) if n and bn else None
             lines.append(f"| {arm} | {case} | {k}/{n} | {bk}/{bn} | "
                          f"{'-' if diff is None else f'{diff:+.2f}'} |")
@@ -317,6 +340,8 @@ def main():
     ap.add_argument("--jobs", type=int, default=2, help="concurrent sessions (keep it at 4 or fewer)")
     ap.add_argument("--out")
     ap.add_argument("--config-dir")
+    ap.add_argument("--work-root", default="/var/tmp/behaviour-eval",
+                    help="where run trees live; must have no CLAUDE.md/AGENTS.md above it (so not under $HOME)")
     ap.add_argument("--force", action="store_true", help="rerun runs that already have a grade")
     ap.add_argument("--md", help="write the report table to this file too")
     ap.add_argument("--claude", default=os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude")
@@ -334,6 +359,11 @@ def main():
     if args.action == "run":
         if not args.config_dir:
             sys.exit("--config-dir is required: a clean config (credentials only)")
+        Path(args.work_root).mkdir(parents=True, exist_ok=True)
+        leaks = ancestor_instructions(args.work_root)
+        if leaks:
+            sys.exit(f"--work-root {args.work_root} sits under instruction files every run would load: "
+                     f"{', '.join(leaks)}. Pick a root outside them (not under $HOME).")
         lock = threading.Lock()
         with cf.ThreadPoolExecutor(min(args.jobs, 4)) as ex:
             futs = [ex.submit(run_one, args, *j) for j in jobs]

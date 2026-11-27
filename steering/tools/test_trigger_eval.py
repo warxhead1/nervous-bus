@@ -113,6 +113,13 @@ def test_run_does_not_inherit_the_launching_session(monkeypatch):
     assert env["AGENT_STEERING_HITS"] == "/nonexistent/hits.jsonl"
 
 
+def test_clean_config_also_gets_a_clean_home(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(te.subprocess, "run", lambda cmd, **k: seen.append(k["env"]) or proc(stream("s")))
+    te.run_one(args(config_dir=str(tmp_path / "cfg")), "q", [], str(tmp_path))
+    assert seen[0]["HOME"] == str(tmp_path / "home") and (tmp_path / "home").is_dir()
+
+
 @pytest.mark.parametrize("n,expect", [(3, None), (4, (4, 0)), (5, (4, 0)), (2, None)])
 def test_min_detectable(n, expect):
     got = te.min_detectable(n)

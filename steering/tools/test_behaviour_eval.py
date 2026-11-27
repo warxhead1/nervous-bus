@@ -106,6 +106,17 @@ def test_clean_env_drops_the_launching_session():
     assert env == {"PATH": "/bin", "HOME": "/h"}
 
 
+def test_ancestor_instructions_finds_a_parent_dot_claude_memory(tmp_path):
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "CLAUDE.md").write_text("rules")
+    run = tmp_path / "a" / "b"
+    run.mkdir(parents=True)
+    found = [p for p in be.ancestor_instructions(run) if p.startswith(str(tmp_path))]
+    assert found == [str(tmp_path / ".claude" / "CLAUDE.md")]
+    (tmp_path / ".claude" / "CLAUDE.md").unlink()
+    assert not any(str(tmp_path) in p for p in be.ancestor_instructions(run))
+
+
 def test_usage_counts_distinct_requests_and_last_result():
     ev = stream(("bash", "ls"), ("result", "x"), ("say", "hi"))
     ev.append(dict(ev[0]))  # a repeated message id is one request
@@ -121,6 +132,18 @@ def test_report_shows_with_without_and_difference(tmp_path):
     out = be.report(rows)
     assert "| p | c | 3/3 | 1/3 | +0.67 |" in out
     assert "| c | p | 3/3 | 1 |" in out  # the unfinished run is counted apart, not as a miss
+
+
+def test_report_grades_each_plugin_on_its_own_checks():
+    # Baseline: model never set, isolation always set. Each plugin is compared on its own check.
+    base = {"case": "c", "arm": "none", "score": False, "score_by": {"mt": False, "iso": True}}
+    rows = [dict(base, run=i) for i in range(2)]
+    rows += [{"case": "c", "arm": "mt", "run": i, "score": False, "score_by": {"mt": True, "iso": False}}
+             for i in range(2)]
+    rows += [{"case": "c", "arm": "iso", "run": i, "score": False, "score_by": {"mt": False, "iso": True}}
+             for i in range(2)]
+    out = be.report(rows)
+    assert "| mt | c | 2/2 | 0/2 | +1.00 |" in out and "| iso | c | 2/2 | 2/2 | +0.00 |" in out
 
 
 # ---------- base-failure ----------
