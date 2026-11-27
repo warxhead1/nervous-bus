@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/crucible.art.check.v1.json",
+  "title": "crucible.art.check v1",
+  "description": "One art drift check result. Ids, enums, counts and timings only: no question or label text rides the bus. A consumer that needs text reads the ledger.",
+  "type": "object",
+  "required": [
+    "game",
+    "bible_rev",
+    "layer",
+    "metric_id",
+    "pass",
+    "value",
+    "tolerance"
+  ],
+  "properties": {
+    "game": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,47}$"
+    },
+    "bible_rev": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "layer": {
+      "type": "string",
+      "enum": [
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5"
+      ]
+    },
+    "metric_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{0,47}$"
+    },
+    "pass": {
+      "type": "boolean"
+    },
+    "value": {
+      "type": "number"
+    },
+    "tolerance": {
+      "type": "number"
+    }
+  },
+  "additionalProperties": false
+}

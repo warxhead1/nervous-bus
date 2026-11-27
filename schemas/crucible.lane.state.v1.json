@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/crucible.lane.state.v1.json",
+  "title": "crucible.lane.state v1",
+  "description": "A build lane changed state. Ids, enums, counts and timings only: no question or label text rides the bus. A consumer that needs text reads the ledger.",
+  "type": "object",
+  "required": [
+    "game",
+    "lane_id",
+    "state",
+    "tier",
+    "wall_s"
+  ],
+  "properties": {
+    "game": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,47}$"
+    },
+    "lane_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{0,47}$"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "passed",
+        "failed",
+        "blocked",
+        "cancelled"
+      ]
+    },
+    "tier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{0,47}$"
+    },
+    "wall_s": {
+      "type": "number",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

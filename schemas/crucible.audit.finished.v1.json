@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/crucible.audit.finished.v1.json",
+  "title": "crucible.audit.finished v1",
+  "description": "A panel audit finished. Ids, enums, counts and timings only: no question or label text rides the bus. A consumer that needs text reads the ledger.",
+  "type": "object",
+  "required": [
+    "game",
+    "audit_id",
+    "domain",
+    "verdict",
+    "seats",
+    "agreed",
+    "disputed",
+    "mechanical_pass"
+  ],
+  "properties": {
+    "game": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,47}$"
+    },
+    "audit_id": {
+      "type": "string",
+      "pattern": "^au-[0-9A-HJKMNP-TV-Z]{26}(\\.[0-9]+)?$"
+    },
+    "domain": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{0,47}$"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "inconclusive",
+        "balanced",
+        "unbalanced"
+      ]
+    },
+    "seats": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "agreed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "disputed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "mechanical_pass": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

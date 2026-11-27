@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/crucible.gate.result.v1.json",
+  "title": "crucible.gate.result v1",
+  "description": "A gate finished. Ids, enums, counts and timings only: no question or label text rides the bus. A consumer that needs text reads the ledger.",
+  "type": "object",
+  "required": [
+    "game",
+    "lane_id",
+    "gate_id",
+    "tier",
+    "pass",
+    "wall_s",
+    "cached"
+  ],
+  "properties": {
+    "game": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,47}$"
+    },
+    "lane_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{0,47}$"
+    },
+    "gate_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{0,47}$"
+    },
+    "tier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{0,47}$"
+    },
+    "pass": {
+      "type": "boolean"
+    },
+    "wall_s": {
+      "type": "number",
+      "minimum": 0
+    },
+    "cached": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}
