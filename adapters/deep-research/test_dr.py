@@ -267,8 +267,9 @@ def test_real_report_capture_runs_end_to_end(tmp_path):
     run = dr.execute_run(eng, "q", CFG, tmp_path, sleep=clk.sleep, clock=clk.now, rng=lambda: 0.5)
     assert run["status"] == "completed"
     assert report.startswith("# CloudEvents Specification Required Attribute Set")
-    assert len(run["citations"]) == 21 and len({c["url"] for c in run["citations"]}) == 20
+    assert len(run["citations"]) == 79 and len({c["url"] for c in run["citations"]}) == 20
     assert all(c["url"].startswith("https://") for c in run["citations"])
+    assert all(not c["claim_span"].startswith("[") for c in run["citations"])
 
 
 def test_attach_skips_submission(tmp_path):
@@ -299,6 +300,57 @@ def test_citation_claim_widens_to_its_line():
     cites = dr.extract_citations(SMALL_REPORT)
     assert cites[0]["claim_span"].startswith("Agent Skills was donated on 2026-10-22")
     assert cites[1]["claim_span"] == cites[2]["claim_span"]
+
+
+def test_citation_long_link_yields_containing_sentence_with_label():
+    md = (
+        "First unrelated sentence.\n\n"
+        "Widgets shipped 4200 units in Q3 2026 according to "
+        "[Quarterly Widget Manufacturing Report 2026 - Example Org](https://example.org/reports/2026/q3/widgets-long-slug). "
+        "Second sentence cites [Another Very Long Source Title Here](https://example.org/other/long/path).\n"
+    )
+    cites = dr.extract_citations(md)
+    assert len(cites) == 2
+    assert cites[0]["claim_span"] == (
+        "Widgets shipped 4200 units in Q3 2026 according to "
+        "Quarterly Widget Manufacturing Report 2026 - Example Org."
+    )
+    assert "https://" not in cites[0]["claim_span"]
+    assert cites[1]["claim_span"] == "Second sentence cites Another Very Long Source Title Here."
+
+
+def test_citation_multiple_links_in_one_sentence_share_claim_span():
+    md = (
+        "Both [First Long Source Title](https://example.org/one/long/url) and "
+        "[Second Long Source Title](https://example.org/two/long/url) confirm the 42% gain. "
+        "Trailing sentence."
+    )
+    cites = dr.extract_citations(md)
+    assert len(cites) == 2
+    assert cites[0]["claim_span"] == cites[1]["claim_span"]
+    assert cites[0]["claim_span"] == "Both First Long Source Title and Second Long Source Title confirm the 42% gain."
+
+
+def test_citation_bullet_and_maxlen_cap():
+    long_body = "word " * 120
+    md = (
+        "- Short bullet claim [Report Label](https://example.org/bullet)\n"
+        f"- {long_body}[Long Label](https://example.org/long).\n"
+    )
+    cites = dr.extract_citations(md)
+    assert cites[0]["claim_span"] == "- Short bullet claim Report Label"
+    assert len(cites[1]["claim_span"]) == 400
+    assert cites[1]["claim_span"].startswith("- word word")
+
+
+def test_citation_abbreviations_and_label_periods_do_not_split_sentence():
+    md = (
+        "1. In e.g. cold climates, [Dr. Smith. Field Study](https://example.org/study) measured 12 cm of frost. "
+        "Next sentence."
+    )
+    cites = dr.extract_citations(md)
+    assert len(cites) == 1
+    assert cites[0]["claim_span"] == "1. In e.g. cold climates, Dr. Smith. Field Study measured 12 cm of frost."
 
 
 def test_cost_lists_runs_without_prices(tmp_path):
@@ -405,6 +457,136 @@ def test_command_judge_nonzero_exit(tmp_path):
 def test_fetch_refuses_non_public_targets(url):
     with pytest.raises(dr.DrError, match="scheme|public address"):
         dr.fetch_page(url)
+
+
+class _FakeResponse:
+    def __init__(self, body, status=200, content_type="text/html; charset=utf-8"):
+        self._body = body
+        self.status = status
+        self.headers = {"Content-Type": content_type}
+
+    def read(self, n=-1):
+        return self._body[:n] if n >= 0 else self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _make_pdf(lines):
+    """Build a minimal valid PDF 1.4 document containing the given ASCII lines."""
+    ops = ["BT /F1 12 Tf 50 750 Td 16 TL"]
+    for i, ln in enumerate(lines):
+        esc = ln.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        ops.append(f"({esc}) Tj" if i == 0 else f"T* ({esc}) Tj")
+    ops.append("ET\n")
+    stream = "\n".join(ops).encode("latin-1")
+    objs = [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>\nendobj\n",
+        b"4 0 obj\n<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"endstream\nendobj\n",
+        b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+    ]
+    buf = bytearray(b"%PDF-1.4\n")
+    offs = []
+    for o in objs:
+        offs.append(len(buf))
+        buf.extend(o)
+    xref = len(buf)
+    buf.extend(f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode())
+    for off in offs:
+        buf.extend(f"{off:010d} 00000 n \n".encode())
+    buf.extend(f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode())
+    return bytes(buf)
+
+
+def _patch_http(monkeypatch, body, content_type="text/html; charset=utf-8", status=200):
+    monkeypatch.setattr(dr, "public_host", lambda host: True)
+    monkeypatch.setattr(dr.urllib.request, "urlopen",
+                        lambda req, timeout=20.0: _FakeResponse(body, status=status, content_type=content_type))
+
+
+def test_fetch_page_extracts_pdf_by_content_type_and_magic(monkeypatch):
+    if not dr.shutil.which("pdftotext"):
+        pytest.skip("pdftotext not installed")
+    pdf = _make_pdf([
+        "Annual Widget Manufacturing Summary for 2026.",
+        "Total shipments reached 4200 units across all four regions in the third quarter.",
+        "Independent auditors verified the production ledger and confirmed zero restatements.",
+        "Regional warehouses reported steady inventory turnover throughout the fiscal period.",
+    ])
+    _patch_http(monkeypatch, pdf, content_type="application/pdf")
+    status, text = dr.fetch_page("https://example.org/report.pdf")
+    assert status == 200
+    assert "4200 units" in text and len(text) >= dr.MIN_PAGE_TEXT
+
+    # Also detected by %PDF magic even when served as octet-stream.
+    _patch_http(monkeypatch, pdf, content_type="application/octet-stream")
+    status2, text2 = dr.fetch_page("https://example.org/download")
+    assert status2 == 200 and "4200 units" in text2
+
+
+def test_fetch_page_pdf_without_pdftotext_is_unreachable(tmp_path, monkeypatch):
+    pdf = _make_pdf(["Sample PDF line."])
+    _patch_http(monkeypatch, pdf, content_type="application/pdf")
+    monkeypatch.setattr(dr.shutil, "which", lambda name: None)
+    run, rdir = completed_run(tmp_path)
+    called = []
+    audit = dr.audit_run(run, rdir, lambda c, p: called.append((c, p)) or ("CONFIRMED", ""), dr.fetch_page)
+    assert not called
+    assert {i["verdict"] for i in audit["items"]} == {"UNREACHABLE"}
+    assert all("pdftotext" in i["reason"] for i in audit["items"])
+
+
+def test_fetch_page_corrupt_pdf_is_unreachable(tmp_path, monkeypatch):
+    if not dr.shutil.which("pdftotext"):
+        pytest.skip("pdftotext not installed")
+    _patch_http(monkeypatch, b"%PDF-1.4\nnot a real pdf payload", content_type="application/pdf")
+    run, rdir = completed_run(tmp_path)
+    called = []
+    audit = dr.audit_run(run, rdir, lambda c, p: called.append((c, p)) or ("CONFIRMED", ""), dr.fetch_page)
+    assert not called
+    assert {i["verdict"] for i in audit["items"]} == {"UNREACHABLE"}
+    assert all("PDF" in i["reason"] for i in audit["items"])
+
+
+def test_fetch_page_empty_shell_html_is_unreachable_without_judging(tmp_path, monkeypatch):
+    shell_html = (HERE / "fixtures" / "empty_shell.html").read_bytes()
+    _patch_http(monkeypatch, shell_html, content_type="text/html; charset=utf-8")
+    with pytest.raises(dr.DrError, match="^no readable text$"):
+        dr.fetch_page("https://example.org/thread")
+    run, rdir = completed_run(tmp_path)
+    called = []
+    audit = dr.audit_run(run, rdir, lambda c, p: called.append((c, p)) or ("CONFIRMED", ""), dr.fetch_page)
+    assert not called
+    assert {i["verdict"] for i in audit["items"]} == {"UNREACHABLE"}
+    assert {i["reason"] for i in audit["items"]} == {"no readable text"}
+
+
+def test_fetch_page_normal_html_above_floor_succeeds(monkeypatch):
+    body = ("<html><head><title>Report</title><script>var x=1;</script></head><body><p>"
+            + "Widgets shipped 4200 units in Q3 2026 across all four regions. " * 6
+            + "</p></body></html>").encode()
+    _patch_http(monkeypatch, body, content_type="text/html; charset=utf-8")
+    status, text = dr.fetch_page("https://example.org/article")
+    assert status == 200 and "4200 units" in text and "var x=1" not in text
+
+
+def test_judge_prompt_targets_claim_sentence_and_rejects_title_only(tmp_path):
+    assert "CLAIM sentence" in dr.JUDGE_PROMPT
+    assert "title" in dr.JUDGE_PROMPT.lower() and "not support" in dr.JUDGE_PROMPT.lower()
+    seen = tmp_path / "prompt.txt"
+    script = tmp_path / "capture_judge.sh"
+    script.write_text(f'#!/bin/sh\ncat > "{seen}"\necho \'{{"verdict": "REFUTED", "reason": "title only"}}\'\n')
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    v, why = dr.make_command_judge(str(script), 10)("Widgets shipped 4200 units in Q3.", "Widget Report")
+    assert (v, why) == ("REFUTED", "title only")
+    prompt = seen.read_text()
+    assert "CLAIM sentence" in prompt and "not support" in prompt
+    assert "Widgets shipped 4200 units in Q3." in prompt
 
 
 # ------------------------------------------------------------ kb sink

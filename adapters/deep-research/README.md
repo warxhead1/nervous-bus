@@ -27,7 +27,7 @@ Each run lives in `--runs-dir` (default `$XDG_STATE_HOME/deep-research/runs/<run
 
 ## Audit
 
-Per (claim, URL) pair the page is fetched (public hosts only, http(s), size capped) and the judge command returns a verdict. A claim with CONFIRMED and REFUTED sources is WEAKENED. Unfetchable pages and judge failures are UNREACHABLE. Link resolution rates run above 94% while fact-check accuracy is 39 to 77%, so a resolving link proves nothing. Page text is untrusted input to the judge.
+Each citation's `claim_span` is the sentence or bullet containing the link (link label kept, capped at 400 chars). Per (claim, URL) pair the page is fetched (public hosts only, http(s), size capped) and the judge command evaluates whether the page body supports the claim sentence (a matching title alone is not support). PDF responses (`application/pdf` or `%PDF` magic) are text-extracted with `pdftotext` when on `PATH`, and pages whose readable text is under 200 chars after stripping tags are marked UNREACHABLE (`no readable text`) without calling the judge. A claim with CONFIRMED and REFUTED sources is WEAKENED. Unfetchable pages, unreadable pages, and judge failures are UNREACHABLE. Link resolution rates run above 94% while fact-check accuracy is 39 to 77%, so a resolving link proves nothing. Page text is untrusted input to the judge.
 
 ## kb sink
 
