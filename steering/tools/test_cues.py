@@ -75,17 +75,44 @@ def test_post_tool_use_cues_fire_on_traps_and_stay_quiet_on_clean_output():
 
 
 def test_post_tool_use_cues_are_fast():
+    import importlib.machinery
+    import importlib.util
+    import io
     import time
+    from contextlib import redirect_stdout
+    from unittest import mock
+
     ebd = ROOT / "evidence-before-done" / "hooks" / "cue"
     payload = json.dumps({"hook_event_name": "PostToolUse", "tool_name": "Bash",
                           "tool_input": {"command": "pytest"}, "tool_response": {"stdout": "x" * 100000 + "\n1 failed"}})
-    # Warm import cache, then measure median of 5 runs
-    subprocess.run([sys.executable, str(ebd)], input=payload, capture_output=True, text=True)
-    times = []
+    # 1. In-process budget: actual parsing + regex matching over 100KB must stay under 15ms.
+    loader = importlib.machinery.SourceFileLoader("cue_perf", str(ebd))
+    spec = importlib.util.spec_from_loader("cue_perf", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    in_proc = []
     for _ in range(5):
         t0 = time.perf_counter()
+        with mock.patch.object(sys, "stdin", io.StringIO(payload)), redirect_stdout(io.StringIO()):
+            assert mod.main() == 0
+        in_proc.append((time.perf_counter() - t0) * 1000)
+    in_proc.sort()
+    assert in_proc[2] < 15.0, f"median in-process cue latency {in_proc[2]:.1f}ms >= 15ms"
+
+    # 2. Subprocess budget: net overhead over bare Python startup stays under 50ms
+    # (avoids flaking when shared CI runners have >30ms interpreter startup).
+    subprocess.run([sys.executable, "-c", "pass"], capture_output=True, text=True)
+    subprocess.run([sys.executable, str(ebd)], input=payload, capture_output=True, text=True)
+    base_times, cue_times = [], []
+    for _ in range(5):
+        t0 = time.perf_counter()
+        subprocess.run([sys.executable, "-c", "pass"], capture_output=True, text=True)
+        base_times.append((time.perf_counter() - t0) * 1000)
+        t0 = time.perf_counter()
         p = subprocess.run([sys.executable, str(ebd)], input=payload, capture_output=True, text=True)
-        times.append((time.perf_counter() - t0) * 1000)
+        cue_times.append((time.perf_counter() - t0) * 1000)
         assert p.returncode == 0
-    times.sort()
-    assert times[2] < 50.0, f"median cue latency {times[2]:.1f}ms >= 50ms"
+    base_times.sort()
+    cue_times.sort()
+    net_ms = cue_times[2] - base_times[2]
+    assert net_ms < 50.0, f"median net cue latency {net_ms:.1f}ms >= 50ms (cue={cue_times[2]:.1f}ms, py={base_times[2]:.1f}ms)"
