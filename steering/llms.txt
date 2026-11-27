@@ -13,6 +13,7 @@
 - [falsify-your-gate/ruling](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/rulings/falsify-your-gate.md): A check counts only after you have seen it fail. Plain markdown to paste into AGENTS.md, GEMINI.md, a Kiro steering file or a system prompt.
 - [plain-prose/ruling](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/hooks/ruling.md): Prose a person reads once: one idea per sentence, plain words, no AI tells. Plain markdown to paste into AGENTS.md, GEMINI.md, a Kiro steering file or a system prompt.
 - [ub-mode/ruling](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/rulings/ub-mode.md): Make it work, then make it right, measured. Plain markdown to paste into AGENTS.md, GEMINI.md, a Kiro steering file or a system prompt.
+- [grill/ruling](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/rulings/grill.md): Hard questions, not many: a design question goes to `crucible grill ask`, and only taste, money or direction reaches the owner. Plain markdown to paste into AGENTS.md, GEMINI.md, a Kiro steering file or a system prompt.
 
 ## Skills (Agent Skills folders; fetch SKILL.md, then the other files listed)
 
@@ -38,6 +39,7 @@
   - https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/references/worked-example.md
   - https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/plain-prose/skills/ste80-humanizer/scripts/ste_check.py
 - [ub-mode/skill](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/ub-mode/skills/ub-mode/SKILL.md): The `ub-mode` method as an Agent Skills folder (SKILL.md and its references).
+- [grill/skill](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/grill/skills/grill/SKILL.md): The `grill` method as an Agent Skills folder (SKILL.md and its references).
 
 ## Checks (Python 3 scripts; JSON on stdin, exit 2 blocks or reports)
 

@@ -1,0 +1,311 @@
+# The card-writing rules, version 1.
+#
+# A card is the one form in which a question reaches the owner. The owner reads it
+# on a phone, in a few seconds, between other things. A card that needs a second
+# reading, a typed answer or a follow-up has failed.
+#
+# `enforced = true` means `crucible grill post` rejects the card with exit 1.
+# The other rules are judgment. The drafter holds them and a panel audits them.
+
+version = 1
+
+[limits]
+question_chars = 90
+label_words = 3
+label_chars = 48
+changes_chars = 96
+options_min = 2
+options_drafted_max = 4   # what a drafter writes
+options_posted_max = 6    # what the phone surface takes
+batch_parts_max = 8
+voice_parts = 4           # the voice sweep reads this many parts
+media_per_part = 4
+
+# ---- the question ----
+
+[[rule]]
+id = "card.question.one"
+enforced = true
+text = "The question is one idea in at most 90 characters."
+
+[[rule]]
+id = "card.question.upstream"
+enforced = false
+text = "Ask the question whose answer settles the most other questions. When one answer decides three smaller questions, ask that one and take the three."
+
+[[rule]]
+id = "card.question.game"
+enforced = false
+text = "Ask about the game the player gets. A question about code, files or tools is a lead call and never a card."
+
+[[rule]]
+id = "card.question.buildable"
+enforced = false
+text = "Every option changes something that can be built, drawn or measured. A question about values with nothing to build under it is not ready."
+
+[[rule]]
+id = "card.question.neutral"
+enforced = false
+text = "The question names no option and holds no word that favours one."
+
+[[rule]]
+id = "card.question.choice"
+enforced = false
+text = "A card asks for a choice. It never asks the owner to supply facts, to list things or to explain."
+
+[[rule]]
+id = "card.question.plain"
+enforced = false
+text = "Use the words the owner uses. Put no record id, file path, model name or tool name in the question or in a label."
+
+# ---- the options ----
+
+[[rule]]
+id = "card.option.count"
+enforced = true
+text = "A drafter writes two to four options. The surface takes six at most."
+
+[[rule]]
+id = "card.option.label"
+enforced = true
+text = "An option label is at most three words and at most 48 characters, and it is unique within its part."
+
+[[rule]]
+id = "card.option.real"
+enforced = false
+text = "Each option is one that a reasonable owner could pick. Write no weak option to make the recommended one look good, and none to fill the count."
+
+[[rule]]
+id = "card.option.exclusive"
+enforced = false
+text = "The options exclude each other and are the same kind of thing."
+
+[[rule]]
+id = "card.option.cover"
+enforced = false
+text = "The options cover the live choices. If the owner must type to give an answer, the draft missed an option."
+
+[[rule]]
+id = "card.option.changes"
+enforced = true
+text = "Each option has one \"what changes\" line of at most 96 characters."
+
+[[rule]]
+id = "card.option.computed"
+enforced = false
+text = "Compute the \"what changes\" line where possible: \"data only\" or \"2 lanes\". State what is built, removed or delayed. Do not state a virtue."
+
+[[rule]]
+id = "card.option.labels"
+enforced = false
+text = "A name in a draft is a label hole of the form {{l:<label id>}}. The hole resolves at post time, so a rename reaches the card."
+
+# ---- the recommendation and the stakes ----
+
+[[rule]]
+id = "card.recommend.first"
+enforced = true
+text = "The recommended option is posted first, because the phone keeps posted order. \"Yes\" accepts it."
+
+[[rule]]
+id = "card.recommend.pips"
+enforced = false
+text = "Show the pips the recommendation earned. Write no confidence word in card text."
+
+[[rule]]
+id = "card.stakes.present"
+enforced = true
+text = "Door and weight are present on every card."
+
+[[rule]]
+id = "card.stakes.no_default"
+enforced = true
+text = "A one-way card or a money card never carries a default-after time. A default would commit the agent's own pick."
+
+[[rule]]
+id = "card.number.evidence"
+enforced = true
+text = "No number appears in card text unless the number is in the evidence JSON."
+
+# ---- what sits behind the card ----
+
+[[rule]]
+id = "card.brief.tap"
+enforced = false
+text = "The rationale stays one tap down, in the brief. The card face holds the question, the options and the \"what changes\" lines."
+
+[[rule]]
+id = "card.brief.unknown"
+enforced = false
+text = "The brief states plainly what the agents looked up, what they measured and what they could not find out."
+
+[[rule]]
+id = "card.brief.objection"
+enforced = false
+text = "A one-way card carries the strongest objection as one line, one tap down. A fresh adversary with no access to the rationale writes it."
+
+# ---- look and feel ----
+
+[[rule]]
+id = "card.show.render"
+enforced = false
+text = "A look question is shown as renders of one test scene, never described. A part takes four images at most."
+
+[[rule]]
+id = "card.show.play"
+enforced = false
+text = "A feel question is two playable slices of ten seconds each. The link opens the local build in Firefox."
+
+# ---- batches ----
+
+[[rule]]
+id = "card.batch.plain"
+enforced = true
+text = "A part joins a batch only when its options explain themselves: names, image picks, yes or no. Any other question posts as a single decision."
+
+[[rule]]
+id = "card.batch.independent"
+enforced = false
+text = "The parts of a batch are independent. When the answer to one part changes the options of another, post them as a series of single cards."
+
+[[rule]]
+id = "card.batch.size"
+enforced = true
+text = "A batch holds at most eight parts. Voice reads the first four, so the four heaviest parts come first."
+
+[[rule]]
+id = "card.batch.say"
+enforced = false
+text = "Each part has a `say` line: the question as a person would speak it, with the recommended option first."
+
+# ---- after the answer ----
+
+[[rule]]
+id = "card.answer.once"
+enforced = false
+text = "The engine never sends the owner back to answer again. A typed answer is stored raw, read once and shown as the settled line. One edit corrects the reading."
+
+# ---- the eight modes ----
+
+[[mode]]
+id = "mode.fork"
+name = "fork"
+used_for = "two to four options"
+act = "one tap"
+
+[[mode]]
+id = "mode.batch"
+name = "batch"
+used_for = "independent picks that need no explanation"
+act = "one Submit, with the recommended picks preselected"
+
+[[mode]]
+id = "mode.duel"
+name = "duel"
+used_for = "look, feel, sound"
+act = "tap the better of each pair, then one Submit"
+
+[[mode]]
+id = "mode.feel"
+name = "feel"
+used_for = "game feel"
+act = "play two slices for ten seconds each, then tap one"
+
+[[mode]]
+id = "mode.name"
+name = "name"
+used_for = "a label"
+act = "edit it or leave it"
+
+[[mode]]
+id = "mode.rule"
+name = "rule"
+used_for = "a pillar"
+act = "one answer, then the sacrifice probe"
+
+[[mode]]
+id = "mode.bet"
+name = "bet"
+used_for = "a prediction before a reveal"
+act = "one number"
+
+[[mode]]
+id = "mode.challenge"
+name = "challenge"
+used_for = "evidence against an earlier answer"
+act = "keep, switch or look deeper"
+
+# ---- the reserved answer words ----
+#
+# These match by exact rule with no model. `match = "prefix"` means the words that
+# follow the phrase are the argument. Any other typed or spoken words are stored raw.
+
+[[word]]
+id = "word.yes"
+phrases = ["yes", "first", "the recommended one"]
+match = "exact"
+records = "pick"
+text = "Picks the recommended option."
+
+[[word]]
+id = "word.send"
+phrases = ["send"]
+match = "exact"
+records = "submit"
+text = "Submits the picks made by voice."
+
+[[word]]
+id = "word.call_it"
+phrases = ["call it"]
+match = "prefix"
+records = "label edit, then pick"
+text = "Renames the option to the words that follow, then picks it."
+
+[[word]]
+id = "word.you_decide"
+phrases = ["you decide"]
+match = "exact"
+records = "delegate"
+text = "Hands the call to the lead. The decision settles with authority lead."
+
+[[word]]
+id = "word.later"
+phrases = ["later"]
+match = "exact"
+records = "deferred"
+text = "Defers the question, with a wake condition."
+
+[[word]]
+id = "word.test_it"
+phrases = ["test it"]
+match = "exact"
+records = "investigation"
+text = "Starts an investigation. The question waits for its result."
+
+[[word]]
+id = "word.why"
+phrases = ["why"]
+match = "exact"
+records = "nothing"
+text = "Opens the brief."
+
+[[word]]
+id = "word.wrong_question"
+phrases = ["wrong question"]
+match = "prefix"
+records = "withdrawn"
+text = "Withdraws the card. The note that follows guides the redraft."
+
+[[word]]
+id = "word.harder"
+phrases = ["harder"]
+match = "exact"
+records = "pressure"
+text = "Raises the pressure dial for that subtree."
+
+[[word]]
+id = "word.enough"
+phrases = ["enough"]
+match = "exact"
+records = "sitting closed"
+text = "Closes the sitting."

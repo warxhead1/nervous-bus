@@ -1,0 +1,345 @@
+# The triage rubric, version 1.
+#
+# The router runs six checks on every question, cheapest first: already answered,
+# class, stakes, draft, recommendation, gate. This file is the text for checks one,
+# two, three, five and six. The card rules in cards.v1.toml cover check four.
+#
+# A job that classes a question cites the id of the clause it used. A class with
+# no clause id is rejected. A tree question inherits the class of its node.
+#
+# The aim is hard questions and few of them. The owner's attention is the scarcest
+# resource in the system. A question reaches the owner only when the answer is the
+# owner's taste, money or direction, and a wrong guess costs more than that attention.
+
+version = 1
+
+# ---- check 1: already answered ----
+
+[[clause]]
+id = "answered.asked"
+check = "answered"
+text = "The owner asked for the outcome. A step toward that outcome needs no question. Do the step."
+
+[[clause]]
+id = "answered.ledger"
+check = "answered"
+text = "A settled decision in the ledger covers the same node and the same scope. Drop the question and cite the decision id."
+
+[[clause]]
+id = "answered.kb"
+check = "answered"
+text = "A kb entry for this project answers the question. Drop the question and cite the entry."
+
+[[clause]]
+id = "answered.near"
+check = "answered"
+text = "A decision about a neighbouring thing does not answer the question. Use it as evidence for the recommendation and keep the question open."
+
+[[clause]]
+id = "answered.due"
+check = "answered"
+text = "A decision whose review trigger has fired does not answer the question. Raise the question as a challenge to that decision."
+
+# ---- check 2: class ----
+
+[[clause]]
+id = "class.fact"
+check = "class"
+value = "fact"
+text = "The answer exists outside the game and is the same for any owner. Examples: a platform rule, a licence term, a price, a hardware property, what the code does today."
+
+[[clause]]
+id = "class.measurable"
+check = "class"
+value = "measurable"
+text = "A run of the sim, a test or a benchmark can produce the answer under a decision rule that is written before the run."
+
+[[clause]]
+id = "class.lead"
+check = "class"
+value = "lead"
+text = "The answer follows by reasoning from settled decisions, pillars and evidence. Two competent designers who read the ledger would accept each other's answer."
+
+[[clause]]
+id = "class.owner"
+check = "class"
+value = "owner"
+text = "The answer depends on what the owner wants the game to be: taste, direction, or what to give up. Two owners with the same evidence would choose differently."
+
+[[clause]]
+id = "class.money"
+check = "class"
+value = "money"
+text = "The answer spends money or plan quota, commits to a paid service, or sets what the game costs or earns."
+
+[[clause]]
+id = "class.test.evidence"
+check = "class"
+text = "Name the evidence that would change the answer. If a lookup would change it, the class is fact. If a run would change it, the class is measurable. If no evidence would change it, the class is lead or owner."
+
+[[clause]]
+id = "class.test.swap"
+check = "class"
+value = "lead"
+text = "Picture a different owner with the same ledger. If the answer stays the same, the class is lead."
+
+[[clause]]
+id = "class.test.notice"
+check = "class"
+value = "lead"
+text = "The owner would not see, hear or feel the difference in the finished game. Code structure, file layout, tool choice inside the budget and internal ids are lead calls."
+
+[[clause]]
+id = "class.test.unknown"
+check = "class"
+text = "An agent that does not know the answer has not found an owner question. Look the answer up, measure it or reason it out first."
+
+[[clause]]
+id = "class.split"
+check = "class"
+text = "A question that mixes classes is split. Route the fact part to a lookup and the measurable part to the lab. Only the taste residue keeps the owner class."
+
+[[clause]]
+id = "class.doubt"
+check = "class"
+value = "owner"
+text = "Lead and owner both fit after the three tests. Class the question owner. The gate still takes it when it is two-way and benign."
+
+# ---- check 3: stakes ----
+
+[[clause]]
+id = "door.one_way.rework"
+check = "door"
+value = "one-way"
+text = "Undoing the answer after dependent work lands needs code changes in more than one area."
+
+[[clause]]
+id = "door.one_way.stored"
+check = "door"
+value = "one-way"
+text = "The answer fixes a format or an id that stored data depends on: a save, a replay, a key."
+
+[[clause]]
+id = "door.one_way.public"
+check = "door"
+value = "one-way"
+text = "The answer leaves the repo: a public name, a store listing, a published build, a message to people outside."
+
+[[clause]]
+id = "door.one_way.spent"
+check = "door"
+value = "one-way"
+text = "The answer spends something that does not come back: money, quota or a one-time offer."
+
+[[clause]]
+id = "door.two_way.data"
+check = "door"
+value = "two-way"
+text = "Undoing the answer is a data change: a rules value, a token or a label."
+
+[[clause]]
+id = "door.two_way.lane"
+check = "door"
+value = "two-way"
+text = "Undoing the answer is one lane of work inside one area."
+
+[[clause]]
+id = "door.doubt"
+check = "door"
+value = "one-way"
+text = "The cost of undoing cannot be counted from a dry run of `crucible lane plan`. The door is one-way."
+
+[[clause]]
+id = "weight.critical"
+check = "weight"
+value = "outcome-critical"
+text = "A wrong answer breaks a pillar, loses player data or money, or makes the first playable slice fail its purpose."
+
+[[clause]]
+id = "weight.divergent"
+check = "weight"
+value = "divergent"
+text = "The options lead to games that a player would tell apart, and the ledger does not predict the owner's pick."
+
+[[clause]]
+id = "weight.benign"
+check = "weight"
+value = "benign"
+text = "The options differ little in the finished game, or the ledger and the taste rules predict the owner's pick."
+
+[[clause]]
+id = "weight.doubt"
+check = "weight"
+text = "Two weights fit. Use the heavier weight."
+
+[[clause]]
+id = "radius.count"
+check = "radius"
+text = "Radius is a count of downstream nodes, label uses and lanes, read from the tree and the label index. No job estimates it."
+
+# ---- the guard list: never taken ----
+
+[[clause]]
+id = "guard.pillar"
+check = "guard"
+value = "pillar"
+text = "The question adds, changes, weakens or makes an exception to a pillar."
+
+[[clause]]
+id = "guard.spend"
+check = "guard"
+value = "spend"
+text = "The question spends money, raises a quota budget or commits to a paid service."
+
+[[clause]]
+id = "guard.look"
+check = "guard"
+value = "look"
+text = "The question changes the look baseline: a look pillar, a locked token or an image in the canon."
+
+[[clause]]
+id = "guard.public_name"
+check = "guard"
+value = "public-name"
+text = "The question sets or changes a name that people outside will see."
+
+[[clause]]
+id = "guard.scope"
+check = "guard"
+value = "scope"
+text = "The question adds to, cuts from or reorders what the first release holds."
+
+[[clause]]
+id = "guard.save_format"
+check = "guard"
+value = "save-format"
+text = "The question changes what a save holds or how a save is read."
+
+[[clause]]
+id = "guard.raise"
+check = "guard"
+text = "The guard raises a class, a door or a weight. It never lowers one."
+
+# ---- check 5: the recommendation and its pips ----
+
+[[clause]]
+id = "pip.evidence"
+check = "pip"
+text = "Pip one: independent evidence supports the recommended option, such as a sim result or two audited sources."
+
+[[clause]]
+id = "pip.seats"
+check = "pip"
+text = "Pip two: sealed seats from two model families agree on the recommended option."
+
+[[clause]]
+id = "pip.record"
+check = "pip"
+text = "Pip three: this class of question has a measured record of accepted recommendations."
+
+[[clause]]
+id = "pip.self"
+check = "pip"
+text = "A model's own statement of confidence earns no pip."
+
+# ---- check 6: the gate ----
+#
+# `end` is where the question stops:
+#   lookup       a lookup or a research run answers it
+#   lab          an experiment answers it
+#   lead_take    an agent decides and logs it. It shows in the Taken strip
+#   owner_take   taken on the recommendation. It shows in the strip. One tap flips it
+#   card_batch   a card in a batch
+#   card_alone   a card posted alone
+# `default` says whether silence may settle the card on the recommendation.
+# A guarded question skips the two take rows and ends as a card.
+
+[[gate]]
+id = "gate.fact"
+class = "fact"
+doors = ["one-way", "two-way"]
+weights = ["outcome-critical", "divergent", "benign"]
+end = "lookup"
+default = false
+text = "A fact is never a card."
+
+[[gate]]
+id = "gate.measurable"
+class = "measurable"
+doors = ["one-way", "two-way"]
+weights = ["outcome-critical", "divergent", "benign"]
+end = "lab"
+default = false
+text = "Only a taste residue of a measurable question can become a card."
+
+[[gate]]
+id = "gate.lead"
+class = "lead"
+doors = ["one-way", "two-way"]
+weights = ["outcome-critical", "divergent", "benign"]
+end = "lead_take"
+default = false
+text = "An agent decides and logs the decision."
+
+[[gate]]
+id = "gate.owner.benign"
+class = "owner"
+doors = ["two-way"]
+weights = ["benign"]
+end = "owner_take"
+default = false
+text = "Taken on the recommendation from day one."
+
+[[gate]]
+id = "gate.owner.two_way"
+class = "owner"
+doors = ["two-way"]
+weights = ["outcome-critical", "divergent"]
+end = "card_batch"
+default = false
+text = "A card in a batch. No silent default at the start."
+
+[[gate]]
+id = "gate.owner.one_way"
+class = "owner"
+doors = ["one-way"]
+weights = ["outcome-critical", "divergent", "benign"]
+end = "card_alone"
+default = false
+text = "A card, alone, with no default, after a sealed two-seat proposal."
+
+[[gate]]
+id = "gate.money"
+class = "money"
+doors = ["one-way", "two-way"]
+weights = ["outcome-critical", "divergent", "benign"]
+end = "card_alone"
+default = false
+text = "A card, alone, with no default."
+
+# ---- the sitting ----
+
+[[clause]]
+id = "sitting.rank"
+check = "sitting"
+text = "Cards rank by weight, then by the lanes they block, then by likely-to-differ times radius."
+
+[[clause]]
+id = "sitting.budget"
+check = "sitting"
+text = "A sitting holds no more cards than the attention budget. The other cards wait. The budget is a knob in `design/knobs.toml`."
+
+[[clause]]
+id = "sitting.push"
+check = "sitting"
+text = "One push is outstanding at a time. The next single card posts after the owner answers the previous card."
+
+[[clause]]
+id = "sitting.probe"
+check = "sitting"
+text = "Each sitting asks one question that the gate would have taken. The probe is the last part of a batch the owner already submits."
+
+[[clause]]
+id = "sitting.no_wait"
+check = "sitting"
+text = "A sitting never makes the owner wait. With no card ready, the sitting closes."

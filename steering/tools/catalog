@@ -151,10 +151,14 @@ META = {
              "requires": ["bin/ub_gate_dry.py", "bin/simjoin.py", "lock/pins.json", "lock/requirements.lock"],
              "smoke": {"steps": [{"args": ["--help"], "exit": 0, "stdout_contains": "ub-gate"}]}},
         ]},
+    # The grill ruling is written by hand, so `authored` keeps it out of the cue-built rulings.
+    "grill": {
+        "purpose": "Hard questions, not many: a design question goes to `crucible grill ask`, and only taste, money or direction reaches the owner.",
+        "skill": "grill", "authored": "steering/rulings/grill.md", "checks": []},
 }
 
 ORDER = ["human-attention", "evidence-before-done", "keep-moving", "model-tiering", "isolated-dispatch",
-         "remediation-ladder", "falsify-your-gate", "plain-prose", "ub-mode"]
+         "remediation-ladder", "falsify-your-gate", "plain-prose", "ub-mode", "grill"]
 HARNESSES = [
     ("claude-code", "Claude Code", "adapters/claude-code.md"),
     ("codex", "Codex CLI", "adapters/codex.md"),
@@ -192,7 +196,10 @@ def skill_files(name, skill):
 
 def plugin_hooks(name):
     """(script basename, event, matcher, timeout) from the plugin's own hooks.json."""
-    data = json.loads((ST / name / "hooks" / "hooks.json").read_text())["hooks"]
+    path = ST / name / "hooks" / "hooks.json"
+    if not path.is_file():
+        return []
+    data = json.loads(path.read_text())["hooks"]
     out = []
     for event, groups in data.items():
         for g in groups:
@@ -326,7 +333,9 @@ def build():
         m = META[name]
         if m.get("ruling") is None and name != "ub-mode":
             pass
-        if m.get("ruling"):
+        if m.get("authored"):
+            rpath = m["authored"]
+        elif m.get("ruling"):
             rpath = f"steering/{name}/{m['ruling']}"
         elif name == "ub-mode":
             rpath = None
@@ -343,12 +352,13 @@ def build():
         pieces.append({"id": f"{name}/skill", "kind": "skill", "plugin": name, "path": f"steering/{name}/skills/{m['skill']}",
                        "entry": f"steering/{name}/skills/{m['skill']}/SKILL.md", "files": files,
                        "purpose": f"The `{m['skill']}` method as an Agent Skills folder (SKILL.md and its references).", "requires": []})
-        cue = {"name": "cue", "path": "hooks/cue", "purpose": "Say the rule when the prompt calls for it.", "effect": "context",
+        has_cue = (ST / name / "hooks" / "cue").is_file()
+        cue = has_cue and {"name": "cue", "path": "hooks/cue", "purpose": "Say the rule when the prompt calls for it.", "effect": "context",
                "event": "UserPromptSubmit", "matcher": None, "kill_switch": "STEERING_CUES_DISABLE=1",
                "input": "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
                "requires": ["hooks/cues.json"],
                "smoke": {"steps": [{"stdin": {"prompt": json.loads((ST / name / "evals" / "trigger.json").read_text())["should"][0]}, "exit": 0, "stdout_contains": f"[{name}]"}]}}
-        for c in m["checks"] + ([cue] if (ST / name / "hooks" / "cue").is_file() else []):
+        for c in m["checks"] + ([cue] if has_cue else []):
             pieces.append({"id": f"{name}/check/{c['name']}", "kind": "check", "plugin": name, "path": f"steering/{name}/{c['path']}",
                            "purpose": c["purpose"], "effect": c["effect"], "event": c["event"], "matcher": c["matcher"],
                            "kill_switch": c["kill_switch"], "input": c["input"],
@@ -440,7 +450,8 @@ def main(argv):
     for path, text in rulings.items():
         outputs[ROOT / path] = text
     for name in ORDER:
-        outputs[ST / name / "README.md"] = readme_with(cat, name, rulings)
+        if (ST / name / "README.md").is_file():
+            outputs[ST / name / "README.md"] = readme_with(cat, name, rulings)
     stale = [rel(p) for p, t in outputs.items() if not p.exists() or p.read_text() != t]
     if "--check" in argv:
         if stale:
