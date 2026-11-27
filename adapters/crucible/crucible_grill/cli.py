@@ -419,12 +419,33 @@ def cmd_answer(a):
     q = ctx.q(a.q)
     if q["state"] != "asked" or q["src_of"]:
         fail("question has no open card", 1, state=q["state"], q=a.q)
+    if a.stamp is not None and a.stamp != state.ms_of(q["posted_ts"]):
+        fail("stale stamp: the card was reposted", 4, q=a.q)
     hid, timeout = q["hearth_id"], ctx.knobs["hearth"]["timeout_s"]
     asked = q["asked"]
     rc = resolved(ctx, {"text": "", "parts": asked["parts"]})
     parts = rc["parts"]
     single = asked["mode"] == "single"
-    text = (a.text or "").strip()
+    pick_ids, part_words, whole = {}, {}, []
+    pids = {p["id"]: p for p in parts}
+    for spec in a.pick or []:
+        k, _, v = spec.partition("=")
+        if k not in pids or v not in {o["id"] for o in pids[k]["options"]}:
+            fail("pick names no part or option", 2, pick=spec)
+        pick_ids[k] = v
+    for t in a.text or []:
+        k, sep, v = t.partition("=")
+        if sep and k in pids:
+            part_words[k] = v.strip()
+        else:
+            whole.append(t)
+    text = "\n".join(whole).strip()
+    for k, v in part_words.items():
+        o = _label_to_option(pids[k], v)
+        if o:
+            pick_ids.setdefault(k, o)
+        else:
+            text = (text + "\n" if text else "") + v
     hit = words.classify(text) if text and "\n" not in text else None
     via = a.via
     if hit:
@@ -445,7 +466,11 @@ def cmd_answer(a):
                 extra["responded_at"] = row["responded_at"]
             return out(dict(ops.apply_word(ctx, a.q, w, arg, via, extra), word=wid))
     picks, raw = {}, None
-    if hit and hit[0]["id"] == "word.yes":
+    if pick_ids and set(pick_ids) == set(pids) and not text:
+        picks = pick_ids
+    elif pick_ids:
+        fail("answer every part by option id, or send the words as one answer", 1, missing=sorted(set(pids) - set(pick_ids)))
+    elif hit and hit[0]["id"] == "word.yes":
         picks = ops.rec_choice({"card": {"parts": parts}})
     elif hit and hit[0]["id"] == "word.call_it":
         picks = ops.rec_choice({"card": {"parts": parts}})
@@ -478,6 +503,11 @@ def cmd_answer(a):
 
 # ---------------------------------------------------------------- take, flip, due
 
+def cmd_later(a):
+    a.text, a.pick = ["later"], None
+    return cmd_answer(a)
+
+
 def cmd_take(a):
     ctx = ctx_for(a)
     q = ctx.q(a.q)
@@ -504,7 +534,7 @@ def cmd_flip(a):
         if len(others) != 1:
             fail("name the option with --option", 2, options=others)
         opt = others[0]
-    return out({"flipped": a.d, "decision": ops.flip_decision(ctx, qid, opt, via="grill")})
+    return out({"flipped": a.d, "decision": ops.flip_decision(ctx, qid, opt, via=a.via)})
 
 
 def _cmp(op, a, b):
@@ -573,12 +603,19 @@ def parser():
     s = add("sit", "open a sitting and push one card or batch")
     s.add_argument("--budget", type=int)
     s.add_argument("--no-open", action="store_true", help="do not raise frontier nodes")
+    s.add_argument("--via", default="grill")
     s = add("post", "lint and post a card to hearth")
     s.add_argument("q", nargs="?")
     s.add_argument("--card", help="card JSON file; raises the question and posts it")
     s = add("answer", "record an answer typed or tapped in Kiln")
     s.add_argument("q")
-    s.add_argument("--text", help="option labels one per part, or words")
+    s.add_argument("--text", action="append", help="option labels one per part, words, or PART=WORDS")
+    s.add_argument("--pick", action="append", metavar="PART=OPTION_ID")
+    s.add_argument("--stamp", type=int, help="the card's stamp; a mismatch exits 4")
+    s.add_argument("--via", default="kiln-tap")
+    s = add("later", "defer a card (same as answering the word later)")
+    s.add_argument("q")
+    s.add_argument("--stamp", type=int)
     s.add_argument("--via", default="kiln-tap")
     s = add("take", "an agent takes a question the gate allows")
     s.add_argument("q")
@@ -587,6 +624,7 @@ def parser():
     s = add("flip", "reverse a taken decision")
     s.add_argument("d")
     s.add_argument("--option")
+    s.add_argument("--via", default="grill")
     s = add("due", "deferred questions and decisions whose review fired")
     s.add_argument("--now")
     s.add_argument("--event", action="append")

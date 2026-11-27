@@ -62,6 +62,39 @@ class TestFlow(Env):
         self.assertTrue(self.records("question.answered", q2)[0]["body"]["was_recommended"])
 
 
+class TestKilnArgv(Env):
+    """The argv the Kiln plugin sends (kiln plugins/crucible/testdata/fake-crucible)."""
+
+    def posted(self, t="Which name fits?"):
+        q = self.ask(t, card(t))[1]["q"]
+        self.grill("post", q)
+        return q, self.grill("cards", "--json")[1]["cards"][-1]["stamp"]
+
+    def test_answer_by_option_id_with_stamp(self):
+        q, stamp = self.posted()
+        self.assertEqual(self.grill("answer", q, "--stamp", str(stamp + 1), "--via", "kiln-tap", "--pick", "p1=b")[0], 4)
+        self.assertEqual(self.fake("get", q)[1]["status"], "pending")
+        code, _ = self.grill("answer", q, "--stamp", str(stamp), "--via", "kiln-hold", "--pick", "p1=b")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.records("question.answered", q)[0]["via"], "kiln-hold")
+        self.assertEqual(self.fake("get", q)[1]["option_id"], "b")
+
+    def test_part_words_and_bad_pick(self):
+        q, stamp = self.posted()
+        self.assertEqual(self.grill("answer", q, "--pick", "p1=zzz")[0], 2)
+        self.assertEqual(self.grill("answer", q, "--text", "p1=Ash", "--via", "kiln-tap")[0], 0)
+        self.assertEqual(self.records("question.answered", q)[0]["body"]["picks"], {"p1": "b"})
+
+    def test_later_and_flip_via(self):
+        q, stamp = self.posted()
+        self.assertEqual(self.grill("later", q, "--stamp", str(stamp), "--via", "kiln-tap")[0], 0)
+        self.assertEqual(len(self.records("question.deferred", q)), 1)
+        t = self.ask("Which tint fits?", card("Which tint fits?", weight="benign"), weight="benign")[1]
+        self.assertEqual(self.grill("flip", t["decision"], "--via", "kiln-tap")[0], 0)
+        self.assertEqual(self.records("question.flipped")[0]["via"], "kiln-tap")
+        self.assertEqual(self.grill("sit", "--via", "kiln", "--no-open")[0], 0)
+
+
 class TestLint(Env):
     def bad(self, mutate, needle):
         c = card()
