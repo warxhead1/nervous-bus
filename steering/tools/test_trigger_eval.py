@@ -103,6 +103,16 @@ def test_budget_flag_reaches_the_cli(monkeypatch):
     assert "--max-budget-usd" in seen[0] and "2.5" in seen[0]
 
 
+def test_run_does_not_inherit_the_launching_session(monkeypatch):
+    seen = []
+    monkeypatch.setenv("CLAUDE_CODE_PLUGIN_DIRS", "/some/session/plugin")
+    monkeypatch.setattr(te.subprocess, "run", lambda cmd, **k: seen.append((cmd, k["env"])) or proc(stream("s")))
+    te.run_one(args(), "q", [], "/nonexistent")
+    cmd, env = seen[0]
+    assert "CLAUDE_CODE_PLUGIN_DIRS" not in env and "--strict-mcp-config" in cmd
+    assert env["AGENT_STEERING_HITS"] == "/nonexistent/hits.jsonl"
+
+
 @pytest.mark.parametrize("n,expect", [(3, None), (4, (4, 0)), (5, (4, 0)), (2, None)])
 def test_min_detectable(n, expect):
     got = te.min_detectable(n)

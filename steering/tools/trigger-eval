@@ -26,6 +26,7 @@ import concurrent.futures as cf
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -102,14 +103,24 @@ def parse_stream(stdout, returncode):
     return "ok", skills_called(stdout), cost
 
 
+SESSION_ENV = re.compile(r"^(CLAUDE|ANTHROPIC|AI_AGENT|ORCA|CODEX|MCP_)")
+
+
+def clean_env(base=None):
+    """The parent's env minus its agent session. Run from inside a session, CLAUDE_CODE_PLUGIN_DIRS
+    and the session's hook endpoints would load into every run and blur what was offered."""
+    return {k: v for k, v in (os.environ if base is None else base).items() if not SESSION_ENV.match(k)}
+
+
 def run_one(args, prompt, plugin_dirs, cwd, tag=""):
     cmd = [args.claude, "-p", prompt, "--model", args.model, "--max-turns", "2",
-           "--output-format", "stream-json", "--verbose", "--allowedTools", "Skill"]
+           "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--allowedTools", "Skill"]
     if args.max_cost_usd:
         cmd += ["--max-budget-usd", str(args.max_cost_usd)]
     for d in plugin_dirs:
         cmd += ["--plugin-dir", str(d)]
-    env = dict(os.environ)
+    env = clean_env()
+    env["AGENT_STEERING_HITS"] = str(Path(cwd) / "hits.jsonl")  # not the user's real hit log
     if args.config_dir:
         env["CLAUDE_CONFIG_DIR"] = args.config_dir
     try:

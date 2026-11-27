@@ -1,0 +1,5 @@
+- ledger/money.py to_cents: "0.29" gave 28 (float truncation).
+- ledger/accounts.py withdraw: withdrawing the full balance raised.
+- ledger/accounts.py transfer: a failed withdraw left dst credited.
+- ledger/report.py monthly_totals: grouped by date[:6], merging months.
+- ledger/importer.py parse_csv: dropped the last row without a trailing newline.

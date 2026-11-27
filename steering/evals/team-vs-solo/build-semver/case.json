@@ -1,0 +1,8 @@
+{"max_turns": 60, "timeout": 1500,
+ "tools": ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "Skill", "Agent", "Task", "TaskOutput"],
+ "arms": {
+  "team": {"agents": "../roles/agents.json",
+           "prefix": "You lead a team. Use the Agent tool to dispatch the planner, implementer and reviewer subagents for this task, in whatever order fits. Do not do their work yourself.\n\n"},
+  "solo": {"skills": "../roles/skills", "disallow": ["Agent", "Task"],
+           "prefix": "Work alone. Use the planner, implementer and reviewer skills (Skill tool) for this task, in whatever order fits.\n\n"}
+ }}
