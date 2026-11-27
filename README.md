@@ -81,14 +81,17 @@ git clone --recurse-submodules https://github.com/warxhead1/nervous-bus
 cd nervous-bus
 
 make doctor     # what is present / missing on this machine (py tools/setup.py doctor)
-make install    # link nervous, nbd, probe, argshape, needs-you, transcripts into ~/.local/bin
+make install    # link the CLIs into ~/.local/bin and pip-install redis + jsonschema
 ```
 
-No `make`? Run `python3 tools/setup.py install` (Windows: `py tools/setup.py install`). `install` creates `~/.config/nervous-bus/` (what `nervous setup` does), never overwrites a file that is not already a nervous-bus link, and prints the `PATH` line to add if the bin dir is not on it. `make uninstall` removes only links that point into this checkout; `make hooks` wires argshape into Claude Code; `make test` runs each test suite in its own process (`make help` lists everything).
+No `make`? Run `python3 tools/setup.py install` (Windows: `py tools/setup.py install`). `install` creates `~/.config/nervous-bus/` (what `nervous setup` does), never overwrites a file that is not already a nervous-bus link, and prints the `PATH` line to add if the bin dir is not on it. `make uninstall` removes only links that point into this checkout. `make hooks` wires argshape into Claude Code, and `make hooks AGENT=opencode` installs the opencode plugin from `agent-hooks/opencode/` (session events on `agent.opencode.session`, argshape on bash calls). `make test` runs the portable suites, each in its own process; `make test-all` runs every suite, and some of those need extra packages (textual, prometheus_client, zsh). `make help` lists everything.
+
+The shell SDK needs `bash` and `jq`; `make doctor` reports what is missing. `install` skips the pip step with `NO_DEPS=1`, and on an OS-managed Python it prints the virtualenv command to use instead.
 
 Platform notes:
 
 - **Linux / macOS:** symlinks into `~/.local/bin`.
+- **CI covers Linux only** (a self-hosted runner, plus a clean Debian and Ubuntu container: `tools/container_smoke.sh`). macOS and Windows are untested by CI.
 - **Windows:** the Python parts (`argshape`, `needs-you`, `transcripts`, `setup.py`) run natively; `install` writes `.cmd` shims into `%LOCALAPPDATA%\nervous-bus\bin`. The shell SDK (`nervous`, `nbd`, `probe`) needs bash: use WSL or Git Bash.
 
 **Supported coding agents:** Claude Code and Codex CLI transcripts are read through `adapters/transcripts`; see [docs/agent-transcripts.md](docs/agent-transcripts.md).

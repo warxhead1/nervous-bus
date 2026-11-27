@@ -21,6 +21,8 @@ Readable today (`transcripts sources`): see the registry in
 | Cursor CLI | `sources/cursor.py` | yes; the format records no tool results |
 | opencode | `sources/opencode.py` | yes, SQLite read-only (`session`, `part`) |
 
+Live hooks: `python3 tools/setup.py hooks --agent claude|opencode` (opencode plugin source: `agent-hooks/opencode/nervous-bus.js`). The other agents are read after the fact only.
+
 Findings from building them, which override the research notes below:
 
 - **Gemini CLI.** Results are at `result[0].functionResponse.response` (`output` or `error`). Shell `status` is `success` even when the program exited nonzero. The exit code is an `Exit Code: N` line in the output, and some successful calls don't have one. Denied or cancelled calls carry status `error`/`cancelled` and text such as `Tool execution denied`. JSONL metadata lines are `{"$set": {"lastUpdated": ...}}`. `~/.gemini/projects.json` (`{projects: {path: shortname}}`) maps `tmp/<name>` back to a cwd.

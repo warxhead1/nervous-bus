@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/agent.opencode.session.v1.json",
+  "title": "agent.opencode.session v1",
+  "description": "opencode session lifecycle, published by agent-hooks/opencode/nervous-bus.js through `nervous publish`. One event per opencode session.created, session.idle and session.deleted. Replaces the retired ccm.session channel.",
+  "type": "object",
+  "required": ["event", "session_id", "ts"],
+  "additionalProperties": false,
+  "properties": {
+    "event": {
+      "type": "string",
+      "enum": ["started", "idle", "ended"],
+      "description": "started = session.created, idle = session.idle (the agent finished a turn), ended = session.deleted."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "opencode session id (ses_...)."
+    },
+    "parent_session_id": {
+      "type": "string",
+      "description": "Parent session id when this is a subagent session. Absent for top-level sessions."
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Working directory of the session."
+    },
+    "title": {
+      "type": "string",
+      "description": "Session title when opencode has set one."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC time the plugin saw the event."
+    }
+  }
+}
