@@ -946,3 +946,13 @@ def test_command_judge_turns_off_steering_hit_log():
     script = 'import os,sys,json; sys.stdin.read(); print(json.dumps({"verdict": "CONFIRMED", "reason": os.environ.get("AGENT_STEERING_LOG", "unset")}))'
     judge = dr.make_command_judge(f"{sys.executable} -c '{script}'", 30)
     assert judge("claim", "page") == ("CONFIRMED", "0")
+
+
+def test_audit_rereads_claims_from_the_saved_report(tmp_path):
+    run, rdir = completed_run(tmp_path)
+    link = "[A long enough link label for the old bug](https://example.org/a)"
+    (rdir / "report.md").write_text(f"Crowds read by value as well as hue, per {link}.\n")
+    run["citations"] = [{"claim_span": link, "url": "https://example.org/a", "title": "x"}]
+    seen = []
+    dr.audit_run(run, rdir, lambda c, p: seen.append(c) or ("CONFIRMED", ""), fake_fetch({"https://example.org/a": "t"}))
+    assert len(seen) == 1 and seen[0].startswith("Crowds read by value")

@@ -702,6 +702,10 @@ def summarize(items):
 
 
 def audit_run(run, rdir, judge, fetch, log=lambda m: None, judge_cmd=""):
+    report = rdir / "report.md"
+    if report.exists():
+        # Runs recorded before #261 stored link-only claim spans; judge the report's sentences.
+        run["citations"] = extract_citations(report.read_text())
     cache, items = {}, []
     for c in run.get("citations", []):
         url = c["url"]
