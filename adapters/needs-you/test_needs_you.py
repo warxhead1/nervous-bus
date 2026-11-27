@@ -444,8 +444,9 @@ class CacheFromTranscript(unittest.TestCase):
 class _FakeHearth:
     """In-process fake Hearth /api/decisions server for integration tests."""
 
-    def __init__(self, *, reject_errand: bool = False, hang_s: float = 0.0):
+    def __init__(self, *, reject_errand: bool = False, reject_upsert: bool = False, hang_s: float = 0.0):
         self.reject_errand = reject_errand
+        self.reject_upsert = reject_upsert
         self.hang_s = hang_s
         self.decisions: dict[str, dict] = {}
         self.requests: list[tuple[str, str, dict]] = []
@@ -491,7 +492,13 @@ class _FakeHearth:
                     if parent.reject_errand and body.get("kind") == "errand":
                         self._send(400, {"error": "unsupported kind: errand"})
                         return
+                    if parent.reject_upsert and body.get("upsert"):
+                        self._send(422, {"error": "upsert not supported"})
+                        return
                     did = body.get("decision_id") or "dec-auto"
+                    if did in parent.decisions and not (body.get("upsert") and body.get("kind") == "errand"):
+                        self._send(200, parent.decisions[did])
+                        return
                     row = {
                         **body,
                         "decision_id": did,
@@ -583,10 +590,11 @@ class FakeHearthDecisions(unittest.TestCase):
         srv = _FakeHearth()
         self.addCleanup(srv.close)
         with mock.patch.dict(os.environ, {"HEARTH_API_URL": srv.url, "HEARTH_API_TOKEN": ""}):
-            # 1. Upsert with 2 bullets -> one part per bullet, kind=errand, id=ny-s1
+            # 1. Upsert with 2 bullets -> one part per bullet, kind=errand, upsert=True, id=ny-s1
             self.assertIsNone(self._run_hook("s1", "Finished build.\n\n**Needs you:**\n- merge PR #5\n- tag release"))
             row = srv.decisions["ny-s1"]
             self.assertEqual(row["kind"], "errand")
+            self.assertIs(row["upsert"], True)
             self.assertEqual(row["relay_mode"], "session_text")
             self.assertEqual(row["session_id"], "s1")
             self.assertEqual([p["label"] for p in row["parts"]], ["merge PR #5", "tag release"])
@@ -599,6 +607,7 @@ class FakeHearthDecisions(unittest.TestCase):
             # 2. Replaced block upserts the same ny-s1 id
             self.assertIsNone(self._run_hook("s1", "Updated.\n\n**Needs you:**\n- approve deploy"))
             row = srv.decisions["ny-s1"]
+            self.assertIs(row["upsert"], True)
             self.assertEqual([p["label"] for p in row["parts"]], ["approve deploy"])
             self.assertEqual(self.published.call_count, 2)
 
@@ -607,6 +616,11 @@ class FakeHearthDecisions(unittest.TestCase):
             self.assertEqual(srv.decisions["ny-s1"]["status"], "withdrawn")
             self.assertFalse((self.tmp / "sessions" / "s1.json").exists())
             self.assertEqual(self.published.call_count, 3)
+
+            # 4. Posting again after settlement reopens ny-s1 as pending via upsert:true
+            self.assertIsNone(self._run_hook("s1", "New ask.\n\n**Needs you:**\n- reopen check"))
+            self.assertEqual(srv.decisions["ny-s1"]["status"], "pending")
+            self.assertEqual([p["label"] for p in srv.decisions["ny-s1"]["parts"]], ["reopen check"])
 
     def test_offline_cache_and_replay_on_next_successful_run(self):
         # Allocate a closed port so Hearth is unreachable
@@ -701,6 +715,18 @@ class FakeHearthDecisions(unittest.TestCase):
                 self.assertTrue(ny.hearth_ack("s-fb", ["done"], ["fallback item"], "terminal"))
             self.assertEqual(len(srv.attention_acks), 1)
             self.assertIn("/api/attention/s-fb/ack?via=terminal", srv.attention_acks[0][0])
+
+    def test_upsert_422_falls_back_cleanly(self):
+        srv = _FakeHearth(reject_upsert=True)
+        self.addCleanup(srv.close)
+        with mock.patch.dict(os.environ, {"HEARTH_API_URL": srv.url, "HEARTH_API_TOKEN": "tok"}):
+            self.assertIsNone(self._run_hook("s-up422", "**Needs you:**\n- fallback on 422"))
+            cached = json.loads((self.tmp / "sessions" / "s-up422.json").read_text())
+            self.assertEqual(cached["items"], ["fallback on 422"])
+            self.assertFalse(cached.get("pending_sync", False))
+            self.assertEqual(self.published.call_count, 1)
+            rec = json.loads((self.tmp / "hook.log").read_text().splitlines()[-1])
+            self.assertEqual(rec["sync"], "fallback_kind")
 
     def test_stop_hook_latency_under_300ms_when_hearth_hanging(self):
         srv = _FakeHearth(hang_s=2.0)

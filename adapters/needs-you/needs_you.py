@@ -476,6 +476,7 @@ def entry_to_decision_payload(entry: dict) -> dict:
         "project": entry.get("project") or "unknown",
         "session_id": entry["session_id"],
         "kind": "errand",
+        "upsert": True,
         "relay_mode": "session_text",
         "title": title,
         "say": say,
