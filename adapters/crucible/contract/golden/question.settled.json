@@ -1,0 +1,14 @@
+{
+ "id": "01JD0000000000000000000022",
+ "v": 1,
+ "ts": "2026-11-27T19:14:00Z",
+ "type": "question.settled",
+ "game": "demo",
+ "by": "crucible",
+ "via": "grill",
+ "body": {
+  "q_id": "q-01JD0000000000000000000002",
+  "route": "lookup",
+  "finding": "Comparable titles average 20-minute sessions."
+ }
+}

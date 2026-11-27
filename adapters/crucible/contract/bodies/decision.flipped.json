@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "required": [
+    "d_id"
+  ],
+  "properties": {
+    "d_id": {
+      "type": "string",
+      "pattern": "^d-"
+    },
+    "q_id": {
+      "type": "string",
+      "pattern": "^q-"
+    },
+    "to": {
+      "type": "string",
+      "pattern": "^d-"
+    },
+    "via": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "type": "object",
+  "required": [
+    "label_id",
+    "edit",
+    "from",
+    "to"
+  ],
+  "properties": {
+    "label_id": {
+      "type": "string",
+      "pattern": "^lbl-"
+    },
+    "edit": {
+      "type": "string",
+      "enum": [
+        "rename",
+        "merge",
+        "split",
+        "retire",
+        "retag"
+      ]
+    },
+    "from": {
+      "type": "string"
+    },
+    "to": {
+      "type": [
+        "string",
+        "array",
+        "null"
+      ]
+    },
+    "into": {
+      "type": [
+        "string",
+        "array"
+      ]
+    },
+    "surface": {
+      "type": "string"
+    },
+    "q_id": {
+      "type": "string",
+      "pattern": "^q-"
+    },
+    "say": {
+      "type": "string"
+    }
+  }
+}

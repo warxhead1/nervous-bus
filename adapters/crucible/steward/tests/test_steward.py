@@ -105,10 +105,10 @@ class TestSync(StewardEnv):
         self.assertEqual(len(self.records("question.deferred", q2)), 1)
 
     def test_old_row_withdrawn_by_a_rename_does_not_withdraw_the_question(self):
-        self.append("label.created", {"lbl_id": "lbl-AAA", "text": "Ember"})
+        self.append("label.proposed", {"label_id": "lbl-AAA", "key": "mec.aaaa", "kind": "mechanic", "text": "Ember"})
         q = self.ask("Which name fits?", card(labels=("{{l:lbl-AAA}}", "Ash")))[1]["q"]
         self.grill("post", q)
-        self.append("label.edited", {"lbl_id": "lbl-AAA", "text": "Cinder"})
+        self.append("label.edited", {"label_id": "lbl-AAA", "edit": "rename", "from": "Ember", "to": "Cinder"})
         self.grill("post", q)
         self.sync()
         self.assertEqual(self.records("question.withdrawn", q), [])

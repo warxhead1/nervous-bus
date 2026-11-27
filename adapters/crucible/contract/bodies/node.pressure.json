@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "required": [
+    "key",
+    "dial"
+  ],
+  "properties": {
+    "key": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dial": {
+      "type": "string",
+      "enum": [
+        "up",
+        "down"
+      ]
+    }
+  }
+}

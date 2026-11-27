@@ -87,6 +87,7 @@ def _parser():
                        "or with --outbound when a question contains a registry term")
     s.add_argument("--text")
     s.add_argument("--file", help="read the text from a file; - for stdin")
+    s.add_argument("--stdin", action="store_true", help="read the text from stdin")
     s.add_argument("--outbound", action="store_true", help="vocabulary check before a question leaves for an outside service")
     s.add_argument("--times", type=int, default=2, help="replacements that make a word banned")
 
@@ -172,19 +173,34 @@ def cmd_get(a):
     return out({"count": len(items), "labels": items})
 
 
+def rename_label(led, lid, to, by=registry.OWNER, via="cli", surface=None, q_id=None):
+    """Validate and append a label.edited rename record. Returns (record, label)."""
+    records, _ = led.read()
+    labels = registry.fold_labels(records)
+    lab = _label(labels, lid)
+    _guard_lock(lab, by)
+    if to == lab["text"]:
+        raise LedgerError("new text equals the current text", 1)
+    _guard_lint(to, records, by)
+    body = {"label_id": lid, "edit": "rename", "from": lab["text"], "to": to}
+    if surface is not None:
+        body["surface"] = surface
+    if q_id is not None:
+        body["q_id"] = q_id
+    rec = led.append({"game": _game(records), "by": by, "via": via, "type": "label.edited", "body": body})
+    return rec, lab
+
+
 def cmd_edit(a):
     led = _ledger(a)
+    if a.rename is not None:
+        rec, lab = rename_label(led, a.id, a.rename, by=a.by, via=a.via, surface=a.surface, q_id=a.q_id)
+        return out({"ok": True, "edit": "rename", "record": rec["id"], "key": lab["key"], "from": lab["text"], "to": a.rename})
     records, _ = led.read()
     labels = registry.fold_labels(records)
     lab = _label(labels, a.id)
     _guard_lock(lab, a.by)
     game = _game(records)
-    if a.rename is not None:
-        if a.rename == lab["text"]:
-            raise LedgerError("new text equals the current text", 1)
-        _guard_lint(a.rename, records, a.by)
-        rec = _edit_record(led, a, game, a.id, "rename", lab["text"], a.rename, surface=a.surface, q_id=a.q_id)
-        return out({"ok": True, "edit": "rename", "record": rec["id"], "key": lab["key"], "from": lab["text"], "to": a.rename})
     if a.retag is not None:
         rec = _edit_record(led, a, game, a.id, "retag", lab["kind"], a.retag, surface=a.surface, q_id=a.q_id)
         return out({"ok": True, "edit": "retag", "record": rec["id"], "from": lab["kind"], "to": a.retag})
@@ -245,10 +261,12 @@ def cmd_lint(a):
     records, _ = led.read()
     if a.text is not None:
         text = a.text
+    elif a.stdin:
+        text = _read_text("-")
     elif a.file:
         text = _read_text(a.file)
     else:
-        raise LedgerError("pass --text or --file", 2)
+        raise LedgerError("pass --text, --file or --stdin", 2)
     if a.outbound:
         hits = registry.outbound_hits(text, registry.fold_labels(records))
         return out({"ok": not hits, "outbound": True, "terms": hits}, 1 if hits else 0)
