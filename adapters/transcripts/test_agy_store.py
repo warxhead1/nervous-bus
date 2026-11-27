@@ -1,4 +1,4 @@
-"""agy_transcripts: hand-encoded protobuf mirroring the inferred schema."""
+"""sources/agy_store: hand-encoded protobuf mirroring the inferred schema."""
 from __future__ import annotations
 
 import json
@@ -7,8 +7,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-import agy_transcripts as ag  # noqa: E402
+sys.path.insert(0, str(Path(__file__).parent))
+from sources import agy_store as ag  # noqa: E402
 
 FIX = Path(__file__).parent / "fixtures" / "agy"
 
@@ -159,3 +159,30 @@ def test_garbage_db_never_crashes(tmp_path):
     convs = list(ag.iter_conversations([str(root)]))
     assert len(convs) == 1
     assert list(ag.iter_steps(convs[0])) == []
+
+
+def test_agy_source_reads_db_store_when_no_brain_transcript(tmp_path, monkeypatch):
+    root = build(tmp_path)
+    monkeypatch.setenv("ANTIGRAVITY_CLI_HOME", str(root))
+    from sources.agy import Agy
+    src = Agy()
+    refs = {r.id: r for r in src.sessions()}
+    assert set(refs) == {"c1"}                      # c2 is opaque, never a session
+    assert refs["c1"].cwd == "/work/proj" and refs["c1"].extra["store"] == "db"
+    calls = list(src.tool_calls(refs["c1"]))
+    assert [(c.tool, c.shell, c.command) for c in calls] == [
+        ("run_command", True, "ls SENTINEL_CMD"), ("manage_task", False, "")]
+    assert calls[0].cwd == "/work/proj" and calls[0].output is None
+
+
+def test_agy_source_prefers_brain_transcript_over_db(tmp_path, monkeypatch):
+    root = build(tmp_path)
+    logs = root / "brain" / "c1" / ".system_generated" / "logs"
+    logs.mkdir(parents=True)
+    (logs / "transcript.jsonl").write_text(json.dumps(
+        {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE", "content": "",
+         "tool_calls": [{"name": "view_file", "args": {}}]}) + "\n")
+    monkeypatch.setenv("ANTIGRAVITY_CLI_HOME", str(root))
+    from sources.agy import Agy
+    refs = list(Agy().sessions())
+    assert [(r.id, r.extra.get("store")) for r in refs] == [("c1", None)]

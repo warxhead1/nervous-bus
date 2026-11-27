@@ -46,15 +46,13 @@ _TRANSCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 if _TRANSCRIPTS not in sys.path:
     sys.path.append(_TRANSCRIPTS)
 from project import project_of as _resolve_project, project_of_dirname  # noqa: E402
+from sources.codex import Codex as _Codex  # noqa: E402
 
 DEFAULT_SRC = os.path.expanduser("~/.cache/nervous-bus/reflex/transcripts")
 FALLBACK_SRC = os.path.expanduser("~/.claude/projects")
 MMX_MIRROR = os.path.join(DEFAULT_SRC, "mmx")
 MMX_LIVE = os.path.expanduser("~/.mmx/projects")
-CODEX_ROOTS = (
-    os.path.expanduser("~/.codex/sessions"),
-    os.path.expanduser("~/.config/orca/codex-accounts/*/home/sessions"),
-)
+CODEX_ROOTS = tuple(_Codex().roots())
 GEMINI_TMP = os.path.expanduser("~/.gemini/tmp")
 GEMINI_PROJECTS = os.path.expanduser("~/.gemini/projects.json")
 ALL_SOURCES = ("claude", "mmx", "codex", "gemini")

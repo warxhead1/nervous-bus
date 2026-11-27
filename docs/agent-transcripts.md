@@ -94,7 +94,7 @@ Findings from building them, which override the research notes below:
   - A 3P guide claims Gemini CLI sunsets 2026-06-18 with Antigravity CLI as successor. That is unconfirmed by official sources, but it matches this box having both trees.
 
 ### Antigravity (agy)
-Existing reader: `adapters/reflex-recorder/agy_transcripts.py`.
+Existing reader: `adapters/transcripts/sources/agy_store.py` (the SQLite store), used by `sources/agy.py` for conversations that have no brain transcript.
 - **CLI store (DISK):**
   - `~/.gemini/antigravity-cli/conversations/<id>.db` (152 present) is SQLite with protobuf blobs; `.pb` siblings are opaque.
   - NEW: `brain/<id>/.system_generated/logs/transcript.jsonl` and `transcript_full.jsonl` exist in 159 sessions (318 files).
@@ -234,7 +234,7 @@ Existing reader: `adapters/reflex-recorder/agy_transcripts.py`.
 ## What I'd try next with more budget
 1. With a shell, run `sqlite3 .tables/.schema` on `opencode-.db`, one agy `.db`, and a Cursor `store.db` to turn the 3P schema claims into DISK findings.
 2. Read opencode's `db.ts` in the correct repo, and the Qwen `chatRecordingService`, to confirm the Qwen chat format.
-3. Check `transcript.jsonl` result steps for exit-code text and fix the step-pairing rule, then add a `transcript.jsonl` reader to `agy_transcripts.py` (cross-boundary lane: `agy_transcripts.py:11,285`).
+3. Check `transcript.jsonl` result steps for exit-code text and fix the step-pairing rule, then add a `transcript.jsonl` reader to `sources/agy.py`.
 4. Fetch current Kimi, Cline, Goose, Kiro, and Copilot docs and source for hook stdin schemas, and for Windows paths for every agent marked unknown.
 5. Install-and-run probes (or find a Windows machine) for Factory, Amp, Kiro, Copilot, Qwen, and Crush to settle the contested store paths.
 

@@ -1395,7 +1395,10 @@ def rule_change_points(tree: Path) -> list[dict]:
     (the tree's baseline snapshot) is not a change point.
     """
     import subprocess
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:    # Python < 3.11
+        import tomli as tomllib
 
     rules_file = Path(tree) / "rules.toml"
     if not rules_file.exists():

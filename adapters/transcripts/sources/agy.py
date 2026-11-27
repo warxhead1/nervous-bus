@@ -9,6 +9,10 @@ Shell is `run_command` with args.CommandLine / args.Cwd. Result content reads
 "The command completed successfully." or "The command exited with code N";
 status RUNNING means the command went to a background task with no result yet.
 transcript_full.jsonl is untruncated and preferred over transcript.jsonl.
+
+Conversations that have no brain transcript are read from the SQLite store under
+conversations/<id>.db (sources/agy_store.py, which decodes the protobuf). That store
+records tool calls but no results.
 """
 from __future__ import annotations
 
@@ -17,6 +21,7 @@ import json
 import os
 import re
 
+from sources import agy_store
 from model import SessionRef, Source, ToolCall, env_path, extra_roots, home, unique
 
 SHELL_TOOLS = {"run_command"}
@@ -33,7 +38,26 @@ class Agy(Source):
         base = env_path("ANTIGRAVITY_CLI_HOME", home(), ".gemini", "antigravity-cli")
         return unique([os.path.join(base, "brain")] + extra_roots(self.name))
 
+    def store_root(self) -> str:
+        return env_path("ANTIGRAVITY_CLI_HOME", home(), ".gemini", "antigravity-cli")
+
     def sessions(self, since: float = 0.0):
+        seen = set()
+        for ref in self._brain_sessions(since):
+            seen.add(ref.id)
+            yield ref
+        for conv in agy_store.iter_conversations([self.store_root()]):
+            if conv.id in seen or conv.kind_of_store != "sqlite" or not conv.decodable:
+                continue
+            try:
+                mt = os.path.getmtime(conv.path)
+            except OSError:
+                continue
+            if mt >= since:
+                yield SessionRef(self.name, conv.id, conv.path, mt, cwd=conv.workspace or "",
+                                 extra={"store": "db", "model": conv.model or ""})
+
+    def _brain_sessions(self, since):
         for root in self.roots():
             for d in glob.glob(os.path.join(root, "*", ".system_generated", "logs")):
                 for fname in ("transcript_full.jsonl", "transcript.jsonl"):
@@ -51,6 +75,9 @@ class Agy(Source):
                     yield SessionRef(self.name, sid, path, mt, extra={"full": fname == "transcript_full.jsonl"})
 
     def tool_calls(self, ref: SessionRef):
+        if ref.extra.get("store") == "db":
+            yield from self._db_tool_calls(ref)
+            return
         rows = []
         with open(ref.path, errors="ignore") as f:
             for line in f:
@@ -82,6 +109,16 @@ class Agy(Source):
                     _apply_result(tc, results[k])
                 yield tc
             i = j
+
+
+    def _db_tool_calls(self, ref: SessionRef):
+        conv = agy_store.Conversation(ref.id, agy_store.SRC_CLI, ref.path)
+        for st in agy_store.iter_steps(conv):
+            if st.kind != "tool_call" or not st.tool:
+                continue
+            shell = st.tool in SHELL_TOOLS and bool(st.command)
+            yield ToolCall(self.name, ref.id, f"{st.idx}:{st.tool}", st.tool, {}, ts=st.timestamp or "",
+                           cwd=ref.cwd if shell else "", shell=shell, command=st.command or "")
 
 
 def _apply_result(tc: ToolCall, step: dict) -> None:

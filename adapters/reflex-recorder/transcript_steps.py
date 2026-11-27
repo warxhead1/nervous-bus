@@ -59,10 +59,10 @@ def parse_ts(value) -> Optional[float]:
     v = value.strip()
     if v.endswith("Z"):
         v = v[:-1] + "+00:00"
-    # Python <3.11 fromisoformat rejects >6 fractional digits (the bus stamps ns).
+    # Python <3.11 fromisoformat accepts only 3 or 6 fractional digits (the bus stamps ns).
     m = re.match(r"^(.*T\d\d:\d\d:\d\d)(\.\d+)?(.*)$", v)
-    if m and m.group(2) and len(m.group(2)) > 7:
-        v = m.group(1) + m.group(2)[:7] + m.group(3)
+    if m and m.group(2):
+        v = m.group(1) + "." + m.group(2)[1:7].ljust(6, "0") + m.group(3)
     try:
         return datetime.fromisoformat(v).timestamp()
     except ValueError:

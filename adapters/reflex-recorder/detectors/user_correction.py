@@ -577,11 +577,15 @@ def _iter_claude_mid_flight(path: Path) -> Iterator[tuple[float, str]]:
 def _parse_iso_ts(value: str) -> Optional[float]:
     """Parse an RFC3339 timestamp (with or without fractional seconds) to a
     unix epoch float. Returns None on any parse failure."""
+    import re
     from datetime import datetime
 
     v = value.strip()
     if v.endswith("Z"):
         v = v[:-1] + "+00:00"
+    m = re.match(r"^(.*T\d\d:\d\d:\d\d)(\.\d+)?(.*)$", v)    # Python < 3.11: 3 or 6 digits only
+    if m and m.group(2):
+        v = m.group(1) + "." + m.group(2)[1:7].ljust(6, "0") + m.group(3)
     try:
         return datetime.fromisoformat(v).timestamp()
     except ValueError:

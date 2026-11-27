@@ -176,3 +176,52 @@ def test_install_dry_run_writes_nothing(tmp_path):
                         "--dry-run"], capture_output=True, text=True)
     assert p.returncode == 0
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin", "win32"])
+def test_doctor_data_with_platform_patched(monkeypatch, tmp_path, platform):
+    """Runs the doctor logic as if on each OS. Real Windows and macOS runs are not covered by CI."""
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setattr(S, "find_bash", lambda: None)
+    d = S.doctor_data(tmp_path / "bin")
+    assert d["platform"] == platform
+    if platform == "win32":
+        assert d["ok"] or not any("bash" in p or "jq" in p for p in d["problems"])
+        assert any("WSL or Git Bash" in w for w in d["warnings"])
+        assert all(c["path"].endswith(".cmd") for c in d["clis"].values())
+    else:
+        assert any("bash not found" in p for p in d["problems"])
+        assert not any(c["path"].endswith(".cmd") for c in d["clis"].values())
+
+
+@pytest.mark.parametrize("platform,expect", [("darwin", "export PATH="), ("linux", "export PATH="), ("win32", "setx PATH")])
+def test_path_hint_per_platform(platform, expect):
+    assert S.path_hint(Path("/x/bin"), platform).startswith(expect)
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_install_and_remove_cli_per_platform(monkeypatch, tmp_path, platform):
+    monkeypatch.setattr(sys, "platform", platform)
+    win = platform == "win32"
+    if not win and not hasattr(os, "symlink"):
+        pytest.skip("no symlinks")
+    r = S.install_one("transcripts", tmp_path, windows=win, bash="bash")
+    assert r["action"] == "linked"
+    assert (tmp_path / ("transcripts.cmd" if win else "transcripts")).exists()
+    assert S.uninstall_one("transcripts", tmp_path, windows=win)["action"] == "removed"
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_transcript_roots_per_platform(monkeypatch, tmp_path, platform):
+    sys.path.insert(0, str(S.REPO / "adapters" / "transcripts"))
+    from sources import SOURCES
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    roots = SOURCES["opencode"].roots()
+    assert all(isinstance(r, str) and r for r in roots)
+    want = str(tmp_path / ("Local" if platform == "win32" else "Library"))
+    assert any(r.startswith(want) for r in roots)
