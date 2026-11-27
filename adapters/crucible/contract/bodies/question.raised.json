@@ -1,0 +1,81 @@
+{
+  "type": "object",
+  "required": [
+    "q_id",
+    "ask",
+    "class",
+    "door",
+    "weight",
+    "end"
+  ],
+  "properties": {
+    "q_id": {
+      "type": "string",
+      "pattern": "^q-"
+    },
+    "ask": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "class": {
+      "type": "string",
+      "enum": [
+        "fact",
+        "measurable",
+        "lead",
+        "owner",
+        "money"
+      ]
+    },
+    "orig_class": {
+      "type": "string"
+    },
+    "door": {
+      "type": "string",
+      "enum": [
+        "one-way",
+        "two-way"
+      ]
+    },
+    "weight": {
+      "type": "string",
+      "enum": [
+        "outcome-critical",
+        "divergent",
+        "benign"
+      ]
+    },
+    "radius": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "gate": {
+      "type": "string"
+    },
+    "end": {
+      "type": "string",
+      "enum": [
+        "lookup",
+        "lab",
+        "lead_take",
+        "owner_take",
+        "card_batch",
+        "card_alone"
+      ]
+    },
+    "node": {
+      "type": "string"
+    },
+    "guard": {
+      "type": "string"
+    },
+    "clause": {
+      "type": "string"
+    },
+    "card": {
+      "type": "object"
+    }
+  }
+}

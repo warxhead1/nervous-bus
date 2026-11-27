@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "required": [
+    "sit_id",
+    "budget",
+    "qs"
+  ],
+  "properties": {
+    "sit_id": {
+      "type": "string",
+      "pattern": "^sit-"
+    },
+    "budget": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "qs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
