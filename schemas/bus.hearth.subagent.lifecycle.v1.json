@@ -24,7 +24,7 @@
     },
     "agent_kind": {
       "type": "string",
-      "enum": ["host_claude_code", "host_codex"],
+      "enum": ["host_claude_code", "host_codex", "host_subagent", "host_hearthloom", "antigravity-cli"],
       "description": "Host-side agent runtime kind."
     },
     "agent_id": {
