@@ -228,6 +228,18 @@ class TestInferAbandon(unittest.TestCase):
         outcome, source = _infer_from_behavior(run, events, verbose=False)
         self.assertEqual(outcome, "abandoned")
 
+    def test_failed_terminal_status_without_commit_is_abandoned(self):
+        run = _make_run(close_reason="ended", event_count=4)
+        events = [_read(), _read(), {"event": "ended", "status": "failed"}]
+        outcome, _ = _infer_from_behavior(run, events, verbose=False)
+        self.assertEqual(outcome, "abandoned")
+
+    def test_completed_terminal_status_is_not_abandoned(self):
+        run = _make_run(close_reason="ended", event_count=4)
+        events = [_read(), _read(), {"event": "ended", "status": "completed"}]
+        outcome, _ = _infer_from_behavior(run, events, verbose=False)
+        self.assertIsNone(outcome)
+
     def test_recorder_shutdown_no_resolving_not_abandoned(self):
         """B1 fix: recorder_shutdown is operational, NOT semantic.
         Must never produce 'abandoned' — that's the B1 blocker fix."""

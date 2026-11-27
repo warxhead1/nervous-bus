@@ -565,6 +565,13 @@ class TestEndedNeverOpensARun(unittest.TestCase):
         self.assertTrue(self.seg.ingest(_activity(event="ended")))
         self.assertEqual([r["close_reason"] for r in self.closed], ["ended"])
 
+    def test_terminal_status_lands_in_run_features(self):
+        self.seg.ingest(_activity(event="tool_call"))
+        end = _activity(event="ended")
+        end["status"] = "failed"
+        self.seg.ingest(end)
+        self.assertEqual(self.closed[0]["features"]["terminal_status"], "failed")
+
     def test_second_ended_after_close_is_absorbed(self):
         self.seg.ingest(_activity(event="tool_call"))
         self.seg.ingest(_activity(event="ended"))

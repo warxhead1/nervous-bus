@@ -801,6 +801,9 @@ def _infer_corrected(events: list[dict]) -> Optional[tuple[str, str]]:
     return None
 
 
+_FAILED_TERMINAL_STATUSES = frozenset({"failed", "cancelled"})
+
+
 def _infer_from_behavior(
     run: dict,
     events: list[dict],
@@ -894,6 +897,15 @@ def _infer_from_behavior(
 
     if is_thrashed:
         return "thrashed", "behavior_inference"
+
+    # A dispatched subagent that reported failed/cancelled and left no commit
+    # ended without delivering; the idle-timeout rule below never sees it
+    # because the terminal closes the run as 'ended'.
+    terminal_status = next(
+        (ev.get("status") for ev in reversed(events) if ev.get("event") == "ended"), None
+    )
+    if terminal_status in _FAILED_TERMINAL_STATUSES and not has_commit:
+        return "abandoned", "behavior_inference"
 
     # ABANDON check
     # B1: exclude recorder_shutdown; only idle_timeout qualifies.
