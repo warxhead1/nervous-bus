@@ -28,7 +28,7 @@ Each piece below works alone. Nothing here needs Claude Code, and nothing needs 
 
 > # keep-moving
 >
-> A wait is never the only thing happening: name the independent work that can run now and start it. One blocked item does not block the rest. Any status carries the clock: elapsed, the cap, what happens at the cap.
+> A wait is never the only thing happening: start any slow build in the background (`run_in_background: true` or `&`) and immediately work on the independent open items while it runs—do not wait for the build to finish first. One blocked item does not block the rest. Any status carries the clock: elapsed, the cap, what happens at the cap.
 >
 > If the user asked for the outcome, the steps toward it are approved. Ask only when the choice is theirs: money, scope, policy, or something hard to undo. Do not hand back a step you can do.
 >
@@ -41,7 +41,7 @@ Each piece below works alone. Nothing here needs Claude Code, and nothing needs 
 | check | what it takes | effect | event and matcher | off |
 |---|---|---|---|---|
 | [`rerun-guard`](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/keep-moving/hooks/rerun-guard) | One JSON object on stdin, as Claude Code sends to a hook. `session_id`, `hook_event_name`, `tool_name` (Bash) and `tool_input.command`. Exit 0 allows. Exit 2 means the same command ran twice already with no edit between, with the message on stderr. Bad input or a kill switch always exits 0. | block | PreToolUse (counts) and PostToolUse (resets on an edit) on Bash; Write\|Edit\|MultiEdit | `RERUN_GUARD_DISABLE=1` |
-| [`cue`](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/keep-moving/hooks/cue) | One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0. Keep with it: `cues.json`. | context | UserPromptSubmit | `STEERING_CUES_DISABLE=1` |
+| [`cue`](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/keep-moving/hooks/cue) | One JSON object on stdin with `prompt` (UserPromptSubmit) or `tool_name`/`tool_input`/`tool_response` (PostToolUse). Prints the rule on stdout (or `hookSpecificOutput.additionalContext` JSON on PostToolUse) when `cues.json` matches, nothing otherwise. Always exits 0. Keep with it: `cues.json`. | context | PostToolUse; UserPromptSubmit on Bash\|Read | `STEERING_CUES_DISABLE=1` |
 
 **Ready-made hook config** (set `STEERING_HOME`, see the harness page): [claude-code](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/claude-code/keep-moving.settings.json), [codex](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/codex/keep-moving.hooks.json), [gemini](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/gemini/keep-moving.settings.json), [kiro](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/kiro/keep-moving.json), [omp/post](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/keep-moving.post.ts), [omp/pre](https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/keep-moving.pre.ts).
 

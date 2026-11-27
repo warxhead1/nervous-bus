@@ -24,6 +24,17 @@
       "matcher": "write"
     },
     {
+      "name": "keep-moving-cue-PostToolUse",
+      "trigger": "PostToolUse",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event PostToolUse \"$STEERING_HOME/keep-moving/hooks/cue\""
+      },
+      "timeout": 5,
+      "enabled": true,
+      "matcher": "shell|read"
+    },
+    {
       "name": "keep-moving-cue-UserPromptSubmit",
       "trigger": "UserPromptSubmit",
       "action": {

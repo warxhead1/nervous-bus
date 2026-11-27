@@ -127,3 +127,25 @@ def test_shim_wraps_cue_text_as_json_for_gemini(tmp_path):
                        input=json.dumps({"prompt": prompt}), capture_output=True, text=True)
     out = json.loads(r.stdout)
     assert out["hookSpecificOutput"]["additionalContext"].startswith("[keep-moving]")
+
+
+def test_shim_handles_post_tool_use_cues_for_gemini_and_codex(tmp_path):
+    shim = ST / "adapters" / "shim"
+    cue = ST / "evidence-before-done" / "hooks" / "cue"
+    ev = {"hook_event_name": "AfterTool", "tool_name": "run_shell_command",
+          "tool_input": {"command": "pytest"}, "tool_response": {"stdout": "FAILED tests/test_a.py::test_x\n1 failed"}}
+    r = subprocess.run([sys.executable, str(shim), "--harness", "gemini", "--event", "PostToolUse", str(cue)],
+                       input=json.dumps(ev), capture_output=True, text=True)
+    assert r.returncode == 0
+    out = json.loads(r.stdout)
+    assert out["hookSpecificOutput"]["hookEventName"] == "AfterTool"
+    assert "[evidence-before-done]" in out["hookSpecificOutput"]["additionalContext"]
+
+    ev_codex = {"hook_event_name": "PostToolUse", "tool_name": "Bash",
+                "tool_input": {"command": "pytest"}, "tool_output": "1 failed in 0.1s"}
+    r2 = subprocess.run([sys.executable, str(shim), "--harness", "codex", "--event", "PostToolUse", str(cue)],
+                        input=json.dumps(ev_codex), capture_output=True, text=True)
+    assert r2.returncode == 0
+    out2 = json.loads(r2.stdout)
+    assert out2["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
+    assert "[evidence-before-done]" in out2["hookSpecificOutput"]["additionalContext"]

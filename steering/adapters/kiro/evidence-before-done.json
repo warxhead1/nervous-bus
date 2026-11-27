@@ -13,6 +13,17 @@
       "matcher": "write"
     },
     {
+      "name": "evidence-before-done-cue-PostToolUse",
+      "trigger": "PostToolUse",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event PostToolUse \"$STEERING_HOME/evidence-before-done/hooks/cue\""
+      },
+      "timeout": 5,
+      "enabled": true,
+      "matcher": "shell"
+    },
+    {
       "name": "evidence-before-done-cue-UserPromptSubmit",
       "trigger": "UserPromptSubmit",
       "action": {

@@ -2,7 +2,7 @@
 import re
 
 WORK = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
-DONE = re.compile(r"BUILD OK")
+DONE = re.compile(r"(?m)^BUILD OK\b|Background command .*completed")
 
 
 def grade(ctx):
