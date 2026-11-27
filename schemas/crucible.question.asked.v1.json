@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/crucible.question.asked.v1.json",
+  "title": "crucible.question.asked v1",
+  "description": "A design question was posted to the owner. Ids, enums, counts and timings only: no question or label text rides the bus. A consumer that needs text reads the ledger.",
+  "type": "object",
+  "required": [
+    "game",
+    "question_id",
+    "sitting_id",
+    "mode",
+    "class",
+    "door",
+    "weight",
+    "parts"
+  ],
+  "properties": {
+    "game": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,47}$"
+    },
+    "question_id": {
+      "type": "string",
+      "pattern": "^q-[0-9A-HJKMNP-TV-Z]{26}(\\.[0-9]+)?$"
+    },
+    "sitting_id": {
+      "type": "string",
+      "pattern": "^sit-[0-9A-HJKMNP-TV-Z]{26}(\\.[0-9]+)?$"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "fork",
+        "batch",
+        "duel",
+        "feel-test",
+        "name",
+        "rule",
+        "bet",
+        "challenge"
+      ]
+    },
+    "class": {
+      "type": "string",
+      "enum": [
+        "fact",
+        "measurable",
+        "lead",
+        "owner",
+        "money"
+      ]
+    },
+    "door": {
+      "type": "string",
+      "enum": [
+        "one-way",
+        "two-way"
+      ]
+    },
+    "weight": {
+      "type": "string",
+      "enum": [
+        "outcome-critical",
+        "divergent",
+        "benign"
+      ]
+    },
+    "parts": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 8
+    }
+  },
+  "additionalProperties": false
+}
