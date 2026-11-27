@@ -14,13 +14,13 @@ te = importlib.util.module_from_spec(importlib.util.spec_from_loader("trigger_ev
 loader.exec_module(te)
 
 
-def stream(skill=None, cost=0.01, is_error=False, with_result=True):
+def stream(skill=None, cost=0.01, is_error=False, with_result=True, subtype=None):
     lines = []
     if skill:
         lines.append(json.dumps({"type": "assistant", "message": {"content": [
             {"type": "tool_use", "name": "Skill", "input": {"skill": skill}}]}}))
     if with_result:
-        lines.append(json.dumps({"type": "result", "is_error": is_error, "total_cost_usd": cost}))
+        lines.append(json.dumps({"type": "result", "is_error": is_error, "total_cost_usd": cost, "subtype": subtype}))
     return "\n".join(lines)
 
 
@@ -61,6 +61,14 @@ def test_empty_stream_with_zero_exit_is_an_error(monkeypatch):
 def test_result_is_error_is_an_error(monkeypatch):
     rows, _ = run(monkeypatch, [proc(stream(is_error=True))])
     assert rows[0]["status"] == "error"
+
+
+def test_running_out_of_turns_after_the_skill_call_is_a_pass_not_an_error(monkeypatch):
+    rows, _ = run(monkeypatch, [proc(stream("s", is_error=True, subtype="error_max_turns"), rc=1),
+                                proc(stream(is_error=True, subtype="error_max_turns"), rc=1)])
+    by = {r["prompt"]: r for r in rows}
+    assert (by["p0"]["status"], by["p0"]["hit"]) == ("pass", True)
+    assert (by["p1"]["status"], by["p1"]["hit"]) == ("miss", False)
 
 
 def test_timeout_is_recorded(monkeypatch):

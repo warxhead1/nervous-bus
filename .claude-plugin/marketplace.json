@@ -49,6 +49,11 @@
       "name": "ub-mode",
       "source": "./steering/ub-mode",
       "description": "Make it work, then make it right, measured. Skill, and `ub-gate`: unclebob's crapper, dryer, and mutator, pinned, hash-locked, and run with no network."
+    },
+    {
+      "name": "grill",
+      "source": "./steering/grill",
+      "description": "Hard questions, not many: a design question goes to the ledger, and only taste, money or direction reaches the owner. Skill, a cue, and a guard against a raw hearth-ask post."
     }
   ]
 }

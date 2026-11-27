@@ -1,0 +1,6 @@
+[
+  {"pattern": "\\bgrill (me|us)\\b",
+   "say": "[grill] \"Grill me\" means hard questions, not many. Start with `crucible grill work` for the subtree named, and post only the cards where a wrong guess costs more than the owner's attention. Load the grill skill."},
+  {"pattern": "\\b(open |unresolved |unsettled )?design (question|decision|choice|call)s?\\b|\\b(should|shall|whether) (the|our|this) (game|player|crew|enemy|enemies|economy|mechanic|loop|level|boss|tile|resource|art style|ui|hud)\\b|\\bwhich (core loop|mechanic|resource|pillar|art style|economy|difficulty curve)\\b|\\b(core loop|pillars?|game feel|difficulty curve|art direction)\\b.*\\b(decide|choose|pick|settle|unsure|undecided|not sure)\\b|\\b(ask|check with|run it by) the owner\\b.*\\b(design|mechanic|art|game|economy|name)\\b",
+   "say": "[grill] An open design question goes to `crucible grill ask`. Do not guess it, and do not ask it in chat or in a Needs-you bullet: that answer never reaches the ledger. Only taste, money or direction reaches the owner. Load the grill skill."}
+]
