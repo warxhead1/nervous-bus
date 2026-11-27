@@ -989,6 +989,75 @@
       ]
     },
     {
+      "id": "grill/check/ledgered-ask-guard",
+      "kind": "check",
+      "plugin": "grill",
+      "path": "steering/grill/hooks/ledgered-ask-guard",
+      "purpose": "Block a raw `hearth-ask post` with no `q-<ulid>` id in a repo that has a crucible ledger.",
+      "effect": "block",
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "kill_switch": "LEDGERED_ASK_GUARD_DISABLE=1",
+      "input": "One JSON object on stdin, as Claude Code sends to a hook. `tool_name` (Bash) and `tool_input.command`. Exit 0 allows. Exit 2 means the post has no ledger id, so its answer never reaches the ledger; the message names `crucible grill ask`, with the message on stderr. Bad input or a kill switch always exits 0.",
+      "requires": [],
+      "smoke": {
+        "files": {
+          "design/ledger/.keep": ""
+        },
+        "steps": [
+          {
+            "stdin": {
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "hearth-ask post --project game --title Name --option a:A"
+              }
+            },
+            "exit": 2
+          },
+          {
+            "stdin": {
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "hearth-ask post --project game --title Name --option a:A --id q-01JD0000000000000000000002"
+              }
+            },
+            "exit": 0
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/grill/hooks/ledgered-ask-guard"
+    },
+    {
+      "id": "grill/check/cue",
+      "kind": "check",
+      "plugin": "grill",
+      "path": "steering/grill/hooks/cue",
+      "purpose": "Say the rule when the prompt calls for it.",
+      "effect": "context",
+      "event": "UserPromptSubmit",
+      "matcher": null,
+      "kill_switch": "STEERING_CUES_DISABLE=1",
+      "input": "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
+      "requires": [
+        "steering/grill/hooks/cues.json"
+      ],
+      "smoke": {
+        "steps": [
+          {
+            "stdin": {
+              "prompt": "Grill me on the economy before we build anything."
+            },
+            "exit": 0,
+            "stdout_contains": "[grill]"
+          }
+        ]
+      },
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/grill/hooks/cue",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/grill/hooks/cues.json"
+      ]
+    },
+    {
       "id": "adapter/shim",
       "kind": "adapter",
       "plugin": null,
@@ -1070,6 +1139,15 @@
       "purpose": "Hook config that runs the falsify-your-gate checks in Claude Code.",
       "requires": [],
       "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/claude-code/falsify-your-gate.settings.json"
+    },
+    {
+      "id": "adapter/claude-code/grill",
+      "kind": "adapter",
+      "plugin": "grill",
+      "path": "steering/adapters/claude-code/grill.settings.json",
+      "purpose": "Hook config that runs the grill checks in Claude Code.",
+      "requires": [],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/claude-code/grill.settings.json"
     },
     {
       "id": "adapter/claude-code/human-attention",
@@ -1158,6 +1236,20 @@
         "steering/adapters/shim"
       ],
       "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/codex/falsify-your-gate.hooks.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/codex/grill",
+      "kind": "adapter",
+      "plugin": "grill",
+      "path": "steering/adapters/codex/grill.hooks.json",
+      "purpose": "Hook config that runs the grill checks in Codex CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/codex/grill.hooks.json",
       "require_urls": [
         "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
       ]
@@ -1289,6 +1381,20 @@
       ]
     },
     {
+      "id": "adapter/gemini/grill",
+      "kind": "adapter",
+      "plugin": "grill",
+      "path": "steering/adapters/gemini/grill.settings.json",
+      "purpose": "Hook config that runs the grill checks in Gemini CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/gemini/grill.settings.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
       "id": "adapter/gemini/human-attention",
       "kind": "adapter",
       "plugin": "human-attention",
@@ -1415,6 +1521,20 @@
       ]
     },
     {
+      "id": "adapter/kiro/grill",
+      "kind": "adapter",
+      "plugin": "grill",
+      "path": "steering/adapters/kiro/grill.json",
+      "purpose": "Hook config that runs the grill checks in Kiro CLI.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/kiro/grill.json",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
       "id": "adapter/kiro/human-attention",
       "kind": "adapter",
       "plugin": "human-attention",
@@ -1536,6 +1656,20 @@
         "steering/adapters/shim"
       ],
       "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/falsify-your-gate.post.ts",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/omp/grill/pre",
+      "kind": "adapter",
+      "plugin": "grill",
+      "path": "steering/adapters/omp/grill.pre.ts",
+      "purpose": "Hook config that runs the grill checks in oh-my-pi.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/grill.pre.ts",
       "require_urls": [
         "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
       ]
