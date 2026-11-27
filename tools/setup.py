@@ -6,8 +6,8 @@ Stdlib only, Python >= 3.9, Linux + macOS + Windows.  No make required:
     python3 tools/setup.py doctor [--json] [--strict]
     python3 tools/setup.py install [--bin-dir DIR] [--dry-run]
     python3 tools/setup.py uninstall [--bin-dir DIR] [--dry-run]
-    python3 tools/setup.py hooks [--agent claude] [--dry-run]
-    python3 tools/setup.py test [--list] [SUITE ...]
+    python3 tools/setup.py hooks [--agent claude|opencode] [--dry-run] [--remove]
+    python3 tools/setup.py test [--list] [SUITE ... | all]   (default: the portable suites)
     python3 tools/setup.py schemas
 
 On Windows use `py tools/setup.py ...`.  The Makefile is a thin wrapper over this file.
@@ -259,6 +259,8 @@ def doctor_data(bin_dir: Path | None = None) -> dict:
     missing = [d for d, ok in deps.items() if not ok]
     if missing:
         problems.append("missing python deps: " + ", ".join(missing))
+    if bash and not win and not shutil.which("jq"):
+        problems.append("jq not found (the shell SDK builds envelopes with it): apt/brew install jq")
     if not bash:
         msg = "bash not found (shell SDK needs it)" + (": use WSL or Git Bash" if win else "")
         (warnings if win else problems).append(msg)
@@ -321,6 +323,29 @@ def cmd_doctor(args) -> int:
 
 # ---------------------------------------------------------------- install / uninstall
 
+def install_deps(args) -> None:
+    """pip-install missing python deps.  Never fatal: the CLIs degrade to file-only delivery without them."""
+    missing = [d for d, ok in py_deps().items() if not ok]
+    if not missing or args.no_deps:
+        return
+    cmd = [sys.executable, "-m", "pip", "install", "--quiet", *missing]
+    if args.dry_run:
+        print("would run: " + " ".join(cmd))
+        return
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode == 0:
+        print("python deps installed: " + ", ".join(missing))
+        return
+    managed = "externally-managed" in (p.stderr or "")
+    print("python deps NOT installed: " + ", ".join(missing))
+    if managed:
+        print("  this python is managed by the OS. Use a virtualenv, then rerun install with it:\n"
+              f"  {sys.executable} -m venv ~/.venvs/nbus && ~/.venvs/nbus/bin/python tools/setup.py install")
+    else:
+        print("  " + " ".join(cmd))
+    print("  without them `nervous publish` writes the local log only (no Redis, no schema validation)")
+
+
 def cmd_install(args) -> int:
     win = is_windows()
     bin_dir = Path(args.bin_dir).expanduser() if args.bin_dir else default_bin_dir()
@@ -335,7 +360,8 @@ def cmd_install(args) -> int:
         print(f"{r['action']:<28} {r['name']:<16} {r['dest']}")
     if not on_path(bin_dir):
         print(f"\n{bin_dir} is not on PATH.  Add it:\n  {path_hint(bin_dir)}")
-    home = os.environ.get("NERVOUS_HOME") or str(Path.home() / ".config" / "nervous-bus")
+    install_deps(args)
+    home =os.environ.get("NERVOUS_HOME") or str(Path.home() / ".config" / "nervous-bus")
     if bash and not win:
         if args.dry_run:
             print(f"would run: bash sdk/shell/nervous setup  (creates {home})")
@@ -364,10 +390,49 @@ def cmd_uninstall(args) -> int:
 
 # ---------------------------------------------------------------- hooks
 
+def opencode_plugin_dir() -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "opencode" / "plugins"
+
+
+def install_opencode_plugin(dest_dir: Path, *, repo: Path = REPO, dry_run: bool = False,
+                            remove: bool = False) -> dict:
+    """Copy agent-hooks/opencode/nervous-bus.js into opencode's plugin dir (copy, not link: Windows)."""
+    src = repo / "agent-hooks" / "opencode" / "nervous-bus.js"
+    dest = dest_dir / "nervous-bus.js"
+    res = {"src": str(src), "dest": str(dest)}
+    if remove:
+        if dest.exists():
+            res["action"] = "would remove" if dry_run else "removed"
+            if not dry_run:
+                dest.unlink()
+        else:
+            res["action"] = "absent"
+        return res
+    if dest.exists() and dest.read_bytes() == src.read_bytes():
+        res["action"] = "unchanged"
+        return res
+    res["action"] = "would install" if dry_run else ("updated" if dest.exists() else "installed")
+    if not dry_run:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dest)
+    return res
+
+
 def cmd_hooks(args) -> int:
     report = agent_report()
+    if args.agent == "opencode":
+        r = install_opencode_plugin(Path(args.plugin_dir) if args.plugin_dir else opencode_plugin_dir(),
+                                    dry_run=args.dry_run, remove=args.remove)
+        print(f"{r['action']:<16} {r['dest']}")
+        if not args.remove:
+            if not shutil.which("argshape"):
+                print("note: argshape is not on PATH; run `install` first, or set ARGSHAPE_BIN for opencode")
+            if not shutil.which("nervous"):
+                print("note: nervous is not on PATH; session events are not published until it is")
+        return 0
     if args.agent == "claude":
-        cmd = [sys.executable, str(script_path("argshape")), "install"]
+        cmd = [sys.executable, str(script_path("argshape")), "uninstall" if args.remove else "install"]
         if args.dry_run:
             print("would run: " + " ".join(cmd))
             return 0
@@ -408,22 +473,46 @@ def discover_suites(repo: Path = REPO) -> dict:
     return suites
 
 
+# Suites that need only python, pytest, jq and bash.  Everything else (textual dashboards, the
+# prometheus exporter, zsh status bars, live /proc sampling) needs extra packages or programs.
+PORTABLE = ("transcripts", "argshape", "needs-you", "reflex-recorder", "tests", "steering")
+
+
+def portable_targets(suites: dict, repo: Path = REPO) -> dict:
+    """name -> list of pytest path args for the portable set."""
+    out = {n: [str(suites[n])] for n in PORTABLE if n in suites}
+    if sys.version_info < (3, 11):
+        out.pop("reflex-recorder", None)    # steering_audit.py and guidance_watch.py import tomllib
+    if (repo / "steering").is_dir():
+        out["steering"] = [str(repo / "steering")]
+    tools = sorted(str(f) for f in (repo / "tools").glob("test_*.py"))
+    if tools:
+        out["tools"] = tools
+    return out
+
+
 def cmd_test(args) -> int:
     suites = discover_suites()
     if args.list:
+        port = portable_targets(suites)
         for n, d in suites.items():
-            print(f"{n}\t{d.relative_to(REPO).as_posix()}")
+            print(f"{n}\t{d.relative_to(REPO).as_posix()}\t{'portable' if n in port else 'extra deps'}")
         return 0
-    want = args.suite or list(suites)
-    unknown = [w for w in want if w not in suites]
-    if unknown:
-        print(f"unknown suite(s): {', '.join(unknown)}; try --list", file=sys.stderr)
-        return 2
+    if args.suite == ["all"]:
+        targets = {n: [str(d)] for n, d in suites.items()}
+    elif args.suite:
+        unknown = [w for w in args.suite if w not in suites and w != "steering"]
+        if unknown:
+            print(f"unknown suite(s): {', '.join(unknown)}; try --list", file=sys.stderr)
+            return 2
+        port = portable_targets(suites)
+        targets = {n: port.get(n) or [str(suites[n])] for n in args.suite}
+    else:
+        targets = portable_targets(suites)
     results = {}
-    for n in want:
+    for n, paths in targets.items():
         print(f"=== {n}", flush=True)
-        p = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(suites[n])],
-                           cwd=REPO)
+        p = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *paths], cwd=REPO)
         results[n] = p.returncode
     print("\nsummary:")
     for n, rc in results.items():
@@ -468,10 +557,14 @@ def build_parser() -> argparse.ArgumentParser:
         s = sub.add_parser(name, help=f"{name} CLIs in a user bin dir")
         s.add_argument("--bin-dir")
         s.add_argument("--dry-run", action="store_true")
+        if name == "install":
+            s.add_argument("--no-deps", action="store_true", help="skip pip install of missing python modules")
         s.set_defaults(fn=fn)
     s = sub.add_parser("hooks", help="wire live hooks into a coding agent")
-    s.add_argument("--agent", default="claude")
+    s.add_argument("--agent", default="claude", help="claude | opencode")
     s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--remove", action="store_true", help="unwire instead of wiring")
+    s.add_argument("--plugin-dir", help="opencode plugin dir (default: <XDG config>/opencode/plugins)")
     s.set_defaults(fn=cmd_hooks)
     s = sub.add_parser("schemas", help="validate schemas/*.json as Draft 2020-12")
     s.set_defaults(fn=cmd_schemas)

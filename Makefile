@@ -11,16 +11,16 @@ help: ## Show this help
 doctor: ## Check python, bash, redis, deps, coding agents, installed CLIs
 	@$(SETUP) doctor
 
-install: ## Link CLIs into ~/.local/bin (BIN_DIR=... to override; DRY=1 to preview)
-	@$(SETUP) install $(if $(BIN_DIR),--bin-dir $(BIN_DIR)) $(if $(DRY),--dry-run)
+install: ## Link CLIs into ~/.local/bin, pip-install deps (BIN_DIR=..., NO_DEPS=1, DRY=1)
+	@$(SETUP) install $(if $(BIN_DIR),--bin-dir $(BIN_DIR)) $(if $(NO_DEPS),--no-deps) $(if $(DRY),--dry-run)
 
 uninstall: ## Remove CLI links that point into this checkout
 	@$(SETUP) uninstall $(if $(BIN_DIR),--bin-dir $(BIN_DIR)) $(if $(DRY),--dry-run)
 
-hooks: ## Wire live hooks into Claude Code (argshape); AGENT=... DRY=1
-	@$(SETUP) hooks $(if $(AGENT),--agent $(AGENT)) $(if $(DRY),--dry-run)
+hooks: ## Wire live hooks (AGENT=claude|opencode, REMOVE=1, DRY=1)
+	@$(SETUP) hooks $(if $(AGENT),--agent $(AGENT)) $(if $(REMOVE),--remove) $(if $(DRY),--dry-run)
 
-test: ## Run every test suite, each in its own process
+test: ## Run the portable test suites (make test-all runs every suite)
 	@$(SETUP) test
 
 test-%: ## Run one suite (make test-transcripts; see: python3 tools/setup.py test --list)
