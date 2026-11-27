@@ -124,13 +124,20 @@ class Dispatch:
 def _epoch(ts: str) -> Optional[float]:
     """Parse an RFC3339/ISO timestamp to epoch seconds, or None.
 
-    Python 3.11's fromisoformat handles the trailing 'Z' and 9-digit fractional
-    seconds our producers emit. A naive timestamp (no offset) is assumed UTC.
+    Python < 3.11 rejects the trailing 'Z' and fractional seconds that are not
+    exactly 3 or 6 digits (producers emit 9), so both are normalised first.
+    A naive timestamp (no offset) is assumed UTC.
     """
     if not ts:
         return None
+    v = ts.strip()
+    if v.endswith("Z"):
+        v = v[:-1] + "+00:00"
+    m = re.match(r"^(.*T\d\d:\d\d:\d\d)(\.\d+)?(.*)$", v)
+    if m and m.group(2):
+        v = m.group(1) + "." + m.group(2)[1:7].ljust(6, "0") + m.group(3)
     try:
-        dt = datetime.fromisoformat(ts.strip())
+        dt = datetime.fromisoformat(v)
     except ValueError:
         return None
     if dt.tzinfo is None:
