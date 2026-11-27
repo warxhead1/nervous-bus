@@ -466,7 +466,9 @@ class _FakeResponse:
         self.headers = {"Content-Type": content_type}
 
     def read(self, n=-1):
-        return self._body[:n] if n >= 0 else self._body
+        chunk = self._body if n < 0 else self._body[:n]
+        self._body = self._body[len(chunk):]
+        return chunk
 
     def __enter__(self):
         return self
@@ -956,3 +958,19 @@ def test_audit_rereads_claims_from_the_saved_report(tmp_path):
     seen = []
     dr.audit_run(run, rdir, lambda c, p: seen.append(c) or ("CONFIRMED", ""), fake_fetch({"https://example.org/a": "t"}))
     assert len(seen) == 1 and seen[0].startswith("Crowds read by value")
+
+
+def test_fetch_page_reads_a_pdf_past_the_html_cap(monkeypatch):
+    if not dr.shutil.which("pdftotext"):
+        pytest.skip("pdftotext not installed")
+    pdf = _make_pdf(["Crowd allegiance reads by value and silhouette before hue at strategic zoom distances."] * 4)
+    _patch_http(monkeypatch, pdf, content_type="application/pdf")
+    status, text = dr.fetch_page("https://example.org/big.pdf", max_bytes=len(pdf) // 2)
+    assert "silhouette" in text
+
+
+def test_fetch_page_rejects_a_pdf_over_its_cap(monkeypatch):
+    monkeypatch.setattr(dr, "PDF_MAX_BYTES", 100)
+    _patch_http(monkeypatch, b"%PDF-1.4\n" + b"0" * 500, content_type="application/pdf")
+    with pytest.raises(dr.DrError, match="PDF larger"):
+        dr.fetch_page("https://example.org/huge.pdf")

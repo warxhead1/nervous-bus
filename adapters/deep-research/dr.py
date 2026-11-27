@@ -576,6 +576,7 @@ def public_host(host):
 
 
 MIN_PAGE_TEXT = 200
+PDF_MAX_BYTES = 20_000_000
 
 
 def _is_pdf(content_type, body):
@@ -605,10 +606,17 @@ def fetch_page(url, timeout=20.0, max_bytes=400_000):
     req = urllib.request.Request(url, headers={"User-Agent": "deep-research-audit/1"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            body = r.read(max_bytes + 1)[:max_bytes]
+            body = r.read(max_bytes + 1)
             status = r.status
             hdrs = r.headers or {}
             content_type = hdrs.get("Content-Type") or hdrs.get("content-type") or ""
+            if _is_pdf(content_type, body):
+                # A truncated PDF cannot be parsed, so read the whole file up to its own cap.
+                body += r.read(PDF_MAX_BYTES + 1 - len(body))
+                if len(body) > PDF_MAX_BYTES:
+                    raise DrError(f"PDF larger than {PDF_MAX_BYTES} bytes")
+            else:
+                body = body[:max_bytes]
     except urllib.error.HTTPError as e:
         raise DrError(f"HTTP {e.code}")
     except (urllib.error.URLError, OSError, ValueError) as e:
