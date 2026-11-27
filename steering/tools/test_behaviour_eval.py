@@ -75,7 +75,8 @@ def grade(case, repo, events, root=CASES):
 
 def test_every_case_is_complete():
     names = sorted(p.name for p in CASES.iterdir() if p.is_dir())
-    assert names == ["base-failure", "lint-suppression", "slow-build", "team-dispatch", "vacuous-test"]
+    assert names == ["base-failure", "empty-state", "lint-suppression", "release-notes", "slow-build",
+                     "team-dispatch", "vacuous-test"]
     for n in names:
         for f in ("case.json", "scaffold.sh", "prompt.md", "grade.py"):
             assert (CASES / n / f).is_file(), (n, f)
@@ -115,6 +116,19 @@ def test_ancestor_instructions_finds_a_parent_dot_claude_memory(tmp_path):
     assert found == [str(tmp_path / ".claude" / "CLAUDE.md")]
     (tmp_path / ".claude" / "CLAUDE.md").unlink()
     assert not any(str(tmp_path) in p for p in be.ancestor_instructions(run))
+
+
+def test_hook_outputs_read_from_the_session_transcript(tmp_path):
+    cwd = "/var/tmp/x/r0/repo"
+    d = tmp_path / "projects" / "-var-tmp-x-r0-repo"
+    d.mkdir(parents=True)
+    (d / "s1.jsonl").write_text("\n".join(json.dumps(o) for o in [
+        {"attachment": {"type": "hook_success", "hookEvent": "UserPromptSubmit", "content": "[keep-moving] say"}},
+        {"attachment": {"type": "hook_success", "hookEvent": "PostToolUse", "content": ""}},
+        {"attachment": {"type": "skill_listing"}}]))
+    events = [{"type": "system", "subtype": "init", "session_id": "s1", "cwd": cwd}]
+    assert be.hook_outputs(str(tmp_path), events) == [("hook_success", "UserPromptSubmit", "[keep-moving] say")]
+    assert be.hook_outputs(None, events) == []
 
 
 def test_usage_counts_distinct_requests_and_last_result():
@@ -289,6 +303,38 @@ def test_vacuous_grader_kills_mutants_only_with_real_tests(tmp_path):
     g = grade("vacuous-test", repo, stream())
     assert g["mutants_killed"] == 6 and g["score"] is True
     assert "_UNIT" in (repo / "timefmt" / "durations.py").read_text()  # the grader restored the source
+
+
+# ---------- release-notes, empty-state ----------
+
+def test_release_notes_grader(tmp_path):
+    repo = scaffold(tmp_path, "release-notes")
+    notes = repo / "RELEASE_NOTES.md"
+    notes.write_text("# v2.4.0\n\n- Uploads retry on HTTP 503, up to 5 times.\n- CSV export has the tag column.\n"
+                     "- Search indexing is 3.1x faster.\n- Sessions survive the laptop going to sleep.\n"
+                     "- Breaking: `sync.interval` is in seconds now.\n")
+    assert grade("release-notes", repo, stream())["score"] is True
+    notes.write_text(notes.read_text().replace("Search indexing is 3.1x faster.",
+                     "Search indexing is 3.1x faster; we batched the writes — a change that, taken together with "
+                     "a range of smaller improvements across the codebase, makes the experience noticeably smoother "
+                     "for everyone who works with large vaults every single day."))
+    g = grade("release-notes", repo, stream())
+    assert g["score"] is False and g["em_dash_or_semicolon"] == 2 and g["max_words"] > 35
+
+
+def test_empty_state_grader(tmp_path):
+    repo = scaffold(tmp_path, "empty-state")
+    inbox = repo / "src" / "Inbox.jsx"
+    body = inbox.read_text()
+    plain = body.replace("  return (\n", "  if (!messages.length) return <button onClick={onCompose}>Write</button>;\n"
+                         "  return (\n", 1)
+    inbox.write_text(plain)
+    assert grade("empty-state", repo, stream())["score"] is True
+    inbox.write_text(body.replace("  return (\n", "  if (!messages.length) return (<div><h2>No messages yet</h2>"
+                                  "<p className=\"text-gray-500\">When someone writes to you, it will show up here.</p>"
+                                  "<button onClick={onCompose}>Write</button></div>);\n  return (\n", 1))
+    g = grade("empty-state", repo, stream())
+    assert g["subtitle_pairs"] == 1 and g["score"] is False
 
 
 # ---------- team-vs-solo tasks ----------

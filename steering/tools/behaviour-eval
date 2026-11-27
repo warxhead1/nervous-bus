@@ -259,16 +259,35 @@ def run_one(args, case, arm, spec, r):
     (rd / "stream.jsonl").write_text(out)
     (rd / "meta.json").write_text(json.dumps({"status": status, "wall_s": round(wall, 1), "arm": arm,
                                               "case": case["name"], "run": r, "model": args.model,
-                                              "repo": str(repo)}))
+                                              "repo": str(repo), "config_dir": env["CLAUDE_CONFIG_DIR"]}))
     return grade_dir(case, rd)
+
+
+def hook_outputs(config_dir, events):
+    """Hook output the session fed to the model, read from its transcript in the config dir
+    (stream-json does not carry it): one (type, event, first 160 chars) per hook that said something."""
+    init = next((e for e in events if e.get("type") == "system" and e.get("subtype") == "init"), {})
+    if not (config_dir and init.get("session_id") and init.get("cwd")):
+        return []
+    mangled = re.sub(r"[^A-Za-z0-9]", "-", init["cwd"])
+    path = Path(config_dir) / "projects" / mangled / f"{init['session_id']}.jsonl"
+    out = []
+    for e in parse_events(path.read_text()) if path.is_file() else []:
+        a = e.get("attachment")
+        if isinstance(a, dict) and str(a.get("type", "")).startswith("hook"):
+            text = _text(a.get("content") or a.get("stdout") or a.get("stderr") or "")
+            if text.strip():
+                out.append((a.get("type"), a.get("hookEvent") or a.get("hookName"), text[:160]))
+    return out
 
 
 def grade_dir(case, rd):
     meta = json.loads((rd / "meta.json").read_text())
     events = parse_events((rd / "stream.jsonl").read_text())
     u = usage_of(events)
-    hits = (rd / "hits.jsonl").read_text().splitlines() if (rd / "hits.jsonl").is_file() else []
-    row = {**meta, **u, "hook_hits": len(hits)}
+    hooks = hook_outputs(meta.get("config_dir"), events)
+    (rd / "hooks.json").write_text(json.dumps(hooks, indent=1))
+    row = {**meta, **u, "hook_hits": len(hooks)}
     if meta["status"] != "ok" or u["is_error"]:
         row["score"] = None  # not a miss: the run did not finish
     else:
