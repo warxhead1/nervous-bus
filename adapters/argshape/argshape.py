@@ -30,6 +30,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
+import isoshape  # noqa: E402
 import pipefail  # noqa: E402
 import segment   # noqa: E402
 import store     # noqa: E402
@@ -177,6 +178,11 @@ def _pre(ev, cfg, tool_input, command) -> int:
     if piped is not None:
         final = piped
         notes.append("verify output is piped, so its exit status was hidden: prepended `set -o pipefail;`")
+    if isoshape.enabled(cfg):
+        iso = isoshape.rewrite(final, ev.get("cwd") or os.getcwd())
+        if iso is not None:
+            final = iso[0]
+            notes.append(iso[1])
     if final != command:
         ctx = ("argshape corrected this command before it ran: " + "; ".join(notes)
                + ". Ran: " + final[:400]
