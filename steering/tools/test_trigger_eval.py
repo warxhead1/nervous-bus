@@ -111,6 +111,37 @@ def test_budget_flag_reaches_the_cli(monkeypatch):
     assert "--max-budget-usd" in seen[0] and "2.5" in seen[0]
 
 
+def test_own_turn_cap_is_not_an_error(monkeypatch):
+    out = "\n".join([stream("s", with_result=False),
+                     json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True})])
+    rows, _ = run(monkeypatch, [proc(out, rc=1)])
+    assert rows[0]["status"] == "pass" and rows[0]["hit"] is True
+
+
+def test_rescore_reads_kept_streams(tmp_path):
+    (tmp_path / "s-pos-000-r0.jsonl").write_text(stream("s"))
+    a = args(rescore=True, streams=str(tmp_path))
+    assert te.run_one(a, "q", [], "/nonexistent", "s-pos-000-r0")[:2] == ("ok", {"s"})
+    assert te.run_one(a, "q", [], "/nonexistent", "missing")[0] == "error"
+
+
+def test_run_does_not_inherit_the_launching_session(monkeypatch):
+    seen = []
+    monkeypatch.setenv("CLAUDE_CODE_PLUGIN_DIRS", "/some/session/plugin")
+    monkeypatch.setattr(te.subprocess, "run", lambda cmd, **k: seen.append((cmd, k["env"])) or proc(stream("s")))
+    te.run_one(args(), "q", [], "/nonexistent")
+    cmd, env = seen[0]
+    assert "CLAUDE_CODE_PLUGIN_DIRS" not in env and "--strict-mcp-config" in cmd
+    assert env["AGENT_STEERING_HITS"] == "/nonexistent/hits.jsonl"
+
+
+def test_clean_config_also_gets_a_clean_home(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(te.subprocess, "run", lambda cmd, **k: seen.append(k["env"]) or proc(stream("s")))
+    te.run_one(args(config_dir=str(tmp_path / "cfg")), "q", [], str(tmp_path))
+    assert seen[0]["HOME"] == str(tmp_path / "home") and (tmp_path / "home").is_dir()
+
+
 @pytest.mark.parametrize("n,expect", [(3, None), (4, (4, 0)), (5, (4, 0)), (2, None)])
 def test_min_detectable(n, expect):
     got = te.min_detectable(n)

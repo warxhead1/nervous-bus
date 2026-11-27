@@ -26,6 +26,7 @@ import concurrent.futures as cf
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -106,16 +107,42 @@ def parse_stream(stdout, returncode):
     return "ok", skills_called(stdout), cost
 
 
+INSTRUCTION_FILES = ("CLAUDE.md", ".claude/CLAUDE.md", "AGENTS.md", "CLAUDE.local.md")
+
+
+def ancestor_instructions(path):
+    """Instruction files a session under path loads as project memory. Measured: a run dir under
+    $HOME loads ~/.claude/CLAUDE.md this way, whatever CLAUDE_CONFIG_DIR and HOME are set to."""
+    p = Path(path).resolve()
+    return [str(a / f) for a in [p, *p.parents] for f in INSTRUCTION_FILES if (a / f).is_file()]
+
+
+SESSION_ENV = re.compile(r"^(CLAUDE|ANTHROPIC|AI_AGENT|ORCA|CODEX|MCP_)")
+
+
+def clean_env(base=None):
+    """The parent's env minus its agent session. Run from inside a session, CLAUDE_CODE_PLUGIN_DIRS
+    and the session's hook endpoints would load into every run and blur what was offered."""
+    return {k: v for k, v in (os.environ if base is None else base).items() if not SESSION_ENV.match(k)}
+
+
 def run_one(args, prompt, plugin_dirs, cwd, tag=""):
-    cmd = [args.claude, "-p", prompt, "--model", args.model, "--max-turns", "2",
-           "--output-format", "stream-json", "--verbose", "--allowedTools", "Skill"]
+    if getattr(args, "rescore", False):  # score the kept stream again; no model call
+        f = Path(args.streams) / f"{tag}.jsonl"
+        return parse_stream(f.read_text(), 0) if f.is_file() else ("error", set(), 0.0)
+    cmd =[args.claude, "-p", prompt, "--model", args.model, "--max-turns", "2",
+           "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--allowedTools", "Skill"]
     if args.max_cost_usd:
         cmd += ["--max-budget-usd", str(args.max_cost_usd)]
     for d in plugin_dirs:
         cmd += ["--plugin-dir", str(d)]
-    env = dict(os.environ)
+    env = clean_env()
+    env["AGENT_STEERING_HITS"] = str(Path(cwd) / "hits.jsonl")  # not the user's real hit log
     if args.config_dir:
         env["CLAUDE_CONFIG_DIR"] = args.config_dir
+        # Keep the user's home (dotfiles, ~/.claude) out of the run as well.
+        env["HOME"] = str(Path(cwd) / "home")
+        Path(env["HOME"]).mkdir(parents=True, exist_ok=True)
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout, cwd=cwd,
                            stdin=subprocess.DEVNULL, env=env)
@@ -206,6 +233,8 @@ def main():
     ap.add_argument("--timeout", type=int, default=180)
     ap.add_argument("--claude", default=os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude")
     ap.add_argument("--no-plugin-dir", action="store_true", help="skills are already installed; do not pass --plugin-dir")
+    ap.add_argument("--work-root", default="/var/tmp/trigger-eval",
+                    help="where the run dir is made; must have no CLAUDE.md/AGENTS.md above it (so not under $HOME)")
     ap.add_argument("--config-dir", help="CLAUDE_CONFIG_DIR to run under. Use a clean one (credentials only): "
                     "a home config that already states these rules hides whether the skill loads")
     ap.add_argument("--json", dest="out")
@@ -217,6 +246,8 @@ def main():
                     "also passed to each call as --max-budget-usd")
     ap.add_argument("--dry-run", action="store_true", help="print the plan and request count; call nothing")
     ap.add_argument("--streams", help="dir to keep each run's raw stream-json in")
+    ap.add_argument("--rescore", action="store_true", help="score the streams kept in --streams again, "
+                    "with the same cases and --runs; calls nothing")
     args = ap.parse_args()
     only = {s for s in args.plugins.split(",") if s}
     cases = load_cases(only, args.cases)
@@ -224,7 +255,12 @@ def main():
         sys.exit("no cases found")
     if args.limit:
         cases = cases[: args.limit]
-    cwd = tempfile.mkdtemp(prefix="trigger-eval-")
+    Path(args.work_root).mkdir(parents=True, exist_ok=True)
+    cwd = tempfile.mkdtemp(prefix="trigger-eval-", dir=args.work_root)
+    leaks = ancestor_instructions(cwd)
+    if leaks and not args.dry_run:
+        sys.exit(f"--work-root {args.work_root} sits under instruction files every run would load: "
+                 f"{', '.join(leaks)}. Pick a root outside them (not under $HOME).")
     if args.cases:
         dirs = []
         missing = link_skills({s for s, _, _ in cases}, args.skill_root or ["~/.claude/skills"], cwd)

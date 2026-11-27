@@ -1,0 +1,2 @@
+{"plugins": ["keep-moving"], "max_turns": 30, "timeout": 600,
+ "tools": ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "Skill", "Monitor", "TaskOutput"]}
