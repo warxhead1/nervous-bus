@@ -425,6 +425,44 @@ def classify_turn(text: str, after_interrupt: bool = False) -> list[str]:
     return sigs
 
 
+#: Signature for a correction typed while the agent was still running. Claude
+#: Code queues such a turn and delivers it as a `queued_command` attachment
+#: with a human origin, so it never appears as a `user` line.
+MID_FLIGHT = "mid_flight"
+
+#: Words that mark a mid-flight turn as pushback or a redirect. The channel is
+#: theme-free: a match here needs no theme keyword.
+_MID_FLIGHT_PUSHBACK_RE = re.compile(
+    r"\b(?:still|again|keeps?|instead|wrong|wtf|why(?! (?:not|don't we))(?!\W*$)|"
+    r"(?<!can't )(?<!can\u2019t )you (?:just|didn['\u2019]?t|should|need to|are not|aren['\u2019]?t)|"
+    r"I (?:said|meant|asked)|don['\u2019]?t (?:need|believe)|"
+    r"no (?:reason|way)|how did that)\b",
+    re.IGNORECASE,
+)
+
+#: Mid-flight text the operator did not type: harness, hub and lead relays
+#: that arrive through the same queue.
+_QUEUED_RELAY_RE = re.compile(
+    r"^\s*(?:You have \d+ orchestration messages?\b|\[[a-z][\w -]*\]\s"
+    r"|Lead note\s*:|<pasted_content\b|<turn\s)",
+    re.IGNORECASE,
+)
+
+
+def classify_mid_flight(text: str) -> list[str]:
+    """Signatures for one human turn typed while the agent was running: the
+    theme-free MID_FLIGHT signature when the turn pushes back or redirects,
+    plus whatever the themed classifier finds. Relays that share the queue
+    return nothing."""
+    if _QUEUED_RELAY_RE.match(text) or _is_synthetic_relay(text):
+        return []
+    head = text[:_MATCH_CHAR_CAP]
+    sigs = classify_turn(text)
+    if _MID_FLIGHT_PUSHBACK_RE.search(head) and MID_FLIGHT not in sigs:
+        sigs.append(MID_FLIGHT)
+    return sigs
+
+
 # ── Claude Code transcript source ───────────────────────────────────────────
 
 _INTERRUPT_MARKER_RE = re.compile(r"^\s*\[Request interrupted by user\b")
@@ -504,6 +542,36 @@ def _iter_claude_turns(path: Path) -> Iterator[tuple[float, str, bool]]:
                 continue
             yield ts, stripped, pending_interrupt
             pending_interrupt = False
+
+
+def _iter_claude_mid_flight(path: Path) -> Iterator[tuple[float, str]]:
+    """Yield (unix_ts, stripped_text) for each human turn typed while the agent
+    was running: a `queued_command` attachment with a human origin and prompt
+    mode. Task notifications and other producers are skipped. Never raises."""
+    try:
+        fh = open(path, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    with fh:
+        for line in fh:
+            if '"queued_command"' not in line:
+                continue
+            try:
+                obj = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            att = obj.get("attachment") if isinstance(obj, dict) else None
+            if not isinstance(att, dict) or att.get("type") != "queued_command":
+                continue
+            origin = att.get("origin")
+            if not isinstance(origin, dict) or origin.get("kind") != "human":
+                continue
+            if att.get("commandMode") != "prompt" or not isinstance(att.get("prompt"), str):
+                continue
+            ts = _parse_iso_ts(att.get("timestamp") or obj.get("timestamp") or "")
+            text = _strip_envelope(att["prompt"])
+            if ts is not None and text:
+                yield ts, text
 
 
 def _parse_iso_ts(value: str) -> Optional[float]:
@@ -608,14 +676,15 @@ class UserCorrectionDetector(BaseDetector):
         hits: dict[str, dict[str, set[str]]] = {}
 
         def _record(session_id: str, ts: float, text: str,
-                    after_interrupt: bool = False) -> None:
+                    after_interrupt: bool = False, mid_flight: bool = False) -> None:
             candidates_for_session = by_session.get(session_id)
             if not candidates_for_session:
                 return
             run_id, project = _resolve_run(candidates_for_session, ts)
             if run_id is None:
                 return
-            for theme in classify_turn(text, after_interrupt):
+            sigs = classify_mid_flight(text) if mid_flight else classify_turn(text, after_interrupt)
+            for theme in sigs:
                 hits.setdefault(project, {}).setdefault(theme, set()).add(run_id)
 
         if claude_sessions:
@@ -626,6 +695,8 @@ class UserCorrectionDetector(BaseDetector):
                     continue
                 for ts, text, after_interrupt in _iter_claude_turns(path):
                     _record(session_id, ts, text, after_interrupt)
+                for ts, text in _iter_claude_mid_flight(path):
+                    _record(session_id, ts, text, mid_flight=True)
 
         if codex_sessions and self.codex_history_path.is_file():
             for session_id, ts, text in _iter_codex_turns(
@@ -699,6 +770,9 @@ def scan_transcripts(root: Path) -> dict[str, int]:
     for path in sorted(root.rglob("*.jsonl")):
         for _ts, text, after_interrupt in _iter_claude_turns(path):
             for sig in classify_turn(text, after_interrupt):
+                counts[sig] = counts.get(sig, 0) + 1
+        for _ts, text in _iter_claude_mid_flight(path):
+            for sig in classify_mid_flight(text):
                 counts[sig] = counts.get(sig, 0) + 1
     return counts
 
