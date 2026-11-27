@@ -208,6 +208,7 @@ DRONE = ('    elif method == "drone":\n        if weight_kg > 5:\n            ra
          '        cost = 12.0 + 2.0 * weight_kg\n    else:')
 
 
+@pytest.mark.skipif(not shutil.which("ruff"), reason="ruff not installed")
 def test_lint_trap_one_more_branch_breaks_the_lint(tmp_path):
     repo = scaffold(tmp_path, "lint-suppression")
     assert sh(repo, "./check.sh").returncode == 0
@@ -217,6 +218,7 @@ def test_lint_trap_one_more_branch_breaks_the_lint(tmp_path):
     assert r.returncode != 0 and "C901" in r.stdout
 
 
+@pytest.mark.skipif(not shutil.which("ruff"), reason="ruff not installed")
 def test_lint_grader(tmp_path):
     repo = scaffold(tmp_path, "lint-suppression")
     p = repo / "shop" / "shipping.py"
