@@ -1,0 +1,639 @@
+# The generic game design tree, version 1.
+#
+# `crucible grill work` opens a node when every node in its `prereqs` is settled.
+# The tree holds questions only. A game's answers live in that game's ledger.
+#
+# Vocabulary is MDA. An aesthetic is a kind of fun the player feels. A dynamic is
+# what happens at run time when rules meet a player. A mechanic is a rule or a
+# piece of data. A player meets them in the order aesthetic, dynamic, mechanic.
+# The tree settles them in that same order, so every rule has a reason first.
+#
+# Fields on every node:
+#   id       dotted key. The first segment is the node's kind.
+#   ask      the question, as one idea in at most 90 characters.
+#   class    fact | measurable | lead | owner | money. See rubric/triage.v1.toml.
+#   door     one-way | two-way. The default. The router can raise it, never lower it.
+#   weight   outcome-critical | divergent | benign. The default, raised the same way.
+#   prereqs  ids that must be settled first.
+# Optional fields:
+#   mode     fork | duel | feel | name | rule. The card mode, on owner and money nodes.
+#   guard    pillar | spend | look | public-name | scope | save-format.
+#            A guarded node is never taken. It always ends as a card.
+# Fields on every mechanic node:
+#   dynamic, aesthetic, pillar
+#            the nodes whose answers the mechanic must cite. In a game's ledger
+#            each becomes the id of a settled decision. A mechanic that cannot
+#            cite all three has no reason to exist.
+#
+# A node that does not apply to a game is parked, never deleted.
+
+version = 1
+
+[vocabulary]
+aesthetics = ["sensation", "fantasy", "narrative", "challenge", "fellowship", "discovery", "expression", "submission"]
+
+# ---- frame: who plays, where, and how large ----
+
+[[node]]
+id = "frame.audience"
+ask = "Who is the game for?"
+class = "owner"
+door = "one-way"
+weight = "outcome-critical"
+mode = "fork"
+prereqs = []
+
+[[node]]
+id = "frame.multiplayer"
+ask = "Is play solo, co-operative or competitive?"
+class = "owner"
+door = "one-way"
+weight = "outcome-critical"
+mode = "fork"
+prereqs = ["frame.audience"]
+
+[[node]]
+id = "frame.session"
+ask = "How long is one session of play?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "fork"
+prereqs = ["frame.audience"]
+
+[[node]]
+id = "frame.platform"
+ask = "What does the game run on?"
+class = "owner"
+door = "one-way"
+weight = "outcome-critical"
+mode = "fork"
+prereqs = ["frame.audience"]
+
+[[node]]
+id = "frame.scope"
+ask = "How large is the first release?"
+class = "owner"
+door = "two-way"
+weight = "outcome-critical"
+mode = "fork"
+guard = "scope"
+prereqs = ["pillar.cost", "frame.platform", "money.budget"]
+
+# ---- market, money, legal: lookups and spend ----
+
+[[node]]
+id = "market.comparables"
+ask = "What do games for this audience show about what works and what fails?"
+class = "fact"
+door = "two-way"
+weight = "benign"
+prereqs = ["frame.audience"]
+
+[[node]]
+id = "market.platform_rules"
+ask = "What do the target platforms and stores require?"
+class = "fact"
+door = "two-way"
+weight = "divergent"
+prereqs = ["frame.platform"]
+
+[[node]]
+id = "market.name_clear"
+ask = "Which candidate names are free to use?"
+class = "fact"
+door = "two-way"
+weight = "outcome-critical"
+prereqs = ["pillar.set"]
+
+[[node]]
+id = "money.budget"
+ask = "What may be spent on tools, assets and services?"
+class = "money"
+door = "two-way"
+weight = "outcome-critical"
+mode = "fork"
+guard = "spend"
+prereqs = []
+
+[[node]]
+id = "money.model"
+ask = "How does the game earn money, if at all?"
+class = "money"
+door = "one-way"
+weight = "outcome-critical"
+mode = "fork"
+guard = "spend"
+prereqs = ["frame.audience", "market.comparables"]
+
+[[node]]
+id = "legal.licences"
+ask = "Which licences bind the tools, assets and fonts in use?"
+class = "fact"
+door = "two-way"
+weight = "outcome-critical"
+prereqs = ["frame.platform"]
+
+# ---- aesthetics: what the player feels ----
+
+[[node]]
+id = "aesthetic.primary"
+ask = "Which kind of fun comes first?"
+class = "owner"
+door = "one-way"
+weight = "outcome-critical"
+mode = "fork"
+prereqs = ["frame.audience"]
+
+[[node]]
+id = "aesthetic.fantasy"
+ask = "What does the player get to be or to do?"
+class = "owner"
+door = "two-way"
+weight = "outcome-critical"
+mode = "fork"
+prereqs = ["aesthetic.primary"]
+
+[[node]]
+id = "aesthetic.support"
+ask = "Which kinds of fun support the first?"
+class = "owner"
+door = "two-way"
+weight = "benign"
+mode = "fork"
+prereqs = ["aesthetic.primary"]
+
+[[node]]
+id = "aesthetic.tone"
+ask = "What mood does the game hold?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "duel"
+prereqs = ["aesthetic.fantasy"]
+
+# ---- pillars: the rules the game never breaks ----
+
+[[node]]
+id = "pillar.set"
+ask = "Which few rules does the game never break?"
+class = "owner"
+door = "one-way"
+weight = "outcome-critical"
+mode = "rule"
+guard = "pillar"
+prereqs = ["aesthetic.primary", "aesthetic.fantasy"]
+
+[[node]]
+id = "pillar.cost"
+ask = "Which cost does each pillar accept?"
+class = "owner"
+door = "one-way"
+weight = "outcome-critical"
+mode = "rule"
+guard = "pillar"
+prereqs = ["pillar.set"]
+
+# ---- dynamics: what happens at run time ----
+
+[[node]]
+id = "dynamic.loop"
+ask = "What does the player do again and again?"
+class = "owner"
+door = "two-way"
+weight = "outcome-critical"
+mode = "fork"
+prereqs = ["pillar.cost", "frame.session"]
+
+[[node]]
+id = "dynamic.tension"
+ask = "How does pressure rise and fall inside one session?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "fork"
+prereqs = ["dynamic.loop"]
+
+[[node]]
+id = "dynamic.feedback"
+ask = "Does a lead grow or shrink over time?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "fork"
+prereqs = ["dynamic.loop", "frame.multiplayer"]
+
+[[node]]
+id = "dynamic.choice"
+ask = "How many good strategies exist at one time?"
+class = "owner"
+door = "two-way"
+weight = "benign"
+mode = "fork"
+prereqs = ["dynamic.loop"]
+
+[[node]]
+id = "dynamic.mastery"
+ask = "What can a skilled player do that a new player cannot?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "fork"
+prereqs = ["dynamic.loop"]
+
+[[node]]
+id = "dynamic.arc"
+ask = "How does play change from the first hour to the last?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "fork"
+prereqs = ["dynamic.loop", "frame.scope"]
+
+[[node]]
+id = "dynamic.social"
+ask = "How do players affect each other?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "fork"
+prereqs = ["dynamic.loop", "frame.multiplayer"]
+
+# ---- mechanics: rules and data. Each cites a dynamic, an aesthetic and a pillar ----
+
+[[node]]
+id = "mechanic.verbs"
+ask = "Which actions can the player take?"
+class = "owner"
+door = "two-way"
+weight = "outcome-critical"
+mode = "fork"
+prereqs = ["dynamic.loop"]
+dynamic = "dynamic.loop"
+aesthetic = "aesthetic.primary"
+pillar = "pillar.set"
+
+[[node]]
+id = "mechanic.time"
+ask = "Does play run in real time or in turns?"
+class = "owner"
+door = "one-way"
+weight = "outcome-critical"
+mode = "fork"
+prereqs = ["dynamic.loop", "frame.platform"]
+dynamic = "dynamic.loop"
+aesthetic = "aesthetic.primary"
+pillar = "pillar.set"
+
+[[node]]
+id = "mechanic.space"
+ask = "What shape is the space the player acts in?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "fork"
+prereqs = ["mechanic.verbs"]
+dynamic = "dynamic.loop"
+aesthetic = "aesthetic.fantasy"
+pillar = "pillar.set"
+
+[[node]]
+id = "mechanic.goal"
+ask = "What ends a session as a win or as a loss?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "fork"
+prereqs = ["mechanic.verbs", "dynamic.tension"]
+dynamic = "dynamic.tension"
+aesthetic = "aesthetic.primary"
+pillar = "pillar.set"
+
+[[node]]
+id = "mechanic.opposition"
+ask = "What pushes back against the player?"
+class = "owner"
+door = "two-way"
+weight = "outcome-critical"
+mode = "fork"
+prereqs = ["mechanic.verbs", "dynamic.tension"]
+dynamic = "dynamic.tension"
+aesthetic = "aesthetic.fantasy"
+pillar = "pillar.set"
+
+[[node]]
+id = "mechanic.resources"
+ask = "What does the player gain, hold and spend?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "fork"
+prereqs = ["mechanic.verbs"]
+dynamic = "dynamic.loop"
+aesthetic = "aesthetic.primary"
+pillar = "pillar.set"
+
+[[node]]
+id = "mechanic.economy"
+ask = "Where does each resource enter the game and where does it leave?"
+class = "lead"
+door = "two-way"
+weight = "divergent"
+prereqs = ["mechanic.resources", "dynamic.feedback"]
+dynamic = "dynamic.feedback"
+aesthetic = "aesthetic.primary"
+pillar = "pillar.set"
+
+[[node]]
+id = "mechanic.chance"
+ask = "Where does chance decide an outcome?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "fork"
+prereqs = ["mechanic.verbs", "dynamic.tension"]
+dynamic = "dynamic.tension"
+aesthetic = "aesthetic.primary"
+pillar = "pillar.set"
+
+[[node]]
+id = "mechanic.information"
+ask = "What is hidden from the player?"
+class = "lead"
+door = "two-way"
+weight = "divergent"
+prereqs = ["mechanic.chance", "dynamic.choice"]
+dynamic = "dynamic.choice"
+aesthetic = "aesthetic.primary"
+pillar = "pillar.set"
+
+[[node]]
+id = "mechanic.failure"
+ask = "What does a failure cost the player?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "fork"
+prereqs = ["mechanic.goal", "dynamic.feedback", "aesthetic.tone"]
+dynamic = "dynamic.feedback"
+aesthetic = "aesthetic.tone"
+pillar = "pillar.set"
+
+[[node]]
+id = "mechanic.progression"
+ask = "What does the player keep between sessions?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "fork"
+prereqs = ["mechanic.resources", "dynamic.arc"]
+dynamic = "dynamic.arc"
+aesthetic = "aesthetic.primary"
+pillar = "pillar.set"
+
+[[node]]
+id = "mechanic.content"
+ask = "What is one unit of content?"
+class = "lead"
+door = "two-way"
+weight = "outcome-critical"
+prereqs = ["mechanic.verbs", "dynamic.arc", "aesthetic.support"]
+dynamic = "dynamic.arc"
+aesthetic = "aesthetic.support"
+pillar = "pillar.set"
+
+[[node]]
+id = "mechanic.controls"
+ask = "How does input map to the player's actions?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "feel"
+prereqs = ["mechanic.verbs", "frame.platform", "dynamic.mastery"]
+dynamic = "dynamic.mastery"
+aesthetic = "aesthetic.primary"
+pillar = "pillar.set"
+
+[[node]]
+id = "mechanic.interaction"
+ask = "What can one player do to another?"
+class = "lead"
+door = "two-way"
+weight = "divergent"
+prereqs = ["mechanic.verbs", "dynamic.social", "aesthetic.support"]
+dynamic = "dynamic.social"
+aesthetic = "aesthetic.support"
+pillar = "pillar.set"
+
+# ---- look, sound, feel: shown or played, never described ----
+
+[[node]]
+id = "look.direction"
+ask = "What does the game look like?"
+class = "owner"
+door = "one-way"
+weight = "outcome-critical"
+mode = "duel"
+guard = "look"
+prereqs = ["aesthetic.tone", "pillar.cost", "frame.platform"]
+
+[[node]]
+id = "look.camera"
+ask = "From where does the player see the play space?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "duel"
+prereqs = ["look.direction", "mechanic.space"]
+
+[[node]]
+id = "look.readability"
+ask = "Can a player tell self, threat and goal apart at a glance?"
+class = "measurable"
+door = "two-way"
+weight = "outcome-critical"
+prereqs = ["look.direction", "mechanic.opposition"]
+
+[[node]]
+id = "sound.direction"
+ask = "What does the game sound like?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "duel"
+prereqs = ["aesthetic.tone", "look.direction"]
+
+[[node]]
+id = "feel.response"
+ask = "How fast and how heavy does an action feel?"
+class = "owner"
+door = "two-way"
+weight = "divergent"
+mode = "feel"
+prereqs = ["mechanic.controls"]
+
+# ---- tech: the calls that bind stored data and determinism ----
+
+[[node]]
+id = "tech.hardware"
+ask = "What hardware does the target player own?"
+class = "fact"
+door = "two-way"
+weight = "divergent"
+prereqs = ["frame.audience", "frame.platform"]
+
+[[node]]
+id = "tech.determinism"
+ask = "Which rules keep the simulation repeatable?"
+class = "lead"
+door = "one-way"
+weight = "outcome-critical"
+prereqs = ["mechanic.time"]
+
+[[node]]
+id = "tech.net"
+ask = "How do the players' machines stay in step?"
+class = "lead"
+door = "one-way"
+weight = "outcome-critical"
+prereqs = ["frame.multiplayer", "tech.determinism"]
+
+[[node]]
+id = "tech.save"
+ask = "What does a save hold, and in what format?"
+class = "owner"
+door = "one-way"
+weight = "outcome-critical"
+mode = "fork"
+guard = "save-format"
+prereqs = ["mechanic.progression", "tech.determinism"]
+
+[[node]]
+id = "tech.perf"
+ask = "Does the game hold its frame budget on the target hardware?"
+class = "measurable"
+door = "two-way"
+weight = "outcome-critical"
+prereqs = ["tech.hardware", "look.direction"]
+
+# ---- tuning: numbers, set by measurement ----
+
+[[node]]
+id = "tuning.params"
+ask = "Which values are tunable, and inside what range?"
+class = "lead"
+door = "two-way"
+weight = "benign"
+prereqs = ["mechanic.economy", "mechanic.goal"]
+
+[[node]]
+id = "tuning.players"
+ask = "Which scripted players stand in for people?"
+class = "lead"
+door = "two-way"
+weight = "divergent"
+prereqs = ["mechanic.verbs", "mechanic.goal"]
+
+[[node]]
+id = "tuning.bands"
+ask = "What range counts as healthy for each measure?"
+class = "owner"
+door = "two-way"
+weight = "benign"
+mode = "fork"
+prereqs = ["dynamic.tension", "dynamic.feedback", "dynamic.choice", "tuning.params"]
+
+[[node]]
+id = "tuning.balance"
+ask = "Does one strategy beat every other?"
+class = "measurable"
+door = "two-way"
+weight = "outcome-critical"
+prereqs = ["tuning.bands", "tuning.players"]
+
+[[node]]
+id = "tuning.economy"
+ask = "Does the economy inflate, stall or loop?"
+class = "measurable"
+door = "two-way"
+weight = "outcome-critical"
+prereqs = ["tuning.bands", "tuning.players", "mechanic.economy"]
+
+[[node]]
+id = "tuning.difficulty"
+ask = "Does difficulty follow the intended curve?"
+class = "measurable"
+door = "two-way"
+weight = "divergent"
+prereqs = ["tuning.bands", "tuning.players", "dynamic.arc", "mechanic.content"]
+
+# ---- content, ux, names ----
+
+[[node]]
+id = "content.slice"
+ask = "What is in the first playable slice?"
+class = "owner"
+door = "two-way"
+weight = "outcome-critical"
+mode = "fork"
+guard = "scope"
+prereqs = ["mechanic.goal", "mechanic.opposition", "mechanic.controls"]
+
+[[node]]
+id = "content.pipeline"
+ask = "How is content made and checked?"
+class = "lead"
+door = "two-way"
+weight = "benign"
+prereqs = ["mechanic.content", "look.direction"]
+
+[[node]]
+id = "content.order"
+ask = "In what order does content unlock?"
+class = "lead"
+door = "two-way"
+weight = "divergent"
+prereqs = ["mechanic.content", "mechanic.progression", "dynamic.arc"]
+
+[[node]]
+id = "ux.onboarding"
+ask = "How does a new player learn the first action?"
+class = "lead"
+door = "two-way"
+weight = "divergent"
+prereqs = ["mechanic.controls", "content.slice"]
+
+[[node]]
+id = "ux.hud"
+ask = "What must stay on screen during play?"
+class = "lead"
+door = "two-way"
+weight = "benign"
+prereqs = ["mechanic.resources", "look.camera"]
+
+[[node]]
+id = "ux.access"
+ask = "Which access options ship in the first release?"
+class = "lead"
+door = "two-way"
+weight = "divergent"
+prereqs = ["mechanic.controls", "look.direction", "frame.scope"]
+
+[[node]]
+id = "name.vocabulary"
+ask = "What are the things in the game called?"
+class = "owner"
+door = "two-way"
+weight = "benign"
+mode = "name"
+prereqs = ["aesthetic.fantasy", "mechanic.resources"]
+
+[[node]]
+id = "name.title"
+ask = "What is the game's public name?"
+class = "owner"
+door = "one-way"
+weight = "outcome-critical"
+mode = "name"
+guard = "public-name"
+prereqs = ["market.name_clear", "aesthetic.tone"]
