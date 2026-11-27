@@ -201,6 +201,33 @@ _CLEAN_OUTCOMES = frozenset({"clean", "landed", "corrected"})
 # bucket for exactly that reason.
 THRASH_EVENT_COUNT_FLOOR = 150
 
+# A run with this many events or fewer is a recorder artefact (a lone `ended`
+# or one stray activity event), not work that could fail. Such a run with no
+# mapped signal is not counted at all.
+PHANTOM_EVENT_CEILING = 2
+
+# Shapes of "no failure signal" that are not failures and so never produce an
+# `unclassified` row.
+NON_FAILURE_CONFIRMED_CLEAN = "confirmed_clean"
+NON_FAILURE_PHANTOM = "phantom"
+
+
+def non_failure_shape(
+    outcome: Optional[str], labeled_at: Optional[str], event_count: int
+) -> Optional[str]:
+    """Name why a signal-free run is not a failure, or None if it is unknown.
+
+    Only meaningful when classify_run() returned no bucket. A run that is
+    labeled clean/landed/corrected, or is a phantom of at most
+    PHANTOM_EVENT_CEILING events, is dropped before counting. Everything else
+    (unlabeled real runs, odd labeled outcomes) stays `unclassified`.
+    """
+    if labeled_at is not None and outcome in _CLEAN_OUTCOMES:
+        return NON_FAILURE_CONFIRMED_CLEAN
+    if event_count <= PHANTOM_EVENT_CEILING:
+        return NON_FAILURE_PHANTOM
+    return None
+
 
 def _hit_detectors_for_run(conn: sqlite3.Connection, run_id: str) -> set[str]:
     """Distinct detector names that already recorded a hit for this run.
@@ -386,6 +413,8 @@ class FailureTaxonomyDetector(BaseDetector):
             )
 
             if not buckets:
+                if non_failure_shape(outcome, labeled_at, event_count or 0):
+                    continue
                 cross_run[(project or "", UNCLASSIFIED)].append({
                     "run_id": run_id,
                     "reasons": [
