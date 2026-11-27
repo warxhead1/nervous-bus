@@ -190,6 +190,8 @@ def ruling_text(name):
     cues = json.loads((ST / name / "hooks" / "cues.json").read_text())
     seen, out = set(), []
     for c in cues:
+        if c.get("event", "UserPromptSubmit") != "UserPromptSubmit":
+            continue
         t = re.sub(r"^\[[^\]]+\]\s*", "", c["say"])
         t = re.sub(r"\s*Load the [\w-]+ skill\.?\s*$", "", t).strip()
         if t not in seen:
@@ -223,11 +225,18 @@ EVENT_MAP = {"codex": {}, "kiro": {}, "claude-code": {},
              "gemini": {"PreToolUse": "BeforeTool", "PostToolUse": "AfterTool", "UserPromptSubmit": "BeforeAgent", "Stop": "AfterAgent"},
              "omp": {"PreToolUse": "tool_call", "PostToolUse": "tool_result"}}
 MATCH_MAP = {
-    "codex": {"Bash": "Bash", "Write|Edit|MultiEdit": "apply_patch", "Agent|Task": "spawn_agent"},
-    "gemini": {"Bash": "run_shell_command", "Write|Edit|MultiEdit": "write_file|replace"},
-    "kiro": {"Bash": "shell", "Write|Edit|MultiEdit": "write", "Agent|Task": "subagent"},
-    "omp": {"Bash": "bash", "Write|Edit|MultiEdit": "edit|write"},
-    "claude-code": {"Bash": "Bash", "Write|Edit|MultiEdit": "Write|Edit|MultiEdit", "Agent|Task": "Agent|Task"},
+    "codex": {"Bash": "Bash", "Bash|Read": "Bash", "Bash|Write|Edit|MultiEdit": "Bash|apply_patch",
+              "Write|Edit|MultiEdit": "apply_patch", "Agent|Task": "spawn_agent"},
+    "gemini": {"Bash": "run_shell_command", "Bash|Read": "run_shell_command|read_file",
+               "Bash|Write|Edit|MultiEdit": "run_shell_command|write_file|replace",
+               "Write|Edit|MultiEdit": "write_file|replace"},
+    "kiro": {"Bash": "shell", "Bash|Read": "shell|read", "Bash|Write|Edit|MultiEdit": "shell|write",
+             "Write|Edit|MultiEdit": "write", "Agent|Task": "subagent"},
+    "omp": {"Bash": "bash", "Bash|Read": "bash|read", "Bash|Write|Edit|MultiEdit": "bash|edit|write",
+            "Write|Edit|MultiEdit": "edit|write"},
+    "claude-code": {"Bash": "Bash", "Bash|Read": "Bash|Read",
+                    "Bash|Write|Edit|MultiEdit": "Bash|Write|Edit|MultiEdit",
+                    "Write|Edit|MultiEdit": "Write|Edit|MultiEdit", "Agent|Task": "Agent|Task"},
 }
 HOME = "$STEERING_HOME"
 
@@ -362,9 +371,17 @@ def build():
                        "entry": f"steering/{name}/skills/{m['skill']}/SKILL.md", "files": files,
                        "purpose": f"The `{m['skill']}` method as an Agent Skills folder (SKILL.md and its references).", "requires": []})
         has_cue = (ST / name / "hooks" / "cue").is_file()
-        cue = has_cue and {"name": "cue", "path": "hooks/cue", "purpose": "Say the rule when the prompt calls for it.", "effect": "context",
-               "event": "UserPromptSubmit", "matcher": None, "kill_switch": "STEERING_CUES_DISABLE=1",
-               "input": "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
+        cue_hooks = [h for h in plugin_hooks(name) if h[0] == "hooks/cue"]
+        cue_events = "; ".join(dict.fromkeys(h[1] for h in cue_hooks)) or "UserPromptSubmit"
+        cue_matchers = "; ".join(dict.fromkeys(h[2] for h in cue_hooks if h[2])) or None
+        cue = has_cue and {"name": "cue", "path": "hooks/cue",
+               "purpose": "Say the rule when the prompt or tool output calls for it." if "PostToolUse" in cue_events else "Say the rule when the prompt calls for it.",
+               "effect": "context",
+               "event": cue_events, "matcher": cue_matchers, "kill_switch": "STEERING_CUES_DISABLE=1",
+               "input": ("One JSON object on stdin with `prompt` (UserPromptSubmit) or `tool_name`/`tool_input`/`tool_response` (PostToolUse). "
+                         "Prints the rule on stdout (or `hookSpecificOutput.additionalContext` JSON on PostToolUse) when `cues.json` matches, nothing otherwise. Always exits 0.")
+                        if "PostToolUse" in cue_events else
+                        "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
                "requires": ["hooks/cues.json"],
                "smoke": {"steps": [{"stdin": {"prompt": json.loads((ST / name / "evals" / "trigger.json").read_text())["should"][0]}, "exit": 0, "stdout_contains": f"[{name}]"}]}}
         for c in m["checks"] + ([cue] if has_cue else []):

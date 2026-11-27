@@ -198,12 +198,12 @@
       "kind": "check",
       "plugin": "evidence-before-done",
       "path": "steering/evidence-before-done/hooks/cue",
-      "purpose": "Say the rule when the prompt calls for it.",
+      "purpose": "Say the rule when the prompt or tool output calls for it.",
       "effect": "context",
-      "event": "UserPromptSubmit",
-      "matcher": null,
+      "event": "PostToolUse; UserPromptSubmit",
+      "matcher": "Bash",
       "kill_switch": "STEERING_CUES_DISABLE=1",
-      "input": "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
+      "input": "One JSON object on stdin with `prompt` (UserPromptSubmit) or `tool_name`/`tool_input`/`tool_response` (PostToolUse). Prints the rule on stdout (or `hookSpecificOutput.additionalContext` JSON on PostToolUse) when `cues.json` matches, nothing otherwise. Always exits 0.",
       "requires": [
         "steering/evidence-before-done/hooks/cues.json"
       ],
@@ -307,12 +307,12 @@
       "kind": "check",
       "plugin": "keep-moving",
       "path": "steering/keep-moving/hooks/cue",
-      "purpose": "Say the rule when the prompt calls for it.",
+      "purpose": "Say the rule when the prompt or tool output calls for it.",
       "effect": "context",
-      "event": "UserPromptSubmit",
-      "matcher": null,
+      "event": "PostToolUse; UserPromptSubmit",
+      "matcher": "Bash|Read",
       "kill_switch": "STEERING_CUES_DISABLE=1",
-      "input": "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
+      "input": "One JSON object on stdin with `prompt` (UserPromptSubmit) or `tool_name`/`tool_input`/`tool_response` (PostToolUse). Prints the rule on stdout (or `hookSpecificOutput.additionalContext` JSON on PostToolUse) when `cues.json` matches, nothing otherwise. Always exits 0.",
       "requires": [
         "steering/keep-moving/hooks/cues.json"
       ],
@@ -619,12 +619,12 @@
       "kind": "check",
       "plugin": "remediation-ladder",
       "path": "steering/remediation-ladder/hooks/cue",
-      "purpose": "Say the rule when the prompt calls for it.",
+      "purpose": "Say the rule when the prompt or tool output calls for it.",
       "effect": "context",
-      "event": "UserPromptSubmit",
-      "matcher": null,
+      "event": "PostToolUse; UserPromptSubmit",
+      "matcher": "Bash|Write|Edit|MultiEdit",
       "kill_switch": "STEERING_CUES_DISABLE=1",
-      "input": "One JSON object on stdin with `prompt`. Prints the rule on stdout when the prompt matches `cues.json`, nothing otherwise. Always exits 0.",
+      "input": "One JSON object on stdin with `prompt` (UserPromptSubmit) or `tool_name`/`tool_input`/`tool_response` (PostToolUse). Prints the rule on stdout (or `hookSpecificOutput.additionalContext` JSON on PostToolUse) when `cues.json` matches, nothing otherwise. Always exits 0.",
       "requires": [
         "steering/remediation-ladder/hooks/cues.json"
       ],
@@ -1754,6 +1754,20 @@
         "steering/adapters/shim"
       ],
       "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/plain-prose.pre.ts",
+      "require_urls": [
+        "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
+      ]
+    },
+    {
+      "id": "adapter/omp/remediation-ladder/post",
+      "kind": "adapter",
+      "plugin": "remediation-ladder",
+      "path": "steering/adapters/omp/remediation-ladder.post.ts",
+      "purpose": "Hook config that runs the remediation-ladder checks in oh-my-pi.",
+      "requires": [
+        "steering/adapters/shim"
+      ],
+      "url": "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/omp/remediation-ladder.post.ts",
       "require_urls": [
         "https://raw.githubusercontent.com/warxhead1/nervous-bus/main/steering/adapters/shim"
       ]

@@ -30,6 +30,7 @@ EVENTS = {
 }
 TOOLS = {
     "Bash": {"bash", "shell", "run_shell_command", "execute_bash", "execute_cmd", "local_shell"},
+    "Read": {"read", "read_file", "fs_read"},
     "Write": {"write", "write_file", "fs_write", "create", "create_file"},
     "Edit": {"edit", "replace", "str_replace", "multiedit", "edit_file"},
     "Agent": {"agent", "task", "spawn_agent", "subagent", "invoke_subagent", "delegate"},
@@ -63,6 +64,11 @@ def normalize(ev, event=None):
         out["tool_input"] = {KEYS.get(k, k): v for k, v in ti.items()}
     if "prompt" not in out and isinstance(ev.get("user_prompt"), str):
         out["prompt"] = ev["user_prompt"]
+    if "tool_response" not in out:
+        for k in ("tool_output", "output", "result", "response"):
+            if k in ev:
+                out["tool_response"] = ev[k]
+                break
     return out
 
 
@@ -103,8 +109,17 @@ def main(argv=None):
         out, err = out + so, err + se
         worst = 2 if 2 in (worst, rc) else max(worst, rc)
     if a.harness == "gemini" and worst == 0 and out.strip():
-        out = json.dumps({"hookSpecificOutput": {"hookEventName": "BeforeAgent" if ev["hook_event_name"] == "UserPromptSubmit" else "AfterTool",
-                                                 "additionalContext": out.strip()}})
+        gem_ev = "BeforeAgent" if ev["hook_event_name"] == "UserPromptSubmit" else "AfterTool"
+        try:
+            parsed = json.loads(out)
+            hso = parsed.get("hookSpecificOutput") if isinstance(parsed, dict) else None
+        except Exception:
+            hso = None
+        if isinstance(hso, dict):
+            hso["hookEventName"] = gem_ev
+            out = json.dumps(parsed)
+        else:
+            out = json.dumps({"hookSpecificOutput": {"hookEventName": gem_ev, "additionalContext": out.strip()}})
     sys.stdout.write(out)
     sys.stderr.write(err)
     return worst

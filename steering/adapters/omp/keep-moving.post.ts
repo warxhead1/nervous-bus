@@ -4,7 +4,8 @@
 import { spawnSync } from "node:child_process";
 
 const checks: [string, string, string][] = [
-  ["edit|write", "$STEERING_HOME/keep-moving/hooks/rerun-guard", "PostToolUse"]
+  ["edit|write", "$STEERING_HOME/keep-moving/hooks/rerun-guard", "PostToolUse"],
+  ["bash|read", "$STEERING_HOME/keep-moving/hooks/cue", "PostToolUse"]
 ];
 const home = process.env.STEERING_HOME ?? "";
 

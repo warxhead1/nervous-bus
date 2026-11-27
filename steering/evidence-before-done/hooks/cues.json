@@ -5,7 +5,7 @@
  },
  {
   "pattern": "\\bpre-?existing\\b|\\b(already|was) (failing|broken|red)\\b|\\bnot (ours|mine|related)\\b|\\bflak(y|e)\\b",
-  "say": "[evidence-before-done] \"Pre-existing\" is a claim to disprove: show the failure on the base commit, or treat it as yours and fix it. Load the evidence-before-done skill."
+  "say": "[evidence-before-done] First concrete step before calling a failure \"pre-existing\" or \"unrelated\": run that failing test on the base commit (for example `git worktree add /tmp/base main && (cd /tmp/base && pytest) && git worktree remove /tmp/base` or `git stash && git checkout main && pytest`). Never claim pre-existing from git diff alone; if you have not run it on main, fix it. Load the evidence-before-done skill."
  },
  {
   "pattern": "\\b(add|use) an? (ignore|skip|suppress\\w*|allow|noqa|exception)\\b|\\b(skip|disable|silence|suppress|ignore|comment out) (the|that|this|it)\\b.*\\b(test|lint|warning|check|error|hook)\\b|--no-verify|\\bjust (stub|mock|hardcode)\\b",
@@ -18,5 +18,19 @@
  {
   "pattern": "\\b(looks?|looking) (off|wrong|bad|broken|weird|ugly|generic|cheap|like (ai )?slop)\\b|\\b(layout|spacing|alignment|styling|css|font|colou?rs?) (is|are|looks?) \\w+|\\b(redesign|restyle|polish|make it (look|feel)|tweak the (ui|layout|design|styles?))\\b|\\bscreenshot\\b|\\b(page|screen|component|modal|landing|dashboard|ui) (looks?|renders?|shows?)\\b",
   "say": "[evidence-before-done] Tests do not see a screen. After a visual change, run the real build, take a screenshot, read it, and say what you saw against what was asked. If you cannot look, report the result as unseen. Load the evidence-before-done skill."
+ },
+ {
+  "event": "PostToolUse",
+  "tools": ["Bash"],
+  "match": "response",
+  "pattern": "(?:^|\\n)\\s*(?:FAILED\\s+\\S+|\\d+\\s+failed\\b|FAIL:\\s+\\S+|test result:\\s*FAILED|AssertionError\\b|not ok \\d+)",
+  "say": "[evidence-before-done] A test failed. FIRST concrete step before calling any failure pre-existing or unrelated: run the failing test on the base commit (`git worktree add /tmp/base main && (cd /tmp/base && <test cmd>) && git worktree remove /tmp/base`, or `git stash && git checkout main && <test cmd> && git checkout - && git stash pop`) to prove it fails on main, or fix the failure directly. Do not call the branch ready to merge while tests fail. Load the evidence-before-done skill."
+ },
+ {
+  "event": "PostToolUse",
+  "tools": ["Bash"],
+  "match": "any",
+  "pattern": "\\bC901\\b|is too complex|#\\s*noqa\\b|max-complexity\\s*=",
+  "say": "[evidence-before-done] A lint gate failed or a suppression is being added. Do not add `# noqa`, raise `max-complexity`, or silence the linter—fix the underlying complexity so the unmodified gate passes. Load the evidence-before-done skill."
  }
 ]
