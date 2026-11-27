@@ -27,14 +27,14 @@ def _parser():
     common.add_argument("--root", default=argparse.SUPPRESS)
     common.add_argument("--writer", default=argparse.SUPPRESS)
     p = _Parser(prog="crucible ledger", description=__doc__)
-    p.add_argument("--root", help="design worktree root (default: $CRUCIBLE_DESIGN_ROOT or nearest design/ledger)")
+    p.add_argument("--root", help="design worktree root (default: $CRUCIBLE_DESIGN_ROOT, for init --repo $CRUCIBLE_WORKTREES/<game>/design, or nearest design/ledger)")
     p.add_argument("--writer", default="crucible", help="ledger file writer name")
     sub = p.add_subparsers(dest="verb", required=True, parser_class=_Parser)
 
     s = sub.add_parser("init", parents=[common], help="create the ledger; adopt a hearth codename row as record one")
     s.add_argument("--game", required=True)
     s.add_argument("--adopt", help="JSON file of the hearth row (decision_id, answer, by)")
-    s.add_argument("--repo", help="git repo to create the design branch worktree from")
+    s.add_argument("--repo", help="git repo whose design branch gets the worktree (needs --root, $CRUCIBLE_DESIGN_ROOT or $CRUCIBLE_WORKTREES)")
 
     s = sub.add_parser("get", parents=[common], help="state of one entity or record, or a filtered list")
     s.add_argument("id", nargs="?")
@@ -79,8 +79,41 @@ def _db(ledger, records):
     return os.path.join(bulk_dir(_game(records)), "index", "ledger.sqlite")
 
 
+def _git(path, *args):
+    r = subprocess.run(["git", "-C", path, *args], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _foreign_checkout(root, repo):
+    """Why root is a git checkout other than the design branch of repo; None when it is not one."""
+    if _git(root, "rev-parse", "--show-toplevel") is None:
+        return None
+    branch = _git(root, "symbolic-ref", "--short", "-q", "HEAD")
+    if branch != "design":
+        return "checked out on " + (branch or "a detached HEAD")
+    if repo:
+        theirs = _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        ours = _git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        if not ours or os.path.realpath(theirs) != os.path.realpath(ours):
+            return "a design checkout of another repo"
+    return None
+
+
 def cmd_init(a):
-    root = os.path.abspath(a.root or os.environ.get("CRUCIBLE_DESIGN_ROOT") or os.getcwd())
+    root = a.root or os.environ.get("CRUCIBLE_DESIGN_ROOT")
+    if not root and a.repo:
+        base = os.environ.get("CRUCIBLE_WORKTREES")
+        if not base:
+            return out({"error": "--repo needs --root, $CRUCIBLE_DESIGN_ROOT or $CRUCIBLE_WORKTREES "
+                                 "(the design worktree goes in $CRUCIBLE_WORKTREES/<game>/design)"}, 2)
+        if os.sep in a.game or a.game in (".", ".."):
+            return out({"error": "--game must be a plain name to name the worktree directory"}, 2)
+        root = os.path.join(base, a.game, "design")
+    root = os.path.abspath(root or os.getcwd())
+    why = _foreign_checkout(root, a.repo) if os.path.isdir(root) else None
+    if why:
+        return out({"error": "root is inside a git checkout that is not the design branch" +
+                             (" of --repo" if a.repo else ""), "root": root, "detail": why}, 1)
     if a.repo and not os.path.exists(root):
         br = subprocess.run(["git", "-C", a.repo, "rev-parse", "--verify", "-q", "design"],
                             capture_output=True).returncode == 0

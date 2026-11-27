@@ -4,13 +4,21 @@
 
 ## crucible ledger
 
-Records are append-only JSONL in `design/ledger/<date>.<writer>.jsonl` under the design worktree, written under one file lock. State is a fold of the records. The SQLite index is a cache under `$CRUCIBLE_BULK/<game>/index/` (default `~/.cache/crucible`).
+Records are append-only JSONL in `design/ledger/<date>.<writer>.jsonl` under the design worktree, written under one file lock. State is a fold of the records. The SQLite index is a cache under `$CRUCIBLE_BULK/<game>/index/`.
 
-Root: `--root`, else `$CRUCIBLE_DESIGN_ROOT`, else the nearest ancestor holding `design/ledger`.
+Root: `--root`, else `$CRUCIBLE_DESIGN_ROOT`, else the nearest ancestor holding `design/ledger`. `init --repo R` with none of those uses `$CRUCIBLE_WORKTREES/<game>/design`, creates that `design` worktree of `R`, and exits 2 when `CRUCIBLE_WORKTREES` is unset. `init` exits 1 when the root is inside a git checkout that is not the `design` branch of `--repo` (without `--repo`: any checkout not on `design`), so a ledger never lands in an unrelated checkout.
+
+Environment:
+
+| Variable | Sets |
+|---|---|
+| `CRUCIBLE_WORKTREES` | parent of the per-game worktrees, for example `/data/worktrees`; the design worktree is `$CRUCIBLE_WORKTREES/<game>/design` |
+| `CRUCIBLE_BULK` | bulk data per game: index, heartbeat. Default `~/.cache/crucible`; point it at a larger disk when the home partition is small |
+| `CRUCIBLE_DESIGN_ROOT` | design worktree root for every verb |
 
 | Verb | Does |
 |---|---|
-| `init --game G [--adopt row.json] [--repo R]` | create the ledger, adopt a hearth row as record one, optionally add the `design` worktree |
+| `init --game G [--adopt row.json] [--repo R]` | create the ledger, adopt a hearth row as record one; with `--repo` also add the `design` worktree |
 | `get [id] [--kind K] [--state S]` | folded entity or record |
 | `why id` | records behind an id, following question origin and supersedes |
 | `build [--check\|--land]` | generate views; `--check` exits 1 on drift; `--land` also commits on the design branch |
