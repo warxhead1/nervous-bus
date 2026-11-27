@@ -1,0 +1,32 @@
+{
+  "skill": "grill",
+  "should": [
+    "Grill me on the economy before we build anything.",
+    "Open design question: should the crew lose scrap when a run fails, or keep half?",
+    "I can't decide whether the game should punish death or forgive it. What do we do?",
+    "Which core loop should the first level teach, the build step or the raid step?",
+    "Ask the owner whether the tile art should be pixel or painted."
+  ],
+  "should_not": [
+    "How long should I grill salmon on a gas grill?",
+    "Rename the staging bucket in the deploy config.",
+    "What does the HTTP 409 status code mean?"
+  ],
+  "measured": {
+    "date": "2026-11-26",
+    "model": "sonnet",
+    "runs_per_prompt": 3,
+    "config": "clean config dir (credentials only), all steering plugins loaded with --plugin-dir, two turns, Skill tool only",
+    "should": {
+      "n": 15,
+      "loaded": 15
+    },
+    "should_not": {
+      "n": 9,
+      "loaded": 0
+    },
+    "load_rate": 1.0,
+    "false_trigger_rate": 0.0,
+    "note": "A run that loaded the skill and then hit the two-turn cap counts as a load; trigger-eval was fixed to do so in the same change."
+  }
+}

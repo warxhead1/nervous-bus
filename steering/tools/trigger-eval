@@ -97,6 +97,10 @@ def parse_stream(stdout, returncode):
         if o.get("type") == "result":
             result = o
     cost = float((result or {}).get("total_cost_usd") or 0)
+    # The run is capped at two turns on purpose. Running out of turns after the skill call is an
+    # observation, not a failure: a loaded skill sends the model to its tools on the next turn.
+    if result is not None and result.get("subtype") == "error_max_turns":
+        return "ok", skills_called(stdout), cost
     if returncode != 0 or result is None or result.get("is_error"):
         return "error", set(), cost
     return "ok", skills_called(stdout), cost
