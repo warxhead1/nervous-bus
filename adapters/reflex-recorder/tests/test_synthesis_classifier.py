@@ -56,6 +56,8 @@ def _seed(conn, prefix, n, *, outcome=None, labeled=False, days_ago=1):
             close_reason="idle_timeout", outcome=outcome,
             labeled_at=ended if labeled else None,
         )
+    # Real runs; a 0-event run is a phantom the classifier does not count.
+    conn.execute("UPDATE runs SET event_count = 10 WHERE run_id LIKE ?", (f"{prefix}-%",))
 
 
 def _evals(result, bucket):

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/crucible.question.settled.v1.json",
+  "title": "crucible.question.settled v1",
+  "description": "A question reached an outcome. Ids, enums, counts and timings only: no question or label text rides the bus. A consumer that needs text reads the ledger.",
+  "type": "object",
+  "required": [
+    "game",
+    "question_id",
+    "outcome",
+    "agreed_with_rec",
+    "via",
+    "latency_ms",
+    "typed_chars",
+    "probe"
+  ],
+  "properties": {
+    "game": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,47}$"
+    },
+    "question_id": {
+      "type": "string",
+      "pattern": "^q-[0-9A-HJKMNP-TV-Z]{26}(\\.[0-9]+)?$"
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "answered",
+        "defaulted",
+        "withdrawn",
+        "taken"
+      ]
+    },
+    "agreed_with_rec": {
+      "type": "boolean"
+    },
+    "via": {
+      "type": "string",
+      "enum": [
+        "kiln-tap",
+        "kiln-voice",
+        "kiln-edit",
+        "hearth",
+        "chat",
+        "cli",
+        "agent"
+      ]
+    },
+    "latency_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "typed_chars": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "probe": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

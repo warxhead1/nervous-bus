@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/crucible.label.edited.v1.json",
+  "title": "crucible.label.edited v1",
+  "description": "A label was edited. Lengths only; the text stays in the ledger. Ids, enums, counts and timings only: no question or label text rides the bus. A consumer that needs text reads the ledger.",
+  "type": "object",
+  "required": [
+    "game",
+    "label_id",
+    "kind",
+    "edit",
+    "via",
+    "chars_from",
+    "chars_to"
+  ],
+  "properties": {
+    "game": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,47}$"
+    },
+    "label_id": {
+      "type": "string",
+      "pattern": "^lbl-[0-9A-HJKMNP-TV-Z]{26}(\\.[0-9]+)?$"
+    },
+    "kind": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{0,47}$"
+    },
+    "edit": {
+      "type": "string",
+      "enum": [
+        "rename",
+        "merge",
+        "split",
+        "retire",
+        "retag"
+      ]
+    },
+    "via": {
+      "type": "string",
+      "enum": [
+        "kiln-tap",
+        "kiln-voice",
+        "kiln-edit",
+        "hearth",
+        "chat",
+        "cli",
+        "agent"
+      ]
+    },
+    "chars_from": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "chars_to": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

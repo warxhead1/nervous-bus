@@ -34,10 +34,15 @@ def test_every_piece_path_exists_and_url_matches():
 
 def test_each_plugin_lists_a_ruling_a_skill_a_check_and_an_adapter_for_every_harness():
     plugins = {p["plugin"] for p in PIECES if p["plugin"]}
-    assert len(plugins) == 9
+    assert len(plugins) == 10
+    hooked = {name for name in plugins if (ST / name / "hooks").is_dir()}
+    assert len(hooked) >= 9
     for name in plugins:
         kinds = {p["kind"] for p in PIECES if p["plugin"] == name}
-        assert {"ruling", "skill", "check", "adapter"} <= kinds, name
+        assert {"ruling", "skill"} <= kinds, name
+    for name in hooked:
+        kinds = {p["kind"] for p in PIECES if p["plugin"] == name}
+        assert {"check", "adapter"} <= kinds, name
         for h in ("claude-code", "codex", "gemini", "kiro"):
             assert any(p["id"].startswith(f"adapter/{h}/{name}") for p in PIECES), (h, name)
 

@@ -450,7 +450,6 @@ class TestAnalyseProjectDryRun(unittest.TestCase):
             project="proj-x",
             failed_runs=failed,
             clean_runs=clean,
-            api_key="unused-in-dry-run",
             dry_run=True,
             verbose=False,
             request_counter=counter,
@@ -468,27 +467,11 @@ class TestAnalyseProjectDryRun(unittest.TestCase):
             project="proj-x",
             failed_runs=failed,
             clean_runs=clean,
-            api_key="",
             dry_run=True,
             verbose=False,
             request_counter=counter,
         )
         self.assertIn("proj-x", patterns[0]["description"])
-
-    def test_no_api_key_returns_empty_without_dry_run(self):
-        failed, clean = self._make_project_sides()
-        counter = [0]
-        patterns = analyst.analyse_project(
-            project="proj-x",
-            failed_runs=failed,
-            clean_runs=clean,
-            api_key="",
-            dry_run=False,
-            verbose=False,
-            request_counter=counter,
-        )
-        self.assertEqual(patterns, [])
-        self.assertEqual(counter[0], 0)
 
 
 # ── _summarise_run ────────────────────────────────────────────────────────────
@@ -541,8 +524,8 @@ class _MainHarness(unittest.TestCase):
             )
         conn.close()
 
-    def _run_main(self, *, eligible=True, key="test-key", dry_run=False,
-                  patterns=None, llm_err=None, emit_ok=True, httpx_ok=True):
+    def _run_main(self, *, eligible=True, claude_present=True, dry_run=False,
+                  patterns=None, llm_err=None, emit_ok=True):
         """Run analyst.main() against a fixture DB; return (rc, stderr, llm_calls)."""
         import contextlib
         import io
@@ -555,15 +538,12 @@ class _MainHarness(unittest.TestCase):
             argv = ["analyst.py", "--db-path", str(db), "--force"]
             if dry_run:
                 argv.append("--dry-run")
-            env = {k: v for k, v in os.environ.items() if k != "MINIMAX_API_KEY"}
-            if key:
-                env["MINIMAX_API_KEY"] = key
             err = io.StringIO()
-            with patch.dict(os.environ, env, clear=True), \
-                    patch.object(sys, "argv", argv), \
-                    patch.object(analyst, "_call_minimax", llm), \
+            with patch.object(sys, "argv", argv), \
+                    patch.object(analyst, "_call_claude", llm), \
                     patch.object(analyst, "_emit_pattern", return_value=emit_ok), \
-                    patch.object(analyst, "_HTTPX_AVAILABLE", httpx_ok), \
+                    patch.object(analyst, "CLAUDE_BIN",
+                                 "sh" if claude_present else "no-such-claude-bin"), \
                     contextlib.redirect_stderr(err), \
                     contextlib.redirect_stdout(io.StringIO()):
                 rc = analyst.main()
@@ -572,26 +552,20 @@ class _MainHarness(unittest.TestCase):
 
 class TestMainExitStatus(_MainHarness):
 
-    def test_missing_key_exits_nonzero_and_names_the_key(self):
-        rc, err, llm_calls = self._run_main(key="")
+    def test_missing_claude_exits_nonzero_and_names_it(self):
+        rc, err, llm_calls = self._run_main(claude_present=False)
         self.assertNotEqual(rc, 0)
-        self.assertIn("MINIMAX_API_KEY", err)
+        self.assertIn("no-such-claude-bin", err)
         self.assertEqual(llm_calls, 0)
 
-    def test_missing_key_fails_even_when_no_project_is_eligible(self):
-        # A broken credential injection must surface today, not on the day the
+    def test_missing_claude_fails_even_when_no_project_is_eligible(self):
+        # A broken install must surface today, not on the day the
         # contrast set first fills up.
-        rc, _err, _calls = self._run_main(key="", eligible=False)
+        rc, _err, _calls = self._run_main(claude_present=False, eligible=False)
         self.assertNotEqual(rc, 0)
 
-    def test_missing_httpx_exits_nonzero(self):
-        rc, err, llm_calls = self._run_main(httpx_ok=False, patterns=[])
-        self.assertNotEqual(rc, 0)
-        self.assertIn("httpx", err)
-        self.assertEqual(llm_calls, 0)
-
-    def test_dry_run_needs_no_key(self):
-        rc, _err, llm_calls = self._run_main(key="", dry_run=True)
+    def test_dry_run_needs_no_claude(self):
+        rc, _err, llm_calls = self._run_main(claude_present=False, dry_run=True)
         self.assertEqual(rc, 0)
         self.assertEqual(llm_calls, 0)
 
@@ -618,153 +592,73 @@ class TestMainExitStatus(_MainHarness):
         self.assertEqual(rc, 0)
         self.assertEqual(llm_calls, 1)
 
-    def test_no_labeled_runs_with_key_is_not_a_failure(self):
+    def test_no_labeled_runs_is_not_a_failure(self):
         rc, _err, llm_calls = self._run_main(eligible=False)
         self.assertEqual(rc, 0)
         self.assertEqual(llm_calls, 0)
 
 
-# ── MiniMax request shape ─────────────────────────────────────────────────────
+# ── claude -p call ────────────────────────────────────────────────────────────
 
-class TestMiniMaxRequest(unittest.TestCase):
+class TestClaudeCall(unittest.TestCase):
 
-    def _post(self) -> dict:
-        import asyncio
-        import types
-
-        posted: list[dict] = []
-
-        class _Resp:
-            status_code = 200
-            text = ""
-
-            def json(self):
-                return {"content": [{"type": "text", "text": "[]"}]}
-
-        class _Client:
-            def __init__(self, **_kw):
-                pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *_a):
-                return False
-
-            async def post(self, _url, json=None, headers=None):
-                posted.append(json)
-                return _Resp()
-
-        fake = types.SimpleNamespace(AsyncClient=_Client, Timeout=lambda **_kw: None)
-        with patch.dict(sys.modules, {"httpx": fake}), \
-                patch.object(analyst, "_HTTPX_AVAILABLE", True):
-            asyncio.run(analyst._call_minimax("k", "prompt"))
-        self.assertEqual(len(posted), 1)
-        return posted[0]
-
-    def test_token_budget_leaves_room_for_reasoning(self):
-        # M3.x models spend most of max_tokens thinking; when the cap is hit
-        # the response has no text block and the project yields nothing.
-        self.assertGreaterEqual(self._post()["max_tokens"], 20000)
-
-    def test_thinking_only_response_is_diagnosed_not_reported_as_bad_json(self):
-        import contextlib
-        import io
-        data = {
-            "content": [{"type": "thinking", "thinking": "..."}],
-            "stop_reason": "max_tokens",
-            "usage": {"output_tokens": 4096},
-        }
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            self.assertIsNone(analyst._parse_response(data))
-        self.assertIn("stop_reason=max_tokens", err.getvalue())
-        self.assertNotIn("JSON parse error", err.getvalue())
-
-    def _call_with_status(self, status: int):
+    def _call(self, stdout: str, code: int = 0, env_probe: bool = False):
         import asyncio
         import contextlib
         import io
-        import types
+        import stat
 
-        class _Resp:
-            status_code = status
-            text = ""
-
-            def json(self):
-                return {}
-
-        class _Client:
-            def __init__(self, **_kw):
-                pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *_a):
-                return False
-
-            async def post(self, *_a, **_kw):
-                return _Resp()
-
-        fake = types.SimpleNamespace(AsyncClient=_Client, Timeout=lambda **_kw: None)
-        err = io.StringIO()
-        with patch.dict(sys.modules, {"httpx": fake}), \
-                patch.object(analyst, "_HTTPX_AVAILABLE", True), \
-                contextlib.redirect_stderr(err):
-            result = asyncio.run(analyst._call_minimax("k", "prompt"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            script = Path(tmpdir) / "claude"
+            body = "printf '%s' \"$ANTHROPIC_API_KEY\"" if env_probe else f"printf '%s' '{stdout}'"
+            script.write_text(f"#!/bin/sh\ncat >/dev/null\n{body}\nexit {code}\n")
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
+            err = io.StringIO()
+            with patch.object(analyst, "CLAUDE_BIN", str(script)), \
+                    contextlib.redirect_stderr(err):
+                result = asyncio.run(analyst._call_claude("prompt"))
         return result, err.getvalue()
 
-    def test_rejected_key_is_not_reported_as_rate_limiting(self):
-        for status in (401, 403):
-            (patterns, kind), err = self._call_with_status(status)
-            self.assertIsNone(patterns)
-            self.assertNotEqual(kind, "rate_limit", status)
-            self.assertIn("rejected the API key", err)
-            self.assertIn(str(status), err)
+    def test_success_parses_a_fenced_array(self):
+        (patterns, kind), _ = self._call('```json\n[{"pattern_name": "p"}]\n```')
+        self.assertEqual(patterns, [{"pattern_name": "p"}])
+        self.assertIsNone(kind)
 
-    def test_http_429_is_still_rate_limiting(self):
-        (patterns, kind), _err = self._call_with_status(429)
+    def test_login_failure_is_not_reported_as_rate_limiting(self):
+        (patterns, kind), err = self._call("Not logged in - Please run /login", code=1)
+        self.assertIsNone(patterns)
+        self.assertEqual(kind, "auth")
+        self.assertIn("not logged in", err)
+
+    def test_usage_limit_is_rate_limiting(self):
+        (patterns, kind), _ = self._call("Claude usage limit reached", code=1)
         self.assertIsNone(patterns)
         self.assertEqual(kind, "rate_limit")
 
-    def test_transport_error_names_its_exception_type(self):
-        import asyncio
+    def test_other_failure_is_transient(self):
+        (_patterns, kind), _ = self._call("boom", code=1)
+        self.assertEqual(kind, "transient")
+
+    def test_api_key_is_removed_from_the_child_env(self):
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}):
+            (_p, kind), _ = self._call("", env_probe=True)
+        # The child echoed an empty key, so its reply is not a JSON array.
+        self.assertEqual(kind, "transient")
+
+    def test_empty_reply_is_diagnosed(self):
         import contextlib
         import io
-        import types
-
-        class _Client:
-            def __init__(self, **_kw):
-                pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *_a):
-                return False
-
-            async def post(self, *_a, **_kw):
-                raise TimeoutError()   # str(e) == "" like httpx.ReadTimeout
-
-        fake = types.SimpleNamespace(AsyncClient=_Client, Timeout=lambda **_kw: None)
         err = io.StringIO()
-        with patch.dict(sys.modules, {"httpx": fake}), \
-                patch.object(analyst, "_HTTPX_AVAILABLE", True), \
-                contextlib.redirect_stderr(err):
-            result = asyncio.run(analyst._call_minimax("k", "prompt"))
-        self.assertEqual(result, (None, "transient"))
-        self.assertIn("TimeoutError", err.getvalue())
-
-    def test_model_is_not_the_retired_m2_family(self):
-        self.assertNotRegex(self._post()["model"], r"^MiniMax-M2")
+        with contextlib.redirect_stderr(err):
+            self.assertIsNone(analyst._parse_response("  "))
+        self.assertIn("empty reply", err.getvalue())
 
 
 # ── systemd unit ──────────────────────────────────────────────────────────────
 
 class TestServiceUnit(unittest.TestCase):
 
-    def test_execstart_injects_the_key_from_the_vault(self):
+    def test_execstart_needs_no_api_key_wrapper(self):
         unit = Path(__file__).parent / "systemd" / "tier2-analyst.service"
         exec_lines = [
             ln.split("=", 1)[1].strip()
@@ -772,25 +666,8 @@ class TestServiceUnit(unittest.TestCase):
             if ln.startswith("ExecStart=")
         ]
         self.assertEqual(len(exec_lines), 1)
-        argv = exec_lines[0].split()
-        self.assertTrue(argv[0].endswith("/hearth-vault"), argv[0])
-        self.assertEqual(argv[1], "exec")
-        self.assertIn("--prefix", argv)
-        self.assertEqual(argv[argv.index("--prefix") + 1], "ai/")
-        self.assertIn("--redact", argv)
-        sep = argv.index("--")
-        self.assertTrue(argv[sep + 1].endswith("python3"), argv[sep + 1])
-        self.assertTrue(argv[-1].endswith("tier2/analyst.py"), argv[-1])
-
-    def test_timeout_covers_a_sequential_pass_over_every_project(self):
-        unit = Path(__file__).parent / "systemd" / "tier2-analyst.service"
-        timeouts = [
-            int(ln.split("=", 1)[1])
-            for ln in unit.read_text().splitlines()
-            if ln.startswith("TimeoutSec=")
-        ]
-        self.assertEqual(len(timeouts), 1)
-        self.assertGreaterEqual(timeouts[0], 3600)
+        self.assertNotIn("hearth-vault", exec_lines[0])
+        self.assertTrue(exec_lines[0].endswith("analyst.py"))
 
 
 if __name__ == "__main__":

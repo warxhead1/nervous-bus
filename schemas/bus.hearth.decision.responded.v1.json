@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth.decision.responded.v1.json",
+  "title": "bus.hearth.decision.responded v1",
+  "description": "A decision was settled. Emitted on the owner's respond call, and lazily when a read passes default_after (status defaulted, option = recommended).",
+  "type": "object",
+  "required": [
+    "decision_id",
+    "correlation_id",
+    "status",
+    "responded_at"
+  ],
+  "properties": {
+    "decision_id": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "answered",
+        "defaulted",
+        "withdrawn"
+      ]
+    },
+    "option_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "answers": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "text": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "answered_by": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "responded_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": true
+}

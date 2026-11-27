@@ -299,3 +299,42 @@ def test_promotion_candidates_reach_the_report_and_table(env, tmp_path):
     rep = _build(env, tmp_path)
     assert rep["promotion"][0]["files"] == ["feedback_sudo.md", "feedback_sudo_ask.md"]
     assert "proj-a/feedback_sudo.md ~ proj-b/feedback_sudo_ask.md" in sv.to_markdown(rep)
+
+
+def test_successes_publish_once_and_retry_after_a_failed_publish(env, tmp_path):
+    items = _build(env, tmp_path)["successes"]
+    assert items
+    sent = []
+
+    def fail(ch, p):
+        sent.append((ch, p))
+        return False
+
+    def ok(ch, p):
+        sent.append((ch, p))
+        return True
+
+    out = tmp_path / "pub"
+    assert sv.publish_successes(items, out, publish=fail) == 0
+    assert sv.publish_successes(items, out, publish=ok) == len(items)
+    assert sv.publish_successes(items, out, publish=ok) == 0
+    assert {ch for ch, _ in sent} == {"reflex.rule.success.v1"}
+    assert len(sent) == 2 * len(items)
+
+
+def test_success_payload_matches_its_schema(env, tmp_path):
+    from jsonschema import Draft202012Validator
+    schema = json.loads((Path(__file__).resolve().parents[3] / "schemas"
+                         / "reflex.rule.success.v1.json").read_text())
+    v = Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER)
+    items = _build(env, tmp_path)["successes"]
+    assert items
+    for s in items:
+        v.validate(s)
+
+
+def test_a_known_correction_names_a_theme_the_registry_can_target():
+    from detectors.user_correction import THEMES, classify_turn
+    assert "stale_claim" in classify_turn("you said it was done but it is still broken")
+    assert "stale_claim" in THEMES
+    assert [(d, t) for _, d, t in sv._targets({"themes": ["stale_claim"]})] == [("user_correction", "stale_claim")]

@@ -3,21 +3,21 @@
 
 Scheduled OFF-PEAK by a systemd timer (fires between 01:00–05:00 UTC) to keep
 LLM analysis cost low.  Reads outcome-labeled runs from the run-store READ-ONLY
-(open SQLite with uri=true&mode=ro), batches per project, asks MiniMax/Anthropic
-the contrast question ("what distinguishes failed/thrashed/abandoned from clean
+(open SQLite with uri=true&mode=ro), batches per project, asks the Claude coding plan
+(`claude -p`) the contrast question ("what distinguishes failed/thrashed/abandoned from clean
 runs in this project?"), and emits ``<project>.pattern.discovered.v1`` for each
 semantic insight found.
 
-Cost unit: REQUESTS (MiniMax coding-plan = flat-rate; track requests, not
-dollars).  One LLM call per project per analyst run.  Off-peak scheduling
-plus a minimum-labeled-runs gate keep the request count low.
+Cost unit: REQUESTS (the coding plan bills by request count, not dollars).
+One LLM call per project per analyst run.  Off-peak scheduling plus a
+minimum-labeled-runs gate keep the request count low.
 
-Credentials: MINIMAX_API_KEY must be in the environment.  The systemd unit
-injects it with ``hearth-vault exec --prefix ai/ --redact --``.  A missing key
-(or missing httpx) is a misconfiguration and exits 2 BEFORE any work, so a
-timer that cannot reach the LLM shows up as a failed unit instead of a
-healthy-looking no-op.  A run that issues no LLM request, or loses any request
-or emit, exits 1.
+Credentials: none.  The call is `claude -p` under the user's plan login, and
+ANTHROPIC_API_KEY is removed from the child env so an API key never takes
+over.  A missing `claude` binary is a misconfiguration and exits 2 BEFORE any
+work, so a timer that cannot reach the LLM shows up as a failed unit instead
+of a healthy-looking no-op.  A run that issues no LLM request, or loses any
+request or emit, exits 1.
 
 Usage:
     python3 analyst.py [--db-path PATH] [--dry-run] [--verbose]
@@ -29,6 +29,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -48,24 +49,15 @@ MIN_RUNS_PER_SIDE = 2
 _FAILED_OUTCOMES = frozenset({"thrashed", "abandoned", "reverted"})
 _CLEAN_OUTCOMES = frozenset({"clean", "landed", "corrected"})
 
-# ── MiniMax / Anthropic call shape (mirrors pattern_consumer.py) ───────────────
-MINIMAX_ENDPOINT = "https://api.minimax.io/anthropic/v1/messages"
-MINIMAX_MODEL = os.environ.get("TIER2_ANALYST_MODEL", "MiniMax-M3.1-Flash")
-# M3.x models reason before answering, cannot be told not to (thinking:disabled
-# is a 400), and the thinking tokens count against max_tokens.  Too small a cap
-# returns a thinking-only response with no text block.
-MINIMAX_MAX_TOKENS = int(os.environ.get("TIER2_MAX_TOKENS", "24576"))
-MINIMAX_CONNECT_TIMEOUT_S = float(os.environ.get("TIER2_CONNECT_TIMEOUT_S", "10"))
-MINIMAX_READ_TIMEOUT_S = float(os.environ.get("TIER2_READ_TIMEOUT_S", "240"))
-
-FALLBACK_ENDPOINT = "https://api.anthropic.com/v1/messages"
-FALLBACK_MODEL = os.environ.get("TIER2_FALLBACK_MODEL", "claude-haiku-4-5-20251001")
-FALLBACK_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+# ── Coding-plan call shape (mirrors deer-flow pattern_consumer.py) ────────────
+ANALYST_MODEL = os.environ.get("TIER2_ANALYST_MODEL", "sonnet")
+CLAUDE_BIN = os.environ.get("TIER2_CLAUDE_BIN", "claude")
+CALL_TIMEOUT_S = float(os.environ.get("TIER2_READ_TIMEOUT_S", "600"))
 
 NBUS_ROOT = os.environ.get("NBUS_ROOT", str(Path(__file__).resolve().parents[3]))
 
 EXIT_RUN_FAILED = 1       # ran, but an LLM request or emit was lost / none was issued
-EXIT_NOT_CONFIGURED = 2   # cannot run at all: no API key or no httpx
+EXIT_NOT_CONFIGURED = 2   # cannot run at all: no claude binary
 
 
 # ── ULID ──────────────────────────────────────────────────────────────────────
@@ -270,121 +262,74 @@ def build_prompt(
     return "\n".join(lines)
 
 
-# ── LLM call (mirrors pattern_consumer.py) ────────────────────────────────────
+# ── LLM call ──────────────────────────────────────────────────────────────────
 
-try:
-    import httpx as _httpx_module
-    _HTTPX_AVAILABLE = True
-except ImportError:
-    _HTTPX_AVAILABLE = False
+_AUTH_MARKERS = ("not logged in", "/login", "authentication_error", "invalid api key", "401", "403")
+_RATE_MARKERS = ("rate limit", "rate_limit", "usage limit", "429", "overloaded")
 
 
-async def _call_minimax(api_key: str, prompt: str) -> tuple[list[dict] | None, str | None]:
-    """Call MiniMax.  Returns (patterns, error_kind)."""
-    if not _HTTPX_AVAILABLE:
-        return None, "no_httpx"
-    import httpx
-    payload = {
-        "model": MINIMAX_MODEL,
-        "max_tokens": MINIMAX_MAX_TOKENS,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    timeout = httpx.Timeout(
-        connect=MINIMAX_CONNECT_TIMEOUT_S,
-        read=MINIMAX_READ_TIMEOUT_S,
-        write=10.0,
-        pool=5.0,
-    )
+def _classify_failure(text: str) -> str:
+    """auth, rate_limit or transient.  A login failure is never a rate limit."""
+    low = text.lower()
+    if any(m in low for m in _AUTH_MARKERS):
+        return "auth"
+    if any(m in low for m in _RATE_MARKERS):
+        return "rate_limit"
+    return "transient"
+
+
+async def _call_claude(prompt: str) -> tuple[list[dict] | None, str | None]:
+    """Run the prompt through `claude -p`.  Returns (patterns, error_kind)."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+    argv = [CLAUDE_BIN, "-p", "--model", ANALYST_MODEL, "--tools", "",
+            "--no-session-persistence", "--setting-sources", "",
+            "--disable-slash-commands", "--strict-mcp-config"]
+    proc = None
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                MINIMAX_ENDPOINT,
-                json=payload,
-                headers={
-                    "anthropic-version": "2023-06-01",
-                    "x-api-key": api_key,
-                    "Content-Type": "application/json",
-                },
-            )
-            if resp.status_code in (401, 403):
-                sys.stderr.write(
-                    f"tier2-analyst: MiniMax rejected the API key (HTTP {resp.status_code})\n"
-                )
-                return None, "auth"
-            if resp.status_code == 429:
-                return None, "rate_limit"
-            if resp.status_code != 200:
-                sys.stderr.write(
-                    f"tier2-analyst: MiniMax {resp.status_code}: {resp.text[:200]}\n"
-                )
-                return None, "transient"
-            return _parse_response(resp.json()), None
-    except Exception as e:
-        sys.stderr.write(f"tier2-analyst: MiniMax error: {type(e).__name__}: {e}\n")
-        return None, "transient"
-
-
-async def _call_anthropic(prompt: str) -> tuple[list[dict] | None, str | None]:
-    """Anthropic fallback.  Returns (patterns, error_kind)."""
-    if not FALLBACK_API_KEY:
-        return None, "no_fallback_key"
-    if not _HTTPX_AVAILABLE:
-        return None, "no_httpx"
-    import httpx
-    payload = {
-        "model": FALLBACK_MODEL,
-        "max_tokens": 2048,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    timeout = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=5.0)
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                FALLBACK_ENDPOINT,
-                json=payload,
-                headers={
-                    "x-api-key": FALLBACK_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-            )
-            if resp.status_code in (401, 403):
-                sys.stderr.write(
-                    f"tier2-analyst: Anthropic rejected the API key (HTTP {resp.status_code})\n"
-                )
-                return None, "auth"
-            if resp.status_code == 429:
-                return None, "rate_limit"
-            if resp.status_code != 200:
-                sys.stderr.write(
-                    f"tier2-analyst: Anthropic {resp.status_code}: {resp.text[:200]}\n"
-                )
-                return None, "transient"
-            return _parse_response(resp.json()), None
-    except Exception as e:
-        sys.stderr.write(f"tier2-analyst: Anthropic error: {type(e).__name__}: {e}\n")
-        return None, "transient"
-
-
-def _parse_response(data: dict) -> list[dict] | None:
-    """Extract the JSON pattern array from an Anthropic-format response."""
-    blocks = data.get("content") or []
-    text_parts = [
-        b.get("text", "")
-        for b in blocks
-        if isinstance(b, dict) and b.get("type") == "text"
-    ]
-    text = "".join(text_parts).strip()
-    if not text:
-        # Reasoning models can spend the whole max_tokens budget thinking and
-        # return only a thinking block; say so instead of "JSON parse error".
-        usage = data.get("usage") or {}
-        sys.stderr.write(
-            "tier2-analyst: response has no text block "
-            f"(stop_reason={data.get('stop_reason')} "
-            f"output_tokens={usage.get('output_tokens')} "
-            f"max_tokens={MINIMAX_MAX_TOKENS}); raise TIER2_MAX_TOKENS\n"
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            cwd=os.environ.get("TMPDIR") or "/var/tmp",
         )
+        out, errb = await asyncio.wait_for(
+            proc.communicate(prompt.encode()), timeout=CALL_TIMEOUT_S
+        )
+    except asyncio.TimeoutError:
+        if proc is not None:
+            proc.kill()
+            await proc.wait()
+        sys.stderr.write(f"tier2-analyst: claude -p timed out after {CALL_TIMEOUT_S}s\n")
+        return None, "transient"
+    except Exception as e:
+        sys.stderr.write(f"tier2-analyst: claude error: {type(e).__name__}: {e}\n")
+        return None, "transient"
+    text = out.decode(errors="replace")
+    if proc.returncode != 0:
+        detail = (text + errb.decode(errors="replace")).strip()
+        kind = _classify_failure(detail)
+        if kind == "auth":
+            sys.stderr.write(f"tier2-analyst: claude is not logged in: {detail[:200]}\n")
+        else:
+            sys.stderr.write(
+                f"tier2-analyst: claude exit {proc.returncode} ({kind}): {detail[:200]}\n"
+            )
+        return None, kind
+    patterns = _parse_response(text)
+    if patterns is not None:
+        return patterns, None
+    # A short unparseable reply is a CLI notice; a long one is model prose.
+    return None, _classify_failure(text) if len(text) < 300 else "transient"
+
+
+def _parse_response(text: str) -> list[dict] | None:
+    """Extract the JSON pattern array from the model's reply text."""
+    text = text.strip()
+    if not text:
+        sys.stderr.write("tier2-analyst: empty reply\n")
         return None
     text = re.sub(r"^```json?\s*", "", text)
     text = re.sub(r"\s*```$", "", text).strip()
@@ -444,7 +389,6 @@ def analyse_project(
     project: str,
     failed_runs: list[dict],
     clean_runs: list[dict],
-    api_key: str,
     dry_run: bool,
     verbose: bool,
     request_counter: list[int],
@@ -480,20 +424,8 @@ def analyse_project(
         }
         return [placeholder]
 
-    if not api_key:
-        sys.stderr.write(
-            f"tier2-analyst: MINIMAX_API_KEY not set; no LLM call for project={project}\n"
-        )
-        failure_counter[0] += 1
-        return []
-
-    patterns, err = asyncio.run(_call_minimax(api_key, prompt))
+    patterns, err = asyncio.run(_call_claude(prompt))
     request_counter[0] += 1
-
-    if err in ("rate_limit", "auth"):
-        sys.stderr.write(f"tier2-analyst: MiniMax {err}; trying Anthropic fallback\n")
-        patterns, err = asyncio.run(_call_anthropic(prompt))
-        request_counter[0] += 1
 
     if patterns is None:
         sys.stderr.write(f"tier2-analyst: LLM call failed for project={project}: {err}\n")
@@ -517,16 +449,10 @@ def analyse_project(
     return emitted
 
 
-def _preflight_problem(api_key: str) -> Optional[str]:
+def _preflight_problem() -> Optional[str]:
     """Return why a live (non-dry-run) analysis cannot reach the LLM, or None."""
-    if not api_key:
-        return (
-            "MINIMAX_API_KEY is not set.  Run under "
-            "`hearth-vault exec --prefix ai/ --redact --` (see "
-            "systemd/tier2-analyst.service)."
-        )
-    if not _HTTPX_AVAILABLE:
-        return "httpx is not importable by this interpreter; no LLM call is possible."
+    if not shutil.which(CLAUDE_BIN):
+        return f"`{CLAUDE_BIN}` is not on PATH; no LLM call is possible."
     return None
 
 
@@ -553,9 +479,8 @@ def main() -> int:
         )
         return 0
 
-    api_key = os.environ.get("MINIMAX_API_KEY", "")
     if not args.dry_run:
-        problem = _preflight_problem(api_key)
+        problem = _preflight_problem()
         if problem:
             sys.stderr.write(f"tier2-analyst: NOT CONFIGURED: {problem}\n")
             return EXIT_NOT_CONFIGURED
@@ -589,7 +514,6 @@ def main() -> int:
             project=project,
             failed_runs=sides["failed"],
             clean_runs=sides["clean"],
-            api_key=api_key,
             dry_run=args.dry_run,
             verbose=args.verbose,
             request_counter=request_counter,

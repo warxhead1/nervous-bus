@@ -16,19 +16,30 @@ Events older than #54 carry none of these; callers keep their legacy paths.
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 
 # lint is not a verification: the keyword floor never counted it either.
 VERIFY_CLASSES = frozenset({"test", "build", "typecheck"})
 
 
+@lru_cache(maxsize=1 << 17)
+def _parse_text(text: str) -> dict:
+    # Shared result: callers only read it. The same summary is parsed several
+    # times per event across the verify predicates, so caching cuts json.loads
+    # calls roughly threefold on a full scan.
+    try:
+        v = json.loads(text or "")
+    except ValueError:
+        return {}
+    return v if isinstance(v, dict) else {}
+
+
 def _parse(summary) -> dict:
     if isinstance(summary, dict):
         return summary
-    try:
-        v = json.loads(summary or "")
-    except (TypeError, ValueError):
+    if not isinstance(summary, str):
         return {}
-    return v if isinstance(v, dict) else {}
+    return _parse_text(summary)
 
 
 def verify_text(tool_summary) -> str:

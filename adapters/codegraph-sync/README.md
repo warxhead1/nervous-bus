@@ -60,6 +60,12 @@ systemctl --user daemon-reload
 systemctl --user enable --now codegraph-sync.timer
 ```
 
+The unit runs `sync.py` from its own clone of origin/main under
+`~/.local/share/nervous-bus/codegraph-sync-src`, fetched on every tick. The
+shared checkout can be on any branch, frozen or dirty and the timer is
+unaffected. A failed fetch keeps the last good clone. Delete that directory to
+force a fresh clone.
+
 Resource policy is in the unit itself: `Slice=build.slice` (the batch slice),
 `CPUWeight=10`, `Nice=19`, `IOSchedulingClass=idle`. It runs alongside
 `game-priority-watch` and is not a second watcher.

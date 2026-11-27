@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/bus.hearth.decision.requested.v1.json",
+  "title": "bus.hearth.decision.requested v1",
+  "description": "An agent needs the owner's call. Emitted by hearth when a decision is posted. Carries either options or parts, never both: up to 8 parts, at most 6 options in any list. Free text is allowed here because hearth is the owner-facing surface; crucible.* channels never carry it.",
+  "type": "object",
+  "required": [
+    "decision_id",
+    "correlation_id",
+    "project",
+    "title"
+  ],
+  "properties": {
+    "decision_id": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "type": "string",
+      "description": "Equals decision_id; clears the card"
+    },
+    "project": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "context": {
+      "type": "string"
+    },
+    "options": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "label": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "maxItems": 6
+    },
+    "parts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "options"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "recommended": {
+            "type": "string"
+          },
+          "media": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "label"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "label": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": true
+            },
+            "maxItems": 6
+          }
+        },
+        "additionalProperties": true
+      },
+      "maxItems": 8
+    },
+    "recommended": {
+      "type": "string"
+    },
+    "default_after": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "links": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "required": [
+        "options"
+      ],
+      "not": {
+        "required": [
+          "parts"
+        ]
+      }
+    },
+    {
+      "required": [
+        "parts"
+      ],
+      "not": {
+        "required": [
+          "options"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": true
+}

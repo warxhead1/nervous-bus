@@ -149,5 +149,16 @@ class TestLoadRepos(unittest.TestCase):
         self.assertEqual(sync.load_repos(Path("/nonexistent/config.yaml")), [])
 
 
+class UnitIndependence(unittest.TestCase):
+    """The timer must not run code from the shared checkout."""
+
+    def test_service_runs_from_its_own_clone(self):
+        unit = (Path(__file__).parent / "systemd" / "codegraph-sync.service").read_text()
+        execs = [ln for ln in unit.splitlines() if ln.startswith("ExecStart=")]
+        self.assertEqual(len(execs), 1)
+        self.assertNotIn("projects/nervous-bus", unit)
+        self.assertIn("${SRC}/adapters/codegraph-sync/sync.py", execs[0])
+
+
 if __name__ == "__main__":
     unittest.main()
