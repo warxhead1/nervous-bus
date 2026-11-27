@@ -254,5 +254,22 @@ class Resolution(Base):
         self.assertEqual(self.label("edit", "lbl-nope")[0], 2)
 
 
+class KilnRename(Base):
+    def test_kiln_argv_renames_as_owner_and_records_via(self):
+        a = self.propose("resource", "Salvage", "owner")
+        lid = a["label_id"]
+        rc, body = self.label("edit", lid, "--text", "--Sprint now", "--via", "kiln")
+        self.assertEqual(rc, 0, body)
+        self.assertEqual(self.label("get", lid)[1]["label"]["text"], "--Sprint now")
+        recs, _ = Ledger(self.root).read()
+        edit = [r for r in recs if r["type"] == "label.edited"][-1]
+        self.assertEqual((edit["via"], edit["by"], edit["body"]["edit"]), ("kiln", "owner", "rename"))
+
+    def test_text_without_by_is_owner_but_an_explicit_agent_stays_locked_out(self):
+        a = self.propose("resource", "Salvage", "owner")
+        rc, _ = self.label("edit", a["label_id"], "--text", "Scrap", "--by", "agent")
+        self.assertEqual(rc, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

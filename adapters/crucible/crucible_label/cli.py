@@ -36,7 +36,7 @@ def _parser():
     p = _Parser(prog="crucible label", description=__doc__)
     p.add_argument("--root", help="design worktree root (default: $CRUCIBLE_DESIGN_ROOT or nearest design/ledger)")
     p.add_argument("--writer", default="crucible", help="ledger file writer name")
-    p.add_argument("--by", default="agent", help="who acts: owner or an agent name. Only owner edits owner-locked labels")
+    p.add_argument("--by", default=None, help="who acts: owner or an agent name. Only owner edits owner-locked labels")
     p.add_argument("--via", default="cli", help="surface the edit came through")
     sub = p.add_subparsers(dest="verb", required=True, parser_class=_Parser)
 
@@ -57,7 +57,8 @@ def _parser():
     s = sub.add_parser("edit", parents=[common], help="rename, retag or split a label")
     s.add_argument("id")
     g = s.add_mutually_exclusive_group(required=True)
-    g.add_argument("--rename", metavar="TEXT")
+    g.add_argument("--rename", "--text", dest="rename", metavar="TEXT",
+                   help="new text. With --text and no --by, the edit is the owner's (the Kiln Rename pill)")
     g.add_argument("--retag", metavar="KIND")
     g.add_argument("--split", nargs="+", metavar="TEXT", help="new labels that take over part of this one's meaning")
     s.add_argument("--surface")
@@ -321,9 +322,25 @@ def cmd_uses(a):
                 "stale_projections": len(stale), "stale": stale})
 
 
+def _glue_values(argv):
+    """`--text --Sprint now` gives a value that starts with dashes; glue it so argparse reads it as the value."""
+    out, i = [], 0
+    while i < len(argv):
+        if argv[i] in ("--text", "--rename") and i + 1 < len(argv):
+            out.append(f"{argv[i]}={argv[i + 1]}")
+            i += 2
+        else:
+            out.append(argv[i])
+            i += 1
+    return out
+
+
 def main(argv):
     try:
-        a = _parser().parse_args(argv)
+        a = _parser().parse_args(_glue_values(argv))
+        if a.by is None:
+            owner_text = a.verb == "edit" and any(x == "--text" or x.startswith("--text=") for x in argv)
+            a.by = registry.OWNER if owner_text else "agent"
         return globals()["cmd_" + a.verb](a)
     except LedgerError as e:
         return out({"error": str(e)}, e.code)
