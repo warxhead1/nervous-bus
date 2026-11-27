@@ -48,6 +48,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
+import bus_publish
 import query
 import steering_audit
 
@@ -304,6 +305,32 @@ def build(conn: sqlite3.Connection, tree: Path, digest_dir: Path, claude_home: P
     }
 
 
+SUCCESS_CHANNEL = "reflex.rule.success.v1"
+PUBLISHED_FILE = "successes-published.json"
+
+
+def publish_successes(items: list[dict], out_dir: Path, publish=bus_publish.publish) -> int:
+    """Publish each success not sent before, keyed by rule, target and commit.
+    A failed publish stays unrecorded so the next run retries it."""
+    state = out_dir / PUBLISHED_FILE
+    try:
+        sent = set(json.loads(state.read_text()))
+    except (OSError, ValueError):
+        sent = set()
+    new = 0
+    for s in items:
+        key = f"{s['rule']}|{s['target']}|{s['commit']}"
+        if key in sent:
+            continue
+        if not publish(SUCCESS_CHANNEL, s):
+            continue
+        sent.add(key)
+        new += 1
+    if new:
+        atomic_write(state, json.dumps(sorted(sent)))
+    return new
+
+
 def success_lines(items: list[dict]) -> list[str]:
     return [f"- {s['rule']} ({s['target']}): {s['before_per_100']} -> {s['after_per_100']} "
             f"per 100 runs after {s['commit']} on {s['at'][:10]}" for s in items]
@@ -357,7 +384,8 @@ def write(rep: dict, out_dir: Path) -> list[Path]:
 
 
 def run(db: Path | None = None, tree: Path | None = None, out_dir: Path | None = None,
-        window_days: int = 14, recent_days: int = 14, write_files: bool = True) -> dict:
+        window_days: int = 14, recent_days: int = 14, write_files: bool = True,
+        publish: bool = False) -> dict:
     out_dir = out_dir or steering_audit.STEERING_DIGEST_DIR
     tree = tree or query.DEFAULT_RULES_TREE
     conn = query.open_db_ro(db)
@@ -368,6 +396,8 @@ def run(db: Path | None = None, tree: Path | None = None, out_dir: Path | None =
         conn.close()
     if write_files:
         write(rep, out_dir)
+        if publish:
+            publish_successes(rep.get("successes", []), out_dir)
     return rep
 
 
@@ -382,7 +412,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-write", action="store_true")
     a = ap.parse_args(argv)
     try:
-        rep = run(a.db, a.tree, a.out_dir, a.window_days, a.recent_days, not a.no_write)
+        rep = run(a.db, a.tree, a.out_dir, a.window_days, a.recent_days, not a.no_write,
+                  publish=True)
     except (FileNotFoundError, sqlite3.Error) as exc:
         print(f"steering_verdicts: {exc}", file=sys.stderr)
         return 1
