@@ -53,6 +53,7 @@ types = [
     # wins the race delivers exactly once — same idempotent pattern already
     # relied on for career-ops./tengine./funsearch./kernel. above.
     "hearth.",
+    "bus.hearth.",
     # bus.agent.activity. / agent.session. (agent lifecycle telemetry): the
     # sandboxed-MiniMax adapter (cmmx-hook inside claude-minimax-sandboxed)
     # publishes from a rootlesskit netns where localhost Redis is unreachable —
