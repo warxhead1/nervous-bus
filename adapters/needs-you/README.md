@@ -6,8 +6,12 @@ full turn output.
 Every Claude Code turn ends with a `**Needs you:**` block (rule in `~/.claude/CLAUDE.md`). The
 Stop hook `needs_you.py hook` reads it, upserts an `errand` decision (`ny-<session_id>`) in Hearth
 via `POST /api/decisions`, and publishes `agent.attention.v1` on the bus. A turn that used tools
-but ended without the block is sent back once to add it. A later `**Needs you:** nothing`
-withdraws the session's decision.
+but ended without the block is sent back once to add it. A choice-shaped bullet without a Hearth
+decision id is also sent back once so the agent posts a real choice card with `hearth-ask post`;
+if it still harvests as an errand, local image/video paths (`png`, `jpg`, `webp`, `gif`, `mp4`)
+named in the bullet or final reply are uploaded in a detached worker via `hearth-ask media` and
+re-posted onto `ny-<session_id>` with `media` (up to 8), keeping the full Stop hook deadline for
+the initial sync. A later `**Needs you:** nothing` withdraws the session's decision.
 
 The local JSON under `~/.local/state/needs-you/sessions/` is an offline cache: written after a
 successful post, replayed on the next reachable run if Hearth was down, and pruned once the

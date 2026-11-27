@@ -617,12 +617,14 @@ class FakeHearthDecisions(unittest.TestCase):
             self.assertTrue(cached["synced"])
             self.assertFalse(cached["pending_sync"])
 
-            # 2. Replaced block upserts the same ny-s1 id
+            # 2. Replaced block upserts the same ny-s1 id; single-bullet context uses summary
             self.assertIsNone(self._run_hook("s1", "Updated.\n\n**Needs you:**\n- approve deploy"))
             row = srv.decisions["ny-s1"]
             self.assertIs(row["upsert"], True)
             self.assertFalse(row.get("parts"))
-            self.assertEqual(row["context"], "- approve deploy")
+            self.assertEqual(row["title"], "approve deploy")
+            self.assertEqual(row["say"], "approve deploy")
+            self.assertEqual(row["context"], "Updated.")
             self.assertEqual(self.published.call_count, 2)
 
             # 3. Needs you: nothing withdraws ny-s1 and prunes cache
@@ -635,7 +637,8 @@ class FakeHearthDecisions(unittest.TestCase):
             self.assertIsNone(self._run_hook("s1", "New ask.\n\n**Needs you:**\n- reopen check"))
             self.assertEqual(srv.decisions["ny-s1"]["status"], "pending")
             self.assertFalse(srv.decisions["ny-s1"].get("parts"))
-            self.assertEqual(srv.decisions["ny-s1"]["context"], "- reopen check")
+            self.assertEqual(srv.decisions["ny-s1"]["title"], "reopen check")
+            self.assertEqual(srv.decisions["ny-s1"]["context"], "New ask.")
 
     def test_offline_cache_and_replay_on_next_successful_run(self):
         # Allocate a closed port so Hearth is unreachable
@@ -663,7 +666,8 @@ class FakeHearthDecisions(unittest.TestCase):
             self.assertIn("ny-s-online", srv.decisions)
             self.assertIn("ny-s-offline", srv.decisions)
             self.assertFalse(srv.decisions["ny-s-offline"].get("parts"))
-            self.assertEqual(srv.decisions["ny-s-offline"]["context"], "- review draft")
+            self.assertEqual(srv.decisions["ny-s-offline"]["title"], "review draft")
+            self.assertEqual(srv.decisions["ny-s-offline"]["context"], "")
             replayed_cache = json.loads((self.tmp / "sessions" / "s-offline.json").read_text())
             self.assertTrue(replayed_cache["synced"])
             self.assertFalse(replayed_cache["pending_sync"])
@@ -816,7 +820,8 @@ class FakeHearthDecisions(unittest.TestCase):
             self.assertIs(row["upsert"], True)
             self.assertEqual(row["session_id"], agy_id)
             self.assertFalse(row.get("parts"))
-            self.assertEqual(row["context"], "- verify agy upsert")
+            self.assertEqual(row["title"], "verify agy upsert")
+            self.assertEqual(row["context"], "Done.")
             self.assertEqual(self.published.call_count, 1)
 
             with mock.patch.object(ny.subprocess, "run"), redirect_stdout(io.StringIO()):
@@ -922,6 +927,322 @@ class FakeHearthDecisions(unittest.TestCase):
             ctx = ny._ssl_context_for(remote_url)
             self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED, remote_url)
             self.assertTrue(ctx.check_hostname, remote_url)
+
+
+class ChoiceDetectionAndMedia(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.patches = [
+            mock.patch.object(ny, "SESSIONS", self.tmp / "sessions"),
+            mock.patch.object(ny, "HOME", self.tmp),
+            mock.patch.object(ny, "NAMES", self.tmp / "names"),
+            mock.patch.object(ny, "BINDINGS", self.tmp / "bindings"),
+            mock.patch.object(ny, "publish"),
+        ]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in reversed(self.patches):
+            p.stop()
+
+    def _run_hook(self, sid: str, reply: str, turn_uuid: str = "u1"):
+        data = {
+            "session_id": sid,
+            "cwd": str(self.tmp),
+            "transcript_path": transcript(
+                self.tmp, user("go", turn_uuid), tool_use(), tool_result(), text(reply)
+            ),
+        }
+        return ny.hook(data)
+
+    def _write_fake_hearth_ask(self, body: str) -> Path:
+        bindir = self.tmp / "bin"
+        bindir.mkdir(parents=True, exist_ok=True)
+        script = bindir / "hearth-ask"
+        script.write_text(f"#!{sys.executable}\n{body}\n")
+        script.chmod(0o755)
+        return bindir
+
+    @staticmethod
+    def _wait_until(pred, timeout: float = 4.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if pred():
+                return True
+            time.sleep(0.02)
+        return bool(pred())
+
+    def test_choice_detector_positives_and_negatives(self):
+        positives = [
+            'Visual style (plan item 12): reply "B" to ship the grey shading (my pick, the second still), or "A" for blue-grey.',
+            'Reply "yes" to deploy now or "no" to hold until Monday.',
+            "Reply A for compact layout or B for full table.",
+            'Pick "dark" or "light" theme for the dashboard.',
+            'Choose "Option 1" (fast) or "Option 2" (thorough) for the nightly run.',
+            "Header layout: compact bar (my pick) vs stacked rows.",
+            "Should we use 'strict' or 'lenient' parsing for the webhook?",
+            'Palette: "warm", "cool", or "neutral" for the card background.',
+            "Reply `v1` or `v2` for the staging endpoint.",
+            "Merge #40 (src-tauri bump): reply A to ship or B to hold.",
+        ]
+        negatives = [
+            "Merge PR #42 once CI is green.",
+            "Pause or clear the goal.",
+            "Pick a release name for next week.",
+            'Rename "old_key" to "new_key" in the config.',
+            "Run `gh auth login` in your terminal.",
+            'Reply "ready" when the DNS record propagates.',
+            "Review the staging preview at https://example.com/preview.",
+            "Don't merge or can't ship until tests pass.",
+            "Approve the deployment and tag v1.2.0.",
+            "Reply to the reviewer on PR #12 or close it",
+            "Pick up the signed lease from the office or tell me to reschedule",
+            "Choose a date for the call or skip it",
+            "Run `make deploy` or `make rollback` once you are back",
+        ]
+        for item in positives:
+            self.assertTrue(ny.is_choice_shaped(item), f"expected choice-shaped: {item!r}")
+        for item in negatives:
+            self.assertFalse(ny.is_choice_shaped(item), f"expected NOT choice-shaped: {item!r}")
+
+        self.assertTrue(ny.has_decision_id("Visual style: reply A or B (dec-abc123)"))
+        self.assertTrue(ny.has_decision_id("Pick on src-lab-7"))
+        self.assertTrue(ny.has_decision_id("Pick one <hearth://decisions/custom-42>"))
+        self.assertFalse(ny.has_decision_id("Pick A or B <hearth://decisions/ny-s1>"))
+        self.assertFalse(ny.has_decision_id('Reply "A" or "B"'))
+        self.assertFalse(ny.has_decision_id("Merge #40 (src-tauri bump): reply A to ship or B to hold"))
+        self.assertEqual(
+            ny.link_item("Merge #40 (src-tauri bump): reply A to ship or B to hold"),
+            "Merge #40 (src-tauri bump): reply A to ship or B to hold",
+        )
+
+    def test_choice_without_decision_id_sends_back_once_then_falls_back_with_media(self):
+        img1 = self.tmp / "still_a.png"
+        img2 = self.tmp / "renders" / "still_b.webp"
+        img2.parent.mkdir(parents=True, exist_ok=True)
+        img1.write_bytes(b"png-bytes")
+        img2.write_bytes(b"webp-bytes")
+
+        sha1 = "a" * 64
+        sha2 = "b" * 64
+        argv_log = self.tmp / "hearth_ask_argv.json"
+        bindir = self._write_fake_hearth_ask(
+            "import json, sys, time\n"
+            "from pathlib import Path\n"
+            f"Path({str(argv_log)!r}).write_text(json.dumps(sys.argv[1:]))\n"
+            "time.sleep(0.15)\n"
+            f"uri_map = {{{str(img2.resolve())!r}: {sha2!r}, {str(img1.resolve())!r}: {sha1!r}}}\n"
+            "rows = [\n"
+            "    {'path': p, 'uri': f'hearth-media://{uri_map[p]}', 'sha256': uri_map[p], 'bytes': 10, 'mime': 'image/png'}\n"
+            "    for p in sys.argv[2:] if p in uri_map\n"
+            "]\n"
+            "print(json.dumps({'media': rows}))\n"
+        )
+        reply = (
+            f"Rendered two stills ({img1} and renders/still_b.webp) plus https://example.com/ignore.png.\n\n"
+            "**Needs you:**\n"
+            '- Visual style: reply "B" for grey (my pick, renders/still_b.webp), or "A" for blue.'
+        )
+
+        srv = _FakeHearth()
+        self.addCleanup(srv.close)
+        env = {
+            "HEARTH_API_URL": srv.url,
+            "HEARTH_API_TOKEN": "tok",
+            "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
+        }
+        with mock.patch.dict(os.environ, env), mock.patch.object(ny, "project_of", return_value="demo"):
+            # First stop: sent back with two plain sentences naming hearth-ask post.
+            out = self._run_hook("s-choice", reply, turn_uuid="turn-1")
+            self.assertEqual(out["decision"], "block")
+            self.assertIn("hearth-ask post --part ... --part-media PART=<local image path>", out["reason"])
+            self.assertIn("decision id", out["reason"])
+            sentences = [s for s in ny.re.split(r"(?<!\.)\.(?!\.)", out["reason"]) if s.strip()]
+            self.assertEqual(len(sentences), 2)
+            self.assertNotIn("ny-s-choice", srv.decisions)
+
+            # Second stop in same turn: agent did not repost -> syncs immediately without waiting
+            # for the 0.15s child upload, then detached worker uploads and re-posts with upsert+media.
+            t0 = time.monotonic()
+            out2 = self._run_hook("s-choice", reply, turn_uuid="turn-1")
+            elapsed_s = time.monotonic() - t0
+            self.assertIsNone(out2)
+            self.assertLess(elapsed_s, 0.5, f"Stop hook took too long ({elapsed_s:.3f}s)")
+            self.assertIn("ny-s-choice", srv.decisions)
+            self.assertNotIn("media", srv.decisions["ny-s-choice"])
+
+        self.assertTrue(
+            self._wait_until(lambda: bool(srv.decisions.get("ny-s-choice", {}).get("media"))),
+            "detached media uploader did not re-post media in time",
+        )
+        row = srv.decisions["ny-s-choice"]
+        self.assertEqual(row["kind"], "errand")
+        self.assertIs(row["upsert"], True)
+        self.assertEqual(row["media"], [f"hearth-media://{sha2}", f"hearth-media://{sha1}"])
+        self.assertNotIn("media_error", row["metadata"])
+        # Bullet media comes before reply-only media; https URL was not passed to hearth-ask media.
+        recorded_argv = json.loads(argv_log.read_text())
+        self.assertEqual(recorded_argv, ["media", str(img2.resolve()), str(img1.resolve())])
+
+    def test_choice_with_decision_id_is_not_blocked(self):
+        srv = _FakeHearth()
+        self.addCleanup(srv.close)
+        reply = 'Posted choice card.\n\n**Needs you:**\n- Visual style: reply "A" or "B" (dec-card-1)'
+        with mock.patch.dict(os.environ, {"HEARTH_API_URL": srv.url, "HEARTH_API_TOKEN": "tok"}):
+            out = self._run_hook("s-linked", reply, turn_uuid="turn-2")
+        self.assertIsNone(out)
+        self.assertIn("ny-s-linked", srv.decisions)
+
+    def test_media_upload_missing_or_failing_posts_without_media_and_records_reason(self):
+        img = self.tmp / "clip.mp4"
+        img.write_bytes(b"mp4")
+        reply = f"Captured clip at {img}.\n\n**Needs you:**\n- review clip.mp4"
+        srv = _FakeHearth()
+        self.addCleanup(srv.close)
+
+        # Case 1: hearth-ask missing from PATH -> recorded immediately on initial sync
+        with mock.patch.dict(os.environ, {"HEARTH_API_URL": srv.url, "HEARTH_API_TOKEN": "tok"}), \
+                mock.patch.object(ny.shutil, "which", return_value=None):
+            self.assertIsNone(self._run_hook("s-missing", reply, turn_uuid="t1"))
+        row = srv.decisions["ny-s-missing"]
+        self.assertNotIn("media", row)
+        self.assertIn("not found", row["metadata"]["media_error"])
+
+        # Case 2: hearth-ask media exits 5 (Hearth unreachable) in detached worker -> re-posts error
+        bindir = self._write_fake_hearth_ask(
+            "import sys\n"
+            "sys.stderr.write('hearth unreachable\\n')\n"
+            "sys.exit(5)\n"
+        )
+        env = {
+            "HEARTH_API_URL": srv.url,
+            "HEARTH_API_TOKEN": "tok",
+            "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
+        }
+        with mock.patch.dict(os.environ, env), mock.patch.object(ny, "project_of", return_value="demo"):
+            self.assertIsNone(self._run_hook("s-fail", reply, turn_uuid="t2"))
+        self.assertTrue(
+            self._wait_until(lambda: "media_error" in srv.decisions.get("ny-s-fail", {}).get("metadata", {})),
+            "detached uploader did not record media_error",
+        )
+        row2 = srv.decisions["ny-s-fail"]
+        self.assertNotIn("media", row2)
+        self.assertIn("exited 5", row2["metadata"]["media_error"])
+
+    def test_media_upload_keeps_full_hook_budget_expands_tilde_and_caps_at_8(self):
+        paths = []
+        for i in range(10):
+            p = self.tmp / f"shot_{i}.jpg"
+            p.write_bytes(b"jpg")
+            paths.append(str(p))
+        reply = "Stills: " + " ".join(paths) + "\n\n**Needs you:**\n- check the renders"
+
+        collected = ny.collect_local_media_paths(["check the renders"], reply, str(self.tmp))
+        self.assertEqual(len(collected), 8)
+
+        # Tilde paths (~/x.png) are expanded and collected.
+        tilde_img = self.tmp / "x.png"
+        tilde_img.write_bytes(b"png")
+        with mock.patch.dict(os.environ, {"HOME": str(self.tmp)}):
+            tilde_collected = ny.collect_local_media_paths(["inspect ~/x.png"], "", str(self.tmp / "other"))
+        self.assertEqual(tilde_collected, [str(tilde_img.resolve())])
+
+        # Slow Hearth (0.09s) + slow real child hearth-ask (0.15s):
+        # Initial sync gets the full HOOK_TIMEOUT (0.2s) so it succeeds synchronously (not cached_offline),
+        # and the detached 0.15s child still finishes and re-posts media.
+        sha = "c" * 64
+        bindir = self._write_fake_hearth_ask(
+            "import json, sys, time\n"
+            "time.sleep(0.15)\n"
+            f"print(json.dumps({{'media': [{{'path': sys.argv[2], 'uri': 'hearth-media://{sha}', 'sha256': '{sha}', 'bytes': 3, 'mime': 'image/png'}}]}}))\n"
+        )
+        srv = _FakeHearth(hang_s=0.09)
+        self.addCleanup(srv.close)
+        env = {
+            "HEARTH_API_URL": srv.url,
+            "HEARTH_API_TOKEN": "tok",
+            "PATH": f"{bindir}:{os.environ.get('PATH', '')}",
+        }
+        with mock.patch.dict(os.environ, env), mock.patch.object(ny, "project_of", return_value="demo"):
+            t0 = time.monotonic()
+            self.assertIsNone(self._run_hook("s-budget", f"See {tilde_img}\n\n**Needs you:**\n- check render", turn_uuid="t3"))
+            elapsed_s = time.monotonic() - t0
+        self.assertLess(elapsed_s, 0.5, f"hook took {elapsed_s:.3f}s")
+        # Initial sync must have succeeded synchronously (not cached_offline), before the 0.15s child finished.
+        self.assertIn("ny-s-budget", srv.decisions)
+        self.assertNotIn("media", srv.decisions["ny-s-budget"])
+        rec = json.loads((self.tmp / "hook.log").read_text().splitlines()[-1])
+        self.assertEqual(rec["sync"], "synced")
+        self.assertTrue(
+            self._wait_until(lambda: srv.decisions.get("ny-s-budget", {}).get("media") == [f"hearth-media://{sha}"]),
+            "detached uploader did not re-post media after full-budget sync",
+        )
+
+    def test_say_is_ask_and_single_bullet_context_uses_summary(self):
+        long_ask = (
+            "Review the rendered comparison stills and approve the preferred surface palette "
+            "before the scheduled release cut tomorrow morning at 09:00 UTC please."
+        )
+        self.assertGreater(len(long_ask), 140)
+        entry = {
+            "session_id": "s-say",
+            "project": "demo",
+            "cwd": "/repo",
+            "items": [long_ask],
+            "summary": "Rendered two hillshade stills and compared contrast.",
+            "orca_terminal": "term_1",
+            "name": "demo-lane",
+            "cache": None,
+            "ts": 1764180000.0,
+            "acked": False,
+        }
+        payload = ny.entry_to_decision_payload(entry)
+        self.assertEqual(payload["say"], long_ask[:140])
+        self.assertNotEqual(payload["say"], entry["summary"][:140])
+        self.assertEqual(payload["title"], long_ask)
+        self.assertEqual(payload["context"], entry["summary"])
+
+        # Round-trip back via decision_to_entry recovers the ask, not the summary.
+        recovered = ny.decision_to_entry(payload)
+        self.assertEqual(recovered["items"], [long_ask])
+
+    def test_schema_validates_decision_level_media_and_rejects_bad_entries(self):
+        jsonschema = __import__("jsonschema")
+        schema = json.loads(
+            (Path(__file__).parents[2] / "schemas/bus.hearth.decision.requested.v1.json").read_text()
+        )
+        validator = jsonschema.Draft202012Validator(schema)
+        base = {
+            "decision_id": "ny-s-media",
+            "correlation_id": "ny-s-media",
+            "project": "demo",
+            "kind": "errand",
+            "title": "Pick a look",
+            "say": "Pick a look",
+            "context": "Two stills attached.",
+            "media": [
+                f"hearth-media://{'0123456789abcdef' * 4}",
+                "https://cdn.example.com/stills/look_b.png",
+            ],
+        }
+        validator.validate(base)
+
+        # Reject > 8 items
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate({**base, "media": [f"hearth-media://{'a' * 64}"] * 9})
+        # Reject local file path
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate({**base, "media": ["/tmp/still.png"]})
+        # Reject http:// (non-https)
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate({**base, "media": ["http://example.com/still.png"]})
+        # Reject malformed hearth-media digest
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate({**base, "media": ["hearth-media://not-a-sha256"]})
+        # Reject uppercase hex in hearth-media digest (N1)
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate({**base, "media": [f"hearth-media://{'A' * 64}"]})
 
 
 if __name__ == "__main__":
