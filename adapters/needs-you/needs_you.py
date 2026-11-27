@@ -742,7 +742,11 @@ def hook(data: dict) -> dict | None:
     if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
         log("skip_headless", data)
         return None
-    session_id = data.get("session_id") or ""
+    session_id = (
+        data.get("session_id")
+        or data.get("conversation_id")
+        or os.environ.get("ANTIGRAVITY_CONVERSATION_ID", "")
+    )
     if not session_id:
         log("skip_no_session", data)
         return None
@@ -1056,10 +1060,16 @@ def cmd_migrate(dry_run: bool = False, max_age_days: float = MIGRATE_MAX_AGE_DAY
 
 
 def cmd_name(slug: str | None) -> int:
-    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    session_id = (
+        os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+        or os.environ.get("ANTIGRAVITY_CONVERSATION_ID", "")
+    )
     if not session_id:
-        print("needs-you name: CLAUDE_CODE_SESSION_ID is unset; run it from a Claude Code session",
-              file=sys.stderr)
+        print(
+            "needs-you name: CLAUDE_CODE_SESSION_ID and ANTIGRAVITY_CONVERSATION_ID are unset; "
+            "run it from a Claude Code or agy session",
+            file=sys.stderr,
+        )
         return 1
     cwd = os.getcwd()
     if slug is None:

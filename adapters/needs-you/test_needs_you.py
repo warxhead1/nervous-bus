@@ -227,9 +227,18 @@ class Hook(unittest.TestCase):
         self.assertEqual(ny.slugify("x" * 40), "x" * 32)
 
     def test_name_needs_a_session(self):
-        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": ""}), \
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "", "ANTIGRAVITY_CONVERSATION_ID": ""}), \
                 redirect_stdout(io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
             self.assertEqual(ny.cmd_name("x"), 1)
+
+    def test_name_falls_back_to_antigravity_conversation_id(self):
+        with mock.patch.dict(os.environ, {
+            "CLAUDE_CODE_SESSION_ID": "",
+            "ANTIGRAVITY_CONVERSATION_ID": "agy-conv-1234",
+        }), mock.patch.object(ny.subprocess, "run"), redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(ny.cmd_name("Agy Session!"), 0)
+        self.assertEqual(out.getvalue().strip(), "agy-session")
+        self.assertEqual(ny.name_of("agy-conv-1234", "/w/projects/demo"), "agy-session")
 
     def test_stop_hook_records_the_terminal_binding(self):
         env = {"ORCA_TERMINAL_HANDLE": "term_9", "TMUX_PANE": "", "CLAUDE_PID": "42",
@@ -779,6 +788,33 @@ class FakeHearthDecisions(unittest.TestCase):
             self.assertEqual(srv.decisions["ny-old-1"]["status"], "withdrawn")
             self.assertFalse((self.tmp / "sessions" / "old-1.json").exists())
             self.assertTrue(json.loads((self.tmp / "sessions" / "recent-1.json").read_text())["synced"])
+
+    def test_agy_session_id_upserts_renames_and_withdraws_like_claude(self):
+        srv = _FakeHearth()
+        self.addCleanup(srv.close)
+        agy_id = "b4884455-0b14-4eb8-9ada-48e3e68f1fb3"
+        with mock.patch.dict(os.environ, {
+            "HEARTH_API_URL": srv.url,
+            "HEARTH_API_TOKEN": "tok",
+            "CLAUDE_CODE_SESSION_ID": "",
+            "ANTIGRAVITY_CONVERSATION_ID": agy_id,
+        }):
+            self.assertIsNone(self._run_hook(agy_id, "Done.\n\n**Needs you:**\n- verify agy upsert"))
+            did = f"ny-{agy_id}"
+            row = srv.decisions[did]
+            self.assertEqual(row["kind"], "errand")
+            self.assertIs(row["upsert"], True)
+            self.assertEqual(row["session_id"], agy_id)
+            self.assertEqual([p["label"] for p in row["parts"]], ["verify agy upsert"])
+            self.assertEqual(self.published.call_count, 1)
+
+            with mock.patch.object(ny.subprocess, "run"), redirect_stdout(io.StringIO()):
+                self.assertEqual(ny.cmd_name("agy-lane"), 0)
+            self.assertEqual(srv.decisions[did]["metadata"]["name"], "agy-lane")
+
+            self.assertIsNone(self._run_hook(agy_id, "Clear.\n\n**Needs you:** nothing"))
+            self.assertEqual(srv.decisions[did]["status"], "withdrawn")
+            self.assertFalse((self.tmp / "sessions" / f"{agy_id}.json").exists())
 
     def test_migrate_aborts_cleanly_when_errand_unsupported(self):
         ny.write_entry({
