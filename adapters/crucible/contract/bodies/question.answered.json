@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "required": ["q_id", "kind"],
+  "properties": {
+    "q_id": {"type": "string", "pattern": "^q-"},
+    "kind": {"type": "string", "enum": ["pick", "text", "ok", "pass"]},
+    "picks": {"type": "object"},
+    "was_recommended": {"type": "boolean"},
+    "latency_ms": {"type": "integer", "minimum": 0},
+    "typed_chars": {"type": "integer", "minimum": 0},
+    "probe": {"type": "boolean"}
+  }
+}
