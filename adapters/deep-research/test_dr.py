@@ -724,8 +724,31 @@ def test_cli_end_to_end_run_audit_render(tmp_path, capsys, monkeypatch):
 def test_cli_signed_out_exit_code(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(dr.time, "sleep", lambda s: None)
     fake = FakeOrca(first_snap=(FIX / "signed_out_tools_menu.txt").read_text())
-    rc = dr.main(["--runs-dir", str(tmp_path), "run", "q"], runner=fake)
+    rc = dr.main(["--runs-dir", str(tmp_path), "run", "q"], runner=fake, lint=lambda q: [])
     assert rc == dr.EXIT_LOGIN and "not signed in" in capsys.readouterr().err
+
+
+def test_run_refuses_a_question_with_registry_terms(tmp_path, capsys):
+    fake = FakeOrca()
+    rc = dr.main(["--runs-dir", str(tmp_path), "run", "q"], runner=fake, lint=lambda q: ["Ember"])
+    assert rc == dr.EXIT_FAIL and "Ember" in capsys.readouterr().err
+    assert fake.filled is None  # nothing left the box
+
+
+class _Done:
+    def __init__(self, code, out=""):
+        self.returncode, self.stdout = code, out
+
+
+def test_outbound_terms_reads_lint_exit_codes():
+    hit = lambda *a, **k: _Done(1, json.dumps({"ok": False, "terms": ["Ember"]}))
+    assert dr.outbound_terms("x", run=hit) == ["Ember"]
+    assert dr.outbound_terms("x", run=lambda *a, **k: _Done(0, "{}")) == []
+    assert dr.outbound_terms("x", run=lambda *a, **k: _Done(2)) == []  # no ledger here
+
+    def missing(*a, **k):
+        raise FileNotFoundError("crucible")
+    assert dr.outbound_terms("x", run=missing) == []
 
 
 def test_cli_rejects_path_traversal_run_id(tmp_path, capsys):

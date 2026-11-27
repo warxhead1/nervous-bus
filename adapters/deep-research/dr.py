@@ -890,7 +890,26 @@ def build_parser():
     return ap
 
 
-def main(argv=None, runner=None):
+def outbound_terms(text, run=subprocess.run):
+    """Crucible registry terms in text, from `crucible label lint --outbound`.
+
+    Exit 1 means a hit. A missing CLI or any other exit (no ledger here) means
+    nothing to block, so dr still works outside a game repo.
+    """
+    try:
+        r = run(["crucible", "label", "lint", "--outbound", "--stdin"], input=text,
+                text=True, capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if r.returncode != 1:
+        return []
+    try:
+        return json.loads(r.stdout).get("terms") or ["(unparsed)"]
+    except ValueError:
+        return ["(unparsed)"]
+
+
+def main(argv=None, runner=None, lint=outbound_terms):
     args = build_parser().parse_args(argv)
     try:
         cfg = load_config(args.config)
@@ -905,6 +924,9 @@ def main(argv=None, runner=None):
                 raise DrError("give a question or --question-file", EXIT_USAGE)
             if cfg["engine"] != "gemini-web":
                 raise DrError(f"unknown engine: {cfg['engine']}", EXIT_USAGE)
+            hits = lint(q.strip())
+            if hits:
+                raise DrError(f"question contains crucible registry terms: {', '.join(map(str, hits))}", EXIT_FAIL)
             run = execute_run(GeminiWebEngine(cfg, runner=runner), q.strip(), cfg, runs_dir, args.delete_remote, log=log, attach=args.attach)
             print(json.dumps({k: run[k] for k in ("run_id", "status", "usage", "cost_estimate", "raw_path")}))
             return EXIT_OK if run["status"] == "completed" else EXIT_FAIL
