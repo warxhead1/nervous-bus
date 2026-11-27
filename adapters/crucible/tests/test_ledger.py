@@ -22,9 +22,9 @@ Q = "q-01JD0000000000000000000099"
 D = "d-01JD0000000000000000000098"
 
 
-def run(*args, env=None):
-    e = dict(os.environ, **(env or {}))
-    p = subprocess.run([sys.executable, CRUCIBLE, *args], capture_output=True, text=True, env=e)
+def run(*args, env=None, cwd=None):
+    e = {k: v for k, v in dict(os.environ, **(env or {})).items() if v is not None}  # None unsets
+    p = subprocess.run([sys.executable, CRUCIBLE, *args], capture_output=True, text=True, env=e, cwd=cwd)
     try:
         body = json.loads(p.stdout) if p.stdout.strip() else None
     except ValueError:
@@ -201,6 +201,108 @@ class Verbs(Base):
         self.seed()
         code, body = self.cl("reindex")
         self.assertEqual((body["records"], body["entities"]), (2, 2))
+
+
+class Init(unittest.TestCase):
+    """init --repo places the ledger in the design worktree, never in whatever checkout is the cwd."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="crucible-test-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.wts = os.path.join(self.tmp, "worktrees")
+        self.env = {"CRUCIBLE_BULK": os.path.join(self.tmp, "bulk"), "CRUCIBLE_WORKTREES": self.wts,
+                    "CRUCIBLE_DESIGN_ROOT": None}
+        self.repo = self.checkout("repo")
+        self.other = self.checkout("other")
+
+    def git(self, cwd, *args):
+        p = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=t",
+                            "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *args],
+                           cwd=cwd, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stdout.strip()
+
+    def checkout(self, name, branch="main"):
+        path = os.path.join(self.tmp, name)
+        os.makedirs(path)
+        self.git(path, "init", "-q", "-b", branch)
+        self.git(path, "commit", "-q", "--allow-empty", "-m", "seed")
+        return path
+
+    def init(self, *args, cwd=None, env=None):
+        return run("ledger", "init", "--game", "g", *args, env=dict(self.env, **(env or {})), cwd=cwd or self.other)
+
+    def test_worktrees_env_gives_default_design_worktree(self):
+        code, body = self.init("--repo", self.repo)  # cwd is an unrelated checkout, as in the bug
+        self.assertEqual(code, 0, body)
+        want = os.path.join(self.wts, "g", "design")
+        self.assertEqual(body["root"], want)
+        self.assertEqual(self.git(want, "symbolic-ref", "--short", "HEAD"), "design")
+        self.assertIn(want, self.git(self.repo, "worktree", "list", "--porcelain"))
+        self.assertTrue(glob.glob(os.path.join(want, "design", "ledger", "*.jsonl")))
+        self.assertFalse(os.path.exists(os.path.join(self.other, "design")))
+        self.assertEqual(self.init("--repo", self.repo)[0], 1)  # second run: already initialised
+
+    def test_existing_design_branch_is_reused(self):
+        self.git(self.repo, "branch", "design")
+        code, body = self.init("--repo", self.repo)
+        self.assertEqual(code, 0, body)
+        self.assertEqual(self.git(body["root"], "symbolic-ref", "--short", "HEAD"), "design")
+
+    def test_repo_without_any_root_exits_2(self):
+        code, body = self.init("--repo", self.repo, env={"CRUCIBLE_WORKTREES": None})
+        self.assertEqual(code, 2)
+        self.assertIn("--root", body["error"])
+        self.assertFalse(os.path.exists(os.path.join(self.other, "design")))
+        self.assertEqual(self.git(self.repo, "worktree", "list", "--porcelain").count("worktree "), 1)
+
+    def test_game_cannot_escape_worktrees_dir(self):
+        code, body = run("ledger", "init", "--game", "../x", "--repo", self.repo, env=self.env, cwd=self.other)
+        self.assertEqual(code, 2)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "x")))
+
+    def test_explicit_root_still_creates_worktree(self):
+        root = os.path.join(self.tmp, "elsewhere", "design")
+        code, body = self.init("--repo", self.repo, "--root", root, env={"CRUCIBLE_WORKTREES": None})
+        self.assertEqual(code, 0, body)
+        self.assertEqual(body["root"], root)
+        self.assertEqual(self.git(root, "symbolic-ref", "--short", "HEAD"), "design")
+        self.assertFalse(os.path.exists(os.path.join(self.other, "design")))
+
+    def test_design_root_env_still_wins(self):
+        root = os.path.join(self.tmp, "from-env", "design")
+        code, body = self.init("--repo", self.repo, env={"CRUCIBLE_DESIGN_ROOT": root})
+        self.assertEqual((code, body["root"]), (0, root))
+
+    def test_unrelated_checkout_refused(self):
+        foreign = self.checkout("foreign", branch="design")  # a design branch, but of another repo
+        for label, root in (("other repo on main", self.other), ("the repo's own main checkout", self.repo),
+                            ("design branch of another repo", foreign),
+                            ("subdirectory of an unrelated checkout", os.path.join(self.other, "sub"))):
+            with self.subTest(label):
+                os.makedirs(root, exist_ok=True)
+                code, body = self.init("--repo", self.repo, "--root", root)
+                self.assertEqual(code, 1, body)
+                self.assertIn("design branch of --repo", body["error"])
+                self.assertFalse(os.path.exists(os.path.join(root, "design", "ledger")))
+
+    def test_repo_design_worktree_is_accepted(self):
+        self.assertEqual(self.init("--repo", self.repo)[0], 0)
+        root = os.path.join(self.wts, "g", "design")
+        os.remove(*glob.glob(os.path.join(root, "design", "ledger", "*.jsonl")))
+        code, body = self.init("--repo", self.repo, "--root", root)  # existing design worktree of this repo
+        self.assertEqual((code, body["root"]), (0, root))
+
+    def test_without_repo_refuses_non_design_checkout(self):
+        code, body = self.init("--root", self.other)
+        self.assertEqual(code, 1, body)
+        self.assertIn("not the design branch", body["error"])
+        self.assertFalse(os.path.exists(os.path.join(self.other, "design")))
+        design = self.checkout("own-design", branch="design")
+        self.assertEqual(self.init("--root", design)[0], 0)
+        plain = os.path.join(self.tmp, "plain")
+        os.makedirs(plain)
+        self.assertEqual(self.init("--root", plain)[0], 0)  # not a checkout: unchanged behaviour
 
 
 class SelfTest(unittest.TestCase):
