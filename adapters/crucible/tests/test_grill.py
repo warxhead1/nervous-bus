@@ -257,11 +257,11 @@ class TestPost(Env):
         self.assertEqual(r["pushed"]["mode"], "single")
 
     def test_label_rename_withdraws_and_reposts_under_dot_two(self):
-        self.append("label.created", {"lbl_id": "lbl-AAA", "kind": "mechanic", "text": "Ember"})
+        self.append("label.proposed", {"label_id": "lbl-AAA", "key": "mec.aaaa", "kind": "mechanic", "text": "Ember"})
         r = self.ask("Which name fits?", card(labels=("{{l:lbl-AAA}}", "Ash")))
         q = r[1]["q"]
         self.grill("post", q)
-        self.append("label.edited", {"lbl_id": "lbl-AAA", "text": "Cinder"})
+        self.append("label.edited", {"label_id": "lbl-AAA", "edit": "rename", "from": "Ember", "to": "Cinder"})
         code, r = self.grill("post", q)
         self.assertEqual((code, r["posted"], r["hearth_id"]), (0, True, q + ".2"))
         self.assertEqual(self.fake("get", q)[1]["status"], "withdrawn")
@@ -271,6 +271,31 @@ class TestPost(Env):
         self.assertEqual(names["cards"][0]["parts"][0]["options"][0]["label"], "Cinder")
         self.assertEqual(names["names"][0]["text"], "Cinder")
         self.assertEqual(self.grill("post", q)[1]["unchanged"], True)
+
+    def test_label_renamed_through_grill_updates_ledger_and_label_reads(self):
+        from test_grill_env import LABEL
+        code, prop = self.run_cli(LABEL, "propose", "--kind", "mechanic", "--text", "Ember", "--by", "owner", "--root", self.root)
+        self.assertEqual(code, 0, prop)
+        lid = prop["label_id"]
+        q = self.ask("Which name fits?", card(labels=(f"{{{{l:{lid}}}}}", "Ash")))[1]["q"]
+        self.assertEqual(self.grill("post", q)[0], 0)
+        code, ans = self.grill("answer", q, "--text", "call it Cinder")
+        self.assertEqual(code, 0, ans)
+        edits = self.records("label.edited")
+        self.assertEqual(len(edits), 1)
+        self.assertEqual(edits[0]["body"]["label_id"], lid)
+        self.assertEqual((edits[0]["body"]["edit"], edits[0]["body"]["from"], edits[0]["body"]["to"]),
+                         ("rename", "Ember", "Cinder"))
+        self.assertNotIn("lbl_id", edits[0]["body"])
+        code, ent = self.run_cli(LEDGER, "get", lid, "--root", self.root)
+        self.assertEqual(code, 0, ent)
+        self.assertEqual(ent["entity"]["body"]["text"], "Cinder")
+        code, listed = self.run_cli(LEDGER, "get", "--kind", "label", "--root", self.root)
+        self.assertEqual((code, listed["count"]), (0, 1))
+        self.assertEqual(listed["entities"][0]["body"]["text"], "Cinder")
+        code, lab = self.run_cli(LABEL, "get", lid, "--root", self.root)
+        self.assertEqual(code, 0, lab)
+        self.assertEqual((lab["label"]["text"], lab["label"]["was"]), ("Cinder", ["Ember"]))
 
 
 class TestWords(Env):
@@ -391,6 +416,41 @@ class TestGate(Env):
         self.assertTrue(r["opened"])
         self.assertIsNone(r["pushed"])
         self.assertTrue(r["undrafted"] or r["opened"])
+
+    def test_settle_routed_lookup_unblocks_downstream_and_is_idempotent(self):
+        c = card("Who is the game for?", door="one-way", weight="outcome-critical", labels=("Solo", "Co-op"))
+        code, r_aud = self.grill("ask", "--node", "frame.audience", "--draft", self.write("aud.json", c), "--post")
+        self.assertEqual(code, 0, r_aud)
+        self.assertEqual(self.grill("answer", r_aud["q"], "--text", "Solo")[0], 0)
+        code, r_cmp = self.grill("ask", "--node", "market.comparables")
+        self.assertEqual((code, r_cmp["state"], r_cmp["route"]), (0, "routed", "lookup"))
+        q = r_cmp["q"]
+        self.assertNotIn("money.model", self.grill("tree")[1]["frontier"])
+
+        code, s1 = self.grill("settle", q, "--route", "lookup", "--finding", "Comparable titles run 20 minutes.")
+        self.assertEqual((code, s1["state"], s1["route"], s1["already"]), (0, "settled", "lookup", False))
+        self.assertIn("money.model", self.grill("tree")[1]["frontier"])
+
+        code, s2 = self.grill("settle", q, "--route", "lookup", "--finding", "Comparable titles run 20 minutes.")
+        self.assertEqual((code, s2["state"], s2["already"], s2["record"]), (0, "settled", True, s1["record"]))
+        self.assertEqual(len(self.records("question.settled", q)), 1)
+
+    def test_settle_routed_lab_reads_file_and_checks_route_and_state(self):
+        code, r = self.ask("Does a 3-step loop hold target pace?", cls="measurable", door="two-way", weight="divergent")
+        self.assertEqual((code, r["state"], r["route"]), (0, "routed", "lab"))
+        q = r["q"]
+        self.assertEqual(self.grill("settle", q, "--route", "lookup", "--finding", "wrong route")[0], 1)
+        finding_file = os.path.join(self.tmp, "finding.txt")
+        with open(finding_file, "w", encoding="utf-8") as f:
+            f.write("Sim run 12 held median pace at 18s.\n")
+        code, s = self.grill("settle", q, "--route", "lab", "--finding", finding_file)
+        self.assertEqual((code, s["state"], s["route"], s["already"]), (0, "settled", "lab", False))
+        rec = self.records("question.settled", q)[0]["body"]
+        self.assertEqual(rec["finding"], "Sim run 12 held median pace at 18s.")
+        self.assertEqual(rec["finding_path"], finding_file)
+        # a non-routed question cannot be settled
+        code, r_own = self.ask("Pick a tint?", card("Pick a tint?"))
+        self.assertEqual(self.grill("settle", r_own["q"], "--route", "lookup", "--finding", "nope")[0], 1)
 
 
 class TestProbe(Env):

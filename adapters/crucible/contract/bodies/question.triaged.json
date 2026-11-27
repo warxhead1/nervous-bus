@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "required": [
+    "q_id",
+    "route"
+  ],
+  "properties": {
+    "q_id": {
+      "type": "string",
+      "pattern": "^q-"
+    },
+    "route": {
+      "type": "string",
+      "enum": [
+        "lookup",
+        "lab",
+        "research",
+        "taken",
+        "card_batch",
+        "card_alone"
+      ]
+    },
+    "clause": {
+      "type": "string"
+    },
+    "class": {
+      "type": "string"
+    }
+  }
+}

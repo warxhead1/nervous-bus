@@ -55,7 +55,10 @@ class LedgerStats(Base):
         os.makedirs(self.root)
         self.led = Ledger(self.root)
         for i in range(1, 8):
-            self.rec("question.raised", {"q_id": self.q(i)}, ts="2026-11-24T08:00:0%dZ" % i)
+            self.rec("question.raised", {
+                "q_id": self.q(i), "ask": f"Question {i}?", "class": "lead" if i == 3 else "owner",
+                "door": "two-way", "weight": "divergent", "end": "card_batch",
+            }, ts="2026-11-24T08:00:0%dZ" % i)
         for i in (1, 2, 3, 7):
             self.rec("question.asked", {"q_id": self.q(i), "mode": "batch", "class": "lead" if i == 3 else "owner",
                                         "door": "two-way", "parts": [{"id": "p1", "text": "t", "options": [{"id": "a", "label": "A"}]}]},

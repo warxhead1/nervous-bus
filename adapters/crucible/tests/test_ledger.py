@@ -76,6 +76,32 @@ class Contract(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertFalse(body["valid"])
 
+    def test_all_invalids_fail_validation(self):
+        files = sorted(glob.glob(os.path.join(BASE, "contract", "invalid", "*.json")))
+        self.assertGreaterEqual(len(files), 11)
+        for f in files:
+            with open(f, encoding="utf-8") as fh:
+                self.assertTrue(schema.validate_record(json.load(fh)), f)
+            code, body = run("ledger", "validate", f)
+            self.assertEqual(code, 1, f)
+            self.assertFalse(body["valid"], f)
+
+    def test_every_written_or_read_record_type_has_body_schema(self):
+        import re
+        kinds = "node|question|decision|assumption|label|investigation|experiment|finding|bet|audit|claim|token|sitting|lane|probe"
+        pat = re.compile(rf"[\"'](({kinds})\.[a-z][a-z_]*)[\"']")
+        found = {"label.kept"}  # read via verb dispatch in crucible_label/registry.py
+        for dirpath, dirnames, filenames in os.walk(BASE):
+            dirnames[:] = [d for d in dirnames if d not in ("tests", "contract", "__pycache__")]
+            for fn in filenames:
+                if not fn.endswith(".py"):
+                    continue
+                with open(os.path.join(dirpath, fn), encoding="utf-8") as fh:
+                    for m in pat.finditer(fh.read()):
+                        found.add(m.group(1))
+        missing = sorted(t for t in found if schema.body_schema(t) is None)
+        self.assertEqual(missing, [], f"missing contract/bodies schemas for: {missing}")
+
     def test_ulid_sorted_unique(self):
         ids = [ulid() for _ in range(2000)]
         self.assertEqual(ids, sorted(ids))

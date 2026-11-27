@@ -9,6 +9,10 @@
     },
     "reason": {
       "type": "string"
+    },
+    "pushes": {
+      "type": "integer",
+      "minimum": 0
     }
   }
 }

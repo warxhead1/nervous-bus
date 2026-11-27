@@ -1,0 +1,13 @@
+{
+ "id": "01JD0000000000000000000013",
+ "v": 1,
+ "ts": "2026-11-27T19:06:00Z",
+ "type": "label.edited",
+ "game": "demo",
+ "by": "owner",
+ "via": "kiln-voice",
+ "body": {
+  "lbl_id": "lbl-01JD0000000000000000000012",
+  "text": "Scrap"
+ }
+}

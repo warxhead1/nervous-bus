@@ -1,0 +1,12 @@
+{
+ "id": "01JD0000000000000000000014",
+ "v": 1,
+ "ts": "2026-11-27T19:07:00Z",
+ "type": "label.shown",
+ "game": "demo",
+ "by": "crucible",
+ "via": "hearth",
+ "body": {
+  "label_id": "bad-prefix"
+ }
+}

@@ -6,7 +6,7 @@ import datetime
 
 from crucible_ledger.fold import fold
 
-SETTLED = {"answered", "taken", "delegated", "defaulted"}
+SETTLED = {"answered", "taken", "delegated", "defaulted", "settled"}
 OPEN = {"raised"}
 
 
@@ -17,8 +17,8 @@ def ms_of(ts):
 
 def _new(qid):
     return {"id": qid, "state": "unknown", "raised": None, "card": None, "asked": None, "hearth_id": None,
-            "posted_ts": None, "post_n": 0, "card_hash": "", "answered": None, "comments": [], "decisions": [],
-            "src_of": None, "ts": None}
+            "posted_ts": None, "post_n": 0, "card_hash": "", "answered": None, "route": None, "settled": None,
+            "settled_record": None, "comments": [], "decisions": [], "src_of": None, "ts": None}
 
 
 def derive(records):
@@ -62,10 +62,15 @@ def derive(records):
                     Q[p["src"]].update(state="asked", src_of=[qid, p["id"]])
         elif verb == "commented":
             q["comments"].append({"text": b.get("text", ""), "ts": r["ts"], "by": r["by"]})
-        elif verb in ("answered", "taken", "delegated", "defaulted", "routed", "deferred"):
+        elif verb in ("answered", "taken", "delegated", "defaulted", "routed", "deferred", "settled"):
             q["state"] = verb
             if verb == "answered":
                 q["answered"] = b
+            elif verb == "routed":
+                q["route"] = b.get("route")
+            elif verb == "settled":
+                q["settled"] = b
+                q["settled_record"] = r["id"]
             cascade(q, verb)
         elif verb == "withdrawn":
             q["state"] = "withdrawn"

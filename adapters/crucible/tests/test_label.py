@@ -172,6 +172,21 @@ class Lint(Base):
                            input="the Scrap economy", capture_output=True, text=True, env=dict(os.environ, **self.env))
         self.assertEqual(p.returncode, 1)
 
+    def test_outbound_lint_stdin_exits_1_on_hit_and_0_on_clean(self):
+        a = self.propose("resource", "Salvage")
+        self.rename(a["label_id"], "Scrap")
+        rc, body = run("label", "lint", "--outbound", "--stdin", "--root", self.root, env=self.env,
+                       stdin="How do roguelikes balance Scrap income?")
+        self.assertEqual((rc, body["ok"], body["outbound"]), (1, False, True))
+        self.assertIn("Scrap", body["terms"])
+        rc, body = run("label", "lint", "--outbound", "--stdin", "--root", self.root, env=self.env,
+                       stdin="Is salvage a common drop mechanic?")
+        self.assertEqual(rc, 1)
+        self.assertIn("Salvage", body["terms"])
+        rc, body = run("label", "lint", "--outbound", "--stdin", "--root", self.root, env=self.env,
+                       stdin="How do roguelikes balance income against upkeep?")
+        self.assertEqual((rc, body["ok"], body["terms"]), (0, True, []))
+
 
 class OwnerLock(Base):
     def test_agent_edit_of_an_owner_locked_label_exits_1(self):

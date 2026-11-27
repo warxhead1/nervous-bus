@@ -1,0 +1,13 @@
+{
+ "id": "01JD0000000000000000000011",
+ "v": 1,
+ "ts": "2026-11-27T19:05:00Z",
+ "type": "label.proposed",
+ "game": "demo",
+ "by": "owner",
+ "via": "cli",
+ "body": {
+  "lbl_id": "lbl-01JD0000000000000000000012",
+  "text": "Salvage"
+ }
+}

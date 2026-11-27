@@ -12,6 +12,7 @@ BASE = os.path.dirname(HERE)
 sys.path.insert(0, BASE)
 
 GRILL = os.path.join(BASE, "crucible-grill")
+LABEL = os.path.join(BASE, "crucible-label")
 LEDGER = os.path.join(BASE, "crucible-ledger")
 STEWARD = os.path.join(BASE, "crucible-steward")
 FAKE = os.path.join(BASE, "testdata", "fake-hearth-ask")
