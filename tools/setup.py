@@ -481,8 +481,6 @@ PORTABLE = ("transcripts", "argshape", "needs-you", "reflex-recorder", "tests", 
 def portable_targets(suites: dict, repo: Path = REPO) -> dict:
     """name -> list of pytest path args for the portable set."""
     out = {n: [str(suites[n])] for n in PORTABLE if n in suites}
-    if sys.version_info < (3, 11):
-        out.pop("reflex-recorder", None)    # steering_audit.py and guidance_watch.py import tomllib
     if (repo / "steering").is_dir():
         out["steering"] = [str(repo / "steering")]
     tools = sorted(str(f) for f in (repo / "tools").glob("test_*.py"))

@@ -91,7 +91,7 @@ The shell SDK needs `bash` and `jq`; `make doctor` reports what is missing. `ins
 Platform notes:
 
 - **Linux / macOS:** symlinks into `~/.local/bin`.
-- **CI covers Linux only** (a self-hosted runner, plus a clean Debian and Ubuntu container: `tools/container_smoke.sh`). macOS and Windows are untested by CI.
+- **CI covers Linux only** (a self-hosted runner, plus a clean Debian and Ubuntu container: `tools/container_smoke.sh`). macOS and Windows are covered only by unit tests that patch the platform (`tools/test_setup.py`), not by real runs.
 - **Windows:** the Python parts (`argshape`, `needs-you`, `transcripts`, `setup.py`) run natively; `install` writes `.cmd` shims into `%LOCALAPPDATA%\nervous-bus\bin`. The shell SDK (`nervous`, `nbd`, `probe`) needs bash: use WSL or Git Bash.
 
 **Supported coding agents:** Claude Code and Codex CLI transcripts are read through `adapters/transcripts`; see [docs/agent-transcripts.md](docs/agent-transcripts.md).
