@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "required": [
+    "q_id",
+    "wake"
+  ],
+  "properties": {
+    "q_id": {
+      "type": "string",
+      "pattern": "^q-"
+    },
+    "wake": {
+      "type": "object"
+    },
+    "note": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+[Unit]
+Description=Crucible steward: write hearth answers into the design ledger
+
+[Service]
+Type=oneshot
+# Sets CRUCIBLE_DESIGN_ROOT, CRUCIBLE_BULK and PATH for the game's design worktree.
+EnvironmentFile=-%h/.config/crucible/steward.env
+ExecStart=/usr/bin/env crucible steward sync --once
+TimeoutStartSec=120
+Nice=10

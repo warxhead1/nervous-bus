@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "required": [
+    "q_id"
+  ],
+  "properties": {
+    "q_id": {
+      "type": "string",
+      "pattern": "^q-"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "note": {
+      "type": "string"
+    },
+    "redraft": {
+      "type": "boolean"
+    },
+    "hearth_id": {
+      "type": "string"
+    }
+  }
+}

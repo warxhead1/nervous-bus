@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "required": [
+    "inv_id",
+    "q_id"
+  ],
+  "properties": {
+    "inv_id": {
+      "type": "string",
+      "pattern": "^inv-"
+    },
+    "q_id": {
+      "type": "string",
+      "pattern": "^q-"
+    },
+    "origin": {
+      "type": "string"
+    }
+  }
+}

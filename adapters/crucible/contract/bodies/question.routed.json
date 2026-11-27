@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "required": [
+    "q_id",
+    "route"
+  ],
+  "properties": {
+    "q_id": {
+      "type": "string",
+      "pattern": "^q-"
+    },
+    "route": {
+      "type": "string"
+    }
+  }
+}

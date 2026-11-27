@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "required": [
+    "sit_id"
+  ],
+  "properties": {
+    "sit_id": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    }
+  }
+}
