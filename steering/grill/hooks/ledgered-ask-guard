@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""PreToolUse hook (Bash): a raw `hearth-ask post` in a repo with a crucible ledger needs a ledger id.
+
+A card the owner sees must exist in the ledger first, so its answer is logged and the
+asking lane hears it. `crucible grill ask` routes the question and posts the card with
+id `q-<ulid>`. A raw post carries no such id, so the answer reaches nobody. Exit 2 blocks.
+A repo has a ledger when `design/ledger` exists at or above the working directory
+(or at $CRUCIBLE_DESIGN_ROOT). Outside such a repo every post passes, which keeps the
+codename card that exists before any ledger. A `--id` that is a shell variable cannot be
+checked, so it passes. Kill switch: LEDGERED_ASK_GUARD_DISABLE=1.
+"""
+import json
+import os
+import re
+import shlex
+import sys
+
+QUOTED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?^\s*\2\s*$", re.S | re.M)
+POST = re.compile(r"(?:^|[\s/])hearth-ask\b(?:\s+-\S+)*\s+post\b")
+LEDGER_ID = re.compile(r"--id(?:=|\s+)[\"']?(?:q-[0-9A-HJKMNP-TV-Z]{26}(?:\.\d+)?|\$)", re.I)
+SEPARATOR = re.compile(r"&&|\|\||[;&|\n]")
+
+
+def mask(text, pattern):
+    """Blank out matches but keep every offset, so a position in the mask is a position in the text."""
+    return pattern.sub(lambda m: "x" * len(m.group(0)), text)
+
+
+def has_ledger(cwd):
+    root = os.environ.get("CRUCIBLE_DESIGN_ROOT")
+    if root and os.path.isdir(os.path.join(root, "design", "ledger")):
+        return True
+    d = os.path.abspath(cwd or os.getcwd())
+    while True:
+        if os.path.isdir(os.path.join(d, "design", "ledger")):
+            return True
+        parent = os.path.dirname(d)
+        if parent == d:
+            return False
+        d = parent
+
+
+def unledgered_posts(command, cwd):
+    """Working directories of each raw post that lacks a ledger id, following simple `cd` steps."""
+    masked = mask(mask(command, HEREDOC), QUOTED)
+    found, start, here = [], 0, cwd
+    for m in list(SEPARATOR.finditer(masked)) + [None]:
+        end = m.start() if m else len(masked)
+        seg, raw = masked[start:end], command[start:end]
+        if seg.strip().startswith("cd "):
+            try:
+                target = os.path.expanduser(shlex.split(raw.strip())[1])
+                here = target if os.path.isabs(target) else os.path.join(here or os.getcwd(), target)
+            except (ValueError, IndexError):
+                pass
+        elif POST.search(seg) and not LEDGER_ID.search(raw):
+            found.append(here)
+        start = m.end() if m else end
+    return found
+
+
+def main():
+    if os.environ.get("LEDGERED_ASK_GUARD_DISABLE") == "1":
+        return 0
+    try:
+        ev = json.load(sys.stdin)
+        command = (ev.get("tool_input") or {}).get("command") or ""
+        cwd = ev.get("cwd") or os.getcwd()
+    except Exception:
+        return 0
+    if ev.get("tool_name") != "Bash" or not isinstance(command, str):
+        return 0
+    if any(has_ledger(d) for d in unledgered_posts(command, cwd)):
+        print(
+            "This repo has a crucible ledger, so a design question goes through `crucible grill ask`. "
+            "It routes the question, and posts a card only when the answer is the owner's taste, money or direction. "
+            "A raw `hearth-ask post` has no ledger id, so its answer reaches the ledger and the asking lane never. "
+            "To post a card the ledger already holds, pass `--id q-<ulid>`.",
+            file=sys.stderr,
+        )
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

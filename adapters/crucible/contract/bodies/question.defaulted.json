@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "required": [
+    "q_id"
+  ],
+  "properties": {
+    "q_id": {
+      "type": "string",
+      "pattern": "^q-"
+    },
+    "picks": {
+      "type": "object"
+    },
+    "option_id": {
+      "type": "string"
+    },
+    "hearth_id": {
+      "type": "string"
+    },
+    "responded_at": {
+      "type": "string"
+    }
+  }
+}

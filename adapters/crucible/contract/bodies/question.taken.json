@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "required": [
+    "q_id",
+    "d_id",
+    "chosen"
+  ],
+  "properties": {
+    "q_id": {
+      "type": "string",
+      "pattern": "^q-"
+    },
+    "d_id": {
+      "type": "string",
+      "pattern": "^d-"
+    },
+    "chosen": {
+      "type": "object"
+    }
+  }
+}

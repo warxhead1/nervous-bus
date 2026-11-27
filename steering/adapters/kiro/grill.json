@@ -1,0 +1,26 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "grill-ledgered-ask-guard-PreToolUse",
+      "trigger": "PreToolUse",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event PreToolUse \"$STEERING_HOME/grill/hooks/ledgered-ask-guard\""
+      },
+      "timeout": 5,
+      "enabled": true,
+      "matcher": "shell"
+    },
+    {
+      "name": "grill-cue-UserPromptSubmit",
+      "trigger": "UserPromptSubmit",
+      "action": {
+        "type": "command",
+        "command": "python3 \"$STEERING_HOME/adapters/shim\" --harness kiro --event UserPromptSubmit \"$STEERING_HOME/grill/hooks/cue\""
+      },
+      "timeout": 5,
+      "enabled": true
+    }
+  ]
+}

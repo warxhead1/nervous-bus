@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "required": [
+    "q_id",
+    "text"
+  ],
+  "properties": {
+    "q_id": {
+      "type": "string",
+      "pattern": "^q-"
+    },
+    "text": {
+      "type": "string"
+    },
+    "hearth_id": {
+      "type": "string"
+    },
+    "row_sig": {
+      "type": "string"
+    }
+  }
+}

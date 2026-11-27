@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "required": [
+    "q_id",
+    "authority"
+  ],
+  "properties": {
+    "q_id": {
+      "type": "string",
+      "pattern": "^q-"
+    },
+    "authority": {
+      "type": "string",
+      "enum": [
+        "lead"
+      ]
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

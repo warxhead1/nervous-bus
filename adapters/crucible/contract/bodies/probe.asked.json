@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "required": [
+    "probe_id",
+    "q_id",
+    "batch"
+  ],
+  "properties": {
+    "probe_id": {
+      "type": "string"
+    },
+    "q_id": {
+      "type": "string",
+      "pattern": "^q-"
+    },
+    "batch": {
+      "type": "string",
+      "pattern": "^q-"
+    },
+    "sit_id": {
+      "type": "string"
+    }
+  }
+}

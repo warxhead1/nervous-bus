@@ -66,6 +66,7 @@ def test_adapter_configs_point_at_real_checks():
 
 def run_steps(case, root, tmp):
     for name, body in case.get("files", {}).items():
+        (tmp / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp / name).write_text(body)
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "CLAUDE_PLUGIN_ROOT")}
     env.update({k: v.replace("{TMP}", str(tmp)) for k, v in case.get("env", {}).items()})

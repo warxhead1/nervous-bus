@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""A stand-in for hearth-ask with the same verbs and JSON shapes, backed by files.
+
+State lives in $FAKE_HEARTH_DIR: one JSON file per decision plus argv.log, one JSON
+argv list per call. FAKE_HEARTH_DOWN=1 makes every call fail like an unreachable hearth.
+Re-posting an id returns the stored row and changes nothing, as the real CLI does."""
+import datetime
+import json
+import os
+import sys
+
+D = os.environ.get("FAKE_HEARTH_DIR") or sys.exit("FAKE_HEARTH_DIR is not set")
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def path(i):
+    return os.path.join(D, "row-" + i.replace("/", "_") + ".json")
+
+
+def load(i):
+    try:
+        with open(path(i)) as f:
+            return json.load(f)
+    except OSError:
+        print(json.dumps({"error": "no such decision", "detail": i}), file=sys.stderr)
+        sys.exit(1)
+
+
+def save(row):
+    with open(path(row["decision_id"]), "w") as f:
+        json.dump(row, f)
+
+
+def emit(o):
+    print(json.dumps(o, sort_keys=True))
+
+
+def opts(args, flag):
+    out = []
+    for i, a in enumerate(args):
+        if a == flag:
+            out.append(args[i + 1])
+    return out
+
+
+def val(args, flag, default=None):
+    v = opts(args, flag)
+    return v[-1] if v else default
+
+
+def main(argv):
+    os.makedirs(D, exist_ok=True)
+    with open(os.path.join(D, "argv.log"), "a") as f:
+        f.write(json.dumps(argv) + "\n")
+    if os.environ.get("FAKE_HEARTH_DOWN"):
+        print("connection refused", file=sys.stderr)
+        return 7
+    cmd, rest = argv[0], argv[1:]
+    if cmd == "post":
+        hid = val(rest, "--id") or "d-%d" % len(os.listdir(D))
+        if os.path.exists(path(hid)):
+            emit({"decision_id": hid, "status": load(hid)["status"]})
+            return 0
+        ctx = sys.stdin.read() if val(rest, "--context-file") == "-" else ""
+        options = [dict(zip(("id", "label", "description"), (o.split(":", 2) + ["", ""])[:3])) for o in opts(rest, "--option")]
+        parts = []
+        for spec in opts(rest, "--part"):
+            pid, label, optspec = spec.split(":", 2)
+            po, rec = [], None
+            for raw in optspec.split(","):
+                oid, _, lab = raw.partition("=")
+                star = oid.endswith("*") or lab.endswith("*")
+                oid, lab = oid.rstrip("*"), lab.rstrip("*")
+                rec = oid if star else rec
+                po.append({"id": oid, "label": lab or oid, "description": ""})
+            part = {"id": pid, "label": label, "options": po, "media": []}
+            if rec:
+                part["recommended"] = rec
+            parts.append(part)
+        row = {"decision_id": hid, "project": val(rest, "--project"), "title": val(rest, "--title"),
+               "context": ctx, "options": options, "parts": parts, "recommended": val(rest, "--recommend"),
+               "default_after": val(rest, "--default-after"), "status": "pending", "answers": None,
+               "option_id": None, "text": None, "comments": [], "created_at": now(), "responded_at": None,
+               "answered_by": None, "viewer_url": "https://hearth.example/?decision=" + hid}
+        save(row)
+        emit({"decision_id": hid, "status": "pending"})
+    elif cmd == "get":
+        emit(load(rest[0]))
+    elif cmd == "list":
+        proj, status = val(rest, "--project"), val(rest, "--status")
+        rows = [json.load(open(os.path.join(D, n))) for n in sorted(os.listdir(D)) if n.startswith("row-")]
+        rows = [r for r in rows if (not proj or r["project"] == proj) and (not status or r["status"] == status)]
+        emit({"count": len(rows), "decisions": rows})
+    elif cmd == "answer":
+        row = load(rest[0])
+        if row["status"] != "pending":
+            print(json.dumps({"error": "already settled"}), file=sys.stderr)
+            return 1
+        picks = {k: v for k, _, v in (p.partition("=") for p in opts(rest, "--pick"))}
+        row.update(status="answered", responded_at=now(), answered_by="owner", via=val(rest, "--via", "chat"),
+                   option_id=val(rest, "--option"), answers=picks or None, text=val(rest, "--text"))
+        save(row)
+        emit(row)
+    elif cmd == "comment":
+        row = load(rest[0])
+        row["comments"].append({"at": now(), "by": "owner", "text": val(rest, "--text"), "via": "chat"})
+        save(row)
+        emit(row)
+    elif cmd == "withdraw":
+        row = load(rest[0])
+        row.update(status="withdrawn", reason=val(rest, "--reason"))
+        save(row)
+        emit(row)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

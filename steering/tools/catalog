@@ -154,7 +154,16 @@ META = {
     # The grill ruling is written by hand, so `authored` keeps it out of the cue-built rulings.
     "grill": {
         "purpose": "Hard questions, not many: a design question goes to `crucible grill ask`, and only taste, money or direction reaches the owner.",
-        "skill": "grill", "authored": "steering/rulings/grill.md", "checks": []},
+        "skill": "grill", "authored": "steering/rulings/grill.md",
+        "checks": [
+            check("ledgered-ask-guard", "hooks/ledgered-ask-guard",
+                  "Block a raw `hearth-ask post` with no `q-<ulid>` id in a repo that has a crucible ledger.", "block",
+                  "PreToolUse", "Bash", "LEDGERED_ASK_GUARD_DISABLE=1", BASH_IN,
+                  "the post has no ledger id, so its answer never reaches the ledger; the message names `crucible grill ask`",
+                  {"files": {"design/ledger/.keep": ""},
+                   "steps": [{"stdin": {"tool_name": "Bash", "tool_input": {"command": "hearth-ask post --project game --title Name --option a:A"}}, "exit": 2},
+                             {"stdin": {"tool_name": "Bash", "tool_input": {"command": "hearth-ask post --project game --title Name --option a:A --id q-01JD0000000000000000000002"}}, "exit": 0}]}),
+        ]},
 }
 
 ORDER = ["human-attention", "evidence-before-done", "keep-moving", "model-tiering", "isolated-dispatch",
