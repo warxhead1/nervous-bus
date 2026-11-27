@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import ssl
 import subprocess
 import sys
@@ -74,15 +75,43 @@ NOTHING_RE = re.compile(r"^(nothing|none|n/a|—)(\W|$)", re.I)
 TRAILING_LINK_RE = re.compile(r" <hearth://[^\s<>]+>$")
 INLINE_LINK_RE = re.compile(r"<?(hearth://[^\s<>)\]]+)>?")
 DECISION_ID_RE = re.compile(r"\b((?:dec|src)-[A-Za-z0-9][A-Za-z0-9_-]*)")
+DECISION_LINK_RE = re.compile(r"hearth://decisions/(?!ny-)[^\s<>]+", re.I)
 PROSE_PATH_RE = re.compile(r"hearth\s*(?:→|->)", re.I)
 PROSE_PATH_HINT = ("needs-you: name the exact tap path or file a decision; "
                    "project slugs are not screens")
+
+MAX_DECISION_MEDIA = 8
+_MY_PICK_RE = re.compile(r"\(\s*my\s+pick\b", re.I)
+_REPLY_OR_RE = re.compile(r"\breply\b[^.!?\n]{1,160}\bor\b", re.I)
+_PICK_OR_RE = re.compile(r"\b(?:pick|choose)\b[^.!?\n]{1,120}\bor\b", re.I)
+_QUOTED_TOKEN = (
+    r"""(?:"[^"\n]{1,40}"|(?<!\w)'[^'\n]{1,40}'(?!\w)|`[^`\n]{1,40}`|\u201c[^\u201d\n]{1,40}\u201d)"""
+)
+_QUOTED_OR_RE = re.compile(
+    rf"{_QUOTED_TOKEN}[^.!?\n]{{0,80}}\bor\b[^.!?\n]{{0,80}}{_QUOTED_TOKEN}",
+    re.I,
+)
+_LOCAL_MEDIA_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9_.:/-])"
+    r"(?:file://)?"
+    r"((?:(?:/|\.\.?/|[A-Za-z0-9._-]+/)[^\s\"'`<>()\[\]{}|,;]*?|[A-Za-z0-9._-]+)"
+    r"\.(?:png|jpe?g|webp|gif|mp4))"
+    r"(?![A-Za-z0-9_-]|\.[A-Za-z0-9])",
+    re.I,
+)
+_MEDIA_URI_RE = re.compile(r"^(?:hearth-media://[0-9a-fA-F]{64}|https://\S+)$")
 
 BLOCK_REASON = (
     "This turn used tools but the reply has no 'Needs you' block. End the reply with "
     "'**Needs you:**' followed by one bullet per decision or action only the user can "
     "take, or '**Needs you:** nothing'. Keep it outside any {{stretch}}. Do not redo "
     "the work or repeat the summary; add the block only."
+)
+CHOICE_BLOCK_REASON = (
+    "This Needs-you item asks for a choice, so post it as a choice card with "
+    "`hearth-ask post --part ... --part-media PART=<local image path>` "
+    "(hearth-ask uploads local files). Then name the returned decision id in the "
+    "'**Needs you:**' block."
 )
 
 
@@ -109,6 +138,91 @@ def link_item(item: str) -> str:
     if m:
         return f"{item} <hearth://decisions/{m.group(1).rstrip('-_')}>"
     return item
+
+
+def has_decision_id(item: str) -> bool:
+    """True when an item names a Hearth decision id (dec-/src- or hearth://decisions/...)."""
+    return bool(DECISION_ID_RE.search(item) or DECISION_LINK_RE.search(item))
+
+
+def is_choice_shaped(item: str) -> bool:
+    """True when a Needs-you bullet offers two or more quoted reply tokens or options."""
+    return bool(
+        _MY_PICK_RE.search(item)
+        or _REPLY_OR_RE.search(item)
+        or _PICK_OR_RE.search(item)
+        or _QUOTED_OR_RE.search(item)
+    )
+
+
+def collect_local_media_paths(items: list[str], reply: str, cwd: str) -> list[str]:
+    """Collect up to MAX_DECISION_MEDIA existing local media file paths from bullets and reply."""
+    base = Path(cwd) if cwd else Path.cwd()
+    seen: set[str] = set()
+    paths: list[str] = []
+    for text in (*items, unstretch(reply)):
+        if not text:
+            continue
+        for m in _LOCAL_MEDIA_PATH_RE.finditer(text):
+            raw = m.group(1)
+            p = Path(raw)
+            if not p.is_absolute():
+                p = base / p
+            try:
+                resolved = str(p.resolve())
+                if resolved in seen or not p.is_file():
+                    continue
+            except OSError:
+                continue
+            seen.add(resolved)
+            paths.append(resolved)
+            if len(paths) >= MAX_DECISION_MEDIA:
+                return paths
+    return paths
+
+
+def upload_local_media(paths: list[str], timeout: float) -> tuple[list[str], str | None]:
+    """Upload local media files via `hearth-ask media`. Returns (uris, error_reason)."""
+    if not paths:
+        return [], None
+    binary = shutil.which("hearth-ask")
+    if not binary:
+        return [], "hearth-ask not found on PATH"
+    try:
+        proc = subprocess.run(
+            [binary, "media", *paths[:MAX_DECISION_MEDIA]],
+            capture_output=True,
+            text=True,
+            timeout=max(0.01, timeout),
+        )
+    except subprocess.TimeoutExpired:
+        return [], f"hearth-ask media timed out after {timeout:.2f}s"
+    except OSError as exc:
+        return [], f"hearth-ask media failed to start: {exc}"
+    if proc.returncode != 0:
+        lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+        tail = lines[-1][:120] if lines else ""
+        suffix = f": {tail}" if tail else ""
+        return [], f"hearth-ask media exited {proc.returncode}{suffix}"
+    try:
+        parsed = json.loads(proc.stdout or "")
+    except ValueError:
+        return [], "hearth-ask media returned invalid JSON"
+    rows = parsed.get("media") if isinstance(parsed, dict) else None
+    if not isinstance(rows, list):
+        return [], "hearth-ask media returned invalid payload"
+    uris: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        uri = row.get("uri") if isinstance(row, dict) else None
+        if isinstance(uri, str) and _MEDIA_URI_RE.match(uri) and uri not in seen:
+            seen.add(uri)
+            uris.append(uri)
+            if len(uris) >= MAX_DECISION_MEDIA:
+                break
+    if not uris:
+        return [], "hearth-ask media returned no valid URIs"
+    return uris, None
 
 
 def prose_path_hint(session_id: str, items: list[str]) -> None:
@@ -486,10 +600,14 @@ def _is_kind_unsupported(status: int | None, body: dict | None) -> bool:
 def entry_to_decision_payload(entry: dict) -> dict:
     """Build POST /api/decisions payload for an errand decision (ny-<session_id>)."""
     items = entry.get("items") or []
-    first = items[0] if items else (entry.get("summary") or "Needs your attention")
-    title = (first if len(items) == 1 else (entry.get("summary") or first))[:200]
-    say = (entry.get("summary") or first)[:140]
-    context = "\n".join(f"- {item}" for item in items)
+    summary = (entry.get("summary") or "").strip()
+    first = items[0] if items else (summary or "Needs your attention")
+    title = (first if len(items) == 1 else (summary or first))[:200]
+    say = first[:140]
+    if len(items) == 1 and items[0].strip() == title.strip():
+        context = summary if summary and summary != title.strip() else ""
+    else:
+        context = "\n".join(f"- {item}" for item in items)
     metadata: dict = {
         "source": "needs-you",
         "cwd": entry.get("cwd", ""),
@@ -500,10 +618,12 @@ def entry_to_decision_payload(entry: dict) -> dict:
     }
     if entry.get("cache"):
         metadata["cache"] = entry["cache"]
+    if entry.get("media_error"):
+        metadata["media_error"] = str(entry["media_error"])[:200]
     if len(json.dumps(metadata).encode("utf-8")) > 4096:
         metadata.pop("summary", None)
         metadata.pop("cwd", None)
-    return {
+    payload: dict = {
         "decision_id": decision_id_for(entry["session_id"]),
         "project": entry.get("project") or "unknown",
         "session_id": entry["session_id"],
@@ -516,6 +636,10 @@ def entry_to_decision_payload(entry: dict) -> dict:
         "audience": "owner",
         "metadata": metadata,
     }
+    media = [m for m in (entry.get("media") or []) if isinstance(m, str) and m][:MAX_DECISION_MEDIA]
+    if media:
+        payload["media"] = media
+    return payload
 
 
 def _parse_ts(val) -> float:
@@ -538,7 +662,8 @@ def decision_to_entry(d: dict) -> dict:
     items = [p["label"] for p in parts if isinstance(p, dict) and p.get("label")]
     if not items:
         ctx = str(d.get("context") or "").strip()
-        if ctx:
+        summary = str(meta.get("summary") or "").strip()
+        if ctx and ctx != summary:
             items = [re.sub(r"^\s*[-*•]\s+", "", line).strip()
                      for line in ctx.splitlines() if line.strip()]
         elif d.get("title"):
@@ -817,6 +942,10 @@ def turn_end(data: dict, session_id: str, transcript: str) -> dict | None:
             return None
         log("block_missing", data, tail=reply[-160:])
         return {"decision": "block", "reason": BLOCK_REASON}
+    if items and any(is_choice_shaped(i) and not has_decision_id(i) for i in items):
+        if not already_blocked(session_id, turn_id or reply[-200:]):
+            log("block_choice", data, tail=reply[-160:])
+            return {"decision": "block", "reason": CHOICE_BLOCK_REASON}
     cwd = data.get("cwd") or os.getcwd()
     entry = {
         "session_id": session_id,
@@ -835,7 +964,18 @@ def turn_end(data: dict, session_id: str, transcript: str) -> dict | None:
         loop_item = GOAL_LOOP_ITEM.format(n=streak)
         if loop_item not in entry["items"]:
             entry["items"] = [loop_item] + entry["items"][:19]
-    sync_status = sync_entry_to_hearth(entry)
+    deadline = time.monotonic() + HOOK_TIMEOUT
+    if entry["items"]:
+        local_media = collect_local_media_paths(entry["items"], reply, cwd)
+        if local_media:
+            upload_budget = max(0.01, (deadline - time.monotonic()) * 0.6)
+            media_uris, media_error = upload_local_media(local_media, timeout=upload_budget)
+            if media_uris:
+                entry["media"] = media_uris
+            if media_error:
+                entry["media_error"] = media_error
+    remaining_budget = max(0.02, deadline - time.monotonic())
+    sync_status = sync_entry_to_hearth(entry, timeout=remaining_budget)
     publish(entry)
     prose_path_hint(session_id, entry["items"])
     log("recorded", data, items=len(entry["items"]), sync=sync_status)
