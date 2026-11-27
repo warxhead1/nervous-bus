@@ -162,3 +162,17 @@ def test_test_list_and_unknown_suite(capsys):
     assert S.main(["test", "--list"]) == 0
     assert "transcripts" in capsys.readouterr().out
     assert S.main(["test", "nope-suite"]) == 2
+
+
+def test_portable_targets_cover_core_and_exclude_extra_dep_suites():
+    t = S.portable_targets(S.discover_suites())
+    assert {"transcripts", "argshape", "tests", "tools", "steering"} <= set(t)
+    assert not {"dashboard", "exporter", "host-load"} & set(t)
+    assert all(Path(f).name.startswith("test_") for f in t["tools"])
+
+
+def test_install_dry_run_writes_nothing(tmp_path):
+    p = subprocess.run([sys.executable, str(Path(S.__file__)), "install", "--bin-dir", str(tmp_path),
+                        "--dry-run"], capture_output=True, text=True)
+    assert p.returncode == 0
+    assert not list(tmp_path.iterdir())
