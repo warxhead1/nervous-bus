@@ -43,6 +43,12 @@ All labels, roles and regexes live in the `UI` and `NB` tables at the top of the
 
 `dr run --attach <conversation-id> "<question>"` skips submission and polls a Gemini conversation that was already started.
 
+## Display off
+
+After opening the tab, `dr run` checks that it draws a frame (a `requestAnimationFrame` callback within 3 s). On a sleeping display Orca's tab never paints: `Page.captureScreenshot` reports "did not draw a frame", `innerText` is empty and Gemini shows no messages. `dr` then exits 5 with `dr: Orca's browser tab is not painting`, without polling. Wake the display and rerun.
+
+Orca's Linux launcher passes `--ozone-platform=wayland`. Untested candidate for unattended runs: add `--disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-background-timer-throttling` to the Exec line of Orca's desktop entry, or switch to `--ozone-platform=x11`, then restart Orca. `orca tab create --headless` and `orca serve` use Orca's offscreen browser backend, which does not depend on the display, but they need a headless Orca runtime separate from the desktop app, and that profile has no Google sign-in.
+
 ## Tests
 
 `python3 -m pytest adapters/deep-research` (or `python3 tools/setup.py test deep-research`). `fixtures/orca/` holds Orca accessibility snapshots replayed by a fake runner (real signed-in captures, scrubbed, plus one synthetic failure page; see its README). No network, no browser.

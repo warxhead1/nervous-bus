@@ -32,7 +32,7 @@ VERDICTS = ("CONFIRMED", "WEAKENED", "REFUTED", "UNREACHABLE")
 MAX_CONFIDENCE = 0.4
 DEFAULT_JUDGE = "claude -p --model haiku --output-format json"
 
-EXIT_OK, EXIT_FAIL, EXIT_USAGE, EXIT_LOGIN, EXIT_API = 0, 1, 2, 3, 4
+EXIT_OK, EXIT_FAIL, EXIT_USAGE, EXIT_LOGIN, EXIT_API, EXIT_NOPAINT = 0, 1, 2, 3, 4, 5
 
 
 class DrError(Exception):
@@ -300,6 +300,10 @@ class OrcaBrowser:
         self.page = self._json(args)["browserPageId"]
         # A background tab does not draw, and Gemini's menu ignores clicks until it is active.
         self._json(["tab", "switch"] + self._p())
+        if not self.paints():
+            self.close()
+            raise DrError("Orca's browser tab is not painting (the display is probably asleep): wake the "
+                          "display or see the README section 'Display off', then retry", EXIT_NOPAINT)
         return self.page
 
     def goto(self, url):
@@ -325,6 +329,14 @@ class OrcaBrowser:
               "re.test((x.getAttribute('aria-label')||x.innerText||'').trim());});"
               "if(b){b.click();return true;}}return false;})(%s)" % json.dumps(list(patterns)))
         return self.eval(js)
+
+    def paints(self, wait_ms=3000):
+        """True when the tab draws a frame within wait_ms. A tab on a sleeping display never fires
+        requestAnimationFrame (and Page.captureScreenshot reports "did not draw a frame"), so the page
+        has no layout and every snapshot is empty."""
+        js = ("new Promise(function(r){var t=setTimeout(function(){r('stalled')},%d);"
+              "requestAnimationFrame(function(){clearTimeout(t);r('painted')})})" % wait_ms)
+        return self.eval(js) == "painted"
 
     def eval(self, expression):
         return self._json(["eval", "--expression", expression] + self._p()).get("result", "")
