@@ -283,9 +283,9 @@ class _Collector:
                 self.findings.append({"severity": self.cur["sev"], "claim": claim, "where": where, "fix": fix})
         self.cur = None
 
-    def start(self, sev: str, first: str) -> None:
+    def start(self, sev: str, first: str, indent: int = 1) -> None:
         self.flush()
-        self.cur = {"sev": sev, "parts": [first.strip()]}
+        self.cur = {"sev": sev, "parts": [first.strip()], "indent": indent}
 
     def feed(self, line: str) -> None:
         """Consume one line."""
@@ -320,8 +320,8 @@ class _Collector:
 
     def _continue(self, line: str) -> None:
         item = _ITEM_RE.match(line)
-        if self.section and item and (self.cur is None or len(item.group("indent")) <= 1):
-            self.start(self.section, item.group("body"))
+        if self.section and item and (self.cur is None or len(item.group("indent")) <= self.cur["indent"]):
+            self.start(self.section, item.group("body"), len(item.group("indent")))
         elif self.cur is not None and line.strip():
             self.cur["parts"].append(line.strip())
         elif self.cur is not None:
@@ -435,23 +435,30 @@ def run_agy(cmd: list[str], repo: Path, timeout: int) -> tuple[str, int, str, bo
         return raw, -1, "", True
 
 
+_SEV_LINE_RE = re.compile(_PREFIX + r"(?:BLOCKER|HIGH)\b[*_`\])]*\s*(?:[:\-\u2013\u2014]|\.(?=\s))?\s*(.*)$")
+
+
+def _next_content(lines: list[str], i: int) -> str:
+    """The first line after a bare severity heading, or "" when the next block starts."""
+    nxt = next((n.strip() for n in lines[i + 1:] if n.strip()), "")
+    if _VERDICT_RE.match(nxt) or _ANY_HEADING_RE.match(nxt) or _SPEC_HEAD_RE.match(nxt) or _HEAD_ONLY_RE.match(nxt):
+        return ""
+    return nxt.lstrip("-*+ ")
+
+
 def hidden_blocking(raw: str) -> bool:
     """True when a BLOCKER or HIGH line carries content the findings parser may have missed."""
-    sev = re.compile(_PREFIX + r"(?:BLOCKER|HIGH)\b[*_`\])]*\s*(?:[:\-\u2013\u2014]|\.(?=\s))?\s*(.*)$")
     lines, in_spec = raw.splitlines(), False
     for i, line in enumerate(lines):
         if _SPEC_HEAD_RE.match(line):
             in_spec = True
         elif _ANY_HEADING_RE.match(line) or _HEAD_ONLY_RE.match(line):
             in_spec = False
-        m = sev.match(line)
+        m = _SEV_LINE_RE.match(line)
         if in_spec or not m or _VERDICT_RE.match(line):
             continue
-        rest = m.group(1).strip(" \t*_`:.")
-        if not rest:
-            nxt = next((n.strip() for n in lines[i + 1:] if n.strip()), "")
-            rest = "" if not nxt or _VERDICT_RE.match(nxt) or _ANY_HEADING_RE.match(nxt) else nxt.lstrip("-*+ ").strip(" \t*_`:.")
-        if rest and not _NONE_RE.match(rest):
+        text = (_next_content(lines, i) if _HEAD_ONLY_RE.match(line) else m.group(1)).strip(" \t*_`:.")
+        if text and not _NONE_RE.match(text):
             return True
     return False
 

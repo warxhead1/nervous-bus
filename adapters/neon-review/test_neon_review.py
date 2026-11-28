@@ -584,3 +584,28 @@ def test_preexisting_gate_output_is_left_alone_and_new_output_removed(env):
     (env["repo"] / ".metrics" / "keep").write_text("x")
     review(env, "--depth", "ub")
     assert (env["repo"] / ".metrics" / "keep").exists()
+
+
+@pytest.mark.parametrize("text", [
+    "### BLOCKER (0)\n- None.\nVERDICT: PASS\n",
+    "### HIGH findings\n- None.\nVERDICT: PASS\n",
+    "**BLOCKER**\n**HIGH**\n- None.\nVERDICT: PASS\n",
+    "BLOCKER:\nSpec rows\n- item: landed\nVERDICT: PASS\n",
+    "BLOCKER\nVERDICT: PASS\n",
+])
+def test_empty_severity_headings_do_not_flip_a_pass(text):
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    assert neon_review.classify(text)["verdict"] == "PASS"
+
+
+def test_sibling_indented_bullets_are_separate_findings():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    text = ("### BLOCKER\n  - foo.py:10 leaks. Fix: redact it.\n    - evidence: run 1\n"
+            "  - bar.py:20 drops. Fix: keep it.\nVERDICT: FAIL\n")
+    got = neon_review.parse_findings(text)
+    assert [f["where"] for f in got] == ["foo.py:10", "bar.py:20"]
+    assert got[0]["fix"].startswith("redact it") and got[1]["fix"] == "keep it"
