@@ -468,3 +468,39 @@ def test_findings_after_a_spec_section_heading_survive_status_words():
     assert neon_review.classify(text)["verdict"] == "FAIL"
     rows = neon_review.parse_spec_rows("## Spec rows\n- Add wiring: **not landed** (helper landed in bar.py)\nVERDICT: FAIL\n")
     assert rows[0]["status"] == "not landed"
+
+
+def test_relative_scratch_is_resolved_so_agy_can_read_the_inputs(env):
+    work = env["tmp"] / "cwd"
+    work.mkdir()
+    e = {**env["env"], "NEON_REVIEW_SCRATCH": "rel_scratch", "FAKE_AGY_MODE": "pass"}
+    p = subprocess.run([str(CLI), "--repo", str(env["repo"]), "--base", "main"], capture_output=True, text=True, env=e, cwd=work)
+    assert p.returncode == 0, p.stderr
+    out = json.loads(p.stdout)
+    assert Path(out["work_dir"]).is_absolute() and (Path(out["work_dir"]) / "branch.diff").exists()
+
+
+def test_out_pointing_at_a_directory_is_exit_2(env):
+    rc, out, _ = review(env, "--out", str(env["tmp"]))
+    assert rc == 2
+    assert calls(env, "agy") == []
+
+
+def test_missing_agy_does_not_waste_the_gates(env):
+    d = Path(only_git(env["tmp"]))
+    (d / "ub-gate").symlink_to(env["tmp"] / "bin" / "ub-gate")
+    e = {**env["env"], "PATH": str(d)}
+    p = subprocess.run([sys.executable, "-I", str(ADAPTER_DIR / "neon_review.py"), "--repo", str(env["repo"]), "--base", "main", "--depth", "ub"],
+                       capture_output=True, text=True, env=e)
+    assert p.returncode == 3
+    assert calls(env, "ub-gate") == []
+
+
+def test_dotfile_where_and_head_only_closes_spec_rows():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    got = neon_review.parse_findings("LOW .gitignore:10 x\nNIT .gitignore:10 stray rule. Fix: drop it.\nVERDICT: FAIL\n")
+    assert got[0]["where"] == ".gitignore:10" and got[0]["claim"].startswith(".gitignore:10")
+    text = "## Spec rows\n- a: landed\n**BLOCKER**\n- y.py:2 broke it, not landed. Fix: redo.\nVERDICT: FAIL\n"
+    assert [r["row"] for r in neon_review.parse_spec_rows(text)] == ["a"]

@@ -43,7 +43,7 @@ GATE_ARTIFACTS = (".metrics", "target")
 _VERDICT_RE = re.compile(r"^[\s*_`>#-]*VERDICT:\s*(PASS|FAIL)\b[\s*_`.]*$", re.I)
 _SEV_ALT = "|".join(SEVERITIES)
 _PREFIX = r"^\s*(?:[-*+>]\s+|\d+[.)]\s+|#{1,6}\s+)*[*_`\[(]*"
-_FINDING_RE = re.compile(_PREFIX + rf"({_SEV_ALT})\b[*_`\])]*\s*[:\-.–—]?\s*(.*)$")
+_FINDING_RE = re.compile(_PREFIX + rf"({_SEV_ALT})\b[*_`\])]*\s*(?:[:\-–—]|\.(?=\s))?\s*(.*)$")
 _HEAD_TAIL = r"[*_`\])]*\s*(?:\(\d+\)|findings?|issues?)?[*_`:\s]*$"
 _HEAD_ONLY_RE = re.compile(
     r"^\s*#{1,6}\s*[*_`\[(]*(" + _SEV_ALT + r")\b" + _HEAD_TAIL + r"|^\s*[*_`]+(" + _SEV_ALT + r")\b" + _HEAD_TAIL,
@@ -52,6 +52,7 @@ _HEAD_ONLY_RE = re.compile(
 _ITEM_RE = re.compile(r"^ {0,1}(?:[-*+]\s+|\d+[.)]\s+)(.*\S)")
 _WHERE_RES = (
     re.compile(r"(?<![\w/.-])[\w./-]*[\w-]\.[A-Za-z0-9_]+:\d+(?:[-,]\d+)*"),
+    re.compile(r"(?<![\w/.-])\.[\w-][\w./-]*:\d+(?:[-,]\d+)*"),
     re.compile(r"(?<![\w/.-])[\w.-]+(?:/[\w.-]+)+:\d+(?:[-,]\d+)*"),
 )
 _SPEC_SEP_RE = re.compile(r"(?:[:\u2013\u2014]|\s-)\s*[*_`]*(not landed|landed differently|landed)\b", re.I)
@@ -89,9 +90,9 @@ def git(repo: Path, *args: str) -> str:
 def scratch_root() -> Path:
     env = os.environ.get("NEON_REVIEW_SCRATCH")
     if env:
-        return Path(env)
+        return Path(env).resolve()
     cache = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-    return Path(cache) / "neon-review"
+    return (Path(cache) / "neon-review").resolve()
 
 
 def inside(child: Path, parent: Path) -> bool:
@@ -257,7 +258,7 @@ def _split_where_fix(body: str) -> tuple[str, str, str]:
     if fm:
         fix = body[fm.end():].strip()
         body = body[: fm.start()]
-    claim = body.strip(" \t.;:*_`")
+    claim = body.strip().lstrip(" \t*_`:;").rstrip(" \t.;:*_`")
     return claim, where, fix.strip(" \t*_`.")
 
 
@@ -342,7 +343,7 @@ def parse_spec_rows(text: str) -> list[dict[str, str]]:
             continue
         if not in_spec:
             continue
-        if _ANY_HEADING_RE.match(line):
+        if _ANY_HEADING_RE.match(line) or _HEAD_ONLY_RE.match(line):
             in_spec = False
             continue
         item = _ITEM_RE.match(line)
@@ -396,6 +397,8 @@ def preflight(args: argparse.Namespace) -> tuple[Path, Path | None, Path, Path] 
     stamp = time.strftime("%Y%m%dT%H%M%S") + f"-{os.getpid()}"
     work = scratch_root() / f"{repo.name}-{stamp}"
     out = Path(args.out).resolve() if args.out else work / "review.txt"
+    if out.is_dir():
+        return EXIT_USAGE, f"--out is a directory: {args.out}"
     for label, path in (("scratch dir", work), ("--out", out)):
         if inside(path, repo):
             return EXIT_USAGE, f"{label} is inside the repo; the review must stay outside the checkout"
@@ -477,6 +480,8 @@ def main(argv: list[str] | None = None) -> int:
 
     before = existing_artifacts(repo)
     gates: dict[str, Any] | None = None
+    if not shutil.which("agy"):
+        return fail(EXIT_UNREACHABLE, "agy not found on PATH")
     try:
         if args.depth == "ub":
             gates, err_msg = gate_stage(repo, args.base, changed)
@@ -486,8 +491,6 @@ def main(argv: list[str] | None = None) -> int:
             files["gates"].write_text(json.dumps(gates, indent=2))
         prompt = build_prompt(RUBRIC.read_text(), args.depth, args.base, files, repo)
         (work / "prompt.txt").write_text(prompt)
-        if not shutil.which("agy"):
-            return fail(EXIT_UNREACHABLE, "agy not found on PATH")
         raw, rc, err, timed_out = run_agy(["agy", "-p", prompt, "--model", args.model, "--add-dir", str(work)], repo, args.timeout)
     finally:
         remove_new_artifacts(repo, before)
