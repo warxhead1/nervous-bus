@@ -35,6 +35,8 @@ def _env_seconds(name: str, default: int) -> int:
     return int(raw) if raw.isascii() and raw.isdigit() and int(raw) > 0 else default
 
 
+GROUP_GRACE_S = 5
+GROUP_DRAIN_S = 5
 MUTATE_TIMEOUT_S = _env_seconds("NEON_REVIEW_MUTATE_TIMEOUT", 900)
 RUBRIC = Path(__file__).resolve().parent / "rubric.md"
 SEVERITIES = ("BLOCKER", "HIGH", "MEDIUM", "NIT")
@@ -76,7 +78,7 @@ def fail(code: int, msg: str, **extra: Any) -> int:
 
 
 def run(argv: list[str], cwd: Path, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
-    """Run argv in its own process group, and on timeout end the whole group.
+    """Run argv in its own process group, and end the whole group on timeout or interrupt.
 
     subprocess.run's timeout kills only the direct child, so a grandchild
     (ub-gate's mutator, agy's workers) kept running after the review returned.
@@ -87,28 +89,50 @@ def run(argv: list[str], cwd: Path, timeout: float | None = None) -> subprocess.
             out, err = p.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             _end_group(p)
-            out, err = p.communicate()
+            out, err = _drain(p)
             raise subprocess.TimeoutExpired(argv, timeout, output=out, stderr=err) from None
         except BaseException:
             _end_group(p)
+            _drain(p)
             raise
     return subprocess.CompletedProcess(argv, p.returncode, out, err)
 
 
+def _drain(p: subprocess.Popen[str]) -> tuple[str, str]:
+    """Collect what the ended group wrote. A grandchild in its own session can
+    hold the pipes open, so give up after a few seconds rather than hang."""
+    try:
+        return p.communicate(timeout=GROUP_DRAIN_S)
+    except subprocess.TimeoutExpired:
+        for f in (p.stdout, p.stderr):
+            if f:
+                f.close()
+        return "", ""
+
+
 def _end_group(p: subprocess.Popen[str]) -> None:
-    """SIGTERM the group, give the leader 5 s, then SIGKILL whatever is left."""
+    """SIGTERM the group, give it GROUP_GRACE_S, then SIGKILL whatever is left.
+
+    The SIGKILL runs even if the grace wait is interrupted.
+    """
     try:
         os.killpg(p.pid, signal.SIGTERM)
     except ProcessLookupError:
         return
     try:
-        p.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(p.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+        deadline = time.monotonic() + GROUP_GRACE_S
+        while p.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+    finally:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def _exit_on_signal(signum: int, _frame: Any) -> None:
+    # Turn SIGTERM/SIGHUP into SystemExit so run() ends its child group on the way out.
+    raise SystemExit(128 + signum)
 
 
 def git(repo: Path, *args: str) -> str:
@@ -587,4 +611,6 @@ def finish(args: argparse.Namespace, out_path: Path, work: Path, gates: dict[str
 
 
 if __name__ == "__main__":
+    for _sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(_sig, _exit_on_signal)
     sys.exit(main())

@@ -24,8 +24,11 @@ mode = os.environ.get("FAKE_AGY_MODE", "pass")
 if mode == "timeout":
     sys.stdout.write("partial review\n"); sys.stdout.flush()
     time.sleep(30)
-if mode == "timeout_grandchild":
-    import subprocess
+if mode in ("timeout_grandchild", "stubborn_grandchild"):
+    import signal, subprocess
+    if mode == "stubborn_grandchild":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    # SIG_IGN is inherited across exec, so the stubborn kid ignores SIGTERM too.
     kid = subprocess.Popen(["sleep", "30"])
     with open(os.environ["FAKE_LOG"] + ".kid", "w") as fh:
         fh.write(str(kid.pid))
@@ -204,22 +207,86 @@ def test_timeout_keeps_partial_output_and_exits_1(env):
     assert "partial review" in Path(out["raw_path"]).read_text()
 
 
+def _gone(pid: int, wait_s: float = 3.0) -> bool:
+    """True once pid has exited. A zombie counts as gone: it has stopped running,
+    and a sandbox whose PID 1 never reaps would otherwise look alive forever."""
+    end = time.monotonic() + wait_s
+    while time.monotonic() < end:
+        try:
+            state = Path(f"/proc/{pid}/status").read_text()
+        except (FileNotFoundError, ProcessLookupError):
+            return True
+        if "\nState:\tZ" in state:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def _kid(env) -> int:
+    path = Path(str(env["log"]) + ".kid")
+    for _ in range(100):
+        if path.exists() and path.read_text().strip():
+            return int(path.read_text())
+        time.sleep(0.05)
+    raise AssertionError("fake agy never wrote its grandchild pid")
+
+
+def _reap(pid: int) -> None:
+    try:
+        os.kill(pid, 9)
+    except ProcessLookupError:
+        pass
+
+
 def test_timeout_kills_the_whole_process_group(env):
     # A timed-out child used to leave its own children running: a mutator
     # outlived its review by 26 minutes and held a worktree.
     rc, out, _ = review(env, "--timeout", "1", mode="timeout_grandchild")
     assert rc == 1
     assert out["verdict"] == "timeout"
-    kid = int(Path(str(env["log"]) + ".kid").read_text())
-    for _ in range(20):
-        try:
-            os.kill(kid, 0)
-        except ProcessLookupError:
-            break
-        time.sleep(0.1)
-    else:
-        os.kill(kid, 9)
+    kid = _kid(env)
+    if not _gone(kid):
+        _reap(kid)
         pytest.fail(f"grandchild {kid} survived the timeout")
+
+
+def test_timeout_escalates_to_sigkill_when_sigterm_is_ignored(env):
+    rc, out, _ = review(env, "--timeout", "1", mode="stubborn_grandchild")
+    assert rc == 1
+    assert out["verdict"] == "timeout"
+    kid = _kid(env)
+    if not _gone(kid):
+        _reap(kid)
+        pytest.fail(f"grandchild {kid} that ignores SIGTERM survived")
+
+
+def test_sigterm_to_neon_review_ends_its_child_group(env):
+    e = {**env["env"], "FAKE_AGY_MODE": "timeout_grandchild"}
+    p = subprocess.Popen([str(CLI), "--repo", str(env["repo"]), "--base", "main", "--timeout", "60"],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=e)
+    try:
+        kid = _kid(env)
+        p.send_signal(15)
+        p.communicate(timeout=20)
+    finally:
+        if p.poll() is None:
+            p.kill()
+    assert p.returncode != 0
+    if not _gone(kid):
+        _reap(kid)
+        pytest.fail(f"grandchild {kid} survived SIGTERM to neon-review")
+
+
+def test_run_returns_when_a_detached_grandchild_holds_the_pipes(monkeypatch):
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review as nr
+    monkeypatch.setattr(nr, "GROUP_GRACE_S", 0.2)
+    monkeypatch.setattr(nr, "GROUP_DRAIN_S", 0.5)
+    script = "import subprocess,time; subprocess.Popen(['sleep','30'], start_new_session=True); time.sleep(30)"
+    t0 = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        nr.run([sys.executable, "-c", script], Path.cwd(), timeout=0.5)
+    assert time.monotonic() - t0 < 5
 
 
 def test_agy_dead_without_output_is_exit_3(env):
