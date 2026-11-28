@@ -286,6 +286,19 @@ def test_dark_attach_leaves_no_run_file(tmp_path):
     assert list(tmp_path.iterdir()) == [] and fake.tabs_open == 0
 
 
+def test_attach_closes_its_tab_when_the_open_fails_midway(tmp_path):
+    class BadSwitch(FakeOrca):
+        def __call__(self, args):
+            if args[:2] == ["tab", "switch"]:
+                raise dr.DrError("switch failed", dr.EXIT_API)
+            return super().__call__(args)
+    fake = BadSwitch()
+    eng = dr.GeminiWebEngine(CFG, runner=fake)
+    with pytest.raises(dr.DrError):
+        eng.attach("abc123def")
+    assert fake.tabs_open == 0
+
+
 def test_missing_ui_element_times_out_with_its_name(tmp_path):
     class Stuck(FakeOrca):
         def _snapshot(self):
