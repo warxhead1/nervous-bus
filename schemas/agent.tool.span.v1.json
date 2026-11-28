@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/agent.tool.span.v1.json",
+  "title": "agent.tool.span v1",
+  "description": "One tool call of a coding agent with its wall time, derived after the fact from the agent's transcript by adapters/spans (tool_use paired with its tool_result). Answers where agent time goes. Carries the command class and, for waits, what is waited on; never command text, arguments or output. span_id is a hash of the transcript file and tool call id, so a rescan produces the same id.",
+  "type": "object",
+  "required": ["v", "span_id", "session", "project", "tool", "class", "start", "status"],
+  "properties": {
+    "v": {"const": 1},
+    "span_id": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+    "session": {"type": "string", "minLength": 1, "maxLength": 200},
+    "agent_id": {"type": "string", "maxLength": 200, "description": "Subagent or workflow lane id; empty for a main session"},
+    "workflow_id": {"type": "string", "maxLength": 200, "description": "Workflow run id when the call ran in a workflow lane"},
+    "label": {"type": "string", "maxLength": 200, "description": "Lane label or description from the transcript metadata"},
+    "project": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Project resolved from the call's cwd; 'unknown' when it cannot be told"},
+    "tool": {"type": "string", "minLength": 1, "maxLength": 100, "description": "The agent's own tool name"},
+    "class": {
+      "type": "string",
+      "enum": ["wait", "gate", "e2e", "test", "build", "vcs", "github", "orchestration", "read", "edit", "search", "subagent", "web", "shell-other", "other"],
+      "description": "What kind of work the call was. wait means the call polled, slept or blocked on something else."
+    },
+    "wait_target": {
+      "type": "string",
+      "enum": ["lock", "build", "e2e", "test", "gate", "ci", "background_task", "time", "unknown"],
+      "description": "Only for class wait: what the call waited on. time is a bare sleep with nothing else to name."
+    },
+    "start": {"type": "string", "format": "date-time"},
+    "duration_ms": {"type": "integer", "minimum": 0, "description": "Result time minus call time; absent when the result never landed"},
+    "status": {"type": "string", "enum": ["ok", "error", "lost"], "description": "error: the tool reported failure. lost: the transcript has no result for the call."},
+    "exit_code": {"type": "integer", "description": "Shell exit code when the transcript reports one"}
+  },
+  "additionalProperties": false
+}

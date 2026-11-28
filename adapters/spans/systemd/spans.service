@@ -1,0 +1,11 @@
+[Unit]
+Description=nervous-bus spans: publish new agent tool spans from Claude Code transcripts to agent.tool.span
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I %h/projects/nervous-bus/adapters/spans/spans.py scan --since 2d
+TimeoutStartSec=10min
+Nice=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=spans
