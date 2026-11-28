@@ -638,3 +638,30 @@ def test_plain_paragraph_findings_under_a_heading_are_parsed():
 
     got = neon_review.parse_findings("### BLOCKER\nfoo.py:10 drops the cursor. Fix: keep it.\nVERDICT: FAIL\n")
     assert [(f["severity"], f["where"], f["fix"]) for f in got] == [("BLOCKER", "foo.py:10", "keep it")]
+
+
+@pytest.mark.parametrize("text", [
+    "### MEDIUM\n- foo.py:10 minor thing. Fix: do x.\n### NIT\n- bar.py:2 style.\nVERDICT: PASS\n",
+    "### BLOCKER\n**Questions**\n- is foo.py:10 intended?\nVERDICT: PASS\n",
+])
+def test_non_blocking_sections_and_labels_keep_a_pass(text):
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    assert neon_review.classify(text)["verdict"] == "PASS"
+
+
+def test_labels_end_the_spec_rows_section():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    text = "## Spec rows\n- item 1: landed\n**Questions**\n- was item 2 landed?\nVERDICT: PASS\n"
+    assert [r["row"] for r in neon_review.parse_spec_rows(text)] == ["item 1"]
+
+
+def test_mutate_keeps_every_site_line_not_only_the_tail(env):
+    bad = env["tmp"] / "bin" / "ub-gate"
+    bad.write_text(bad.read_text().replace('print("UNCOVERED " + argv[1] + ":1 delete not")', 'print("SURVIVED " + argv[1] + ":7 flip")\n    [print("table row %d" % i) for i in range(100)]'))
+    rc, out, _ = review(env, "--depth", "ub")
+    first = out["gates"]["mutate"][0]
+    assert first["sites"] == ["SURVIVED b.py:7 flip"] and len(first["output_tail"]) == 40

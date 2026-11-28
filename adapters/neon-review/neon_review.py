@@ -168,6 +168,7 @@ def mutate_file(repo: Path, rel: str) -> dict[str, Any]:
     entry["exit"] = p.returncode
     out_lines = [ln for ln in (p.stdout + p.stderr).splitlines() if ln.strip()]
     entry["output_tail"] = out_lines[-40:]
+    entry["sites"] = [ln for ln in out_lines if re.match(r"\s*(?:SURVIV\w*|UNCOVERED)\b", ln)][:200]
     if p.returncode not in (0, 2):
         return entry
     digest, error = _read_digest(repo)
@@ -350,7 +351,7 @@ def parse_spec_rows(text: str) -> list[dict[str, str]]:
             continue
         if not in_spec:
             continue
-        if _ANY_HEADING_RE.match(line) or _HEAD_ONLY_RE.match(line):
+        if _ANY_HEADING_RE.match(line) or _HEAD_ONLY_RE.match(line) or _LABEL_RE.match(line):
             in_spec = False
             continue
         item = _ITEM_RE.match(line)
@@ -444,7 +445,7 @@ _SEV_LINE_RE = re.compile(_PREFIX + r"(?:BLOCKER|HIGH)\b[*_`\])]*\s*(?:[:\-\u201
 def _next_content(lines: list[str], i: int) -> str:
     """The first line after a bare severity heading, or "" when the next block starts."""
     nxt = next((n.strip() for n in lines[i + 1:] if n.strip()), "")
-    if _VERDICT_RE.match(nxt) or _ANY_HEADING_RE.match(nxt) or _SPEC_HEAD_RE.match(nxt) or _HEAD_ONLY_RE.match(nxt):
+    if any(r.match(nxt) for r in (_VERDICT_RE, _ANY_HEADING_RE, _SPEC_HEAD_RE, _HEAD_ONLY_RE, _LABEL_RE)):
         return ""
     return re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", nxt)
 
@@ -459,6 +460,8 @@ def hidden_blocking(raw: str) -> bool:
             in_spec = False
         m = _SEV_LINE_RE.match(line)
         head = _HEAD_ONLY_RE.match(line)
+        if head and (head.group(1) or head.group(2)).upper() not in BLOCKING:
+            continue
         if in_spec or not (m or head) or _VERDICT_RE.match(line):
             continue
         text = (_next_content(lines, i) if head else m.group(1)).strip(" \t*_`:.")
