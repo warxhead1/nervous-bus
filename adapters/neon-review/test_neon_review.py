@@ -755,3 +755,22 @@ def test_zero_mutate_timeout_falls_back_to_the_default():
         assert neon_review._env_seconds("NEON_REVIEW_MUTATE_TIMEOUT", 900) == 5
     finally:
         del os.environ["NEON_REVIEW_MUTATE_TIMEOUT"]
+
+
+@pytest.mark.parametrize("body", ["- None found.", "- None identified", "- None to report.", "- 0", "- Zero", "- N/A", "- No findings."])
+def test_empty_section_placeholders_keep_a_clean_pass(body):
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    text = f"### BLOCKER\n{body}\n### HIGH\n{body}\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n"
+    assert neon_review.parse_findings(text) == []
+    assert neon_review.classify(text)["verdict"] == "PASS"
+
+
+def test_inline_zero_placeholder_is_not_a_finding():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    text = "BLOCKER: 0\nHIGH: None found.\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n"
+    assert neon_review.parse_findings(text) == []
+    assert neon_review.classify(text)["verdict"] == "PASS"
