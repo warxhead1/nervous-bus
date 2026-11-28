@@ -71,12 +71,9 @@
       "type": "array",
       "maxItems": 8,
       "default": [],
-      "description": "Decision-level media URIs shown above options and parts",
+      "description": "Decision-level media shown above options and parts: v1 string refs or v2 media objects",
       "items": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 1024,
-        "pattern": "^(hearth-media://[0-9a-f]{64}|https://\\S+)$"
+        "$ref": "#/$defs/mediaEntry"
       }
     },
     "options": {
@@ -106,6 +103,9 @@
               "null"
             ],
             "maxLength": 140
+          },
+          "media": {
+            "$ref": "#/$defs/optionMedia"
           }
         },
         "additionalProperties": true
@@ -154,9 +154,7 @@
             "type": "array",
             "maxItems": 4,
             "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 1024
+              "$ref": "#/$defs/partMediaEntry"
             }
           },
           "options": {
@@ -186,6 +184,9 @@
                     "null"
                   ],
                   "maxLength": 140
+                },
+                "media": {
+                  "$ref": "#/$defs/optionMedia"
                 }
               },
               "additionalProperties": true
@@ -264,6 +265,21 @@
         "null"
       ],
       "format": "date-time"
+    },
+    "input": {
+      "type": "array",
+      "default": [],
+      "uniqueItems": true,
+      "maxItems": 4,
+      "description": "Answer modes beyond a one-tap pick (decision media v2)",
+      "items": {
+        "enum": [
+          "pins",
+          "rank",
+          "notes",
+          "changes"
+        ]
+      }
     }
   },
   "not": {
@@ -300,5 +316,196 @@
       }
     }
   },
-  "additionalProperties": true
+  "additionalProperties": true,
+  "$defs": {
+    "mediaRef": {
+      "type": "string",
+      "minLength": 79,
+      "maxLength": 79,
+      "pattern": "^hearth-media://[0-9a-f]{64}(?![\\s\\S])"
+    },
+    "mediaObject": {
+      "description": "A typed media object (decision media v2). Every ref is a hearth-media:// digest already in Hearth's store; nothing is fetched remotely.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "src"
+          ],
+          "properties": {
+            "kind": {
+              "const": "image"
+            },
+            "src": {
+              "$ref": "#/$defs/mediaRef"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 80,
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "src"
+          ],
+          "properties": {
+            "kind": {
+              "const": "video"
+            },
+            "src": {
+              "$ref": "#/$defs/mediaRef"
+            },
+            "poster": {
+              "$ref": "#/$defs/mediaRef"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 80,
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "src",
+            "poster"
+          ],
+          "properties": {
+            "kind": {
+              "const": "model"
+            },
+            "src": {
+              "$ref": "#/$defs/mediaRef"
+            },
+            "poster": {
+              "$ref": "#/$defs/mediaRef"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 80,
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "frames"
+          ],
+          "properties": {
+            "kind": {
+              "const": "sequence"
+            },
+            "frames": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 72,
+              "items": {
+                "$ref": "#/$defs/mediaRef"
+              }
+            },
+            "fps": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30
+            },
+            "poster": {
+              "$ref": "#/$defs/mediaRef"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 80,
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "items"
+          ],
+          "properties": {
+            "kind": {
+              "const": "compare"
+            },
+            "items": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 4,
+              "items": {
+                "type": "object",
+                "required": [
+                  "src"
+                ],
+                "properties": {
+                  "src": {
+                    "$ref": "#/$defs/mediaRef"
+                  },
+                  "label": {
+                    "type": "string",
+                    "maxLength": 40,
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 80,
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "mediaEntry": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^(hearth-media://[0-9a-f]{64}|https://\\S+)(?![\\s\\S])"
+        },
+        {
+          "$ref": "#/$defs/mediaObject"
+        }
+      ]
+    },
+    "partMediaEntry": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        {
+          "$ref": "#/$defs/mediaObject"
+        }
+      ]
+    },
+    "optionMedia": {
+      "type": "array",
+      "maxItems": 4,
+      "default": [],
+      "description": "Media that is this option; a client shows the option as one tappable tile",
+      "items": {
+        "$ref": "#/$defs/mediaEntry"
+      }
+    }
+  }
 }

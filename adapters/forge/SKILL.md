@@ -13,6 +13,7 @@ Run `forge` from `adapters/forge/`. JSON on stdout, diagnostics on stderr, `forg
 | Does my bpy script build the asset, and what does it look like | `forge blend --script S.py --out DIR [--timeout 300]` |
 | Does the mesh pass the geometry budget | `forge gate DIR/model.glb --profile budget.toml` |
 | How far is the model from the reference | `forge compare DIR/sheet.png REF_DIR` |
+| Let the owner judge the model on the phone | `hearth-ask post ... --option-media ID=forge:DIR[,refs=REF_DIR]` |
 
 Exit codes: `0` ok, `1` negative result (bad or missing image, script failed or timed out, gate failed), `2` usage, `3` backend unreachable (agy or blender missing, mesh_gate dependency missing).
 
@@ -21,6 +22,24 @@ Exit codes: `0` ok, `1` negative result (bad or missing image, script failed or 
 - `ref` writes `ref_01.png` and up, plus `asset.json` (tool, model, prompt, `ai_generated: true`, `player_facing: false`, sha256 per file). References are never shipped.
 - `blend` writes `model.glb` (your script), then `sheet.png`, `views/*.png`, `render_info.json`, `blend.log`, `render.log`. The sheet has seven columns (front, back, left, right, top, three-quarter, close-up). The top row is colour and the bottom row is clay. The camera framing comes from the bounding box, so renders of one model are comparable across revisions.
 - `compare` writes `compare.png` beside the sheet: references stacked on the left, the sheet on the right.
+
+## Asking the owner
+
+`hearth-ask` (Hearth's ask CLI) reads a `forge blend` output directory as it is. `forge:DIR` attaches the model (`model.glb`, with `views/color_three_quarter.png` as the still shown where 3D cannot load), a turntable of the front, right, back and left colour views, and, with `refs=REF_DIR`, the first reference beside the render. The owner gets a 3D viewer with orbit, zoom, turntable and studio or clay light on the phone, the web and Kiln.
+
+One option per look, so the owner taps the look. Three looks are three options:
+
+```sh
+hearth-ask post --project P --title "Which look?" \
+  --option a:"Look A" --option-media a=forge:out/a,refs=refs \
+  --option b:"Look B" --option-media b=forge:out/b,refs=refs \
+  --option c:"Look C" --option-media c=forge:out/c,refs=refs \
+  --input pins,changes
+```
+
+A plain pick stays one tap. `--input` asks for more only when the call is worth it: `pins` (pins with comments on the model or a still), `rank` (order the looks), `notes` (a note per look), `changes` (pick, with changes). The answer is typed into the asking session as one line, and `hearth-ask wait ID` prints it as JSON with `feedback` (pins on the model carry `pos` in model space). Other media specs: `model:GLB,poster=IMG`, `seq:DIR`, `compare:Reference=A.png,Render=B.png`. See `hearth-ask post --help`.
+
+Never post a test ask: it notifies the owner's phone.
 
 ## Writing the bpy script
 

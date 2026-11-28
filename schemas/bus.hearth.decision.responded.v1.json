@@ -105,6 +105,148 @@
     "responded_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "feedback": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Rich answer for an ask that declared input modes (decision media v2): ranking, per-option notes, the change request of pick-with-changes, pins on images or 3D models (pos in model space)",
+      "properties": {
+        "rank": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "notes": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 6,
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "changes": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "pins": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "required": [
+              "ref",
+              "comment"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string",
+                "minLength": 79,
+                "maxLength": 79,
+                "pattern": "^hearth-media://[0-9a-f]{64}(?![\\s\\S])"
+              },
+              "option_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "x": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "y": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "pos": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "number"
+                }
+              },
+              "normal": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "number"
+                }
+              },
+              "comment": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 280
+              }
+            },
+            "additionalProperties": false,
+            "oneOf": [
+              {
+                "description": "2D pin on an image, frame or compare item",
+                "required": [
+                  "x",
+                  "y"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "pos"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "normal"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "description": "3D pin on a model, in model space",
+                "required": [
+                  "pos"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "x"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "y"
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      },
+      "additionalProperties": false,
+      "minProperties": 1
     }
   },
   "additionalProperties": true
