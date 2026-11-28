@@ -278,6 +278,14 @@ def test_notebook_import_and_attach_also_fail_fast_on_a_dark_tab(tmp_path):
     assert e.value.code == dr.EXIT_NOPAINT and not any(c[0] == "snapshot" for c in nb.calls)
 
 
+def test_dark_attach_leaves_no_run_file(tmp_path):
+    fake = FakeOrca()
+    fake.dark = True
+    assert dr.main(["--runs-dir", str(tmp_path), "run", "--attach", "abc123def", "q?"],
+                   runner=fake, lint=lambda q: []) == dr.EXIT_NOPAINT
+    assert list(tmp_path.iterdir()) == [] and fake.tabs_open == 0
+
+
 def test_missing_ui_element_times_out_with_its_name(tmp_path):
     class Stuck(FakeOrca):
         def _snapshot(self):
