@@ -442,7 +442,7 @@ class GeminiWebEngine(Engine):
             snap = self._open_tools_menu(snap)
             if is_checked(snap, "deep_research"):
                 # Already selected (its chip has not rendered yet): clicking would switch it off.
-                self.browser.click(find_ref(snap, "tools"))  # close the menu
+                snap = (self._click_until(snap, "tools", lambda s: not find_ref(s, "deep_research")) or snap)
             else:
                 snap = (self._click_until(snap, "deep_research", lambda s: find_ref(s, "deep_research_on"))
                         or self._until("deep_research_on", "the research-mode chip (mode not selected)"))
@@ -450,8 +450,9 @@ class GeminiWebEngine(Engine):
         snap = self._until("send", "the send button")
         cid = self._send(snap)
         snap = self._until("start_research", "the research plan")
-        self._click_until(snap, "start_research",
-                          lambda s: not find_ref(s, "start_research") or find_ref(s, "running"))
+        if not self._click_until(snap, "start_research",
+                                 lambda s: not find_ref(s, "start_research") or find_ref(s, "running")):
+            raise DrError("timed out waiting for research to start (the click did not take)", EXIT_API)
         return cid
 
     def poll(self, ident):

@@ -333,13 +333,29 @@ def test_menu_item_already_checked_is_not_clicked(tmp_path):
             s = super()._snapshot()
             return s.replace('"Deep research" [checked=false', '"Deep research" [checked=true') \
                 if self.phase == "tools_menu" else s
-    assert dr.is_checked(Checked()._snapshot().replace('"Deep research" [checked=false', '"Deep research" [checked=true')
-                         if False else snap("tools_menu").replace('"Deep research" [checked=false',
-                                                                   '"Deep research" [checked=true'), "deep_research")
+    assert dr.is_checked(snap("tools_menu").replace('"Deep research" [checked=false',
+                                                    '"Deep research" [checked=true'), "deep_research")
     assert not dr.is_checked(snap("tools_menu"), "deep_research")
     _, fake, _ = run_it(tmp_path, runner=Checked())
     clicks = [c[2] for c in fake.calls if c[0] == "click"]
     assert "@e31" not in clicks and "@e36" in clicks and fake.filled
+
+
+def test_start_research_click_that_never_lands_raises(tmp_path):
+    class Dead(FakeOrca):
+        def _click(self, ref):
+            if ref != "@e179":
+                super()._click(ref)
+
+        def __call__(self, args):
+            if args[0] == "eval" and "getAttribute('aria-label')" in args[args.index("--expression") + 1] \
+                    and "Start research" in args[args.index("--expression") + 1]:
+                return json.dumps({"ok": True, "result": {"result": True}})
+            return super().__call__(args)
+    clk = Clock()
+    eng = dr.GeminiWebEngine(CFG, runner=Dead(), sleep=clk.sleep, clock=clk.now)
+    with pytest.raises(dr.DrError, match="research to start"):
+        eng.start("q")
 
 
 def test_slow_conversation_url_never_sends_twice(tmp_path):
