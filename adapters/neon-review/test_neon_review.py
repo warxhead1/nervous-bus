@@ -665,3 +665,23 @@ def test_mutate_keeps_every_site_line_not_only_the_tail(env):
     rc, out, _ = review(env, "--depth", "ub")
     first = out["gates"]["mutate"][0]
     assert first["sites"] == ["SURVIVED b.py:7 flip"] and len(first["output_tail"]) == 40
+    assert first["uncovered_count"] == 0
+
+
+@pytest.mark.parametrize("text", [
+    "### BLOCKER findings (0)\n- None.\nVERDICT: PASS\n",
+    "### BLOCKER\n- None.\n---\nSummary: all checks passed.\nVERDICT: PASS\n",
+])
+def test_count_headings_and_rules_keep_a_pass(text):
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    assert neon_review.classify(text)["verdict"] == "PASS"
+
+
+def test_findings_label_after_spec_rows_ends_the_spec_section():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    text = "## Spec rows\n- a: landed\n**Findings**\n- BLOCKER foo.py:10 auth check not landed. Fix: add check.\nVERDICT: PASS\n"
+    assert neon_review.classify(text)["verdict"] == "FAIL"

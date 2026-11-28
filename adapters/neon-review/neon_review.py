@@ -44,7 +44,7 @@ _VERDICT_RE = re.compile(r"^[\s*_`>#-]*VERDICT:\s*(PASS|FAIL)\b[\s*_`.]*$", re.I
 _SEV_ALT = "|".join(SEVERITIES)
 _PREFIX = r"^\s*(?:[-*+>]\s+|\d+[.)]\s+|#{1,6}\s+)*[*_`\[(]*"
 _FINDING_RE = re.compile(_PREFIX + rf"({_SEV_ALT})\b[*_`\])]*\s*(?:[:\-–—]|\.(?=\s))?\s*(.*)$")
-_HEAD_TAIL = r"[*_`\])]*\s*(?:\(\d+\)|findings?|issues?)?[*_`:\s]*$"
+_HEAD_TAIL = r"[*_`\])]*\s*(?:(?:findings?|issues?)\s*)?(?:\(\d+\)\s*)?[*_`:\s]*$"
 _HEAD_ONLY_RE = re.compile(
     r"^\s*#{1,6}\s*[*_`\[(]*(" + _SEV_ALT + r")\b" + _HEAD_TAIL + r"|^\s*[*_`]*(" + _SEV_ALT + r")\b" + _HEAD_TAIL,
     re.I,
@@ -59,7 +59,7 @@ _SPEC_SEP_RE = re.compile(r"(?:[:\u2013\u2014]|\s-)\s*[*_`]*(not landed|landed d
 _FILE_RE = re.compile(r"[\w./-]+/[\w.-]+\.[A-Za-z0-9_]+|\b[\w-]+\.(?:py|go|rs|ts|tsx|js|sh|md|json|ya?ml|toml)\b")
 _SPEC_HEAD_RE = re.compile(r"^\s*(?:#{1,6}\s*)?[*_`]*spec\s+(?:rows?|items?|coverage)\b[*_`:]*\s*$", re.I)
 _NONE_RE = re.compile(r"^(?:none|n/?a|nothing|no (?:new )?(?:findings?|issues?)(?: found| identified)?)\W*$", re.I)
-_LABEL_RE = re.compile(r"^\s*[*_]{2}[^*_\n]+[*_]{2}:?\s*$")
+_LABEL_RE = re.compile(r"^\s*(?:[*_]{2}[^*_\n]+[*_]{2}:?|([-*_])(?:\s*\1){2,})\s*$")
 _ANY_HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 _SPEC_STATUS_RE = re.compile(r"\b(not landed|landed differently|landed)\b", re.I)
 
@@ -168,7 +168,10 @@ def mutate_file(repo: Path, rel: str) -> dict[str, Any]:
     entry["exit"] = p.returncode
     out_lines = [ln for ln in (p.stdout + p.stderr).splitlines() if ln.strip()]
     entry["output_tail"] = out_lines[-40:]
-    entry["sites"] = [ln for ln in out_lines if re.match(r"\s*(?:SURVIV\w*|UNCOVERED)\b", ln)][:200]
+    entry["sites"] = [ln for ln in out_lines if re.match(r"\s*SURVIV\w*\b", ln)][:200]
+    uncovered = [ln for ln in out_lines if re.match(r"\s*UNCOVERED\b", ln)]
+    entry["uncovered_count"] = len(uncovered)
+    entry["uncovered_head"] = uncovered[:30]
     if p.returncode not in (0, 2):
         return entry
     digest, error = _read_digest(repo)
@@ -300,7 +303,7 @@ class _Collector:
             self.section = None
             return
         head = _HEAD_ONLY_RE.match(line)
-        if head or _ANY_HEADING_RE.match(line):
+        if head or _ANY_HEADING_RE.match(line) or _LABEL_RE.match(line):
             self.in_spec = False
         if self.in_spec and _ITEM_RE.match(line) and _SPEC_STATUS_RE.search(line):
             self.flush()
@@ -456,7 +459,7 @@ def hidden_blocking(raw: str) -> bool:
     for i, line in enumerate(lines):
         if _SPEC_HEAD_RE.match(line):
             in_spec = True
-        elif _ANY_HEADING_RE.match(line) or _HEAD_ONLY_RE.match(line):
+        elif _ANY_HEADING_RE.match(line) or _HEAD_ONLY_RE.match(line) or _LABEL_RE.match(line):
             in_spec = False
         m = _SEV_LINE_RE.match(line)
         head = _HEAD_ONLY_RE.match(line)
