@@ -17,7 +17,7 @@ A branch in rapid development merges once this returns `"verdict": "PASS"`. It b
 
 - Before every rapid-dev merge, after the author's own tests are green.
 - On Claude-built branches, so a different model family reviews them.
-- Use `--depth ub` for branches that change logic, state or security. The tool runs `ub-gate crap` and `ub-gate dry` and hands their JSON to the reviewer, which then runs `ub-gate mutate` on the two riskiest files. It needs `ub-gate` installed and costs several minutes more.
+- Use `--depth ub` for branches that change logic, state or security. The tool itself runs `ub-gate crap` and `ub-gate dry`, and `ub-gate mutate` on the two changed source files with the most added lines, then hands the JSON to the reviewer (its sandbox cannot reach the ub-gate install). A gate that cannot run exits `3`. Python mutation reports only uncovered sites when the `coverage` package is missing. `NEON_REVIEW_MUTATE_TIMEOUT` (seconds, default 900) bounds each mutate run. It needs `ub-gate` installed and costs several minutes more.
 - Pass `--spec` with the bead, issue or brief so each of its items becomes a spec row.
 
 ## Reading the result

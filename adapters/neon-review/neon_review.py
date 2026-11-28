@@ -27,6 +27,7 @@ EXIT_UNREACHABLE = 3
 DEFAULT_MODEL = "gemini-4-neon-medium"
 DEFAULT_TIMEOUT_S = 1800
 GATE_TIMEOUT_S = 600
+MUTATE_TIMEOUT_S = int(os.environ.get("NEON_REVIEW_MUTATE_TIMEOUT", "900"))
 RUBRIC = Path(__file__).resolve().parent / "rubric.md"
 SEVERITIES = ("BLOCKER", "HIGH", "MEDIUM", "NIT")
 BLOCKING = {"BLOCKER", "HIGH"}
@@ -41,8 +42,12 @@ _HEAD_ONLY_RE = re.compile(
     r"^\s*#{1,6}\s*[*_`\[(]*(" + _SEV_ALT + r")\b" + _HEAD_TAIL + r"|^\s*[*_`]+(" + _SEV_ALT + r")\b" + _HEAD_TAIL,
     re.I,
 )
-_ITEM_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)(.*\S)")
-_WHERE_RE = re.compile(r"(?<![\w/.-])[\w./-]*[\w-]:\d+(?:[-,]\d+)*")
+_ITEM_RE = re.compile(r"^ {0,1}(?:[-*+]\s+|\d+[.)]\s+)(.*\S)")
+_WHERE_RES = (
+    re.compile(r"(?<![\w/.-])[\w./-]*[\w-]\.[A-Za-z0-9_]+:\d+(?:[-,]\d+)*"),
+    re.compile(r"(?<![\w/.-])[\w.-]+(?:/[\w.-]+)+:\d+(?:[-,]\d+)*"),
+)
+_SPEC_SEP_RE = re.compile(r"(?:[:\u2013\u2014]|\s-)\s*(not landed|landed differently|landed)\b", re.I)
 _FILE_RE = re.compile(r"[\w./-]+/[\w.-]+\.[A-Za-z0-9_]+|\b[\w-]+\.(?:py|go|rs|ts|tsx|js|sh|md|json|ya?ml|toml)\b")
 _SPEC_HEAD_RE = re.compile(r"^\s*(?:#{1,6}\s*)?[*_`]*spec\s+(?:rows?|items?|coverage)\b[*_`:]*\s*$", re.I)
 _NONE_RE = re.compile(r"^(?:none|n/?a|nothing|no (?:new )?(?:findings?|issues?))\W*$", re.I)
@@ -126,6 +131,38 @@ def _read_digest(repo: Path) -> tuple[dict[str, Any], str | None]:
     return digest, None
 
 
+SOURCE_EXTS = (".py", ".go", ".rs", ".ts", ".tsx", ".js", ".mjs", ".java", ".clj", ".cljc")
+MUTATE_FILES = 2
+
+
+def risk_files(repo: Path, base: str, changed: list[str]) -> list[str]:
+    """The changed non-test source files with the most added lines."""
+    added: dict[str, int] = {}
+    for row in git(repo, "-c", "core.quotepath=false", "diff", "--numstat", f"{base}...HEAD").splitlines():
+        parts = row.split("\t")
+        if len(parts) == 3 and parts[0].isdigit() and parts[2] in changed:
+            added[parts[2]] = int(parts[0])
+    src = [f for f in added if f.endswith(SOURCE_EXTS) and not re.search(r"(^|/)(tests?|test_[^/]*|[^/]*_test\.[a-z]+)(/|$)", f)]
+    return sorted(src, key=lambda f: (-added[f], f))[:MUTATE_FILES]
+
+
+def mutate_file(repo: Path, rel: str) -> dict[str, Any]:
+    """Mutate one file on the host: the reviewer sandbox cannot reach the ub-gate install."""
+    argv = ["ub-gate", "mutate", rel]
+    entry: dict[str, Any] = {"file": rel, "cmd": " ".join(argv)}
+    try:
+        p = run(argv, repo, MUTATE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        entry["timeout_s"] = MUTATE_TIMEOUT_S
+        return entry
+    entry["exit"] = p.returncode
+    out_lines = [ln for ln in (p.stdout + p.stderr).splitlines() if ln.strip()]
+    entry["output_tail"] = out_lines[-40:]
+    digest, _ = _read_digest(repo)
+    entry["summary"] = digest.get("mutate")
+    return entry
+
+
 def run_ub_gates(repo: Path, base: str, changed: list[str]) -> dict[str, Any]:
     """Run crap and dry ourselves and return their JSON digest.
 
@@ -144,6 +181,7 @@ def run_ub_gates(repo: Path, base: str, changed: list[str]) -> dict[str, Any]:
     for name in ("crap", "dry"):
         if gates[name].get("exit") in (0, 2):
             gates[name]["summary"] = digest.get(name)
+    gates["mutate"] = [mutate_file(repo, f) for f in risk_files(repo, base, changed)]
     return gates
 
 
@@ -170,8 +208,10 @@ def build_prompt(rubric: str, depth: str, base: str, files: dict[str, Path], rep
     if depth == "ub":
         lines += [
             "This is a `ub` depth review.",
-            f"- The caller already ran `ub-gate crap` and `ub-gate dry --since {base} --against-repo`. Their JSON is in {files['gates']}. Report from it as the rubric says.",
-            "- Run `ub-gate mutate <file>` yourself on the two highest-risk changed files from your risk map. Run it one file at a time and report surviving mutants.",
+            f"- The caller already ran `ub-gate crap`, `ub-gate dry --since {base} --against-repo` and `ub-gate mutate` on the two changed source files with the most added lines. Their JSON is in {files['gates']}. Report from it as the rubric says.",
+            "- Your sandbox cannot reach the ub-gate install, so do not run `ub-gate mutate` yourself. Read the `mutate` entries instead and report each surviving mutant at a boundary.",
+            "- If a mutate entry shows `timeout_s`, or only uncovered sites because coverage tooling is missing, say so as a NIT. Do not treat it as a defect in the branch.",
+            "- If your risk map ranks other files higher, name them and say what mutants you would expect to survive.",
             "",
         ]
     lines += [
@@ -198,7 +238,7 @@ def parse_verdict(text: str) -> str | None:
 
 def _split_where_fix(body: str) -> tuple[str, str, str]:
     where = ""
-    m = _WHERE_RE.search(body) or _FILE_RE.search(body)
+    m = next((m for m in (r.search(body) for r in _WHERE_RES) if m), None) or _FILE_RE.search(body)
     if m:
         where = m.group(0)
     fix = ""
@@ -216,6 +256,7 @@ class _Collector:
     """Accumulates finding blocks while parse_findings walks the text."""
 
     def __init__(self) -> None:
+        self.in_spec = False
         self.findings: list[dict[str, str]] = []
         self.section: str | None = None
         self.cur: dict[str, Any] | None = None
@@ -234,6 +275,11 @@ class _Collector:
 
     def feed(self, line: str) -> None:
         """Consume one line."""
+        if _SPEC_HEAD_RE.match(line):
+            self.in_spec = True
+        if self.in_spec and _ITEM_RE.match(line) and _SPEC_STATUS_RE.search(line):
+            self.flush()
+            return
         if _SPEC_HEAD_RE.match(line) or _VERDICT_RE.match(line):
             self.flush()
             self.section = None
@@ -250,6 +296,7 @@ class _Collector:
         if _ANY_HEADING_RE.match(line):
             self.flush()
             self.section = None
+            self.in_spec = False
             return
         item = _ITEM_RE.match(line)
         if self.section and item:
@@ -290,7 +337,8 @@ def parse_spec_rows(text: str) -> list[dict[str, str]]:
         ms = list(_SPEC_STATUS_RE.finditer(body))
         if not ms:
             continue
-        m = ms[-1]
+        sep = _SPEC_SEP_RE.search(body)
+        m = next((x for x in ms if sep and x.start() == sep.start(1)), ms[-1])
         status = m.group(1).lower()
         row = body[: m.start()].strip(" \t:-*_`–—()")
         detail = body[m.end():].strip(" \t:-*_`–—().")
@@ -358,6 +406,8 @@ def run_agy(cmd: list[str], repo: Path, timeout: int) -> tuple[str, int, str, bo
     try:
         p = run(cmd, repo, timeout)
         return p.stdout, p.returncode, p.stderr, False
+    except OSError as e:
+        return "", 127, f"agy could not start: {e}", False
     except subprocess.TimeoutExpired as e:
         raw = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
         return raw, -1, "", True
@@ -425,6 +475,11 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         remove_new_artifacts(repo, before)
 
+    return finish(args, out_path, work, gates, (raw, rc, err, timed_out))
+
+
+def finish(args: argparse.Namespace, out_path: Path, work: Path, gates: dict[str, Any] | None, ran: tuple[str, int, str, bool]) -> int:
+    raw, rc, err, timed_out = ran
     out_path.write_text(raw)
     meta: dict[str, Any] = {"depth": args.depth, "model": args.model, "raw_path": str(out_path), "work_dir": str(work)}
     if gates is not None:

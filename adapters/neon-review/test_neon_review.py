@@ -59,8 +59,10 @@ if argv[0] == "crap":
 elif argv[0] == "dry":
     Path(".metrics").mkdir(exist_ok=True)
     print("No duplicate candidates found.")
+elif argv[0] == "mutate":
+    print("UNCOVERED " + argv[1] + ":1 delete not")
 elif argv[0] == "summary":
-    print(json.dumps({"crap": {"functions": 3, "over_10": 1}, "dry": {"pairs": 2}}))
+    print(json.dumps({"crap": {"functions": 3, "over_10": 1}, "dry": {"pairs": 2}, "mutate": {"killed": 4, "survived": 1}}))
 """
 
 
@@ -208,7 +210,12 @@ def test_ub_depth_runs_gates_and_hands_json_over(env):
     assert out["gates"]["dry"]["summary"] == {"pairs": 2}
     (call,) = calls(env, "agy")
     prompt = call["argv"][call["argv"].index("-p") + 1]
-    assert "yourself on the two highest-risk" in prompt and "mutate <file>" in prompt
+    assert "`mutate` entries" in prompt and "cannot reach the ub-gate install" in prompt
+    mut = out["gates"]["mutate"]
+    assert [m["file"] for m in mut] == ["b.py", "a.py"]
+    assert mut[0]["summary"] == {"killed": 4, "survived": 1}
+    assert mut[0]["output_tail"] == ["UNCOVERED b.py:1 delete not"]
+    assert ["mutate", "b.py"] in [c["argv"] for c in calls(env, "ub-gate")]
     gates_file = Path(out["work_dir"]) / "ub-gates.json"
     assert json.loads(gates_file.read_text())["dry"]["summary"] == {"pairs": 2}
     assert str(gates_file) in prompt
@@ -221,7 +228,7 @@ def test_medium_depth_skips_gates_and_mutate_instruction(env):
     (call,) = calls(env, "agy")
     prompt = call["argv"][call["argv"].index("-p") + 1]
     assert "Their JSON is in" not in prompt
-    assert "yourself on the two highest-risk" not in prompt and "ub-gates.json" not in prompt
+    assert "`mutate` entries" not in prompt and "ub-gates.json" not in prompt
     assert "gates" not in review(env)[1]
 
 
@@ -376,3 +383,51 @@ def test_missing_git_is_a_json_usage_error(env):
                        capture_output=True, text=True, env=e)
     assert p.returncode == 2
     assert json.loads(p.stdout)["verdict"] == "error"
+
+
+def test_mutate_picks_source_files_with_most_added_lines_and_skips_tests(env):
+    repo = env["repo"]
+    (repo / "test_big.py").write_text("x = 1\n" * 500)
+    (repo / "docs.md").write_text("w\n" * 500)
+    (repo / "mid.py").write_text("y = 1\n" * 50)
+    sh(repo, "git", "add", "-A")
+    sh(repo, "git", "commit", "-qm", "more")
+    rc, out, _ = review(env, "--depth", "ub")
+    assert [m["file"] for m in out["gates"]["mutate"]] == ["mid.py", "b.py"]
+
+
+def test_spec_rows_are_not_findings_and_status_follows_the_separator():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    text = (
+        "## Spec rows\n"
+        "- BLOCKER override flips PASS to FAIL: landed (neon_review.py:372)\n"
+        "- Add CLI wiring: not landed (helper landed in bar.py)\n"
+        "VERDICT: PASS\n"
+    )
+    assert neon_review.parse_findings(text) == []
+    assert [r["status"] for r in neon_review.parse_spec_rows(text)] == ["landed", "not landed"]
+    assert neon_review.classify(text)["verdict"] == "PASS"
+
+
+def test_indented_sub_bullets_extend_one_finding_and_where_prefers_file_line():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    text = "### BLOCKER\n- foo.py:10 drops cursor\n  - evidence: pytest failed\n  - Fix: keep cursor\nVERDICT: FAIL\n"
+    got = neon_review.parse_findings(text)
+    assert len(got) == 1 and got[0]["fix"] == "keep cursor" and got[0]["where"] == "foo.py:10"
+    got = neon_review.parse_findings("HIGH exit code:1 returned in adapters/foo.py:42. Fix: return 2.\nVERDICT: FAIL\n")
+    assert got[0]["where"] == "adapters/foo.py:42"
+
+
+def test_agy_that_cannot_execute_is_exit_3(env):
+    d = Path(only_git(env["tmp"]))
+    (d / "agy").write_text("#!/nonexistent/interpreter\n")
+    (d / "agy").chmod(0o755)
+    e = {**env["env"], "PATH": str(d)}
+    p = subprocess.run([sys.executable, "-I", str(ADAPTER_DIR / "neon_review.py"), "--repo", str(env["repo"]), "--base", "main"],
+                       capture_output=True, text=True, env=e)
+    assert p.returncode == 3
+    assert "agy" in json.loads(p.stdout)["error"]
