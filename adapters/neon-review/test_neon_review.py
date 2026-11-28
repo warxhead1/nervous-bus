@@ -60,6 +60,8 @@ elif argv[0] == "dry":
     Path(".metrics").mkdir(exist_ok=True)
     print("No duplicate candidates found.")
 elif argv[0] == "mutate":
+    if os.environ.get("FAKE_MUTATE_EXIT"):
+        sys.stderr.write("tools are not installed for this pin\\n"); sys.exit(int(os.environ["FAKE_MUTATE_EXIT"]))
     print("UNCOVERED " + argv[1] + ":1 delete not")
 elif argv[0] == "summary":
     print(json.dumps({"crap": {"functions": 3, "over_10": 1}, "dry": {"pairs": 2}, "mutate": {"killed": 4, "survived": 1}}))
@@ -431,3 +433,38 @@ def test_agy_that_cannot_execute_is_exit_3(env):
                        capture_output=True, text=True, env=e)
     assert p.returncode == 3
     assert "agy" in json.loads(p.stdout)["error"]
+
+
+def test_mutate_exit_3_is_backend_failure_not_a_pass(env):
+    env["env"]["FAKE_MUTATE_EXIT"] = "3"
+    rc, out, _ = review(env, "--depth", "ub")
+    assert rc == 3
+    assert "mutate" in out["error"] and "not installed" in out["error"]
+    assert calls(env, "agy") == []
+
+
+def test_renamed_source_file_is_still_chosen_for_mutation(env):
+    repo = env["repo"]
+    sh(repo, "git", "mv", "b.py", "renamed.py")
+    (repo / "renamed.py").write_text("v = 1\n" * 40)
+    sh(repo, "git", "add", "-A")
+    sh(repo, "git", "commit", "-qm", "rename b")
+    rc, out, _ = review(env, "--depth", "ub")
+    assert "renamed.py" in [m["file"] for m in out["gates"]["mutate"]]
+
+
+def test_bad_mutate_timeout_env_falls_back_instead_of_crashing(env):
+    env["env"]["NEON_REVIEW_MUTATE_TIMEOUT"] = "abc"
+    rc, out, p = review(env)
+    assert rc == 0, p.stderr
+
+
+def test_findings_after_a_spec_section_heading_survive_status_words():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    text = "## Spec rows\n- a: landed (x.py)\n### BLOCKER\n- y.py:2 broke it, not landed. Fix: redo.\nVERDICT: PASS\n"
+    assert [f["severity"] for f in neon_review.parse_findings(text)] == ["BLOCKER"]
+    assert neon_review.classify(text)["verdict"] == "FAIL"
+    rows = neon_review.parse_spec_rows("## Spec rows\n- Add wiring: **not landed** (helper landed in bar.py)\nVERDICT: FAIL\n")
+    assert rows[0]["status"] == "not landed"

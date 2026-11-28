@@ -27,7 +27,14 @@ EXIT_UNREACHABLE = 3
 DEFAULT_MODEL = "gemini-4-neon-medium"
 DEFAULT_TIMEOUT_S = 1800
 GATE_TIMEOUT_S = 600
-MUTATE_TIMEOUT_S = int(os.environ.get("NEON_REVIEW_MUTATE_TIMEOUT", "900"))
+
+
+def _env_seconds(name: str, default: int) -> int:
+    raw = os.environ.get(name, "")
+    return int(raw) if raw.isdigit() and int(raw) > 0 else default
+
+
+MUTATE_TIMEOUT_S = _env_seconds("NEON_REVIEW_MUTATE_TIMEOUT", 900)
 RUBRIC = Path(__file__).resolve().parent / "rubric.md"
 SEVERITIES = ("BLOCKER", "HIGH", "MEDIUM", "NIT")
 BLOCKING = {"BLOCKER", "HIGH"}
@@ -47,7 +54,7 @@ _WHERE_RES = (
     re.compile(r"(?<![\w/.-])[\w./-]*[\w-]\.[A-Za-z0-9_]+:\d+(?:[-,]\d+)*"),
     re.compile(r"(?<![\w/.-])[\w.-]+(?:/[\w.-]+)+:\d+(?:[-,]\d+)*"),
 )
-_SPEC_SEP_RE = re.compile(r"(?:[:\u2013\u2014]|\s-)\s*(not landed|landed differently|landed)\b", re.I)
+_SPEC_SEP_RE = re.compile(r"(?:[:\u2013\u2014]|\s-)\s*[*_`]*(not landed|landed differently|landed)\b", re.I)
 _FILE_RE = re.compile(r"[\w./-]+/[\w.-]+\.[A-Za-z0-9_]+|\b[\w-]+\.(?:py|go|rs|ts|tsx|js|sh|md|json|ya?ml|toml)\b")
 _SPEC_HEAD_RE = re.compile(r"^\s*(?:#{1,6}\s*)?[*_`]*spec\s+(?:rows?|items?|coverage)\b[*_`:]*\s*$", re.I)
 _NONE_RE = re.compile(r"^(?:none|n/?a|nothing|no (?:new )?(?:findings?|issues?))\W*$", re.I)
@@ -138,7 +145,7 @@ MUTATE_FILES = 2
 def risk_files(repo: Path, base: str, changed: list[str]) -> list[str]:
     """The changed non-test source files with the most added lines."""
     added: dict[str, int] = {}
-    for row in git(repo, "-c", "core.quotepath=false", "diff", "--numstat", f"{base}...HEAD").splitlines():
+    for row in git(repo, "-c", "core.quotepath=false", "diff", "--numstat", "--no-renames", f"{base}...HEAD").splitlines():
         parts = row.split("\t")
         if len(parts) == 3 and parts[0].isdigit() and parts[2] in changed:
             added[parts[2]] = int(parts[0])
@@ -158,6 +165,8 @@ def mutate_file(repo: Path, rel: str) -> dict[str, Any]:
     entry["exit"] = p.returncode
     out_lines = [ln for ln in (p.stdout + p.stderr).splitlines() if ln.strip()]
     entry["output_tail"] = out_lines[-40:]
+    if p.returncode not in (0, 2):
+        return entry
     digest, _ = _read_digest(repo)
     entry["summary"] = digest.get("mutate")
     return entry
@@ -276,36 +285,42 @@ class _Collector:
     def feed(self, line: str) -> None:
         """Consume one line."""
         if _SPEC_HEAD_RE.match(line):
-            self.in_spec = True
-        if self.in_spec and _ITEM_RE.match(line) and _SPEC_STATUS_RE.search(line):
             self.flush()
+            self.in_spec, self.section = True, None
             return
-        if _SPEC_HEAD_RE.match(line) or _VERDICT_RE.match(line):
+        if _VERDICT_RE.match(line):
             self.flush()
             self.section = None
             return
         head = _HEAD_ONLY_RE.match(line)
-        if head:
+        if head or _ANY_HEADING_RE.match(line):
+            self.in_spec = False
+        if self.in_spec and _ITEM_RE.match(line) and _SPEC_STATUS_RE.search(line):
+            self.flush()
+        elif head:
             self.flush()
             self.section = (head.group(1) or head.group(2)).upper()
-            return
+        else:
+            self._body(line)
+
+    def _body(self, line: str) -> None:
         fm = _FINDING_RE.match(line)
         if fm and fm.group(2).strip():
             self.start(fm.group(1).upper(), fm.group(2))
-            return
-        if _ANY_HEADING_RE.match(line):
+        elif _ANY_HEADING_RE.match(line):
             self.flush()
             self.section = None
-            self.in_spec = False
-            return
+        else:
+            self._continue(line)
+
+    def _continue(self, line: str) -> None:
         item = _ITEM_RE.match(line)
         if self.section and item:
             self.start(self.section, item.group(1))
+        elif self.cur is not None and line.strip():
+            self.cur["parts"].append(line.strip())
         elif self.cur is not None:
-            if line.strip():
-                self.cur["parts"].append(line.strip())
-            else:
-                self.flush()
+            self.flush()
 
 
 def parse_findings(text: str) -> list[dict[str, str]]:
@@ -436,10 +451,12 @@ def gate_stage(repo: Path, base: str, changed: list[str]) -> tuple[dict[str, Any
         gates = run_ub_gates(repo, base, changed)
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, f"ub-gate failed to run: {e}"
-    bad = [n for n in ("crap", "dry") if gates[n].get("exit") not in (0, 2, None)]
-    if bad or gates.get("summary_error"):
-        detail = {n: gates[n].get("stderr", "") for n in bad} or gates["summary_error"]
-        return None, f"ub-gate failed ({', '.join(bad) or 'summary'}): {str(detail)[-500:]}"
+    failed = [f"{n}: {gates[n].get('stderr', '')}" for n in ("crap", "dry") if gates[n].get("exit") not in (0, 2, None)]
+    failed += [f"mutate {m['file']}: {' '.join(m.get('output_tail', []))}" for m in gates["mutate"] if m.get("exit", 0) not in (0, 2)]
+    if gates.get("summary_error"):
+        failed.append(f"summary: {gates['summary_error']}")
+    if failed:
+        return None, f"ub-gate failed: {' | '.join(failed)[-500:]}"
     return gates, None
 
 
