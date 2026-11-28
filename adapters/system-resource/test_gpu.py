@@ -168,15 +168,6 @@ class GpuReadTests(unittest.TestCase):
             popen.assert_called_once()
             self.assertEqual(result["reason"], "unsupported")
 
-    def test_driver_stuck_validates_against_v3_schema(self):
-        schema = json.loads((Path(gpu.__file__).resolve().parents[2] / "schemas"
-                             / "bus.system.resource.sample.v3.json").read_text())
-        measurement = gpu.unavailable_gpu("driver_stuck")
-        jsonschema.validate(measurement, {"$defs": schema["$defs"], **schema["$defs"]["gpu"]}
-                            if "gpu" in schema.get("$defs", {}) else schema["properties"]["gpu"]
-                            | {"$defs": schema["$defs"]})
-        self.assertEqual(measurement["reason"], "driver_stuck")
-
     def test_stdout_close_does_not_bypass_deadline_and_cleanup_is_bounded(self):
         ticks = [0.0]
         process = ClosedStdoutProcess(ticks)
@@ -330,6 +321,17 @@ class GpuStoreTests(unittest.TestCase):
         ])
         self.assertEqual(store.db.execute("SELECT COUNT(*) FROM samples").fetchone()[0], len(measurements))
         self.assertEqual(store.db.execute("SELECT COUNT(*) FROM gpu_gauges").fetchone()[0], 3)
+
+    def test_driver_stuck_event_validates_and_stores_without_an_attempt(self):
+        event, _ = self.sample(1000, gpu.unavailable_gpu("driver_stuck", attempted=False))
+        self.assertEqual((event["gpu"]["reason"], event["gpu"]["attempted"]), ("driver_stuck", False))
+        self.assertEqual(event["entities"][0]["gauges"]["memory_current_bytes"], 1024)
+        self.validate(event)
+        store = self.store()
+        store.rollup(1100)
+        store.commit()
+        row = store.db.execute("SELECT state,reason,attempted FROM gpu_batches").fetchone()
+        self.assertEqual(tuple(row), ("unavailable", "driver_stuck", 0))
 
     def test_rollup_retention_restart_and_report_are_idempotent(self):
         for ts in (1000, 1060, 1120, 1180, 1240):
