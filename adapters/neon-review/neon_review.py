@@ -172,7 +172,10 @@ def mutate_file(repo: Path, rel: str) -> dict[str, Any]:
     uncovered = [ln for ln in out_lines if re.match(r"\s*UNCOVERED\b", ln)]
     entry["uncovered_count"] = len(uncovered)
     entry["uncovered_head"] = uncovered[:30]
-    if p.returncode not in (0, 2):
+    # ub-gate mutate exits 3 both when a mutant survived and when its tools are
+    # missing. Survivors print SURVIVED sites; a missing install prints none.
+    entry["ran"] = p.returncode in (0, 2) or (p.returncode == 3 and bool(entry["sites"]))
+    if not entry["ran"]:
         return entry
     digest, error = _read_digest(repo)
     entry["summary"] = digest.get("mutate")
@@ -487,7 +490,7 @@ def gate_stage(repo: Path, base: str, changed: list[str]) -> tuple[dict[str, Any
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, f"ub-gate failed to run: {e}"
     failed = [f"{n}: {gates[n].get('stderr', '')}" for n in ("crap", "dry") if gates[n].get("exit") not in (0, 2, None)]
-    failed += [f"mutate {m['file']}: {' '.join(m.get('output_tail', []))}" for m in gates["mutate"] if m.get("exit", 0) not in (0, 2)]
+    failed += [f"mutate {m['file']}: {' '.join(m.get('output_tail', []))}" for m in gates["mutate"] if "exit" in m and not m.get("ran")]
     failed += [f"mutate {m['file']} summary: {m['summary_error']}" for m in gates["mutate"] if m.get("summary_error")]
     if gates.get("summary_error"):
         failed.append(f"summary: {gates['summary_error']}")

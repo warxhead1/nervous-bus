@@ -63,6 +63,10 @@ elif argv[0] == "dry":
     Path(".metrics").mkdir(exist_ok=True)
     print("No duplicate candidates found.")
 elif argv[0] == "mutate":
+    if os.environ.get("FAKE_MUTATE_SURVIVED"):
+        print("SURVIVED  " + argv[1] + ":2 < -> <=")
+        print("Total 1 1 0 2 50.0%")
+        sys.exit(3)
     if os.environ.get("FAKE_MUTATE_EXIT"):
         sys.stderr.write("tools are not installed for this pin\\n"); sys.exit(int(os.environ["FAKE_MUTATE_EXIT"]))
     print("UNCOVERED " + argv[1] + ":1 delete not")
@@ -445,6 +449,16 @@ def test_mutate_exit_3_is_backend_failure_not_a_pass(env):
     assert rc == 3
     assert "mutate" in out["error"] and "not installed" in out["error"]
     assert calls(env, "agy") == []
+
+
+def test_mutate_exit_3_with_survivors_is_a_result_for_the_reviewer(env):
+    # ub-gate mutate exits 3 when a mutant survived: that is the finding, not a dead backend.
+    env["env"]["FAKE_MUTATE_SURVIVED"] = "1"
+    rc, out, _ = review(env, "--depth", "ub")
+    assert "error" not in out, out
+    sites = [s for m in out["gates"]["mutate"] for s in m["sites"]]
+    assert sites and all("SURVIVED" in s for s in sites)
+    assert len(calls(env, "agy")) == 1
 
 
 def test_renamed_source_file_is_still_chosen_for_mutation(env):
