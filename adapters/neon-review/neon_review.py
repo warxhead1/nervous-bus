@@ -46,10 +46,10 @@ _PREFIX = r"^\s*(?:[-*+>]\s+|\d+[.)]\s+|#{1,6}\s+)*[*_`\[(]*"
 _FINDING_RE = re.compile(_PREFIX + rf"({_SEV_ALT})\b[*_`\])]*\s*(?:[:\-–—]|\.(?=\s))?\s*(.*)$")
 _HEAD_TAIL = r"[*_`\])]*\s*(?:\(\d+\)|findings?|issues?)?[*_`:\s]*$"
 _HEAD_ONLY_RE = re.compile(
-    r"^\s*#{1,6}\s*[*_`\[(]*(" + _SEV_ALT + r")\b" + _HEAD_TAIL + r"|^\s*[*_`]+(" + _SEV_ALT + r")\b" + _HEAD_TAIL,
+    r"^\s*#{1,6}\s*[*_`\[(]*(" + _SEV_ALT + r")\b" + _HEAD_TAIL + r"|^\s*[*_`]*(" + _SEV_ALT + r")\b" + _HEAD_TAIL,
     re.I,
 )
-_ITEM_RE = re.compile(r"^ {0,1}(?:[-*+]\s+|\d+[.)]\s+)(.*\S)")
+_ITEM_RE = re.compile(r"^(?P<indent> *)(?:[-*+]\s+|\d+[.)]\s+)(?P<body>.*\S)")
 _WHERE_RES = (
     re.compile(r"(?<![\w/.-])[\w./-]*[\w-]\.[A-Za-z0-9_]+:\d+(?:[-,]\d+)*"),
     re.compile(r"(?<![\w/.-])\.[\w-][\w./-]*:\d+(?:[-,]\d+)*"),
@@ -141,6 +141,7 @@ def _read_digest(repo: Path) -> tuple[dict[str, Any], str | None]:
 
 SOURCE_EXTS = (".py", ".go", ".rs", ".ts", ".tsx", ".js", ".mjs", ".java", ".clj", ".cljc")
 MUTATE_FILES = 2
+_TEST_PATH_RE = re.compile(r"(^|/)(tests?|__tests__|test_[^/]*|[^/]*[_.](?:test|spec)\.[a-z]+|[^/]*Tests?\.[a-z]+)(/|$)")
 
 
 def risk_files(repo: Path, base: str, changed: list[str]) -> list[str]:
@@ -150,7 +151,7 @@ def risk_files(repo: Path, base: str, changed: list[str]) -> list[str]:
         parts = row.split("\t")
         if len(parts) == 3 and parts[0].isdigit() and parts[2] in changed:
             added[parts[2]] = int(parts[0])
-    src = [f for f in added if f.endswith(SOURCE_EXTS) and not re.search(r"(^|/)(tests?|test_[^/]*|[^/]*_test\.[a-z]+)(/|$)", f)]
+    src = [f for f in added if f.endswith(SOURCE_EXTS) and not _TEST_PATH_RE.search(f)]
     return sorted(src, key=lambda f: (-added[f], f))[:MUTATE_FILES]
 
 
@@ -168,8 +169,10 @@ def mutate_file(repo: Path, rel: str) -> dict[str, Any]:
     entry["output_tail"] = out_lines[-40:]
     if p.returncode not in (0, 2):
         return entry
-    digest, _ = _read_digest(repo)
+    digest, error = _read_digest(repo)
     entry["summary"] = digest.get("mutate")
+    if error:
+        entry["summary_error"] = error
     return entry
 
 
@@ -191,7 +194,8 @@ def run_ub_gates(repo: Path, base: str, changed: list[str]) -> dict[str, Any]:
     for name in ("crap", "dry"):
         if gates[name].get("exit") in (0, 2):
             gates[name]["summary"] = digest.get(name)
-    gates["mutate"] = [mutate_file(repo, f) for f in risk_files(repo, base, changed)]
+    ok = not error and all(gates[n].get("exit") in (0, 2, None) for n in ("crap", "dry"))
+    gates["mutate"] = [mutate_file(repo, f) for f in risk_files(repo, base, changed)] if ok else []
     return gates
 
 
@@ -316,8 +320,8 @@ class _Collector:
 
     def _continue(self, line: str) -> None:
         item = _ITEM_RE.match(line)
-        if self.section and item:
-            self.start(self.section, item.group(1))
+        if self.section and item and (self.cur is None or len(item.group("indent")) <= 1):
+            self.start(self.section, item.group("body"))
         elif self.cur is not None and line.strip():
             self.cur["parts"].append(line.strip())
         elif self.cur is not None:
@@ -336,7 +340,7 @@ def parse_spec_rows(text: str) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     in_spec = False
     for line in text.splitlines():
-        if _VERDICT_RE.match(line):
+        if in_spec and _VERDICT_RE.match(line):
             break
         if _SPEC_HEAD_RE.match(line):
             in_spec = True
@@ -349,7 +353,7 @@ def parse_spec_rows(text: str) -> list[dict[str, str]]:
         item = _ITEM_RE.match(line)
         if not item:
             continue
-        body = item.group(1).strip()
+        body = item.group("body").strip()
         ms = list(_SPEC_STATUS_RE.finditer(body))
         if not ms:
             continue
@@ -431,13 +435,34 @@ def run_agy(cmd: list[str], repo: Path, timeout: int) -> tuple[str, int, str, bo
         return raw, -1, "", True
 
 
+def hidden_blocking(raw: str) -> bool:
+    """True when a BLOCKER or HIGH line carries content the findings parser may have missed."""
+    sev = re.compile(_PREFIX + r"(?:BLOCKER|HIGH)\b[*_`\])]*\s*(?:[:\-\u2013\u2014]|\.(?=\s))?\s*(.*)$")
+    lines, in_spec = raw.splitlines(), False
+    for i, line in enumerate(lines):
+        if _SPEC_HEAD_RE.match(line):
+            in_spec = True
+        elif _ANY_HEADING_RE.match(line) or _HEAD_ONLY_RE.match(line):
+            in_spec = False
+        m = sev.match(line)
+        if in_spec or not m or _VERDICT_RE.match(line):
+            continue
+        rest = m.group(1).strip(" \t*_`:.")
+        if not rest:
+            nxt = next((n.strip() for n in lines[i + 1:] if n.strip()), "")
+            rest = "" if not nxt or _VERDICT_RE.match(nxt) or _ANY_HEADING_RE.match(nxt) else nxt.lstrip("-*+ ").strip(" \t*_`:.")
+        if rest and not _NONE_RE.match(rest):
+            return True
+    return False
+
+
 def classify(raw: str) -> dict[str, Any]:
     verdict = parse_verdict(raw)
     findings = parse_findings(raw)
     note = None
     if verdict is None:
         verdict, note = "unparsed", "no final VERDICT line"
-    elif verdict == "PASS" and any(f["severity"] in BLOCKING for f in findings):
+    elif verdict == "PASS" and (any(f["severity"] in BLOCKING for f in findings) or hidden_blocking(raw)):
         verdict, note = "FAIL", "reviewer said PASS but listed BLOCKER or HIGH findings"
     counts = {sev: sum(1 for f in findings if f["severity"] == sev) for sev in SEVERITIES}
     result: dict[str, Any] = {"verdict": verdict, "findings": findings, "spec_rows": parse_spec_rows(raw), "counts": counts}
@@ -456,6 +481,7 @@ def gate_stage(repo: Path, base: str, changed: list[str]) -> tuple[dict[str, Any
         return None, f"ub-gate failed to run: {e}"
     failed = [f"{n}: {gates[n].get('stderr', '')}" for n in ("crap", "dry") if gates[n].get("exit") not in (0, 2, None)]
     failed += [f"mutate {m['file']}: {' '.join(m.get('output_tail', []))}" for m in gates["mutate"] if m.get("exit", 0) not in (0, 2)]
+    failed += [f"mutate {m['file']} summary: {m['summary_error']}" for m in gates["mutate"] if m.get("summary_error")]
     if gates.get("summary_error"):
         failed.append(f"summary: {gates['summary_error']}")
     if failed:

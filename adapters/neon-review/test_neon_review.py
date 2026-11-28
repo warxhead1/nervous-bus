@@ -504,3 +504,83 @@ def test_dotfile_where_and_head_only_closes_spec_rows():
     assert got[0]["where"] == ".gitignore:10" and got[0]["claim"].startswith(".gitignore:10")
     text = "## Spec rows\n- a: landed\n**BLOCKER**\n- y.py:2 broke it, not landed. Fix: redo.\nVERDICT: FAIL\n"
     assert [r["row"] for r in neon_review.parse_spec_rows(text)] == ["a"]
+
+
+@pytest.mark.parametrize("text", [
+    "BLOCKER:\n- foo.py:10 drops cursor. Fix: keep it.\nVERDICT: PASS\n",
+    "### BLOCKER\n  - foo.py:10 drops cursor. Fix: keep it.\nVERDICT: PASS\n",
+    "HIGH\nsomething odd happened in foo.py\nVERDICT: PASS\n",
+])
+def test_blocking_findings_in_any_layout_never_pass(text):
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    result = neon_review.classify(text)
+    assert result["verdict"] == "FAIL"
+
+
+@pytest.mark.parametrize("text", [
+    "No findings.\n### BLOCKER\n- None.\n### HIGH\nnone\n## Spec rows\n- BLOCKER flip: landed (a.py:3)\nVERDICT: PASS\n",
+])
+def test_clean_pass_stays_a_pass(text):
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    assert neon_review.classify(text)["verdict"] == "PASS"
+
+
+def test_indented_top_level_bullets_are_findings():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    got = neon_review.parse_findings("### BLOCKER\n  - foo.py:10 drops cursor. Fix: keep it.\nVERDICT: FAIL\n")
+    assert [(f["where"], f["fix"]) for f in got] == [("foo.py:10", "keep it")]
+
+
+def test_verdict_quote_before_spec_rows_does_not_hide_rows():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    text = "The author wrote:\nVERDICT: PASS\n## Spec rows\n- a: landed\nVERDICT: FAIL\n"
+    assert [r["row"] for r in neon_review.parse_spec_rows(text)] == ["a"]
+
+
+def test_test_files_of_every_language_are_not_mutation_targets():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    for name in ("a.test.ts", "b.spec.ts", "src/__tests__/x.ts", "FooTest.java", "x_test.go", "tests/y.py", "test_z.py"):
+        assert neon_review._TEST_PATH_RE.search(name), name
+    for name in ("src/app.ts", "lib/contest.py", "pkg/handler.go"):
+        assert not neon_review._TEST_PATH_RE.search(name), name
+
+
+def test_failed_summary_after_mutate_is_exit_3(env):
+    bad = env["tmp"] / "bin" / "ub-gate"
+    bad.write_text(bad.read_text().replace('elif argv[0] == "summary":', 'elif argv[0] == "summary" and os.path.exists("MUTATED"):\n    sys.exit(1)\nelif argv[0] == "summary":').replace('print("UNCOVERED "', 'open("MUTATED", "w").close(); print("UNCOVERED "'))
+    rc, out, _ = review(env, "--depth", "ub")
+    assert rc == 3 and "summary" in out["error"]
+
+
+def test_gate_failing_early_skips_the_mutation_runs(env):
+    bad = env["tmp"] / "bin" / "ub-gate"
+    bad.write_text(bad.read_text().replace('if argv[0] == "crap":', 'if argv[0] == "crap":\n    sys.exit(3)\nif False:'))
+    rc, out, _ = review(env, "--depth", "ub")
+    assert rc == 3
+    assert [c for c in calls(env, "ub-gate") if c["argv"][0] == "mutate"] == []
+
+
+def test_mutate_timeout_is_recorded_and_not_a_failure(env):
+    bad = env["tmp"] / "bin" / "ub-gate"
+    bad.write_text(bad.read_text().replace('print("UNCOVERED "', 'import time; time.sleep(30); print("UNCOVERED "'))
+    env["env"]["NEON_REVIEW_MUTATE_TIMEOUT"] = "1"
+    rc, out, _ = review(env, "--depth", "ub")
+    assert rc == 0
+    assert [m["timeout_s"] for m in out["gates"]["mutate"]] == [1, 1]
+
+
+def test_preexisting_gate_output_is_left_alone_and_new_output_removed(env):
+    (env["repo"] / ".metrics").mkdir()
+    (env["repo"] / ".metrics" / "keep").write_text("x")
+    review(env, "--depth", "ub")
+    assert (env["repo"] / ".metrics" / "keep").exists()
