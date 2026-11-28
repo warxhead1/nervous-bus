@@ -74,9 +74,18 @@ def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+class UsageError(Exception):
+    """A bad command line; the caller exits 2."""
+
+
+def valid_int(raw: Optional[str], minimum: int) -> bool:
+    return bool(raw) and re.fullmatch(r"[0-9]{1,15}", raw) is not None and int(raw) >= minimum
+
+
 def int_limit(flag: Optional[str], env: str, default: int, minimum: int) -> int:
+    """Flag (already validated), then a valid env value, then the default."""
     for raw in (flag, os.environ.get(env)):
-        if raw and re.fullmatch(r"[0-9]{1,15}", raw) and int(raw) >= minimum:
+        if valid_int(raw, minimum):
             return int(raw)
     return default
 
@@ -93,7 +102,12 @@ def channel_allowed(channel: str) -> bool:
         toml = d / "nervous.toml"
         if toml.is_file():
             import tomllib
-            patterns = tomllib.loads(toml.read_text()).get("channels", [])
+            try:
+                patterns = tomllib.loads(toml.read_text()).get("channels", [])
+            except (tomllib.TOMLDecodeError, UnicodeDecodeError, OSError) as exc:
+                raise UsageError(f"cannot read the allowlist {toml}: {exc}") from exc
+            if not isinstance(patterns, list) or not all(isinstance(x, str) for x in patterns):
+                raise UsageError(f"the allowlist {toml}: channels must be a list of strings")
             return not patterns or any(fnmatch(channel, p) for p in patterns)
     return True
 
@@ -191,7 +205,7 @@ def xadd_rediscli(url: str, events: list, typed: int, fanout: int) -> bool:
         r = subprocess.run([cli, "-u", url, "--pipe"], input=body, capture_output=True, timeout=120)
     except (OSError, subprocess.TimeoutExpired):
         return False
-    return r.returncode == 0 and b"errors: 0" in r.stdout
+    return r.returncode == 0 and f"errors: 0, replies: {len(events)}".encode() in r.stdout
 
 
 def deliver(events: list, typed: int, fanout: int) -> str:
@@ -218,7 +232,14 @@ def dumps(obj) -> str:
 
 
 def too_big(raw: str, limit: int) -> bool:
-    return limit != 0 and len(raw.encode()) > limit and os.environ.get("NERVOUS_OVERSIZE_POLICY") != "warn"
+    """True when the envelope is over `limit` bytes and must be refused; policy warn lets it through."""
+    size = len(raw.encode())
+    if limit == 0 or size <= limit:
+        return False
+    if os.environ.get("NERVOUS_OVERSIZE_POLICY") == "warn":
+        warn(f"WARNING: payload is {size} bytes, over the {limit} byte limit; publishing anyway (NERVOUS_OVERSIZE_POLICY=warn)")
+        return False
+    return True
 
 
 def classify_line(n: int, text: str, ctx: dict) -> tuple[Optional[dict], Optional[dict]]:
@@ -247,18 +268,30 @@ def dead_letter_for(rej: dict, ctx: dict) -> dict:
     return dead_letter(ctx["source"], data)
 
 
+CHANNEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+
+
+def flag_value(name: str, it, minimum: int) -> str:
+    raw = next(it, None)
+    if not valid_int(raw, minimum):
+        raise UsageError(f"{name} needs an integer >= {minimum}")
+    return raw
+
+
 def parse_args(argv: list) -> tuple[Optional[str], Optional[str], Optional[str]]:
     maxlen = max_bytes = channel = None
     it = iter(argv)
     for a in it:
         if a == "--maxlen":
-            maxlen = next(it, None)
+            maxlen = flag_value(a, it, 1)
         elif a == "--max-bytes":
-            max_bytes = next(it, None)
+            max_bytes = flag_value(a, it, 0)
         elif a.startswith("--") or channel is not None:
-            raise SystemExit(f"nervous publish-batch: unexpected argument {a}")
+            raise UsageError(f"unexpected argument {a}")
         else:
             channel = a
+    if channel is not None and not CHANNEL_RE.match(channel):
+        raise UsageError(f"channel name {channel!r} must match [A-Za-z0-9][A-Za-z0-9._-]*")
     return channel, maxlen, max_bytes
 
 
@@ -329,11 +362,15 @@ def run(channel: str, maxlen: Optional[str], max_bytes: Optional[str], lines) ->
 
 
 def main(argv: list) -> int:
-    channel, maxlen, max_bytes = parse_args(argv)
-    if not channel:
-        print("usage: nervous publish-batch [--maxlen N] [--max-bytes N] <channel>  (JSONL payloads on stdin)", file=sys.stderr)
+    usage = "usage: nervous publish-batch [--maxlen N] [--max-bytes N] <channel>  (JSONL payloads on stdin)"
+    try:
+        channel, maxlen, max_bytes = parse_args(argv)
+        if not channel:
+            raise UsageError(usage)
+        return run(channel, maxlen, max_bytes, sys.stdin)
+    except UsageError as exc:
+        print(f"nervous publish-batch: {exc}", file=sys.stderr)
         return 2
-    return run(channel, maxlen, max_bytes, sys.stdin)
 
 
 if __name__ == "__main__":
