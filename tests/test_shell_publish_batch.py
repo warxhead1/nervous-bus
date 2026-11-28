@@ -1,9 +1,12 @@
 """`nervous publish-batch`: JSONL on stdin, one process, one log append, one Redis connection."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import re
 import shutil
+import site
 import socket
 import stat
 import subprocess
@@ -12,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).absolute().parents[1]
 NERVOUS = REPO / "sdk" / "shell" / "nervous"
 CHANNEL = "agent.tool.span.v1"
 
@@ -30,7 +33,8 @@ def box(tmp_path):
         pass
     b = Box()
     b.tmp, b.log = tmp_path, tmp_path / "debug.jsonl"
-    b.env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "NERVOUS_HOME": str(tmp_path / "home"),
+    b.env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "PYTHONUSERBASE": site.getuserbase(),
+             "NERVOUS_HOME": str(tmp_path / "home"),
              "NERVOUS_NO_REDIS": "1", "NERVOUS_NO_ZELLIJ": "1", "NERVOUS_DEBUG_LOG": str(b.log)}
     b.run = lambda lines, *args, channel=CHANNEL, env=None: subprocess.run(
         [str(NERVOUS), "publish-batch", *args, channel], input="".join(json.dumps(x) + "\n" if not isinstance(x, str) else x
@@ -135,7 +139,8 @@ def free_port() -> int:
 
 @pytest.fixture
 def redis_server(tmp_path):
-    pytest.importorskip("redis")
+    if importlib.util.find_spec("redis") is None:
+        pytest.skip("SKIPPED LOUDLY: python redis module missing, the xadd_python path is NOT tested here")
     if not shutil.which("redis-server"):
         pytest.skip("redis-server not installed")
     port = free_port()
@@ -176,6 +181,20 @@ def test_dead_letters_are_delivered_too(box, redis_server):
     assert client.xlen("nbus:bus.dead_letter") == 1 and client.xlen(f"nbus:{CHANNEL}") == 1
 
 
+def test_python_redis_client_is_the_path_used_when_the_module_exists(box, redis_server):
+    client, url = redis_server
+    fake = box.tmp / "fakebin"
+    fake.mkdir()
+    cli = fake / "redis-cli"
+    cli.write_text(f"#!/bin/sh\ntouch '{box.tmp}/cli-ran'\nexit 1\n")
+    cli.chmod(cli.stat().st_mode | stat.S_IXUSR)
+    r = box.run([span(i) for i in range(10)], env={"NERVOUS_NO_REDIS": "0", "NERVOUS_REDIS_URL": url,
+                                                    "PATH": f"{fake}:{box.env['PATH']}"})
+    assert r.returncode == 0, r.stderr
+    assert client.xlen(f"nbus:{CHANNEL}") == 10
+    assert not (box.tmp / "cli-ran").exists()
+
+
 def test_redis_cli_pipe_is_the_fallback_when_the_python_module_is_missing(box, redis_server):
     if not shutil.which("redis-cli"):
         pytest.skip("redis-cli not installed")
@@ -200,3 +219,44 @@ def test_unreachable_redis_leaves_events_durable_and_strict_mode_fails(box):
 
 def test_helper_is_executable():
     assert os.access(REPO / "sdk" / "shell" / "publish_batch.py", os.X_OK) and stat.S_IMODE(NERVOUS.stat().st_mode) & 0o111
+
+
+@pytest.mark.parametrize("args", [("--bogus",), ("--maxlen", "0"), ("--maxlen", "abc"), ("--max-bytes", "-1"),
+                                  ("--max-bytes",), ("--maxlen",)])
+def test_bad_flags_exit_two(box, args):
+    r = box.run([span(1)], *args)
+    assert r.returncode == 2 and "nervous publish-batch" in r.stderr
+    assert box.events() == []
+
+
+def test_a_second_positional_argument_exits_two(box):
+    r = subprocess.run([str(NERVOUS), "publish-batch", CHANNEL, "extra"], input="", text=True, capture_output=True,
+                       cwd=box.tmp, env=box.env)
+    assert r.returncode == 2
+
+
+def test_max_bytes_zero_disables_the_limit_and_the_exact_limit_passes(box):
+    assert box.run([span(1, label="x" * 200)], "--max-bytes", "0").returncode == 0 and len(box.events()) == 1
+    probe = box.run([span(2)], "--max-bytes", "10", env={"NERVOUS_OVERSIZE_POLICY": "warn"})
+    size = int(re.search(r"payload is (\d+) bytes", probe.stderr).group(1))
+    assert box.run([span(3)], "--max-bytes", str(size)).returncode == 0
+    r = box.run([span(4)], "--max-bytes", str(size - 1))
+    assert r.returncode == 2 and json.loads(r.stdout)["rejected"][0]["reason"] == "payload_too_large"
+
+
+@pytest.mark.parametrize("channel", ["../schemas/agent.tool.span.v1", "a/b", ".hidden", "-x", "a b", ""])
+def test_channel_names_outside_the_pattern_are_refused(box, channel):
+    (box.tmp / "schemas").mkdir(exist_ok=True)
+    r = box.run([span(1)], channel=channel)
+    assert r.returncode == 2 and box.events() == []
+
+
+def test_a_broken_allowlist_exits_two_with_a_message(box):
+    (box.tmp / "nervous.toml").write_text("channels = [unterminated\n")
+    r = box.run([span(1)])
+    assert r.returncode == 2 and "allowlist" in r.stderr and box.events() == []
+
+
+def test_oversize_policy_warn_publishes_and_warns(box):
+    r = box.run([span(1)], "--max-bytes", "100", env={"NERVOUS_OVERSIZE_POLICY": "warn"})
+    assert r.returncode == 0 and len(box.events()) == 1 and "over the 100 byte limit" in r.stderr

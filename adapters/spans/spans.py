@@ -307,26 +307,33 @@ def flush(a, nervous: str, batch: list, cur: dict, cursor_path: Path) -> Optiona
     return summary
 
 
-def drain(a, nervous: str, buf: list, cur: dict, cursor_path: Path, full_only: bool) -> Optional[int]:
-    """Flush batches from `buf`; only full batches unless `full_only` is False. None on failure."""
-    sent = 0
+def drain(a, nervous: str, buf: list, cur: dict, cursor_path: Path, full_only: bool) -> Optional[tuple[int, int]]:
+    """Flush batches from `buf`; only full batches unless `full_only` is False.
+    (published, rejected) counts, or None on failure."""
+    published = rejected = 0
     while len(buf) >= (a.batch_size if full_only else 1):
         batch = buf[:a.batch_size]
-        if flush(a, nervous, batch, cur, cursor_path) is None:
+        summary = flush(a, nervous, batch, cur, cursor_path)
+        if summary is None:
             return None
         del buf[:len(batch)]
-        sent += len(batch)
-    return sent
+        rejected += len(summary["rejected"])
+        published += len(batch) - len(summary["rejected"])
+    return published, rejected
+
+
+def scan_setup(a) -> tuple:
+    """(root, cursor_path, since, nervous) from the scan arguments; clamps the batch size."""
+    a.batch_size = max(1, a.batch_size)
+    return (a.root or default_root(), Path(a.cursor) if a.cursor else default_cursor(),
+            parse_since(a.since) if a.since else 0.0, find_nervous(a.nervous))
 
 
 def cmd_scan(a) -> int:
-    root = a.root or default_root()
-    cursor_path = Path(a.cursor) if a.cursor else default_cursor()
+    root, cursor_path, since, nervous = scan_setup(a)
     cur = load_cursor(cursor_path)
-    since = parse_since(a.since) if a.since else 0.0
-    nervous = find_nervous(a.nervous)
-    a.batch_size = max(1, a.batch_size)
-    published, buf = 0, []
+    published = rejected = 0
+    buf = []
     for rel, path in recent_files(root, since):
         try:
             fs = open_file(cur, rel, path)
@@ -335,18 +342,21 @@ def cmd_scan(a) -> int:
             continue
         cur[rel] = fs.cursor()
         buf.extend((fs, s) for s in fs.spans)
-        n = drain(a, nervous, buf, cur, cursor_path, True)
-        if n is None:
+        counts = drain(a, nervous, buf, cur, cursor_path, True)
+        if counts is None:
             print(f"spans: stopped after {published} published", file=sys.stderr)
             return 1
-        published += n
-    n = drain(a, nervous, buf, cur, cursor_path, False)
-    if n is None:
+        published, rejected = published + counts[0], rejected + counts[1]
+    counts = drain(a, nervous, buf, cur, cursor_path, False)
+    if counts is None:
         print(f"spans: stopped after {published} published", file=sys.stderr)
         return 1
+    published, rejected = published + counts[0], rejected + counts[1]
     if not a.dry_run:
         save_cursor(cursor_path, cur)
-    print(json.dumps({"published": published + n, "dry_run": bool(a.dry_run)}), file=sys.stderr)
+    if rejected:
+        print(f"spans: WARNING {rejected} spans rejected by the bus and skipped", file=sys.stderr)
+    print(json.dumps({"published": published, "rejected": rejected, "dry_run": bool(a.dry_run)}), file=sys.stderr)
     return 0
 
 

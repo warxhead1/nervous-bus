@@ -62,13 +62,16 @@ def test_failed_second_batch_keeps_the_first_batch_in_the_cursor(world):
     assert len(sent) == 5 and len({s["span_id"] for s in sent}) == 5
 
 
-def test_rejected_lines_are_accounted_and_not_resent(world):
+def test_rejected_lines_are_accounted_and_not_resent(world, capsys):
     five_calls(world)
     reject = script(world, "reject", "cat >/dev/null\necho call >> '%s/calls'\n"
                     "echo '{\"published\":4,\"rejected\":[{\"line\":2,\"reason\":\"schema_violation\"}]}'\nexit 2\n" % world.tmp)
     assert scan_with(world, reject) == 0
+    first = capsys.readouterr().err
     assert scan_with(world, reject) == 0
     assert calls(world) == 1
+    assert json.loads(first.strip().splitlines()[-1]) == {"published": 4, "rejected": 1, "dry_run": False}
+    assert "1 spans rejected" in first
 
 
 def test_a_summary_that_does_not_add_up_is_retried(world):
