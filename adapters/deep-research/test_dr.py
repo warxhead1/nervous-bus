@@ -253,11 +253,29 @@ def test_tab_that_never_paints_fails_fast_with_its_own_exit_code(tmp_path):
     assert clk.t == 0 and fake.tabs_open == 0  # no waiting, tab closed
 
 
-def test_main_run_exits_5_when_display_is_dark(tmp_path):
+def test_main_run_exits_5_when_display_is_dark(tmp_path, capsys):
     fake = FakeOrca()
     fake.dark = True
     base = ["--runs-dir", str(tmp_path)]
-    assert dr.main(base + ["run", "q?"], runner=fake) == dr.EXIT_NOPAINT
+    assert dr.main(base + ["run", "q?"], runner=fake, lint=lambda q: []) == dr.EXIT_NOPAINT
+    assert "not painting" in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_notebook_import_and_attach_also_fail_fast_on_a_dark_tab(tmp_path):
+    fake = FakeOrca()
+    fake.dark = True
+    clk = Clock()
+    eng = dr.GeminiWebEngine(CFG, runner=fake, sleep=clk.sleep, clock=clk.now)
+    with pytest.raises(dr.DrError) as e:
+        eng.poll("abc123def")  # --attach path opens its own tab
+    assert e.value.code == dr.EXIT_NOPAINT and clk.t == 0 and fake.tabs_open == 0
+    nb = FakeNotebook()
+    nb.dark = True
+    run, rdir = audited_two_urls(tmp_path)
+    with pytest.raises(dr.DrError) as e:
+        dr.notebook_import(run, rdir, nb, sleep=clk.sleep, clock=clk.now)
+    assert e.value.code == dr.EXIT_NOPAINT and not any(c[0] == "snapshot" for c in nb.calls)
 
 
 def test_missing_ui_element_times_out_with_its_name(tmp_path):
@@ -952,6 +970,8 @@ class FakeNotebook:
                 self.phase = "create_filled"
             return json.dumps({"ok": True, "result": {}})
         if cmd == "eval":
+            if "requestAnimationFrame" in args[args.index("--expression") + 1]:
+                return json.dumps({"ok": True, "result": {"result": "stalled" if getattr(self, "dark", False) else "painted"}})
             url = "https://gemini.google.com/notebook/00000000-0000-0000-0000-000000000000" \
                 if self.created or self.phase not in ("create_form", "create_filled") else "https://gemini.google.com/notebooks/create"
             return json.dumps({"ok": True, "result": {"result": url}})

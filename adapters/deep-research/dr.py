@@ -300,6 +300,10 @@ class OrcaBrowser:
         self.page = self._json(args)["browserPageId"]
         # A background tab does not draw, and Gemini's menu ignores clicks until it is active.
         self._json(["tab", "switch"] + self._p())
+        if not self.paints():
+            self.close()
+            raise DrError("Orca's browser tab is not painting (the display is probably asleep): wake the "
+                          "display or see the README section 'Display off', then retry", EXIT_NOPAINT)
         return self.page
 
     def goto(self, url):
@@ -440,9 +444,6 @@ class GeminiWebEngine(Engine):
     def _start(self, question):
         b = self.browser
         b.open(GEMINI_URL)
-        if not b.paints():
-            raise DrError("Orca's browser tab is not painting (the display is probably asleep): wake the "
-                          "display or see the README section 'Display off', then retry", EXIT_NOPAINT)
         snap = self._until("prompt", "the prompt box")
         if find_ref(snap, "signed_out"):
             raise DrError("Orca's browser is not signed in to Google: sign in at gemini.google.com "
