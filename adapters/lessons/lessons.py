@@ -25,15 +25,13 @@ from pathlib import Path
 
 CHANNEL = "agent.lesson.v1"
 REPO_NERVOUS = Path(__file__).resolve().parents[2] / "sdk" / "shell" / "nervous"
-AREA_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+AREA_RE = re.compile(r"[a-z0-9][a-z0-9._-]*\Z")
+LIMITS = {"project": 100, "area": 60, "lesson": 300, "evidence": 300, "rule": 300, "supersedes": 17}
 
 
 def store_path() -> Path:
-    env = os.environ.get("NERVOUS_LESSONS_FILE")
-    if env:
-        return Path(env)
-    state = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
-    return Path(state) / "nervous-bus" / "lessons" / "lessons.jsonl"
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
+    return Path(os.environ.get("NERVOUS_LESSONS_FILE") or state / "nervous-bus" / "lessons" / "lessons.jsonl")
 
 
 def load(path: Path) -> list[dict]:
@@ -61,54 +59,68 @@ def find_nervous(explicit):
         or shutil.which("nervous") or "nervous"
 
 
-def cmd_record(a) -> int:
-    for name in ("project", "lesson", "evidence"):
-        if not getattr(a, name).strip():
-            return fail(f"--{name} is empty")
-    if not AREA_RE.match(a.area) or len(a.area) > 60:
-        return fail("--area must be lowercase letters, digits, '.', '_' or '-'")
-    if len(a.lesson) > 300 or len(a.evidence) > 300 or len(a.rule or "") > 300:
-        return fail("a lesson is short: --lesson, --evidence and --rule are 300 characters at most")
+def validate(a) -> str:
+    """The first problem with the record fields, or ''. Strips the fields in place."""
+    for name in LIMITS:
+        setattr(a, name, (getattr(a, name, "") or "").strip())
+    for name in ("project", "area", "lesson", "evidence"):
+        if not getattr(a, name):
+            return f"--{name} is empty"
+    if not AREA_RE.match(a.area):
+        return "--area must be lowercase letters, digits, '.', '_' or '-'"
+    if any(len(getattr(a, k)) > n for k, n in LIMITS.items() if k != "supersedes"):
+        return "a lesson is short: --project 100, --area 60, --lesson, --evidence and --rule 300 characters at most"
     if "\n" in a.lesson:
-        return fail("--lesson is one sentence on one line")
-    path = store_path()
-    existing = load(path)
-    if a.supersedes and not any(d.get("lesson_id") == a.supersedes for d in existing):
-        return fail(f"--supersedes {a.supersedes} is not in the store")
+        return "--lesson is one sentence on one line"
+    return ""
+
+
+def publish(nervous: str, rec: dict) -> tuple[bool, str]:
+    try:
+        r = subprocess.run([nervous, "publish", CHANNEL, json.dumps(rec, separators=(",", ":"))],
+                           capture_output=True, text=True, timeout=30,
+                           env=dict(os.environ, NERVOUS_SOURCE="/lessons"))
+        return r.returncode == 0, r.stderr.strip()[:200]
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, str(exc)
+
+
+def make_record(a) -> dict:
     ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     rec = {"v": 1, "ts": ts,
            "lesson_id": "les_" + hashlib.sha256(f"{ts}\0{a.project}\0{a.lesson}".encode()).hexdigest()[:12],
-           "project": a.project, "area": a.area, "lesson": a.lesson.strip(), "evidence": a.evidence.strip()}
-    if a.rule:
-        rec["rule"] = a.rule.strip()
-    if a.supersedes:
-        rec["supersedes"] = a.supersedes
-    sid = os.environ.get("CLAUDE_SESSION_ID")
-    if sid:
-        rec["session_id"] = sid
+           "project": a.project, "area": a.area, "lesson": a.lesson, "evidence": a.evidence}
+    extra = {"rule": a.rule, "supersedes": a.supersedes, "session_id": (os.environ.get("CLAUDE_SESSION_ID") or "")[:200]}
+    rec.update({k: v for k, v in extra.items() if v})
+    return rec
+
+
+def cmd_record(a) -> int:
+    problem = validate(a)
+    if problem:
+        return fail(problem)
+    path = store_path()
+    if a.supersedes and not any(d.get("lesson_id") == a.supersedes for d in load(path)):
+        return fail(f"--supersedes {a.supersedes} is not in the store")
+    rec = make_record(a)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:
         f.write(json.dumps(rec, separators=(",", ":")) + "\n")
-    try:
-        r = subprocess.run([find_nervous(a.nervous), "publish", CHANNEL, json.dumps(rec, separators=(",", ":"))],
-                           capture_output=True, text=True, timeout=30,
-                           env=dict(os.environ, NERVOUS_SOURCE="/lessons"))
-        ok, err = r.returncode == 0, r.stderr.strip()[:200]
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        ok, err = False, str(exc)
+    ok, err = publish(find_nervous(a.nervous), rec)
     print(json.dumps(rec))
     if not ok:
         print(f"lessons: stored, publish failed: {err}", file=sys.stderr)
-        return 1
-    return 0
+    return 0 if ok else 1
+
+
+def matches(d: dict, a) -> bool:
+    return (not a.project or d.get("project") == a.project) and (not a.area or d.get("area") == a.area)
 
 
 def cmd_query(a) -> int:
     rows = load(store_path())
     replaced = {d["supersedes"] for d in rows if d.get("supersedes")}
-    rows = [d for d in rows if (a.all or d.get("lesson_id") not in replaced)
-            and (not a.project or d.get("project") == a.project)
-            and (not a.area or d.get("area") == a.area)]
+    rows = [d for d in rows if (a.all or d.get("lesson_id") not in replaced) and matches(d, a)]
     rows.sort(key=lambda d: d.get("ts", ""), reverse=True)
     if a.text:
         for d in rows:

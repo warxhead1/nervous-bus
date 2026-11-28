@@ -153,6 +153,7 @@ def test_span_never_carries_command_text(world):
     secret = "hunter2-token-value"
     world.write(use("a", "Bash", 0, world.alpha, f"curl -H 'x: {secret}' https://example.invalid/{secret}"), result("a", 1))
     got, _, _ = spans.read_spans(str(world.session), "r")
+    assert len(got) == 1
     assert secret not in json.dumps(got) and "curl" not in json.dumps(got)
 
 
@@ -285,6 +286,84 @@ def test_top_text_view(world, capsys):
     assert "TOOL CLASS" in out and "build" in out and "WAIT TARGET" in out
 
 
-def test_bad_since_is_a_usage_error(world):
-    with pytest.raises(SystemExit):
-        spans.main(["top", "--root", str(world.root), "--since", "soon"])
+@pytest.mark.parametrize("verb", ["top", "scan"])
+def test_bad_since_exits_2_on_stderr(world, capsys, verb):
+    extra = ["--cursor", str(world.cursor)] if verb == "scan" else []
+    assert spans.main([verb, "--root", str(world.root), "--since", "soon", *extra]) == 2
+    out = capsys.readouterr()
+    assert "bad --since" in out.err and out.out == ""
+
+
+# ------------------------------------------------------------ review fixes
+
+def test_open_call_at_offset_zero_does_not_resend_finished_spans(world):
+    world.write(use("slow", "Bash", 0, world.alpha, "cargo test"),
+                use("a", "Bash", 1, world.alpha, "ls"), result("a", 2))
+    world.scan()
+    world.scan()
+    world.scan()
+    assert len(world.sent()) == 1
+    world.write(result("slow", 50), mode="a")
+    world.scan()
+    world.scan()
+    assert len(world.sent()) == 2
+
+
+def test_failure_on_second_span_keeps_the_first_in_the_cursor(world):
+    world.write(use("a", "Bash", 0, world.alpha, "ls"), result("a", 1),
+                use("b", "Bash", 2, world.alpha, "ls"), result("b", 3))
+    flaky = world.tmp / "flaky"
+    flaky.write_text(f'#!/bin/sh\nn=$(cat "{world.tmp}/n" 2>/dev/null || echo 0)\n'
+                     f'echo $((n+1)) > "{world.tmp}/n"\n[ "$n" -ge 1 ] && exit 7\nprintf "%s\\n" "$3" >> "{world.tmp}/sent"\n')
+    flaky.chmod(flaky.stat().st_mode | stat.S_IEXEC)
+    assert spans.main(["scan", "--root", str(world.root), "--cursor", str(world.cursor), "--nervous", str(flaky)]) == 1
+    assert len(world.sent()) == 1
+    assert world.scan() == 0
+    sent = world.sent()
+    assert len(sent) == 2 and len({s["span_id"] for s in sent}) == 2
+
+
+def test_label_is_a_slug_never_free_text(world):
+    lane_dir = world.root / "-alpha" / "s1" / "subagents" / "workflows" / "wf_1"
+    lane_dir.mkdir(parents=True)
+    (lane_dir / "agent-1.jsonl").write_text("")
+    meta = lane_dir / "agent-1.meta.json"
+    for body, expect in [({"description": "fix /some/private/path now"}, ""),
+                         ({"description": "run the build", "label": "lane-a"}, "lane-a"),
+                         ({"label": "has space"}, ""),
+                         ({"description": "research:lane-one"}, "research:lane-one")]:
+        meta.write_text(json.dumps(body))
+        assert spans.lane_meta(str(lane_dir / "agent-1.jsonl"))[1] == expect
+
+
+def test_abandoned_open_call_expires_on_file_idle_time(world):
+    world.write(use("gone", "Bash", 0, world.alpha, "sleep 5"))
+    old = spans.time.time() - spans.STALE_PENDING_S - 60
+    os.utime(world.session, (old, old))
+    got, offset, _ = spans.read_spans(str(world.session), "r")
+    assert [(s["status"], "duration_ms" in s) for s in got] == [("lost", False)]
+    assert offset == world.session.stat().st_size
+
+
+def test_long_fields_are_capped_to_the_schema(world):
+    world.write(use("a", "T" * 300, 0, world.alpha, None, session="S" * 500, agent="A" * 500), result("a", 1))
+    got, _, _ = spans.read_spans(str(world.session), "r")
+    assert len(got) == 1
+    VALIDATOR.validate(spans.public(got[0]))
+
+
+def test_project_resolves_from_the_launching_transcript(world):
+    world.write(use("a", "Bash", 0, "/nowhere/unknown-dir", "ls"), result("a", 1))
+    got, _, _ = spans.read_spans(str(world.session), "r")
+    assert got[0]["project"] != ""
+
+
+@pytest.mark.parametrize("cmd,expect", [
+    ("echo start\nsleep 30", ("wait", "unknown")),
+    ("cd x\ngit status", ("vcs", None)),
+    ("echo hi\ngh pr view 1", ("github", None)),
+    ("echo hi\nbd ready", ("orchestration", None)),
+    ("echo hi\nuntil [ -f e2e.done ]; do sleep 5; done", ("wait", "e2e")),
+])
+def test_multiline_commands_classify_by_any_line(cmd, expect):
+    assert classify("Bash", cmd) == expect

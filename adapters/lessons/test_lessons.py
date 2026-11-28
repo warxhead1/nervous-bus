@@ -74,6 +74,8 @@ def test_query_filters_and_hides_superseded(env):
     {"--lesson": "two\nlines"},
     {"--supersedes": "les_000000000000"},
     {"--project": " "},
+    {"--project": "p" * 101},
+    {"--area": "c\ni"},
 ])
 def test_bad_input_is_refused_and_not_stored(env, override):
     base = {"--project": "alpha", "--area": "ci", "--lesson": "ok.", "--evidence": "e"}
@@ -81,3 +83,14 @@ def test_bad_input_is_refused_and_not_stored(env, override):
     r = run(env, "record", *[x for kv in base.items() for x in kv])
     assert r.returncode == 2
     assert not (env["tmp"] / "l.jsonl").exists()
+
+
+def test_fields_are_stripped(env):
+    rec = json.loads(record(env, project="  alpha  ", lesson="  Trim me.  ").stdout)
+    V.validate(rec)
+    assert rec["project"] == "alpha" and rec["lesson"] == "Trim me."
+
+
+def test_session_id_is_capped(env):
+    env["env"]["CLAUDE_SESSION_ID"] = "s" * 500
+    V.validate(json.loads(record(env).stdout))

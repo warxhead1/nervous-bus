@@ -25,7 +25,8 @@ _WAIT = re.compile(
     r"|--watch\b"
     r"|\btail\s+-[a-zA-Z]*f\b"
     r"|\binotifywait\b"
-    r"|\bkill\s+-0\b"
+    r"|\bkill\s+-0\b",
+    re.M,
 )
 
 # Wait targets, first match wins, searched in the full command text.
@@ -46,9 +47,9 @@ _SHELL = [
     ("e2e", re.compile(r"e2e|journey|playwright|cypress")),
     ("test", re.compile(r"cargo\s+(?:nextest|test)|\bpytest\b|go\s+test|npm\s+(?:run\s+)?test|\bjest\b|\bvitest\b|\bctest\b")),
     ("build", re.compile(r"cargo\s+(?:build|check|clippy|run)|\bmake\b|\bcmake\b|go\s+build|npm\s+run\s+build|\bgradle|docker\s+build|\bwasm-pack\b")),
-    ("vcs", re.compile(r"(?:^|[;&|(]\s*)(?:cd\s+[^;&|]*(?:&&|;)\s*)?git\s")),
-    ("github", re.compile(r"(?:^|[;&|(]\s*)gh\s")),
-    ("orchestration", re.compile(r"(?:^|[;&|(]\s*)(?:\S*/)?(?:neon-run|orca|bd|nervous)\s")),
+    ("vcs", re.compile(r"(?:^|[;&|(]\s*)(?:cd\s+[^;&|]*(?:&&|;)\s*)?git\s", re.M)),
+    ("github", re.compile(r"(?:^|[;&|(]\s*)gh\s", re.M)),
+    ("orchestration", re.compile(r"(?:^|[;&|(]\s*)(?:\S*/)?(?:neon-run|orca|bd|nervous)\s", re.M)),
 ]
 
 _TOOL_CLASS = {
@@ -75,18 +76,23 @@ def wait_target(text: str) -> str:
     return "unknown"
 
 
-def classify(tool: str, command: Optional[str] = None) -> tuple[str, Optional[str]]:
-    if tool in ("TaskOutput", "BashOutput", "KillShell"):
-        return ("wait", "background_task") if tool != "KillShell" else ("other", None)
+def tool_only_class(tool: str, command: Optional[str]) -> Optional[tuple[str, Optional[str]]]:
+    """Class for tools whose name decides it (waiting tools, non-shell tools); None for a shell command."""
+    if tool in ("TaskOutput", "BashOutput"):
+        return "wait", "background_task"
     if tool == "Monitor":
         return "wait", (wait_target(command) if command else "background_task")
     if tool != "Bash" and not command:
         return _TOOL_CLASS.get(tool, "other"), None
+    return None
+
+
+def classify(tool: str, command: Optional[str] = None) -> tuple[str, Optional[str]]:
+    decided = tool_only_class(tool, command)
+    if decided:
+        return decided
     command = command or ""
     stripped = strip_text(command)
     if _WAIT.search(stripped):
         return "wait", wait_target(command)
-    for name, rx in _SHELL:
-        if rx.search(stripped):
-            return name, None
-    return "shell-other", None
+    return next(((name, None) for name, rx in _SHELL if rx.search(stripped)), ("shell-other", None))
