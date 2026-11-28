@@ -23,6 +23,8 @@ mode = os.environ.get("FAKE_AGY_MODE", "pass")
 if mode == "timeout":
     sys.stdout.write("partial review\n"); sys.stdout.flush()
     time.sleep(30)
+if mode == "crashpass":
+    sys.stdout.write("Reviewed 0 bytes.\\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\\nVERDICT: PASS\\n"); sys.stderr.write("boom\\n"); sys.exit(9)
 if mode == "crash":
     sys.stdout.write("half a review\\n"); sys.stderr.write("boom\\n"); sys.exit(9)
 if mode == "dead":
@@ -41,6 +43,7 @@ body = {
           "## Spec rows\n- row one: not landed\n- row two: landed differently (b.py)\nVERDICT: FAIL\n"),
  "unparsed": "Reviewed %d bytes of diff.\nLooks fine to me.\n",
  "passwithhigh": "Reviewed %d bytes.\nHIGH a.py:1 real bug. Fix: do it.\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
+ "crashpass": "Reviewed %d bytes.\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
  "crash": "half a review\\n",
  "headings": "Reviewed %d bytes.\n### BLOCKER\n- a.py:5 first. Fix: one.\n- b.py:6 second. Fix: two.\n### NIT\n- c.py:7 style.\nVERDICT: FAIL\n",
 }[mode]
@@ -512,7 +515,7 @@ def test_dotfile_where_and_head_only_closes_spec_rows():
     "### BLOCKER\n  - foo.py:10 drops cursor. Fix: keep it.\nCOUNTS: BLOCKER=1 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
     "HIGH\nsomething odd happened in foo.py\nCOUNTS: BLOCKER=1 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
 ])
-def test_blocking_findings_in_any_layout_never_pass(text):
+def test_reviewer_blocking_counts_fail_a_pass_in_any_layout(text):
     sys.path.insert(0, str(ADAPTER_DIR))
     import neon_review
 
@@ -716,3 +719,9 @@ def test_counts_line_needs_all_four_severities_and_url_ports_are_not_locations()
     assert neon_review.parse_counts("COUNTS: BLOCKER=0 HIGH=0\n") is None
     got = neon_review.parse_findings("HIGH https://example.com:8080/api leaks token in auth.py:42. Fix: redact.\nVERDICT: FAIL\n")
     assert got[0]["where"] == "auth.py:42"
+
+
+def test_pass_from_a_crashed_agy_is_not_trusted(env):
+    rc, out, _ = review(env, mode="crashpass")
+    assert rc == 3
+    assert "not trusted" in out["error"]

@@ -544,8 +544,8 @@ def finish(args: argparse.Namespace, out_path: Path, work: Path, gates: dict[str
     if rc != 0 and not raw.strip():
         return fail(EXIT_UNREACHABLE, f"agy exited {rc} with no output: {err.strip()[-500:]}", **meta)
     result = classify(raw)
-    if rc != 0 and result["verdict"] == "unparsed":
-        return fail(EXIT_UNREACHABLE, f"agy exited {rc} without a verdict: {err.strip()[-500:]}", **meta)
+    if rc != 0 and result["verdict"] in ("unparsed", "PASS"):
+        return fail(EXIT_UNREACHABLE, f"agy exited {rc} so its {result['verdict']} is not trusted: {err.strip()[-500:]}", **meta)
     emit({**result, **meta})
     return EXIT_OK if result["verdict"] == "PASS" else EXIT_NEGATIVE
 
