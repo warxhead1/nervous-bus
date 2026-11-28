@@ -431,7 +431,13 @@ class GeminiWebEngine(Engine):
                         self.clock, what="the conversation URL")
 
     def attach(self, ident):
-        """Resume polling a conversation that was already submitted (crash recovery)."""
+        """Resume polling a conversation that was already submitted (crash recovery). Opens the tab
+        here so a tab that does not paint fails before execute_run writes run.json."""
+        try:
+            self.browser.open(f"{GEMINI_URL}/{ident}")
+        except BaseException:
+            self.browser.close()
+            raise
         return ident
 
     def start(self, question):
