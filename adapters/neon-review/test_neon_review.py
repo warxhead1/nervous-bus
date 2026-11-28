@@ -23,6 +23,8 @@ mode = os.environ.get("FAKE_AGY_MODE", "pass")
 if mode == "timeout":
     sys.stdout.write("partial review\n"); sys.stdout.flush()
     time.sleep(30)
+if mode == "crash":
+    sys.stdout.write("half a review\\n"); sys.stderr.write("boom\\n"); sys.exit(9)
 if mode == "dead":
     sys.stderr.write("backend down\n"); sys.exit(7)
 prompt = argv[argv.index("-p") + 1]
@@ -39,6 +41,7 @@ body = {
           "## Spec rows\n- row one: not landed\n- row two: landed differently (b.py)\nVERDICT: FAIL\n"),
  "unparsed": "Reviewed %d bytes of diff.\nLooks fine to me.\n",
  "passwithhigh": "Reviewed %d bytes.\nHIGH a.py:1 real bug. Fix: do it.\nVERDICT: PASS\n",
+ "crash": "half a review\\n",
  "headings": "Reviewed %d bytes.\n### BLOCKER\n- a.py:5 first. Fix: one.\n- b.py:6 second. Fix: two.\n### NIT\n- c.py:7 style.\nVERDICT: FAIL\n",
 }[mode]
 sys.stdout.write(body % size if "%d" in body else body)
@@ -287,12 +290,27 @@ def test_out_inside_repo_is_refused_and_leaves_no_file(env):
     assert sh(env["repo"], "git", "status", "--porcelain") == ""
 
 
-def test_bad_ub_summary_is_recorded_not_silent(env):
+def test_bad_ub_summary_is_backend_failure_not_a_pass(env):
     bad = env["tmp"] / "bin" / "ub-gate"
     bad.write_text(bad.read_text().replace('print(json.dumps({"crap"', 'print("not json"); sys.exit(1); print(json.dumps({"crap"'))
     rc, out, _ = review(env, "--depth", "ub")
-    assert out["gates"]["summary_error"]
-    assert out["gates"]["crap"].get("summary") is None
+    assert rc == 3
+    assert "summary" in out["error"]
+    assert calls(env, "agy") == []
+
+
+def test_gate_that_exits_3_is_backend_failure_not_a_pass(env):
+    bad = env["tmp"] / "bin" / "ub-gate"
+    bad.write_text(bad.read_text().replace('if argv[0] == "crap":', 'if argv[0] in ("crap", "dry", "summary"):\n    sys.stderr.write("tools not installed\\n"); sys.exit(3)\nif argv[0] == "crap":'))
+    rc, out, _ = review(env, "--depth", "ub")
+    assert rc == 3
+    assert "tools not installed" in out["error"]
+
+
+def test_agy_nonzero_with_partial_output_and_no_verdict_is_exit_3(env):
+    rc, out, _ = review(env, mode="crash")
+    assert rc == 3
+    assert "boom" in out["error"]
 
 
 def test_renamed_and_edited_file_is_a_changed_source(env):
@@ -323,3 +341,38 @@ def test_heading_with_inline_finding_is_kept_and_later_headings_close_spec():
     got = neon_review.parse_findings(text)
     assert [(f["severity"], f["where"]) for f in got] == [("BLOCKER", "foo.py:10")]
     assert [r["row"] for r in neon_review.parse_spec_rows(text)] == ["a"]
+
+
+def test_findings_after_spec_rows_still_count_and_placeholders_do_not():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    text = (
+        "### BLOCKER\n- None.\n### HIGH\nHIGH: none\n"
+        "## Spec rows\n- a: landed (x.py)\n"
+        "HIGH foo.py:3 late finding. Fix: do bug-fix-2 now.\n"
+        "VERDICT: PASS\n"
+    )
+    got = neon_review.parse_findings(text)
+    assert [(f["severity"], f["where"], f["fix"]) for f in got] == [("HIGH", "foo.py:3", "do bug-fix-2 now")]
+    assert neon_review.classify(text)["verdict"] == "FAIL"
+
+
+def test_spec_status_is_the_last_marker_and_extensionless_files_have_where():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    rows = neon_review.parse_spec_rows("## Spec rows\n- item landed in name: not landed\nVERDICT: FAIL\n")
+    assert rows[0]["status"] == "not landed"
+    got = neon_review.parse_findings("MEDIUM adapters/x/neon-review:2 exit code wrong. Fix: return 2.\nVERDICT: FAIL\n")
+    assert got[0]["where"] == "adapters/x/neon-review:2"
+
+
+def test_missing_git_is_a_json_usage_error(env):
+    only = env["tmp"] / "nogit"
+    only.mkdir()
+    e = {**env["env"], "PATH": str(only)}
+    p = subprocess.run([sys.executable, "-I", str(ADAPTER_DIR / "neon_review.py"), "--repo", str(env["repo"]), "--base", "main"],
+                       capture_output=True, text=True, env=e)
+    assert p.returncode == 2
+    assert json.loads(p.stdout)["verdict"] == "error"

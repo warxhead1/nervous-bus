@@ -42,9 +42,10 @@ _HEAD_ONLY_RE = re.compile(
     re.I,
 )
 _ITEM_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)(.*\S)")
-_WHERE_RE = re.compile(r"[\w./-]*[\w-]\.[A-Za-z0-9_]+:\d+(?:[-,]\d+)*")
+_WHERE_RE = re.compile(r"(?<![\w/.-])[\w./-]*[\w-]:\d+(?:[-,]\d+)*")
 _FILE_RE = re.compile(r"[\w./-]+/[\w.-]+\.[A-Za-z0-9_]+|\b[\w-]+\.(?:py|go|rs|ts|tsx|js|sh|md|json|ya?ml|toml)\b")
 _SPEC_HEAD_RE = re.compile(r"^\s*(?:#{1,6}\s*)?[*_`]*spec\s+(?:rows?|items?|coverage)\b[*_`:]*\s*$", re.I)
+_NONE_RE = re.compile(r"^(?:none|n/?a|nothing|no (?:new )?(?:findings?|issues?))\W*$", re.I)
 _ANY_HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 _SPEC_STATUS_RE = re.compile(r"\b(not landed|landed differently|landed)\b", re.I)
 
@@ -64,7 +65,10 @@ def run(argv: list[str], cwd: Path, timeout: float | None = None) -> subprocess.
 
 
 def git(repo: Path, *args: str) -> str:
-    p = run(["git", *args], repo)
+    try:
+        p = run(["git", *args], repo)
+    except OSError as e:
+        raise RuntimeError(f"git unavailable: {e}") from e
     if p.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)}: {p.stderr.strip()}")
     return p.stdout
@@ -199,7 +203,7 @@ def _split_where_fix(body: str) -> tuple[str, str, str]:
         where = m.group(0)
     fix = ""
     fm = None
-    for fm in re.finditer(r"\bfix(?:es)?\s*[:\-]\s*", body, re.I):
+    for fm in re.finditer(r"(?<![\w-])fix(?:es)?\s*:\s*", body, re.I):
         pass
     if fm:
         fix = body[fm.end():].strip()
@@ -220,7 +224,7 @@ class _Collector:
         if self.cur is not None:
             body = " ".join(p for p in self.cur["parts"] if p).strip()
             claim, where, fix = _split_where_fix(body)
-            if claim or where:
+            if (claim or where) and not _NONE_RE.match(claim):
                 self.findings.append({"severity": self.cur["sev"], "claim": claim, "where": where, "fix": fix})
         self.cur = None
 
@@ -228,28 +232,25 @@ class _Collector:
         self.flush()
         self.cur = {"sev": sev, "parts": [first.strip()]}
 
-    def feed(self, line: str) -> bool:
-        """Consume one line. Returns False when the findings section has ended."""
-        if _SPEC_HEAD_RE.match(line):
-            self.flush()
-            return False
-        if _VERDICT_RE.match(line):
+    def feed(self, line: str) -> None:
+        """Consume one line."""
+        if _SPEC_HEAD_RE.match(line) or _VERDICT_RE.match(line):
             self.flush()
             self.section = None
-            return True
+            return
         head = _HEAD_ONLY_RE.match(line)
         if head:
             self.flush()
             self.section = (head.group(1) or head.group(2)).upper()
-            return True
+            return
         fm = _FINDING_RE.match(line)
         if fm and fm.group(2).strip():
             self.start(fm.group(1).upper(), fm.group(2))
-            return True
+            return
         if _ANY_HEADING_RE.match(line):
             self.flush()
             self.section = None
-            return True
+            return
         item = _ITEM_RE.match(line)
         if self.section and item:
             self.start(self.section, item.group(1))
@@ -258,14 +259,12 @@ class _Collector:
                 self.cur["parts"].append(line.strip())
             else:
                 self.flush()
-        return True
 
 
 def parse_findings(text: str) -> list[dict[str, str]]:
     c = _Collector()
     for line in text.splitlines():
-        if not c.feed(line):
-            break
+        c.feed(line)
     c.flush()
     return c.findings
 
@@ -288,9 +287,10 @@ def parse_spec_rows(text: str) -> list[dict[str, str]]:
         if not item:
             continue
         body = item.group(1).strip()
-        m = _SPEC_STATUS_RE.search(body)
-        if not m:
+        ms = list(_SPEC_STATUS_RE.finditer(body))
+        if not ms:
             continue
+        m = ms[-1]
         status = m.group(1).lower()
         row = body[: m.start()].strip(" \t:-*_`–—()")
         detail = body[m.end():].strip(" \t:-*_`–—().")
@@ -378,6 +378,21 @@ def classify(raw: str) -> dict[str, Any]:
     return result
 
 
+def gate_stage(repo: Path, base: str, changed: list[str]) -> tuple[dict[str, Any] | None, str | None]:
+    """Run the ub gates. A gate that cannot run is a backend failure, never a hollow pass."""
+    if not shutil.which("ub-gate"):
+        return None, "ub-gate not found on PATH (needed for --depth ub)"
+    try:
+        gates = run_ub_gates(repo, base, changed)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, f"ub-gate failed to run: {e}"
+    bad = [n for n in ("crap", "dry") if gates[n].get("exit") not in (0, 2, None)]
+    if bad or gates.get("summary_error"):
+        detail = {n: gates[n].get("stderr", "") for n in bad} or gates["summary_error"]
+        return None, f"ub-gate failed ({', '.join(bad) or 'summary'}): {str(detail)[-500:]}"
+    return gates, None
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         args = build_parser().parse_args(argv)
@@ -397,12 +412,9 @@ def main(argv: list[str] | None = None) -> int:
     gates: dict[str, Any] | None = None
     try:
         if args.depth == "ub":
-            if not shutil.which("ub-gate"):
-                return fail(EXIT_UNREACHABLE, "ub-gate not found on PATH (needed for --depth ub)")
-            try:
-                gates = run_ub_gates(repo, args.base, changed)
-            except (OSError, subprocess.TimeoutExpired) as e:
-                return fail(EXIT_UNREACHABLE, f"ub-gate failed to run: {e}")
+            gates, err_msg = gate_stage(repo, args.base, changed)
+            if err_msg:
+                return fail(EXIT_UNREACHABLE, err_msg)
             files["gates"] = work / "ub-gates.json"
             files["gates"].write_text(json.dumps(gates, indent=2))
         prompt = build_prompt(RUBRIC.read_text(), args.depth, args.base, files, repo)
@@ -424,6 +436,8 @@ def main(argv: list[str] | None = None) -> int:
     if rc != 0 and not raw.strip():
         return fail(EXIT_UNREACHABLE, f"agy exited {rc} with no output: {err.strip()[-500:]}", **meta)
     result = classify(raw)
+    if rc != 0 and result["verdict"] == "unparsed":
+        return fail(EXIT_UNREACHABLE, f"agy exited {rc} without a verdict: {err.strip()[-500:]}", **meta)
     emit({**result, **meta})
     return EXIT_OK if result["verdict"] == "PASS" else EXIT_NEGATIVE
 
