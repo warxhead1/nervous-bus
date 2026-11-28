@@ -86,7 +86,9 @@ consumer-delivery proof. Other outcomes are `receipt_only`, `failed`, `timed_out
 `unavailable`, and `dry_run`. Publication has a 12-second deadline, and only its own
 process group is terminated on timeout. The GPU query never kills a process group:
 it targets and reaps only its direct owned child, exposing `cleanup_failed` if bounded
-reaping cannot be confirmed. Generic nervous-bus Redis/mirror and Hearth nbus
+reaping cannot be confirmed. If an earlier `nvidia-smi` is still in uninterruptible D
+state (a wedged driver), the query spawns nothing and reports `driver_stuck` with
+`attempted: false`. Generic nervous-bus Redis/mirror and Hearth nbus
 ingestion can retain the event without a separate provider or scraper.
 
 V1 and V2 remain byte-for-byte frozen in `schemas/` for compatibility. The installed

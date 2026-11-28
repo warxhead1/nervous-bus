@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 from unittest.mock import patch
 
@@ -95,6 +96,13 @@ class BufferedPipeProcess:
 
 
 class GpuReadTests(unittest.TestCase):
+    def setUp(self):
+        empty = tempfile.mkdtemp()
+        self.addCleanup(os.rmdir, empty)
+        patcher = patch("gpu.PROC_ROOT", empty)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_real_pipe_reader_caps_output_and_cleans_up_read_errors(self):
         for failure in ("overflow", "read_error", "success"):
             with self.subTest(failure=failure):
@@ -127,6 +135,47 @@ class GpuReadTests(unittest.TestCase):
                 result = gpu.collect_gpu()
             self.assertEqual((result["state"], result["reason"]), ("unavailable", reason))
         self.assertEqual(gpu.parse_output(b"x" * (gpu.MAX_STDOUT_BYTES + 1))["reason"], "output_limit")
+
+    def _proc_tree(self, entries):
+        root = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        for pid, content in entries.items():
+            os.mkdir(os.path.join(root, pid))
+            if content is not None:
+                with open(os.path.join(root, pid, "stat"), "w") as handle:
+                    handle.write(content)
+        return root
+
+    def test_d_state_nvidia_smi_returns_driver_stuck_without_spawning(self):
+        root = self._proc_tree({"11": "11 (bash) S 1 1 1 0", "12": "12 (nvidia-smi) D 1 1 1 0",
+                                "gone": None, "13": None})
+        popen = unittest.mock.Mock()
+        result = gpu.run_query(popen=popen, proc_root=root)
+        popen.assert_not_called()
+        self.assertEqual((result["state"], result["reason"], result["attempted"]),
+                         ("unavailable", "driver_stuck", False))
+        shaped = gpu.collect_gpu(lambda: gpu.run_query(popen=popen, proc_root=root))
+        self.assertEqual((shaped["reason"], shaped["attempted"], shaped["devices"]),
+                         ("driver_stuck", False, []))
+        self.assertEqual(gpu.UNAVAILABLE & {"driver_stuck"}, {"driver_stuck"})
+
+    def test_running_or_absent_nvidia_smi_proceeds_to_popen(self):
+        for entries in ({"12": "12 (nvidia-smi) R 1 1 1 0", "14": "14 (x) y) D 1 1"},
+                        {"13": None}, {}):
+            root = self._proc_tree(entries)
+            popen = unittest.mock.Mock(side_effect=FileNotFoundError)
+            result = gpu.run_query(popen=popen, proc_root=root)
+            popen.assert_called_once()
+            self.assertEqual(result["reason"], "unsupported")
+
+    def test_driver_stuck_validates_against_v3_schema(self):
+        schema = json.loads((Path(gpu.__file__).resolve().parents[2] / "schemas"
+                             / "bus.system.resource.sample.v3.json").read_text())
+        measurement = gpu.unavailable_gpu("driver_stuck")
+        jsonschema.validate(measurement, {"$defs": schema["$defs"], **schema["$defs"]["gpu"]}
+                            if "gpu" in schema.get("$defs", {}) else schema["properties"]["gpu"]
+                            | {"$defs": schema["$defs"]})
+        self.assertEqual(measurement["reason"], "driver_stuck")
 
     def test_stdout_close_does_not_bypass_deadline_and_cleanup_is_bounded(self):
         ticks = [0.0]

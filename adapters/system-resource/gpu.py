@@ -20,7 +20,8 @@ COMMAND = (
 )
 UUID = re.compile(r"^GPU-[0-9a-fA-F][0-9a-fA-F-]{7,126}$")
 DRIVER = re.compile(r"^[0-9][0-9A-Za-z._-]{0,63}$")
-UNAVAILABLE = frozenset({"unsupported", "timeout", "output_limit", "query_failed", "cleanup_failed", "not_collected"})
+UNAVAILABLE = frozenset({"unsupported", "timeout", "output_limit", "query_failed", "cleanup_failed", "not_collected",
+                         "driver_stuck"})
 
 
 def unavailable_gpu(reason="not_collected", query_ms=0.0, attempted=False):
@@ -29,6 +30,33 @@ def unavailable_gpu(reason="not_collected", query_ms=0.0, attempted=False):
         reason = "query_failed"
     return {"state": "unavailable", "reason": reason, "attempted": bool(attempted),
             "query_ms": max(0.0, float(query_ms)), "devices": []}
+
+
+PROC_ROOT = "/proc"
+
+
+def stuck_nvidia_smi(proc_root=None):
+    """Return True when an earlier nvidia-smi sits in uninterruptible D state."""
+    proc_root = PROC_ROOT if proc_root is None else proc_root
+    try:
+        names = os.listdir(proc_root)
+    except OSError:
+        return False
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc_root, name, "stat"), "rb") as handle:
+                raw = handle.read(4096)
+        except OSError:
+            continue
+        head, sep, tail = raw.rpartition(b")")
+        _, opened, comm = head.partition(b"(")
+        if not sep or not opened or comm != b"nvidia-smi":
+            continue
+        if tail.split(None, 1)[:1] == [b"D"]:
+            return True
+    return False
 
 
 def _elapsed(started, clock):
@@ -123,8 +151,11 @@ def _bounded_stdout(process, started, clock):
         selector.close()
 
 
-def run_query(popen=None, clock=None):
+def run_query(popen=None, clock=None, proc_root=None):
     """Run nvidia-smi without a shell and return a bounded internal result."""
+    if stuck_nvidia_smi(proc_root):
+        return {"state": "unavailable", "reason": "driver_stuck", "attempted": False,
+                "query_ms": 0.0, "stdout": b""}
     popen = subprocess.Popen if popen is None else popen
     clock = time.monotonic if clock is None else clock
     started = clock()
