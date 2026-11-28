@@ -451,6 +451,11 @@ def test_media_objects_reject_cross_kind_fields_and_trailing_newlines() -> None:
         {"kind": "compare", "items": [{"src": _ref("4")}, {"src": _ref("5")}], "poster": _ref("1")},
         {"kind": "image", "src": _ref("a") + "\n"},
         {"kind": "image", "src": _ref("a").upper()},
+        {"kind": "image", "src": _ref("a"), "label": ""},
+        {"kind": "image", "src": _ref("a"), "alt": "x"},
+        {"kind": "video", "src": _ref("a"), "fps": 8},
+        {"kind": "compare", "items": [{"src": _ref("4"), "label": ""}, {"src": _ref("5")}]},
+        {"kind": "compare", "items": [{"src": _ref("4"), "w": 1}, {"src": _ref("5")}]},
     ]
     for entry in bad:
         with pytest.raises(ValidationError):
@@ -487,6 +492,14 @@ def test_feedback_rejects_unbounded_rank_notes_and_shapeless_pins() -> None:
         {"pins": [{**pin, "x": 0.5, "y": 0.5, "pos": [0, 0, 0]}]},
         {"pins": [{**pin, "x": 0.5, "y": 0.5, "option_id": ""}]},
         {"pins": [{**pin, "ref": _ref("4") + "\n", "x": 0.5, "y": 0.5}]},
+        {},
+        {"vibes": 1},
+        {"pins": []},
+        {"pins": [{**pin, "x": 0.5, "y": 0.5}] * 13},
+        {"pins": [{**pin, "x": 0.5, "y": 0.5, "color": "red"}]},
+        {"pins": [{**pin, "pos": [0, 0, 0, 0]}]},
+        {"changes": ""},
+        {"changes": "x" * 1001},
     ]
     for fb in bad:
         with pytest.raises(ValidationError):

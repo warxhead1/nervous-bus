@@ -245,7 +245,8 @@
           }
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "minProperties": 1
     }
   },
   "additionalProperties": true
