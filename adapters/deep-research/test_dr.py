@@ -66,6 +66,7 @@ class FakeOrca:
         self.phase, self.end, self.running_polls, self.calls = first, end, running_polls, []
         self.first_snap, self.tabs_open = first_snap, 0
         self.filled = None
+        self.dark = False  # True: the tab never paints (display asleep)
 
     def __call__(self, args):
         self.calls.append(list(args))
@@ -103,6 +104,8 @@ class FakeOrca:
                         self._click(hit)
                         break
                 return json.dumps({"ok": True, "result": {"result": True}})
+            if "requestAnimationFrame" in expr:  # paint probe
+                return json.dumps({"ok": True, "result": {"result": "stalled" if self.dark else "painted"}})
             url = "https://gemini.google.com/app"
             if self.phase in ("plan", "running", "done", "done_collapsed", "failed"):
                 url += "/abc123def"
@@ -236,6 +239,25 @@ def test_signed_out_is_a_login_error_not_a_hang(tmp_path):
     assert e.value.code == dr.EXIT_LOGIN and "sign in" in str(e.value).lower()
     assert not any(c[0] == "fill" for c in fake.calls)  # nothing submitted
     assert fake.tabs_open == 0
+
+
+def test_tab_that_never_paints_fails_fast_with_its_own_exit_code(tmp_path):
+    fake = FakeOrca()
+    fake.dark = True
+    clk = Clock()
+    eng = dr.GeminiWebEngine(CFG, runner=fake, sleep=clk.sleep, clock=clk.now)
+    with pytest.raises(dr.DrError) as e:
+        eng.start("q")
+    assert e.value.code == dr.EXIT_NOPAINT == 5 and "not painting" in str(e.value)
+    assert not any(c[0] in ("snapshot", "fill") for c in fake.calls)  # never polled or submitted
+    assert clk.t == 0 and fake.tabs_open == 0  # no waiting, tab closed
+
+
+def test_main_run_exits_5_when_display_is_dark(tmp_path):
+    fake = FakeOrca()
+    fake.dark = True
+    base = ["--runs-dir", str(tmp_path)]
+    assert dr.main(base + ["run", "q?"], runner=fake) == dr.EXIT_NOPAINT
 
 
 def test_missing_ui_element_times_out_with_its_name(tmp_path):
