@@ -619,3 +619,22 @@ def test_mixed_case_numbered_and_indented_layouts():
     assert neon_review.classify("### BLOCKER\n1. None.\nVERDICT: PASS\n")["verdict"] == "PASS"
     text = "### BLOCKER\n  BLOCKER foo.py:1 a. Fix: x.\n  - bar.py:2 b. Fix: y.\nVERDICT: FAIL\n"
     assert [f["where"] for f in neon_review.parse_findings(text)] == ["foo.py:1", "bar.py:2"]
+
+
+@pytest.mark.parametrize("text", [
+    "High-level summary: all checks pass.\n- High test coverage.\nVERDICT: PASS\n",
+    "### BLOCKER\n- None.\n**Questions**\n- is foo.py:10 intended?\nVERDICT: PASS\n",
+])
+def test_prose_and_question_labels_do_not_flip_a_pass(text):
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    assert neon_review.classify(text)["verdict"] == "PASS"
+
+
+def test_plain_paragraph_findings_under_a_heading_are_parsed():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    got = neon_review.parse_findings("### BLOCKER\nfoo.py:10 drops the cursor. Fix: keep it.\nVERDICT: FAIL\n")
+    assert [(f["severity"], f["where"], f["fix"]) for f in got] == [("BLOCKER", "foo.py:10", "keep it")]

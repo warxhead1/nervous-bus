@@ -28,7 +28,7 @@ A branch in rapid development merges once this returns `"verdict": "PASS"`. It b
 | `findings[]` | `severity` (BLOCKER, HIGH, MEDIUM, NIT), `claim`, `where` (file:line), `fix` |
 | `spec_rows[]` | `row`, `status` (landed, not landed, landed differently), `detail` |
 | `raw_path` | the full review text, kept outside the checkout |
-| `gates` | at `ub` depth, the crap and dry digests the reviewer received |
+| `gates` | at `ub` depth, the crap, dry and mutate results the reviewer received |
 
 Exit codes: `0` PASS, `1` FAIL, `unparsed` or `timeout`, `2` usage, `3` agy (or `ub-gate` at `ub` depth) unreachable.
 

@@ -58,7 +58,8 @@ _WHERE_RES = (
 _SPEC_SEP_RE = re.compile(r"(?:[:\u2013\u2014]|\s-)\s*[*_`]*(not landed|landed differently|landed)\b", re.I)
 _FILE_RE = re.compile(r"[\w./-]+/[\w.-]+\.[A-Za-z0-9_]+|\b[\w-]+\.(?:py|go|rs|ts|tsx|js|sh|md|json|ya?ml|toml)\b")
 _SPEC_HEAD_RE = re.compile(r"^\s*(?:#{1,6}\s*)?[*_`]*spec\s+(?:rows?|items?|coverage)\b[*_`:]*\s*$", re.I)
-_NONE_RE = re.compile(r"^(?:none|n/?a|nothing|no (?:new )?(?:findings?|issues?))\W*$", re.I)
+_NONE_RE = re.compile(r"^(?:none|n/?a|nothing|no (?:new )?(?:findings?|issues?)(?: found| identified)?)\W*$", re.I)
+_LABEL_RE = re.compile(r"^\s*[*_]{2}[^*_\n]+[*_]{2}:?\s*$")
 _ANY_HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 _SPEC_STATUS_RE = re.compile(r"\b(not landed|landed differently|landed)\b", re.I)
 
@@ -312,7 +313,7 @@ class _Collector:
         fm = _FINDING_RE.match(line)
         if fm and fm.group(2).strip():
             self.start(fm.group(1).upper(), fm.group(2), len(line) - len(line.lstrip(" ")))
-        elif _ANY_HEADING_RE.match(line):
+        elif _ANY_HEADING_RE.match(line) or _LABEL_RE.match(line):
             self.flush()
             self.section = None
         else:
@@ -324,6 +325,8 @@ class _Collector:
             self.start(self.section, item.group("body"), len(item.group("indent")))
         elif self.cur is not None and line.strip():
             self.cur["parts"].append(line.strip())
+        elif self.section and line.strip():
+            self.start(self.section, line.strip(), 0)
         elif self.cur is not None:
             self.flush()
 
@@ -435,7 +438,7 @@ def run_agy(cmd: list[str], repo: Path, timeout: int) -> tuple[str, int, str, bo
         return raw, -1, "", True
 
 
-_SEV_LINE_RE = re.compile(_PREFIX + r"(?:BLOCKER|HIGH)\b[*_`\])]*\s*(?:[:\-\u2013\u2014]|\.(?=\s))?\s*(.*)$", re.I)
+_SEV_LINE_RE = re.compile(_PREFIX + r"(?:BLOCKER|HIGH)\b[*_`\])]*\s*(?:[:\-\u2013\u2014]|\.(?=\s))?\s*(.*)$")
 
 
 def _next_content(lines: list[str], i: int) -> str:
@@ -455,9 +458,10 @@ def hidden_blocking(raw: str) -> bool:
         elif _ANY_HEADING_RE.match(line) or _HEAD_ONLY_RE.match(line):
             in_spec = False
         m = _SEV_LINE_RE.match(line)
-        if in_spec or not m or _VERDICT_RE.match(line):
+        head = _HEAD_ONLY_RE.match(line)
+        if in_spec or not (m or head) or _VERDICT_RE.match(line):
             continue
-        text = (_next_content(lines, i) if _HEAD_ONLY_RE.match(line) else m.group(1)).strip(" \t*_`:.")
+        text = (_next_content(lines, i) if head else m.group(1)).strip(" \t*_`:.")
         if text and not _NONE_RE.match(text):
             return True
     return False
