@@ -179,7 +179,7 @@ def test_timeout_keeps_partial_output_and_exits_1(env):
     rc, out, _ = review(env, "--timeout", "1", mode="timeout")
     assert rc == 1
     assert out["verdict"] == "timeout"
-    assert Path(out["raw_path"]).exists()
+    assert "partial review" in Path(out["raw_path"]).read_text()
 
 
 def test_agy_dead_without_output_is_exit_3(env):
@@ -205,7 +205,7 @@ def test_ub_depth_runs_gates_and_hands_json_over(env):
     assert out["gates"]["dry"]["summary"] == {"pairs": 2}
     (call,) = calls(env, "agy")
     prompt = call["argv"][call["argv"].index("-p") + 1]
-    assert "ub-gate mutate" in prompt and "two highest-risk" in prompt
+    assert "yourself on the two highest-risk" in prompt and "mutate <file>" in prompt
     gates_file = Path(out["work_dir"]) / "ub-gates.json"
     assert json.loads(gates_file.read_text())["dry"]["summary"] == {"pairs": 2}
     assert str(gates_file) in prompt
@@ -217,7 +217,8 @@ def test_medium_depth_skips_gates_and_mutate_instruction(env):
     review(env)
     (call,) = calls(env, "agy")
     prompt = call["argv"][call["argv"].index("-p") + 1]
-    assert "Their JSON is in" not in prompt and "ub-gate-gates" not in prompt
+    assert "Their JSON is in" not in prompt
+    assert "yourself on the two highest-risk" not in prompt and "ub-gates.json" not in prompt
     assert "gates" not in review(env)[1]
 
 
@@ -276,3 +277,49 @@ def test_scratch_inside_repo_is_refused(env):
     e = {**env["env"], "NEON_REVIEW_SCRATCH": str(env["repo"] / "scratch")}
     p = subprocess.run([str(CLI), "--repo", str(env["repo"]), "--base", "main"], capture_output=True, text=True, env=e)
     assert p.returncode == 2
+
+
+def test_out_inside_repo_is_refused_and_leaves_no_file(env):
+    leak = env["repo"] / "leaked.txt"
+    rc, out, _ = review(env, "--out", str(leak))
+    assert rc == 2
+    assert not leak.exists()
+    assert sh(env["repo"], "git", "status", "--porcelain") == ""
+
+
+def test_bad_ub_summary_is_recorded_not_silent(env):
+    bad = env["tmp"] / "bin" / "ub-gate"
+    bad.write_text(bad.read_text().replace('print(json.dumps({"crap"', 'print("not json"); sys.exit(1); print(json.dumps({"crap"'))
+    rc, out, _ = review(env, "--depth", "ub")
+    assert out["gates"]["summary_error"]
+    assert out["gates"]["crap"].get("summary") is None
+
+
+def test_renamed_and_edited_file_is_a_changed_source(env):
+    repo = env["repo"]
+    sh(repo, "git", "mv", "b.py", "c.py")
+    (repo / "c.py").write_text("def f():\n    return 2\n")
+    sh(repo, "git", "add", "-A")
+    sh(repo, "git", "commit", "-qm", "rename and edit")
+    review(env, "--depth", "ub")
+    crap = [c["argv"] for c in calls(env, "ub-gate") if c["argv"][0] == "crap"]
+    assert crap == [["crap", "--no-coverage", "a.py", "c.py"]]
+
+
+def test_prose_starting_with_spec_does_not_end_findings():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    text = "Spec was not provided.\nBLOCKER foo.py:10 sql injection. Fix: parameterize.\nVERDICT: PASS\n"
+    got = neon_review.parse_findings(text)
+    assert [(f["severity"], f["where"], f["fix"]) for f in got] == [("BLOCKER", "foo.py:10", "parameterize")]
+
+
+def test_heading_with_inline_finding_is_kept_and_later_headings_close_spec():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    text = "### BLOCKER foo.py:10 drops cursor. Fix: keep it.\n## Spec rows\n- a: landed (x.py)\n## Notes\n- not landed in prose\nVERDICT: FAIL\n"
+    got = neon_review.parse_findings(text)
+    assert [(f["severity"], f["where"]) for f in got] == [("BLOCKER", "foo.py:10")]
+    assert [r["row"] for r in neon_review.parse_spec_rows(text)] == ["a"]
