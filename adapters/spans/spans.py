@@ -109,8 +109,8 @@ def open_call(line_start: int, ts: float, e: dict, b: dict) -> dict:
     cmd = inp.get("command")
     cls, target = classify(b.get("name", ""), cmd if isinstance(cmd, str) else None)
     return {"offset": line_start, "ts": ts, "tool": (b.get("name") or "unknown")[:100],
-            "class": cls, "wait_target": target, "cwd": e.get("cwd", ""),
-            "session": e.get("sessionId", ""), "agent_id": e.get("agentId", "")}
+            "class": cls, "wait_target": target, "cwd": e.get("cwd") or "",
+            "session": e.get("sessionId") or "", "agent_id": e.get("agentId") or ""}
 
 
 def close_status(p: dict, block: dict) -> tuple[str, Optional[int]]:
@@ -255,9 +255,9 @@ def save_cursor(path: Path, cur: dict) -> None:
     os.replace(tmp, path)
 
 
-def file_state(c: dict, st: os.stat_result, path: str) -> tuple[int, frozenset]:
+def file_state(c: dict, st: os.stat_result, head: str) -> tuple[int, frozenset]:
     """(offset, done ids) to resume from; (0, empty) when the file is not the one the cursor saw."""
-    same = c.get("inode") == st.st_ino and c.get("head") == head_hash(path) and c.get("offset", 0) <= st.st_size
+    same = c.get("inode") == st.st_ino and c.get("head") == head and c.get("offset", 0) <= st.st_size
     return (c.get("offset", 0), frozenset(c.get("done", []))) if same else (0, frozenset())
 
 
@@ -265,7 +265,7 @@ def scan_file(a, nervous: str, cur: dict, rel: str, path: str) -> tuple[int, boo
     """Publish one file's new spans. Returns (published, ok); the cursor in `cur` is updated."""
     st = os.stat(path)
     head = head_hash(path)
-    offset, done = file_state(cur.get(rel) or {}, st, path)
+    offset, done = file_state(cur.get(rel) or {}, st, head)
     spans, next_offset, kept = read_spans(path, rel, offset, done)
     sent: set = set()
     for s in spans:
