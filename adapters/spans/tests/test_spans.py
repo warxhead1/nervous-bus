@@ -17,6 +17,7 @@ HERE = Path(__file__).absolute().parent
 ADAPTER = HERE.parent
 import spans
 from classify import classify
+from conftest import FAKE, FAKE_FAIL
 
 SCHEMA = json.loads((ADAPTER.parents[1] / "schemas" / "agent.tool.span.v1.json").read_text())
 VALIDATOR = Draft202012Validator(SCHEMA, format_checker=Draft202012Validator.FORMAT_CHECKER)
@@ -41,30 +42,6 @@ def result(cid, sec, text="ok", error=False):
                        "message": {"content": [{"type": "tool_result", "tool_use_id": cid, "content": text, "is_error": error}]}})
 
 
-@pytest.fixture
-def world(tmp_path, monkeypatch):
-    projects = tmp_path / "work" / "projects"
-    for p in ("alpha", "beta"):
-        (projects / p).mkdir(parents=True)
-    monkeypatch.setenv("NBUS_PROJECT_ROOTS", str(projects))
-    monkeypatch.delenv("NBUS_PROJECT_ALIASES", raising=False)
-    root = tmp_path / "claude" / "projects"
-    (root / "-alpha").mkdir(parents=True)
-    fake = tmp_path / "nervous"
-    fake.write_text(f'#!/bin/sh\n[ -f "{tmp_path}/fail" ] && exit 7\n'
-                    f'[ "$1" = publish ] && [ "$2" = agent.tool.span.v1 ] && printf "%s\\n" "$3" >> "{tmp_path}/sent"\n')
-    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
-
-    class W:
-        pass
-    w = W()
-    w.tmp, w.root, w.fake, w.alpha, w.beta = tmp_path, root, fake, str(projects / "alpha"), str(projects / "beta")
-    w.cursor = tmp_path / "cursor.json"
-    w.session = root / "-alpha" / "s1.jsonl"
-    w.sent = lambda: [json.loads(x) for x in (tmp_path / "sent").read_text().splitlines()] if (tmp_path / "sent").exists() else []
-    w.write = lambda *lines, path=None, mode="w": (path or w.session).open(mode).write("\n".join(lines) + "\n")
-    w.scan = lambda *extra: spans.main(["scan", "--root", str(root), "--cursor", str(w.cursor), "--nervous", str(fake), *extra])
-    return w
 
 
 # ------------------------------------------------------------ classification
@@ -314,10 +291,9 @@ def test_failure_on_second_span_keeps_the_first_in_the_cursor(world):
     world.write(use("a", "Bash", 0, world.alpha, "ls"), result("a", 1),
                 use("b", "Bash", 2, world.alpha, "ls"), result("b", 3))
     flaky = world.tmp / "flaky"
-    flaky.write_text(f'#!/bin/sh\nn=$(cat "{world.tmp}/n" 2>/dev/null || echo 0)\n'
-                     f'echo $((n+1)) > "{world.tmp}/n"\n[ "$n" -ge 1 ] && exit 7\nprintf "%s\\n" "$3" >> "{world.tmp}/sent"\n')
+    flaky.write_text(FAKE.replace("body=$(cat)", FAKE_FAIL).replace("TMP", str(world.tmp)))
     flaky.chmod(flaky.stat().st_mode | stat.S_IEXEC)
-    assert spans.main(["scan", "--root", str(world.root), "--cursor", str(world.cursor), "--nervous", str(flaky)]) == 1
+    assert spans.main(["scan", "--root", str(world.root), "--cursor", str(world.cursor), "--nervous", str(flaky), "--batch-size", "1"]) == 1
     assert len(world.sent()) == 1
     assert world.scan() == 0
     sent = world.sent()

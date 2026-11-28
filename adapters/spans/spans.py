@@ -38,6 +38,7 @@ import project as projmod  # noqa: E402
 CHANNEL = "agent.tool.span.v1"
 REPO_NERVOUS = HERE.parents[1] / "sdk" / "shell" / "nervous"
 PUBLISH_TIMEOUT_S = 30
+BATCH_SIZE = 500
 STALE_PENDING_S = 6 * 3600   # a call with no result this long before the last line is lost
 _EXIT = re.compile(r"^Exit code (\d+)")
 _UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -220,18 +221,22 @@ def find_nervous(explicit: Optional[str]) -> str:
         or shutil.which("nervous") or "nervous"
 
 
-def publish(nervous: str, record: dict) -> bool:
+def publish_batch(nervous: str, records: list) -> Optional[dict]:
+    """Send records through one `nervous publish-batch`. The summary dict when every line was
+    accounted for (published, or rejected and dead-lettered), None when the batch must be retried."""
     env = dict(os.environ, NERVOUS_SOURCE="/spans")
+    body = "".join(json.dumps(r, separators=(",", ":")) + "\n" for r in records)
     try:
-        r = subprocess.run([nervous, "publish", CHANNEL, json.dumps(record, separators=(",", ":"))],
-                           capture_output=True, text=True, timeout=PUBLISH_TIMEOUT_S, env=env)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"spans: publish failed: {exc}", file=sys.stderr)
-        return False
-    if r.returncode != 0:
-        print(f"spans: publish exit {r.returncode}: {r.stderr.strip()[:200]}", file=sys.stderr)
-        return False
-    return True
+        r = subprocess.run([nervous, "publish-batch", CHANNEL], input=body, capture_output=True,
+                           text=True, timeout=PUBLISH_TIMEOUT_S + len(records), env=env)
+        summary = json.loads(r.stdout.strip().splitlines()[-1])
+    except (OSError, subprocess.TimeoutExpired, ValueError, IndexError) as exc:
+        print(f"spans: publish-batch failed: {exc!r}", file=sys.stderr)
+        return None
+    accounted = r.returncode in (0, 2) and summary.get("published", 0) + len(summary.get("rejected", [])) == len(records)
+    if not accounted:
+        print(f"spans: publish-batch exit {r.returncode}: {r.stderr.strip()[:200]}", file=sys.stderr)
+    return summary if accounted else None
 
 
 def head_hash(path: str) -> str:
@@ -261,22 +266,57 @@ def file_state(c: dict, st: os.stat_result, head: str) -> tuple[int, frozenset]:
     return (c.get("offset", 0), frozenset(c.get("done", []))) if same else (0, frozenset())
 
 
-def scan_file(a, nervous: str, cur: dict, rel: str, path: str) -> tuple[int, bool]:
-    """Publish one file's new spans. Returns (published, ok); the cursor in `cur` is updated."""
+class FileScan:
+    """One file's unpublished spans and the cursor entry that matches how many have gone out."""
+
+    def __init__(self, rel: str, st: os.stat_result, head: str, offset: int, done: frozenset, result: tuple):
+        self.rel, self.inode, self.head, self.offset, self.done = rel, st.st_ino, head, offset, done
+        self.spans, self.next_offset, self.kept = result
+        self.sent: set = set()
+
+    def cursor(self) -> dict:
+        complete = len(self.sent) >= len(self.spans)
+        entry = {"inode": self.inode, "head": self.head}
+        if complete:
+            return {**entry, "offset": self.next_offset, "done": sorted(self.kept)}
+        return {**entry, "offset": self.offset, "done": sorted(self.done | self.sent)}
+
+
+def open_file(cur: dict, rel: str, path: str) -> FileScan:
     st = os.stat(path)
     head = head_hash(path)
     offset, done = file_state(cur.get(rel) or {}, st, head)
-    spans, next_offset, kept = read_spans(path, rel, offset, done)
-    sent: set = set()
-    for s in spans:
-        if a.dry_run:
+    return FileScan(rel, st, head, offset, done, read_spans(path, rel, offset, done))
+
+
+def flush(a, nervous: str, batch: list, cur: dict, cursor_path: Path) -> Optional[dict]:
+    """Publish one batch, then save the cursor for it. None when the publish must be retried."""
+    if a.dry_run:
+        for _, s in batch:
             print(json.dumps(public(s)))
-        elif not publish(nervous, public(s)):
-            cur[rel] = {"inode": st.st_ino, "head": head, "offset": offset, "done": sorted(done | sent)}
-            return len(sent), False
-        sent.add(s["span_id"])
-    cur[rel] = {"inode": st.st_ino, "head": head, "offset": next_offset, "done": sorted(kept)}
-    return len(sent), True
+        summary: Optional[dict] = {"rejected": []}
+    else:
+        summary = publish_batch(nervous, [public(s) for _, s in batch])
+    if summary is None:
+        return None
+    for fs, s in batch:
+        fs.sent.add(s["span_id"])
+        cur[fs.rel] = fs.cursor()
+    if not a.dry_run:
+        save_cursor(cursor_path, cur)
+    return summary
+
+
+def drain(a, nervous: str, buf: list, cur: dict, cursor_path: Path, full_only: bool) -> Optional[int]:
+    """Flush batches from `buf`; only full batches unless `full_only` is False. None on failure."""
+    sent = 0
+    while len(buf) >= (a.batch_size if full_only else 1):
+        batch = buf[:a.batch_size]
+        if flush(a, nervous, batch, cur, cursor_path) is None:
+            return None
+        del buf[:len(batch)]
+        sent += len(batch)
+    return sent
 
 
 def cmd_scan(a) -> int:
@@ -285,20 +325,28 @@ def cmd_scan(a) -> int:
     cur = load_cursor(cursor_path)
     since = parse_since(a.since) if a.since else 0.0
     nervous = find_nervous(a.nervous)
-    published = 0
+    a.batch_size = max(1, a.batch_size)
+    published, buf = 0, []
     for rel, path in recent_files(root, since):
         try:
-            n, ok = scan_file(a, nervous, cur, rel, path)
+            fs = open_file(cur, rel, path)
         except OSError as exc:
             print(f"spans: skipped {rel}: {exc}", file=sys.stderr)
             continue
-        published += n
-        if not a.dry_run:
-            save_cursor(cursor_path, cur)
-        if not ok:
+        cur[rel] = fs.cursor()
+        buf.extend((fs, s) for s in fs.spans)
+        n = drain(a, nervous, buf, cur, cursor_path, True)
+        if n is None:
             print(f"spans: stopped after {published} published", file=sys.stderr)
             return 1
-    print(json.dumps({"published": published, "dry_run": bool(a.dry_run)}), file=sys.stderr)
+        published += n
+    n = drain(a, nervous, buf, cur, cursor_path, False)
+    if n is None:
+        print(f"spans: stopped after {published} published", file=sys.stderr)
+        return 1
+    if not a.dry_run:
+        save_cursor(cursor_path, cur)
+    print(json.dumps({"published": published + n, "dry_run": bool(a.dry_run)}), file=sys.stderr)
     return 0
 
 
@@ -368,6 +416,7 @@ def main(argv=None) -> int:
     sc.add_argument("--since", help="only files modified within this window, e.g. 24h")
     sc.add_argument("--dry-run", action="store_true", help="print spans, publish nothing, keep the cursor")
     sc.add_argument("--nervous")
+    sc.add_argument("--batch-size", type=int, default=BATCH_SIZE, help="spans per publish-batch call")
     tp = sub.add_parser("top", help="rank the slowest producers")
     tp.add_argument("--root")
     tp.add_argument("--project")
