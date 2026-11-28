@@ -120,10 +120,12 @@ UI = {
     "signed_out": ("button", r"^Sign in( to |$)"),
     "prompt": ("textbox", r"^Enter a prompt"),
     # opens a menu whose items include the Deep research checkbox.
-    "tools": ("button", r"^Upload & tools"),
+    # alternatives: the current label, then the pre-2026-11-27 one.
+    "tools": [("button", r"^(Upload & tools|Tools)\b"), ("button", r"^Upload & tools")],
     "deep_research": ("menuitemcheckbox", r"^Deep research"),
-    # chip that appears in the composer once Deep research is selected.
-    "deep_research_on": ("button", r"^Deselect Deep research"),
+    # Deep research selected. Since 2026-11-27 Gemini shows no "Deselect Deep research" chip;
+    # the composer gains a "Sources, ..." button instead (absent in plain chat). The chip is the fallback.
+    "deep_research_on": [("button", r"^Sources\b"), ("button", r"^Deselect Deep research")],
     "send": ("button", r"^Send message"),
     # the plan card shown before the research starts.
     "start_research": ("button", r"^Start research$"),
@@ -231,10 +233,11 @@ def report_card_ref(snapshot):
 
 
 def find_ref(snapshot, key, table=None):
-    role, pat = (table or UI)[key]
-    for r, name, ref in parse_snapshot(snapshot):
-        if r == role and re.search(pat, name):
-            return ref
+    spec = (table or UI)[key]
+    for role, pat in ([spec] if isinstance(spec, tuple) else spec):
+        for r, name, ref in parse_snapshot(snapshot):
+            if r == role and re.search(pat, name):
+                return ref
     return None
 
 
@@ -273,6 +276,8 @@ class OrcaBrowser:
     def open(self, url):
         args = ["tab", "create", "--url", url] + (["--profile", self.profile] if self.profile else [])
         self.page = self._json(args)["browserPageId"]
+        # A background tab does not draw, and Gemini's menu ignores clicks until it is active.
+        self._json(["tab", "switch"] + self._p())
         return self.page
 
     def goto(self, url):
@@ -340,6 +345,42 @@ class GeminiWebEngine(Engine):
             return s if find_ref(s, key) else None
         return wait_for(probe, self.step_timeout, self.sleep, self.clock, what=what)
 
+    def _open_tools_menu(self, snap, attempts=3):
+        """Click the tools button until the menu shows. A fresh tab swallows its first click
+        (observed 2026-11-27), so a click with no menu is retried; a menu that opened is never re-clicked."""
+        for _ in range(attempts):
+            self.browser.click(find_ref(snap, "tools"))
+            end = self.clock() + min(self.step_timeout, 8.0)
+            while True:
+                snap = self.browser.snapshot()
+                if find_ref(snap, "deep_research"):
+                    return snap
+                if self.clock() >= end:
+                    break
+                self.sleep(1.0)
+        return self._until("deep_research", "the tools menu entry")
+
+    def _send(self, snap, attempts=3):
+        """Click send until the page moves to a conversation URL. A click that Gemini swallowed leaves
+        the send button in place and is retried; once the URL changes the message is out."""
+        for _ in range(attempts):
+            self.browser.click(find_ref(snap, "send"))
+            end = self.clock() + min(self.step_timeout, 10.0)
+            while True:
+                cid = conversation_id(self.browser.url())
+                if cid:
+                    return cid
+                snap = self.browser.snapshot()
+                if not find_ref(snap, "send"):
+                    break  # the button is gone: the message went out, only the URL is late
+                if self.clock() >= end:
+                    break
+                self.sleep(1.0)
+            if not find_ref(snap, "send"):
+                break
+        return wait_for(lambda: conversation_id(self.browser.url()), self.step_timeout, self.sleep,
+                        self.clock, what="the conversation URL")
+
     def attach(self, ident):
         """Resume polling a conversation that was already submitted (crash recovery)."""
         return ident
@@ -358,15 +399,15 @@ class GeminiWebEngine(Engine):
         if find_ref(snap, "signed_out"):
             raise DrError("Orca's browser is not signed in to Google: sign in at gemini.google.com "
                           "in Orca's default browser profile, then retry", EXIT_LOGIN)
-        b.click(find_ref(snap, "tools"))
-        snap = self._until("deep_research", "the tools menu entry")
-        b.click(find_ref(snap, "deep_research"))
-        snap = self._until("deep_research_on", "the research-mode chip (mode not selected)")
+        if find_ref(snap, "deep_research_on"):
+            pass  # Gemini kept the research mode selected from an earlier chat; toggling it would switch it off.
+        else:
+            snap = self._open_tools_menu(snap)
+            b.click(find_ref(snap, "deep_research"))
+            snap = self._until("deep_research_on", "the research-mode chip (mode not selected)")
         b.fill(find_ref(snap, "prompt"), question)
         snap = self._until("send", "the send button")
-        b.click(find_ref(snap, "send"))
-        cid = wait_for(lambda: conversation_id(b.url()), self.step_timeout, self.sleep, self.clock,
-                       what="the conversation URL")
+        cid = self._send(snap)
         snap = self._until("start_research", "the research plan")
         b.click(find_ref(snap, "start_research"))
         return cid
