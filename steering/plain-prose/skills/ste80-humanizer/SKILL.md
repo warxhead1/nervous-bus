@@ -21,7 +21,7 @@ Rewrite AI-sounding text so it reads like a careful person wrote it, and so the 
 
 The skill has two passes:
 
-- **Pass 1 (§1 to §26)** removes AI tells: habits that people recognize as machine writing.
+- **Pass 1 (§1 to §30)** removes AI tells: habits that people recognize as machine writing.
 - **Pass 2 (S1 to S15)** rebuilds sentences with the structure of ASD-STE100, softened to 80%.
 
 Report your edits by these numbers. *Weak alone* means: act only when other tells are near it.
@@ -154,6 +154,19 @@ The fact underneath is usually sound. Keep it and remove the dressing.
 
 Act on §26 only when you can see the conversation or the text is plainly a reply.
 
+### G. Grammar and genre (measured, survives every word swap)
+
+Reinhart et al. (PNAS 2025, arXiv 2410.16107) compared instruction-tuned models with human text on 66 grammar features. GPT-4o used phrasal coordination at 1.9 times the human rate, nominalizations at 2.1 times and present participial clauses at 5.3 times. Models also use fewer human subjects and fewer stance markers. Text can pass §1 to §26 and still read as machine-written because of these features. Landing pages, product pages and bios show them most, since the genre already invites fragments.
+
+| § | Tell | Watch for | Fix |
+|---|---|---|---|
+| 27 | Noun phrases joined by "and" as a whole line | "A fixed price, and a first version you can click in a week."; "Fixes, updates and a reply within one business day." outside a table | Give each phrase a subject and a verb: "You'll know the price before I start." |
+| 28 | No person in the sentence | lines where nobody acts or speaks: "Fixed price.", "Rough and real, on a private link." | Put "I", "you" or a named person in the subject. |
+| 29 | No stance at all | copy with no "maybe", "actually", "I'd like to", "honestly", "I think" anywhere | Let the writer hedge or soften where a person talking would. Keep the source's certainty (fidelity rules). |
+| 30 | A line anyone could sign | "I build the software your business is missing." | Harry Dry's tests: can the reader picture it, could it be proven false, could no competitor say it? Rewrite with a fact only this writer has. |
+
+For customer-facing copy, run §27 to §30 as well as Pass 1, then read every line aloud (Paul Graham, "Write Like You Talk"). If the writer would not say it across a counter, rewrite it. Use the customer's own words where the source has them (Joanna Wiebe's message mining). Do not compress copy into STE fragments: Pass 2's short sentences must still be sentences with a person in them.
+
 ## Pass 2: STE80 structure
 
 `references/ste80-rules.md` has examples for each rule. `references/strict-mode.md` has the strict rule set and a checklist.
@@ -200,7 +213,8 @@ A person can make any of these choices on purpose. Several tells together are th
 - **Quotes, titles, names, and text about a phrase.** Leave the phrase alone.
 - **Letters.** Salutations and sign-offs are older than chatbots.
 - **Text written before 30 November 2022** is not AI-written.
-- **Fiction, poetry, speeches, jokes, brand copy.** Pass 1 only if asked. No Pass 2: STE removes voice on purpose.
+- **Fiction, poetry, speeches, jokes.** Pass 1 only if asked. No Pass 2: STE removes voice on purpose.
+- **Brand and landing copy.** Pass 1 and §27 to §30 always. Pass 2 only for sentence length, never to turn sentences into fragments.
 - **Contracts, legal and regulatory text.** Do not rewrite. Offer a plain summary next to it.
 - **Code.** Edit prose, comments and docs only.
 - **Other languages.** Do Pass 1 and the structure rules of Pass 2 with that language's plain words. Do not translate.
