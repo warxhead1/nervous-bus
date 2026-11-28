@@ -146,24 +146,23 @@ class GpuReadTests(unittest.TestCase):
                     handle.write(content)
         return root
 
-    def test_d_state_nvidia_smi_returns_driver_stuck_without_spawning(self):
+    def test_d_state_nvidia_smi_returns_cleanup_failed_without_spawning(self):
         root = self._proc_tree({"11": "11 (bash) S 1 1 1 0", "12": "12 (nvidia-smi) D 1 1 1 0",
                                 "gone": None, "13": None})
         popen = unittest.mock.Mock()
         result = gpu.run_query(popen=popen, proc_root=root)
         popen.assert_not_called()
         self.assertEqual((result["state"], result["reason"], result["attempted"]),
-                         ("unavailable", "driver_stuck", False))
+                         ("unavailable", "cleanup_failed", False))
         shaped = gpu.collect_gpu(lambda: gpu.run_query(popen=popen, proc_root=root))
         self.assertEqual((shaped["reason"], shaped["attempted"], shaped["devices"]),
-                         ("driver_stuck", False, []))
-        self.assertEqual(gpu.UNAVAILABLE & {"driver_stuck"}, {"driver_stuck"})
+                         ("cleanup_failed", False, []))
 
     def test_missing_proc_root_does_not_block_the_query(self):
         self.assertFalse(gpu.stuck_nvidia_smi(os.path.join(tempfile.gettempdir(), "no-such-proc-root")))
 
     def test_running_or_absent_nvidia_smi_proceeds_to_popen(self):
-        for entries in ({"12": "12 (nvidia-smi) R 1 1 1 0", "14": "14 (x) y) D 1 1"},
+        for entries in ({"12": "12 (nvidia-smi) R 1 1 1 0", "14": "14 (nvidia-smi) D 1) R 1 1"},
                         {"13": None}, {}):
             root = self._proc_tree(entries)
             popen = unittest.mock.Mock(side_effect=FileNotFoundError)
@@ -325,16 +324,16 @@ class GpuStoreTests(unittest.TestCase):
         self.assertEqual(store.db.execute("SELECT COUNT(*) FROM samples").fetchone()[0], len(measurements))
         self.assertEqual(store.db.execute("SELECT COUNT(*) FROM gpu_gauges").fetchone()[0], 3)
 
-    def test_driver_stuck_event_validates_and_stores_without_an_attempt(self):
-        event, _ = self.sample(1000, gpu.unavailable_gpu("driver_stuck", attempted=False))
-        self.assertEqual((event["gpu"]["reason"], event["gpu"]["attempted"]), ("driver_stuck", False))
+    def test_cleanup_failed_event_validates_and_stores_without_an_attempt(self):
+        event, _ = self.sample(1000, gpu.unavailable_gpu("cleanup_failed", attempted=False))
+        self.assertEqual((event["gpu"]["reason"], event["gpu"]["attempted"]), ("cleanup_failed", False))
         self.assertEqual(event["entities"][0]["gauges"]["memory_current_bytes"], 1024)
         self.validate(event)
         store = self.store()
         store.rollup(1300)
         store.commit()
         row = store.db.execute("SELECT state,reason,attempted FROM gpu_batches").fetchone()
-        self.assertEqual(tuple(row), ("unavailable", "driver_stuck", 0))
+        self.assertEqual(tuple(row), ("unavailable", "cleanup_failed", 0))
         rolled = store.db.execute("SELECT status_count,attempt_count,unavailable_count "
                                   "FROM gpu_status_rollups").fetchall()
         self.assertEqual([tuple(r) for r in rolled], [(1, 0, 1)])

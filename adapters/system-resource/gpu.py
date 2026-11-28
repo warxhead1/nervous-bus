@@ -20,8 +20,7 @@ COMMAND = (
 )
 UUID = re.compile(r"^GPU-[0-9a-fA-F][0-9a-fA-F-]{7,126}$")
 DRIVER = re.compile(r"^[0-9][0-9A-Za-z._-]{0,63}$")
-UNAVAILABLE = frozenset({"unsupported", "timeout", "output_limit", "query_failed", "cleanup_failed", "not_collected",
-                         "driver_stuck"})
+UNAVAILABLE = frozenset({"unsupported", "timeout", "output_limit", "query_failed", "cleanup_failed", "not_collected"})
 
 
 def unavailable_gpu(reason="not_collected", query_ms=0.0, attempted=False):
@@ -154,7 +153,7 @@ def _bounded_stdout(process, started, clock):
 def run_query(popen=None, clock=None, proc_root=None):
     """Run nvidia-smi without a shell and return a bounded internal result."""
     if stuck_nvidia_smi(proc_root):
-        return {"state": "unavailable", "reason": "driver_stuck", "attempted": False,
+        return {"state": "unavailable", "reason": "cleanup_failed", "attempted": False,
                 "query_ms": 0.0, "stdout": b""}
     popen = subprocess.Popen if popen is None else popen
     clock = time.monotonic if clock is None else clock

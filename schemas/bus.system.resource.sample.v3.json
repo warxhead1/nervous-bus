@@ -162,7 +162,7 @@
       "type": "object", "additionalProperties": false,
       "properties": {
         "state": {"enum": ["ok", "partial", "unavailable", "empty"]},
-        "reason": {"enum": [null, "unsupported", "timeout", "output_limit", "query_failed", "cleanup_failed", "not_collected", "driver_stuck", "empty", "malformed_output", "duplicate_uuid", "device_limit", "partial_reading"]},
+        "reason": {"enum": [null, "unsupported", "timeout", "output_limit", "query_failed", "cleanup_failed", "not_collected", "empty", "malformed_output", "duplicate_uuid", "device_limit", "partial_reading"]},
         "attempted": {"type": "boolean"},
         "query_ms": {"type": "number", "minimum": 0},
         "devices": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/gpu_device"}}
