@@ -609,3 +609,13 @@ def test_sibling_indented_bullets_are_separate_findings():
     got = neon_review.parse_findings(text)
     assert [f["where"] for f in got] == ["foo.py:10", "bar.py:20"]
     assert got[0]["fix"].startswith("redact it") and got[1]["fix"] == "keep it"
+
+
+def test_mixed_case_numbered_and_indented_layouts():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    assert neon_review.classify("### High\nsomething is wrong in foo.py\nVERDICT: PASS\n")["verdict"] == "FAIL"
+    assert neon_review.classify("### BLOCKER\n1. None.\nVERDICT: PASS\n")["verdict"] == "PASS"
+    text = "### BLOCKER\n  BLOCKER foo.py:1 a. Fix: x.\n  - bar.py:2 b. Fix: y.\nVERDICT: FAIL\n"
+    assert [f["where"] for f in neon_review.parse_findings(text)] == ["foo.py:1", "bar.py:2"]

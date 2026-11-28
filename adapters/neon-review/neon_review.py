@@ -311,7 +311,7 @@ class _Collector:
     def _body(self, line: str) -> None:
         fm = _FINDING_RE.match(line)
         if fm and fm.group(2).strip():
-            self.start(fm.group(1).upper(), fm.group(2))
+            self.start(fm.group(1).upper(), fm.group(2), len(line) - len(line.lstrip(" ")))
         elif _ANY_HEADING_RE.match(line):
             self.flush()
             self.section = None
@@ -435,7 +435,7 @@ def run_agy(cmd: list[str], repo: Path, timeout: int) -> tuple[str, int, str, bo
         return raw, -1, "", True
 
 
-_SEV_LINE_RE = re.compile(_PREFIX + r"(?:BLOCKER|HIGH)\b[*_`\])]*\s*(?:[:\-\u2013\u2014]|\.(?=\s))?\s*(.*)$")
+_SEV_LINE_RE = re.compile(_PREFIX + r"(?:BLOCKER|HIGH)\b[*_`\])]*\s*(?:[:\-\u2013\u2014]|\.(?=\s))?\s*(.*)$", re.I)
 
 
 def _next_content(lines: list[str], i: int) -> str:
@@ -443,7 +443,7 @@ def _next_content(lines: list[str], i: int) -> str:
     nxt = next((n.strip() for n in lines[i + 1:] if n.strip()), "")
     if _VERDICT_RE.match(nxt) or _ANY_HEADING_RE.match(nxt) or _SPEC_HEAD_RE.match(nxt) or _HEAD_ONLY_RE.match(nxt):
         return ""
-    return nxt.lstrip("-*+ ")
+    return re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", nxt)
 
 
 def hidden_blocking(raw: str) -> bool:
