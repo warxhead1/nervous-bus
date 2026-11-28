@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).absolute().parent
 SCHEMA = json.loads((HERE.parents[1] / "schemas" / "agent.lesson.v1.json").read_text())
 V = Draft202012Validator(SCHEMA, format_checker=Draft202012Validator.FORMAT_CHECKER)
 
@@ -94,3 +94,26 @@ def test_fields_are_stripped(env):
 def test_session_id_is_capped(env):
     env["env"]["CLAUDE_SESSION_ID"] = "s" * 500
     V.validate(json.loads(record(env).stdout))
+
+
+@pytest.mark.parametrize("field,limit", [("project", 100), ("area", 60), ("lesson", 300), ("evidence", 300), ("rule", 300)])
+def test_fields_at_exactly_the_limit_are_accepted(env, field, limit):
+    base = {"project": "alpha", "area": "ci", "lesson": "ok.", "evidence": "e"}
+    base[field] = ("a" * limit)
+    r = run(env, "record", *[x for k, v in base.items() for x in (f"--{k}", v)])
+    assert r.returncode == 0, r.stderr
+    V.validate(json.loads(r.stdout))
+
+
+def test_unknown_supersedes_is_refused_when_the_store_has_other_lessons(env):
+    record(env)
+    r = record(env, lesson="Second.", supersedes="les_000000000000")
+    assert r.returncode == 2 and "not in the store" in r.stderr
+    assert len((env["tmp"] / "l.jsonl").read_text().splitlines()) == 1
+
+
+def test_query_is_newest_first(env):
+    rows = [{"v": 1, "ts": f"2026-11-0{d}T00:00:00Z", "lesson_id": f"les_00000000000{d}", "project": "alpha",
+             "area": "ci", "lesson": f"L{d}", "evidence": "e"} for d in (2, 3, 1)]
+    (env["tmp"] / "l.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    assert [d["lesson"] for d in json.loads(run(env, "query").stdout)] == ["L3", "L2", "L1"]

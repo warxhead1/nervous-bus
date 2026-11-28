@@ -10,6 +10,10 @@
 #   nervous publish --subject silo_racing_X tengine.session.frame '{"fps":47.3}'
 #   nervous publish --maxlen 2000 --max-bytes 4096 loom.lifecycle.started.v1 '{"id":"01J"}'
 #                                           # flags go BEFORE the channel
+#   nervous publish-batch [--maxlen N] [--max-bytes N] <channel>
+#                                           # JSONL payloads on stdin, one event per line;
+#                                           # validates each, one log append, one Redis connection.
+#                                           # Prints a JSON summary; exit 2 when a line was rejected
 #   nervous tail tengine.session            # subscribe (requires plugin running)
 #   nervous schemas                         # list known channels (repo + user-home)
 #   nervous schemas --cluster autobench     # filter by taxonomy cluster
@@ -649,6 +653,12 @@ except Exception as e:
     fi
 }
 
+# One process for a whole batch of events; see publish_batch.py.
+cmd_publish_batch() {
+    export NERVOUS_SOURCE="${NERVOUS_SOURCE:-/$(basename "$PWD")}"
+    exec "${NERVOUS_PYTHON:-python3}" "$(dirname "$(readlink -f "$0")")/publish_batch.py" "$@"
+}
+
 cmd_subscribers() {
     if [[ -z "${ZELLIJ:-}" ]]; then
         echo "nervous subscribers requires a Zellij session" >&2
@@ -1133,6 +1143,7 @@ PYEOF
 
 case "$CMD" in
     publish) cmd_publish "$@" ;;
+    publish-batch) cmd_publish_batch "$@" ;;
     tail)    cmd_tail "$@" ;;
     subscribers) cmd_subscribers "$@" ;;
     schemas) cmd_schemas "$@" ;;

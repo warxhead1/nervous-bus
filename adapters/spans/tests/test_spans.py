@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -12,10 +13,11 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).absolute().parent
 ADAPTER = HERE.parent
 import spans
 from classify import classify
+from conftest import FAKE, FAKE_FAIL
 
 SCHEMA = json.loads((ADAPTER.parents[1] / "schemas" / "agent.tool.span.v1.json").read_text())
 VALIDATOR = Draft202012Validator(SCHEMA, format_checker=Draft202012Validator.FORMAT_CHECKER)
@@ -40,30 +42,6 @@ def result(cid, sec, text="ok", error=False):
                        "message": {"content": [{"type": "tool_result", "tool_use_id": cid, "content": text, "is_error": error}]}})
 
 
-@pytest.fixture
-def world(tmp_path, monkeypatch):
-    projects = tmp_path / "work" / "projects"
-    for p in ("alpha", "beta"):
-        (projects / p).mkdir(parents=True)
-    monkeypatch.setenv("NBUS_PROJECT_ROOTS", str(projects))
-    monkeypatch.delenv("NBUS_PROJECT_ALIASES", raising=False)
-    root = tmp_path / "claude" / "projects"
-    (root / "-alpha").mkdir(parents=True)
-    fake = tmp_path / "nervous"
-    fake.write_text(f'#!/bin/sh\n[ -f "{tmp_path}/fail" ] && exit 7\n'
-                    f'[ "$1" = publish ] && [ "$2" = agent.tool.span.v1 ] && printf "%s\\n" "$3" >> "{tmp_path}/sent"\n')
-    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
-
-    class W:
-        pass
-    w = W()
-    w.tmp, w.root, w.fake, w.alpha, w.beta = tmp_path, root, fake, str(projects / "alpha"), str(projects / "beta")
-    w.cursor = tmp_path / "cursor.json"
-    w.session = root / "-alpha" / "s1.jsonl"
-    w.sent = lambda: [json.loads(x) for x in (tmp_path / "sent").read_text().splitlines()] if (tmp_path / "sent").exists() else []
-    w.write = lambda *lines, path=None, mode="w": (path or w.session).open(mode).write("\n".join(lines) + "\n")
-    w.scan = lambda *extra: spans.main(["scan", "--root", str(root), "--cursor", str(w.cursor), "--nervous", str(fake), *extra])
-    return w
 
 
 # ------------------------------------------------------------ classification
@@ -313,10 +291,9 @@ def test_failure_on_second_span_keeps_the_first_in_the_cursor(world):
     world.write(use("a", "Bash", 0, world.alpha, "ls"), result("a", 1),
                 use("b", "Bash", 2, world.alpha, "ls"), result("b", 3))
     flaky = world.tmp / "flaky"
-    flaky.write_text(f'#!/bin/sh\nn=$(cat "{world.tmp}/n" 2>/dev/null || echo 0)\n'
-                     f'echo $((n+1)) > "{world.tmp}/n"\n[ "$n" -ge 1 ] && exit 7\nprintf "%s\\n" "$3" >> "{world.tmp}/sent"\n')
+    flaky.write_text(FAKE.replace("body=$(cat)", FAKE_FAIL).replace("TMP", str(world.tmp)))
     flaky.chmod(flaky.stat().st_mode | stat.S_IEXEC)
-    assert spans.main(["scan", "--root", str(world.root), "--cursor", str(world.cursor), "--nervous", str(flaky)]) == 1
+    assert spans.main(["scan", "--root", str(world.root), "--cursor", str(world.cursor), "--nervous", str(flaky), "--batch-size", "1"]) == 1
     assert len(world.sent()) == 1
     assert world.scan() == 0
     sent = world.sent()
@@ -353,9 +330,20 @@ def test_long_fields_are_capped_to_the_schema(world):
 
 
 def test_project_resolves_from_the_launching_transcript(world):
-    world.write(use("a", "Bash", 0, "/nowhere/unknown-dir", "ls"), result("a", 1))
+    launch = world.root / re.sub(r"[^A-Za-z0-9]", "-", world.alpha)
+    launch.mkdir()
+    session = launch / "s1.jsonl"
+    session.write_text(use("a", "Bash", 0, "/nowhere/unknown-dir", "ls") + "\n" + result("a", 1) + "\n")
+    got, _, _ = spans.read_spans(str(session), "r")
+    assert got[0]["project"] == "alpha"
+
+
+def test_null_ids_in_a_transcript_line_do_not_crash(world):
+    e = json.loads(use("a", "Bash", 0, world.alpha, "ls"))
+    e.update(agentId=None, sessionId=None, cwd=None)
+    world.write(json.dumps(e), result("a", 1))
     got, _, _ = spans.read_spans(str(world.session), "r")
-    assert got[0]["project"] != ""
+    assert len(got) == 1 and "agent_id" not in got[0] and got[0]["session"] == "s1"
 
 
 @pytest.mark.parametrize("cmd,expect", [
@@ -367,3 +355,85 @@ def test_project_resolves_from_the_launching_transcript(world):
 ])
 def test_multiline_commands_classify_by_any_line(cmd, expect):
     assert classify("Bash", cmd) == expect
+
+
+# ------------------------------------------------------------ boundaries
+
+def parallel_use(sec, cwd, *ids):
+    blocks = [{"type": "tool_use", "id": i, "name": "Bash", "input": {"command": "ls"}} for i in ids]
+    return json.dumps({"type": "assistant", "timestamp": at(sec), "cwd": cwd, "sessionId": "s1",
+                       "message": {"content": blocks}})
+
+
+def test_orphan_results_and_foreign_blocks_are_ignored(world):
+    stray = {"type": "assistant", "timestamp": at(2), "message": {"content": [
+        {"type": "text", "tool_use_id": "open", "text": "x"}]}}
+    world.write(result("never-opened", 0), use("open", "Bash", 1, world.alpha, "ls"), json.dumps(stray))
+    got, offset, _ = spans.read_spans(str(world.session), "r")
+    assert got == []
+    assert offset == world.session.read_text().index(use("open", "Bash", 1, world.alpha, "ls"))
+
+
+def test_call_on_a_shared_line_with_an_open_sibling_is_sent_once(world):
+    world.write(parallel_use(0, world.alpha, "a", "b"), result("a", 5))
+    world.scan()
+    world.scan()
+    assert [s["duration_ms"] for s in world.sent()] == [5000]
+    world.write(result("b", 9), mode="a")
+    world.scan()
+    world.scan()
+    assert sorted(s["duration_ms"] for s in world.sent()) == [5000, 9000]
+
+
+def test_call_open_exactly_the_stale_window_is_still_open(world, monkeypatch):
+    world.write(use("old", "Bash", 0, world.alpha, "ls"), use("x", "Read", spans.STALE_PENDING_S, world.alpha),
+                result("x", spans.STALE_PENDING_S))
+    mtime = int(T0.timestamp())
+    os.utime(world.session, (mtime, mtime))
+    monkeypatch.setattr(spans.time, "time", lambda: mtime)
+    got, offset, _ = spans.read_spans(str(world.session), "r")
+    assert [s["tool"] for s in got] == ["Read"]
+    assert offset == 0
+    world.write(use("y", "Read", spans.STALE_PENDING_S + 2, world.alpha), result("y", spans.STALE_PENDING_S + 3), mode="a")
+    got, _, _ = spans.read_spans(str(world.session), "r")
+    assert sorted(s["status"] for s in got) == ["lost", "ok", "ok"]
+
+
+def test_file_idle_exactly_the_stale_window_is_not_abandoned(world, monkeypatch):
+    world.write(use("open", "Bash", 0, world.alpha, "ls"))
+    mtime = int(T0.timestamp())
+    os.utime(world.session, (mtime, mtime))
+    monkeypatch.setattr(spans.time, "time", lambda: mtime + spans.STALE_PENDING_S)
+    assert spans.read_spans(str(world.session), "r")[0] == []
+    monkeypatch.setattr(spans.time, "time", lambda: mtime + spans.STALE_PENDING_S + 1)
+    assert [s["status"] for s in spans.read_spans(str(world.session), "r")[0]] == ["lost"]
+
+
+def test_zero_and_negative_durations_clamp_to_zero(world):
+    world.write(use("a", "Bash", 5, world.alpha, "ls"), result("a", 5),
+                use("b", "Bash", 9, world.alpha, "ls"), result("b", 8))
+    got, _, _ = spans.read_spans(str(world.session), "r")
+    assert [s["duration_ms"] for s in got] == [0, 0]
+
+
+def test_files_modified_exactly_at_since_are_read(world):
+    world.write(use("a", "Bash", 0, world.alpha, "ls"), result("a", 1))
+    os.utime(world.session, (1_000_000, 1_000_000))
+    assert [r for r, _ in spans.recent_files(str(world.root), 1_000_000)] == ["-alpha/s1.jsonl"]
+    assert list(spans.recent_files(str(world.root), 1_000_001)) == []
+
+
+def test_span_starting_exactly_at_since_is_ranked(world):
+    world.write(use("a", "Bash", 0, world.alpha, "ls"), result("a", 1))
+    start = T0.timestamp()
+    assert len(list(spans.top_spans(str(world.root), start, None))) == 1
+    assert list(spans.top_spans(str(world.root), start + 0.001, None)) == []
+
+
+def test_rank_average_and_top_totals(world, capsys):
+    assert spans.rank({"k": [10.0, 4]}, 5) == [{"key": "k", "hours": 0.003, "calls": 4, "avg_s": 2.5}]
+    world.write(use("a", "Bash", 0, world.alpha, "ls"), result("a", 60),
+                use("b", "Bash", 100, world.alpha, "ls"), result("b", 220))
+    res = top(world, capsys, "--since", "24h")
+    assert res["calls"] == 2 and res["tool_hours"] == 0.05
+    assert res["classes"] == [{"key": "shell-other", "hours": 0.05, "calls": 2, "avg_s": 90.0}]
