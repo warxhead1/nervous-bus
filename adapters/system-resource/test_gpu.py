@@ -159,6 +159,9 @@ class GpuReadTests(unittest.TestCase):
                          ("driver_stuck", False, []))
         self.assertEqual(gpu.UNAVAILABLE & {"driver_stuck"}, {"driver_stuck"})
 
+    def test_missing_proc_root_does_not_block_the_query(self):
+        self.assertFalse(gpu.stuck_nvidia_smi(os.path.join(tempfile.gettempdir(), "no-such-proc-root")))
+
     def test_running_or_absent_nvidia_smi_proceeds_to_popen(self):
         for entries in ({"12": "12 (nvidia-smi) R 1 1 1 0", "14": "14 (x) y) D 1 1"},
                         {"13": None}, {}):
@@ -328,10 +331,13 @@ class GpuStoreTests(unittest.TestCase):
         self.assertEqual(event["entities"][0]["gauges"]["memory_current_bytes"], 1024)
         self.validate(event)
         store = self.store()
-        store.rollup(1100)
+        store.rollup(1300)
         store.commit()
         row = store.db.execute("SELECT state,reason,attempted FROM gpu_batches").fetchone()
         self.assertEqual(tuple(row), ("unavailable", "driver_stuck", 0))
+        rolled = store.db.execute("SELECT status_count,attempt_count,unavailable_count "
+                                  "FROM gpu_status_rollups").fetchall()
+        self.assertEqual([tuple(r) for r in rolled], [(1, 0, 1)])
 
     def test_rollup_retention_restart_and_report_are_idempotent(self):
         for ts in (1000, 1060, 1120, 1180, 1240):
