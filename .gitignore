@@ -157,3 +157,6 @@ schemas/gamelab.*.json
 
 # plugin eval output
 steering/*/evals/results/
+
+# ub-gate output
+.metrics/
