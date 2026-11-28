@@ -24,7 +24,7 @@ if mode == "timeout":
     sys.stdout.write("partial review\n"); sys.stdout.flush()
     time.sleep(30)
 if mode == "crashpass":
-    sys.stdout.write("Reviewed 0 bytes.\\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\\nVERDICT: PASS\\n"); sys.stderr.write("boom\\n"); sys.exit(9)
+    sys.stdout.write("Reviewed 0 bytes.\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n"); sys.stderr.write("boom\n"); sys.exit(9)
 if mode == "crash":
     sys.stdout.write("half a review\\n"); sys.stderr.write("boom\\n"); sys.exit(9)
 if mode == "dead":
@@ -619,7 +619,7 @@ def test_mixed_case_numbered_and_indented_layouts():
     sys.path.insert(0, str(ADAPTER_DIR))
     import neon_review
 
-    assert neon_review.classify("### High\nsomething is wrong in foo.py\nCOUNTS: BLOCKER=1 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n")["verdict"] == "FAIL"
+    assert [f["severity"] for f in neon_review.parse_findings("### High\nfoo.py:3 is wrong\nVERDICT: FAIL\n")] == ["HIGH"]
     assert neon_review.classify("### BLOCKER\n1. None.\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n")["verdict"] == "PASS"
     text = "### BLOCKER\n  BLOCKER foo.py:1 a. Fix: x.\n  - bar.py:2 b. Fix: y.\nVERDICT: FAIL\n"
     assert [f["where"] for f in neon_review.parse_findings(text)] == ["foo.py:1", "bar.py:2"]
@@ -687,8 +687,9 @@ def test_findings_label_after_spec_rows_ends_the_spec_section():
     sys.path.insert(0, str(ADAPTER_DIR))
     import neon_review
 
-    text = "## Spec rows\n- a: landed\n**Findings**\n- BLOCKER foo.py:10 auth check not landed. Fix: add check.\nCOUNTS: BLOCKER=1 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n"
-    assert neon_review.classify(text)["verdict"] == "FAIL"
+    text = "## Spec rows\n- a: landed\n**Findings**\n- BLOCKER foo.py:10 auth check not landed. Fix: add check.\nVERDICT: FAIL\n"
+    assert [f["severity"] for f in neon_review.parse_findings(text)] == ["BLOCKER"]
+    assert [r["row"] for r in neon_review.parse_spec_rows(text)] == ["a"]
 
 
 def test_pass_without_counts_is_unparsed():
@@ -725,3 +726,32 @@ def test_pass_from_a_crashed_agy_is_not_trusted(env):
     rc, out, _ = review(env, mode="crashpass")
     assert rc == 3
     assert "not trusted" in out["error"]
+
+
+def test_bold_finding_text_is_not_a_section_label():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    got = neon_review.parse_findings("### BLOCKER\n**foo.py:10 drops the cursor.**\nVERDICT: FAIL\n")
+    assert [(f["severity"], f["where"]) for f in got] == [("BLOCKER", "foo.py:10")]
+
+
+def test_gate_exit_2_is_a_result_not_a_failure(env):
+    bad = env["tmp"] / "bin" / "ub-gate"
+    bad.write_text(bad.read_text().replace('if argv[0] == "crap":', 'if argv[0] in ("crap", "dry", "mutate"):\n    print("threshold"); sys.exit(2)\nif False:'))
+    rc, out, _ = review(env, "--depth", "ub")
+    assert rc == 0
+    assert out["gates"]["crap"]["exit"] == 2 and out["gates"]["mutate"][0]["exit"] == 2
+
+
+def test_zero_mutate_timeout_falls_back_to_the_default():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    os.environ["NEON_REVIEW_MUTATE_TIMEOUT"] = "0"
+    try:
+        assert neon_review._env_seconds("NEON_REVIEW_MUTATE_TIMEOUT", 900) == 900
+        os.environ["NEON_REVIEW_MUTATE_TIMEOUT"] = "5"
+        assert neon_review._env_seconds("NEON_REVIEW_MUTATE_TIMEOUT", 900) == 5
+    finally:
+        del os.environ["NEON_REVIEW_MUTATE_TIMEOUT"]

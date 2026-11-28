@@ -59,7 +59,7 @@ _SPEC_SEP_RE = re.compile(r"(?:[:\u2013\u2014]|\s-)\s*[*_`]*(not landed|landed d
 _FILE_RE = re.compile(r"[\w./-]+/[\w.-]+\.[A-Za-z0-9_]+|\b[\w-]+\.(?:py|go|rs|ts|tsx|js|sh|md|json|ya?ml|toml)\b")
 _SPEC_HEAD_RE = re.compile(r"^\s*(?:#{1,6}\s*)?[*_`]*spec\s+(?:rows?|items?|coverage)\b[*_`:]*\s*$", re.I)
 _NONE_RE = re.compile(r"^(?:none|n/?a|nothing|no (?:new )?(?:findings?|issues?)(?: found| identified)?)\W*$", re.I)
-_LABEL_RE = re.compile(r"^\s*(?:[*_]{2}[^*_\n]+[*_]{2}:?|([-*_])(?:\s*\1){2,})\s*$")
+_LABEL_RE = re.compile(r"^\s*(?:[*_]{2}(?![^\n]*\w:\d)[^*_\n]+[*_]{2}:?|([-*_])(?:\s*\1){2,})\s*$")
 _ANY_HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 _SPEC_STATUS_RE = re.compile(r"\b(not landed|landed differently|landed)\b", re.I)
 
