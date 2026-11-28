@@ -391,3 +391,105 @@ def test_media_v2_objects_option_media_input_and_feedback() -> None:
     resp_v.validate(answered)
     with pytest.raises(ValidationError):
         resp_v.validate({**answered, "feedback": {"pins": [{"ref": _ref("4"), "x": 2, "y": 0, "comment": "c"}]}})
+
+
+# The payloads Hearth #895's route test creates and answers
+# (crates/hearth-api/src/routes/decision_media_route_tests.rs), as row_json and
+# responded_event emit them: serde skips empty object fields.
+HEARTH_V2_DUEL = {
+    **REQUESTED_GOLDEN["choice"],
+    "title": "Which cube?",
+    "options": [
+        {"id": "a", "label": "Look A", "media": [{"kind": "model", "src": _ref("a"), "poster": _ref("1"), "label": "A"}]},
+        {"id": "b", "label": "Look B", "media": [{"kind": "sequence", "frames": [_ref("2"), _ref("3")], "fps": 4}]},
+        {"id": "c", "label": "Look C", "media": [
+            {"kind": "compare", "items": [{"src": _ref("1"), "label": "Reference"}, {"src": _ref("4"), "label": "Render"}]},
+            {"kind": "image", "src": _ref("2")},
+        ]},
+    ],
+    "input": ["pins", "rank", "notes", "changes"],
+}
+HEARTH_V2_FEEDBACK = {
+    "rank": ["a", "c", "b"],
+    "notes": {"b": "too fast"},
+    "changes": "rounder edges",
+    "pins": [
+        {"ref": _ref("a"), "option_id": "a", "pos": [0.5, 0.25, -0.5], "normal": [1, 0, 0], "comment": "bevel here"},
+        {"ref": _ref("4"), "option_id": "c", "x": 0.25, "y": 0.75, "comment": "shadow too dark"},
+    ],
+}
+
+
+def _answered(feedback):
+    return {**RESPONDED_GOLDEN[sorted(RESPONDED_GOLDEN)[0]], "feedback": feedback}
+
+
+def test_hearth_v2_payloads_validate() -> None:
+    req_v = _validator("bus.hearth.decision.requested")
+    req_v.validate(HEARTH_V2_DUEL)
+    video = {"kind": "video", "src": _ref("5"), "poster": _ref("6")}
+    req_v.validate({**HEARTH_V2_DUEL, "media": [video, {"kind": "video", "src": _ref("5")}]})
+    part_media = {**HEARTH_V2_DUEL, "input": [], "options": [], "parts": [{
+        "id": "mug", "label": "Mug", "media": ["hearth-media://abc", video],
+        "options": [{"id": "a", "label": "A", "media": [{"kind": "image", "src": _ref("7")}]},
+                    {"id": "b", "label": "B"}],
+    }]}
+    req_v.validate(part_media)
+    resp_v = _validator("bus.hearth.decision.responded")
+    resp_v.validate(_answered(HEARTH_V2_FEEDBACK))
+    resp_v.validate(_answered(None))
+
+
+def test_media_objects_reject_cross_kind_fields_and_trailing_newlines() -> None:
+    v = _validator("bus.hearth.decision.requested")
+    bad = [
+        {"kind": "image", "src": _ref("a"), "frames": [_ref("2"), _ref("3")]},
+        {"kind": "image", "src": _ref("a"), "poster": _ref("1")},
+        {"kind": "image", "src": _ref("a"), "fps": 8},
+        {"kind": "model", "src": _ref("a"), "poster": _ref("1"), "items": [{"src": _ref("4")}, {"src": _ref("5")}]},
+        {"kind": "sequence", "frames": [_ref("2"), _ref("3")], "src": _ref("a")},
+        {"kind": "compare", "items": [{"src": _ref("4")}, {"src": _ref("5")}], "poster": _ref("1")},
+        {"kind": "image", "src": _ref("a") + "\n"},
+        {"kind": "image", "src": _ref("a").upper()},
+    ]
+    for entry in bad:
+        with pytest.raises(ValidationError):
+            v.validate({**HEARTH_V2_DUEL, "options": [{"id": "a", "label": "A", "media": [entry]}]})
+    for top in (_ref("a") + "\n", "https://example.com/x.png\n"):
+        with pytest.raises(ValidationError):
+            v.validate({**HEARTH_V2_DUEL, "media": [top]})
+    five = [{"kind": "image", "src": _ref(c)} for c in "abcde"]
+    with pytest.raises(ValidationError):
+        v.validate({**HEARTH_V2_DUEL, "options": [{"id": "a", "label": "A", "media": five}]})
+    with pytest.raises(ValidationError):
+        v.validate({**HEARTH_V2_DUEL, "input": ["rank", "rank"]})
+
+
+def test_feedback_rejects_unbounded_rank_notes_and_shapeless_pins() -> None:
+    v = _validator("bus.hearth.decision.responded")
+    pin = {"ref": _ref("4"), "comment": "c"}
+    bad = [
+        {"rank": ["a"]},
+        {"rank": ["a", "a", "b"]},
+        {"rank": ["", "b"]},
+        {"rank": [str(i) for i in range(7)]},
+        {"rank": ["a" * 65, "b"]},
+        {"notes": {}},
+        {"notes": {"": "x"}},
+        {"notes": {"a" * 65: "x"}},
+        {"notes": {str(i): "x" for i in range(7)}},
+        {"notes": {"a": ""}},
+        {"pins": [pin]},
+        {"pins": [{**pin, "x": 0.5}]},
+        {"pins": [{**pin, "y": 0.5}]},
+        {"pins": [{**pin, "normal": [0, 1, 0]}]},
+        {"pins": [{**pin, "x": 0.5, "y": 0.5, "normal": [0, 1, 0]}]},
+        {"pins": [{**pin, "x": 0.5, "y": 0.5, "pos": [0, 0, 0]}]},
+        {"pins": [{**pin, "x": 0.5, "y": 0.5, "option_id": ""}]},
+        {"pins": [{**pin, "ref": _ref("4") + "\n", "x": 0.5, "y": 0.5}]},
+    ]
+    for fb in bad:
+        with pytest.raises(ValidationError):
+            v.validate(_answered(fb))
+    v.validate(_answered({"pins": [{**pin, "pos": [0, 0, 0]}]}))
+    v.validate(_answered({"rank": [str(i) for i in range(6)]}))

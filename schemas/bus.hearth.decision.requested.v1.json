@@ -320,143 +320,150 @@
   "$defs": {
     "mediaRef": {
       "type": "string",
-      "minLength": 1,
-      "maxLength": 1024,
-      "pattern": "^hearth-media://[0-9a-f]{64}$"
+      "minLength": 79,
+      "maxLength": 79,
+      "pattern": "^hearth-media://[0-9a-f]{64}(?![\\s\\S])"
     },
     "mediaObject": {
-      "type": "object",
       "description": "A typed media object (decision media v2). Every ref is a hearth-media:// digest already in Hearth's store; nothing is fetched remotely.",
-      "required": [
-        "kind"
-      ],
-      "properties": {
-        "kind": {
-          "enum": [
-            "image",
-            "video",
-            "model",
-            "sequence",
-            "compare"
-          ]
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "src"
+          ],
+          "properties": {
+            "kind": {
+              "const": "image"
+            },
+            "src": {
+              "$ref": "#/$defs/mediaRef"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 80
+            }
+          },
+          "additionalProperties": false
         },
-        "src": {
-          "$ref": "#/$defs/mediaRef"
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "src"
+          ],
+          "properties": {
+            "kind": {
+              "const": "video"
+            },
+            "src": {
+              "$ref": "#/$defs/mediaRef"
+            },
+            "poster": {
+              "$ref": "#/$defs/mediaRef"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 80
+            }
+          },
+          "additionalProperties": false
         },
-        "poster": {
-          "$ref": "#/$defs/mediaRef"
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "src",
+            "poster"
+          ],
+          "properties": {
+            "kind": {
+              "const": "model"
+            },
+            "src": {
+              "$ref": "#/$defs/mediaRef"
+            },
+            "poster": {
+              "$ref": "#/$defs/mediaRef"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 80
+            }
+          },
+          "additionalProperties": false
         },
-        "frames": {
-          "type": "array",
-          "minItems": 2,
-          "maxItems": 72,
-          "items": {
-            "$ref": "#/$defs/mediaRef"
-          }
-        },
-        "fps": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 30
-        },
-        "items": {
-          "type": "array",
-          "minItems": 2,
-          "maxItems": 4,
-          "items": {
-            "type": "object",
-            "required": [
-              "src"
-            ],
-            "properties": {
-              "src": {
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "frames"
+          ],
+          "properties": {
+            "kind": {
+              "const": "sequence"
+            },
+            "frames": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 72,
+              "items": {
                 "$ref": "#/$defs/mediaRef"
-              },
-              "label": {
-                "type": "string",
-                "maxLength": 40
               }
             },
-            "additionalProperties": false
-          }
-        },
-        "label": {
-          "type": "string",
-          "maxLength": 80
-        }
-      },
-      "additionalProperties": false,
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "image"
-              }
+            "fps": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30
+            },
+            "poster": {
+              "$ref": "#/$defs/mediaRef"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 80
             }
           },
-          "then": {
-            "required": [
-              "src"
-            ]
-          }
+          "additionalProperties": false
         },
         {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "video"
+          "type": "object",
+          "required": [
+            "kind",
+            "items"
+          ],
+          "properties": {
+            "kind": {
+              "const": "compare"
+            },
+            "items": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 4,
+              "items": {
+                "type": "object",
+                "required": [
+                  "src"
+                ],
+                "properties": {
+                  "src": {
+                    "$ref": "#/$defs/mediaRef"
+                  },
+                  "label": {
+                    "type": "string",
+                    "maxLength": 40
+                  }
+                },
+                "additionalProperties": false
               }
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 80
             }
           },
-          "then": {
-            "required": [
-              "src"
-            ]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "model"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "src",
-              "poster"
-            ]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "sequence"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "frames"
-            ]
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "kind": {
-                "const": "compare"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "items"
-            ]
-          }
+          "additionalProperties": false
         }
       ]
     },
@@ -466,7 +473,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 1024,
-          "pattern": "^(hearth-media://[0-9a-f]{64}|https://\\S+)$"
+          "pattern": "^(hearth-media://[0-9a-f]{64}|https://\\S+)(?![\\s\\S])"
         },
         {
           "$ref": "#/$defs/mediaObject"

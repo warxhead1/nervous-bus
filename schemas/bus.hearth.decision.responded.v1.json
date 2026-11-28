@@ -115,12 +115,24 @@
       "properties": {
         "rank": {
           "type": "array",
+          "minItems": 2,
+          "maxItems": 6,
+          "uniqueItems": true,
           "items": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
           }
         },
         "notes": {
           "type": "object",
+          "minProperties": 1,
+          "maxProperties": 6,
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
           "additionalProperties": {
             "type": "string",
             "minLength": 1,
@@ -145,12 +157,13 @@
             "properties": {
               "ref": {
                 "type": "string",
-                "minLength": 1,
-                "maxLength": 1024,
-                "pattern": "^hearth-media://[0-9a-f]{64}$"
+                "minLength": 79,
+                "maxLength": 79,
+                "pattern": "^hearth-media://[0-9a-f]{64}(?![\\s\\S])"
               },
               "option_id": {
                 "type": "string",
+                "minLength": 1,
                 "maxLength": 64
               },
               "x": {
@@ -185,7 +198,50 @@
                 "maxLength": 280
               }
             },
-            "additionalProperties": false
+            "additionalProperties": false,
+            "oneOf": [
+              {
+                "description": "2D pin on an image, frame or compare item",
+                "required": [
+                  "x",
+                  "y"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "pos"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "normal"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "description": "3D pin on a model, in model space",
+                "required": [
+                  "pos"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "x"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "y"
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
           }
         }
       },
