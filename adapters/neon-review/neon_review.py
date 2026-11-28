@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -75,7 +76,39 @@ def fail(code: int, msg: str, **extra: Any) -> int:
 
 
 def run(argv: list[str], cwd: Path, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout, errors="replace")
+    """Run argv in its own process group, and on timeout end the whole group.
+
+    subprocess.run's timeout kills only the direct child, so a grandchild
+    (ub-gate's mutator, agy's workers) kept running after the review returned.
+    """
+    with subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, errors="replace", start_new_session=True) as p:
+        try:
+            out, err = p.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _end_group(p)
+            out, err = p.communicate()
+            raise subprocess.TimeoutExpired(argv, timeout, output=out, stderr=err) from None
+        except BaseException:
+            _end_group(p)
+            raise
+    return subprocess.CompletedProcess(argv, p.returncode, out, err)
+
+
+def _end_group(p: subprocess.Popen[str]) -> None:
+    """SIGTERM the group, give the leader 5 s, then SIGKILL whatever is left."""
+    try:
+        os.killpg(p.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        p.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
 def git(repo: Path, *args: str) -> str:

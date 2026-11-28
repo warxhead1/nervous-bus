@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,13 @@ with open(os.environ["FAKE_LOG"], "a") as fh:
     fh.write(json.dumps({"tool": "agy", "argv": argv, "cwd": os.getcwd()}) + "\n")
 mode = os.environ.get("FAKE_AGY_MODE", "pass")
 if mode == "timeout":
+    sys.stdout.write("partial review\n"); sys.stdout.flush()
+    time.sleep(30)
+if mode == "timeout_grandchild":
+    import subprocess
+    kid = subprocess.Popen(["sleep", "30"])
+    with open(os.environ["FAKE_LOG"] + ".kid", "w") as fh:
+        fh.write(str(kid.pid))
     sys.stdout.write("partial review\n"); sys.stdout.flush()
     time.sleep(30)
 if mode == "crashpass":
@@ -194,6 +202,24 @@ def test_timeout_keeps_partial_output_and_exits_1(env):
     assert rc == 1
     assert out["verdict"] == "timeout"
     assert "partial review" in Path(out["raw_path"]).read_text()
+
+
+def test_timeout_kills_the_whole_process_group(env):
+    # A timed-out child used to leave its own children running: a mutator
+    # outlived its review by 26 minutes and held a worktree.
+    rc, out, _ = review(env, "--timeout", "1", mode="timeout_grandchild")
+    assert rc == 1
+    assert out["verdict"] == "timeout"
+    kid = int(Path(str(env["log"]) + ".kid").read_text())
+    for _ in range(20):
+        try:
+            os.kill(kid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    else:
+        os.kill(kid, 9)
+        pytest.fail(f"grandchild {kid} survived the timeout")
 
 
 def test_agy_dead_without_output_is_exit_3(env):
