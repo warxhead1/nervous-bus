@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import signal
 import struct
@@ -156,6 +157,41 @@ def cmd_ref(a) -> int:
 
 # ---------------------------------------------------------------- blend
 
+def gpu_probe() -> None:
+    """Fail fast when the GPU driver does not answer.
+
+    A wedged NVIDIA driver leaves every process that opens /dev/nvidia* in
+    uninterruptible sleep, and blender opens it even for CPU renders. The probe
+    opens the control node in a disposable child. A child that does not finish
+    within FORGE_GPU_PROBE_TIMEOUT seconds is abandoned (it may be unkillable)
+    and never waited on again. FORGE_GPU_DEVICE names the node (a missing node
+    skips the probe); FORGE_GPU_PROBE_CMD replaces the child argv (for tests).
+    """
+    if not Path(os.environ.get("FORGE_GPU_DEVICE", "/dev/nvidiactl")).exists():
+        return
+    override = os.environ.get("FORGE_GPU_PROBE_CMD")
+    dev = os.environ.get("FORGE_GPU_DEVICE", "/dev/nvidiactl")
+    argv = shlex.split(override) if override else [
+        sys.executable, "-I", "-c", "import os,sys; os.close(os.open(sys.argv[1], os.O_RDWR))", dev]
+    try:
+        timeout = float(os.environ.get("FORGE_GPU_PROBE_TIMEOUT", "5"))
+    except ValueError:
+        timeout = 5.0
+    try:
+        p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError as e:
+        raise Fail(f"GPU driver probe could not start: {e}", EXIT_UNREACHABLE)
+    deadline = time.monotonic() + timeout
+    while p.poll() is None:
+        if time.monotonic() >= deadline:
+            raise Fail(f"the GPU driver is not responding (probe did not finish in {timeout:g}s); "
+                       "blender not started", EXIT_UNREACHABLE)
+        time.sleep(0.05)
+    if p.returncode != 0:
+        raise Fail(f"the GPU driver is not responding (probe exited {p.returncode})", EXIT_UNREACHABLE)
+
+
 def blender_cmd(script: Path, args: list[str]) -> list[str]:
     return ["blender", "-b", "--factory-startup", "--python", str(script), "--", *args]
 
@@ -179,6 +215,7 @@ def cmd_blend(a) -> int:
         raise Fail(f"script not found: {script}", EXIT_USAGE)
     if not shutil.which("blender"):
         raise Fail("blender not found on PATH", EXIT_UNREACHABLE)
+    gpu_probe()
     out.mkdir(parents=True, exist_ok=True)
     glb = out / "model.glb"
     if glb.exists():
@@ -236,6 +273,7 @@ def cmd_gate(a) -> int:
     for p in (glb, prof):
         if not p.is_file():
             raise Fail(f"not found: {p}", EXIT_USAGE)
+    gpu_probe()
     rc, so, se, to, secs = run_tool([sys.executable, gate, str(glb), "--profile", str(prof)], a.timeout)
     if to:
         raise Fail(f"mesh_gate timed out after {a.timeout}s")
@@ -263,6 +301,7 @@ def cmd_compare(a) -> int:
         check_png(r)
     if not shutil.which("blender"):
         raise Fail("blender not found on PATH", EXIT_UNREACHABLE)
+    gpu_probe()
     out = Path(a.out).resolve() if a.out else sheet.with_name("compare.png")
     cargs = ["--sheet", str(sheet), "--refs", ",".join(str(r) for r in refs), "--out", str(out)]
     rc, so, se, to, secs = run_tool(blender_cmd(HERE / "forge_compose.py", cargs), a.timeout)

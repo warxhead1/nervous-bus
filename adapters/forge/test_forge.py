@@ -281,3 +281,81 @@ def test_live_cube(tmp_path):
     shutil.copy(out / "views" / "color_front.png", refs / "ref_01.png")
     rc, j, err = forge(e, "compare", out / "sheet.png", refs)
     assert rc == 0, (j, err)
+
+
+# ---------------------------------------------------------------- GPU driver probe
+
+@pytest.fixture()
+def probe_env(env, tmp_path):
+    """env whose blender records every launch; a plain file stands in for /dev/nvidiactl."""
+    calls = tmp_path / "blender_calls"
+    _exe(tmp_path / "bin" / "blender", f"#!/bin/sh\necho called >> {calls}\nexit 1\n")
+    dev = tmp_path / "nvidiactl"
+    dev.write_text("")
+    env["FORGE_GPU_DEVICE"] = str(dev)
+    env["FORGE_GPU_PROBE_TIMEOUT"] = "1"
+    env["FORGE_GPU_PROBE_CMD"] = "true"
+    env["calls"] = str(calls)
+    return env
+
+
+def _blend_args(tmp_path):
+    s = tmp_path / "s.py"
+    s.write_text("# fake\n")
+    return ("blend", "--script", s, "--out", tmp_path / "out")
+
+
+def _run(env, args):
+    return subprocess.run([str(CLI), *map(str, args)], env=env, capture_output=True, text=True, timeout=30)
+
+
+def test_probe_hang_fails_fast_without_blender(probe_env, tmp_path):
+    import time
+    probe_env["FORGE_GPU_PROBE_CMD"] = "sleep 600"
+    t0 = time.monotonic()
+    r = _run(probe_env, _blend_args(tmp_path))
+    assert time.monotonic() - t0 < 3.0
+    assert r.returncode != 0
+    assert "GPU driver is not responding" in r.stderr
+    assert not Path(probe_env["calls"]).exists()
+
+
+def test_probe_hang_guards_compare(probe_env, tmp_path):
+    probe_env["FORGE_GPU_PROBE_CMD"] = "sleep 600"
+    png = tmp_path / "x.png"
+    png.write_bytes(_png())
+    refs = tmp_path / "refs"
+    refs.mkdir()
+    (refs / "ref_01.png").write_bytes(_png())
+    r = _run(probe_env, ("compare", png, refs))
+    assert r.returncode != 0 and "GPU driver is not responding" in r.stderr
+    assert not Path(probe_env["calls"]).exists()
+
+
+def test_probe_hang_guards_gate(probe_env, tmp_path):
+    probe_env["FORGE_GPU_PROBE_CMD"] = "sleep 600"
+    gate = tmp_path / "gate.py"
+    gate.write_text("")
+    probe_env["FORGE_MESH_GATE"] = str(gate)
+    glb = tmp_path / "m.glb"
+    glb.write_text("x")
+    r = _run(probe_env, ("gate", glb, "--profile", glb))
+    assert r.returncode != 0 and "GPU driver is not responding" in r.stderr
+
+
+def test_probe_ok_lets_blender_launch(probe_env, tmp_path):
+    _run(probe_env, _blend_args(tmp_path))
+    assert Path(probe_env["calls"]).read_text().strip() == "called"
+
+
+def test_probe_skipped_without_device_node(probe_env, tmp_path):
+    probe_env["FORGE_GPU_DEVICE"] = str(tmp_path / "absent")
+    probe_env["FORGE_GPU_PROBE_CMD"] = "sleep 600"
+    _run(probe_env, _blend_args(tmp_path))
+    assert Path(probe_env["calls"]).exists()
+
+
+def _png():
+    ns: dict = {}
+    exec(PNG_HELPER, ns)
+    return ns["png"]()
