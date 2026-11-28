@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 from unittest.mock import patch
 
@@ -95,6 +96,13 @@ class BufferedPipeProcess:
 
 
 class GpuReadTests(unittest.TestCase):
+    def setUp(self):
+        empty = tempfile.mkdtemp()
+        self.addCleanup(os.rmdir, empty)
+        patcher = patch("gpu.PROC_ROOT", empty)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_real_pipe_reader_caps_output_and_cleans_up_read_errors(self):
         for failure in ("overflow", "read_error", "success"):
             with self.subTest(failure=failure):
@@ -127,6 +135,40 @@ class GpuReadTests(unittest.TestCase):
                 result = gpu.collect_gpu()
             self.assertEqual((result["state"], result["reason"]), ("unavailable", reason))
         self.assertEqual(gpu.parse_output(b"x" * (gpu.MAX_STDOUT_BYTES + 1))["reason"], "output_limit")
+
+    def _proc_tree(self, entries):
+        root = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        for pid, content in entries.items():
+            os.mkdir(os.path.join(root, pid))
+            if content is not None:
+                with open(os.path.join(root, pid, "stat"), "w") as handle:
+                    handle.write(content)
+        return root
+
+    def test_d_state_nvidia_smi_returns_cleanup_failed_without_spawning(self):
+        root = self._proc_tree({"11": "11 (bash) S 1 1 1 0", "12": "12 (nvidia-smi) D 1 1 1 0",
+                                "gone": None, "13": None})
+        popen = unittest.mock.Mock()
+        result = gpu.run_query(popen=popen, proc_root=root)
+        popen.assert_not_called()
+        self.assertEqual((result["state"], result["reason"], result["attempted"]),
+                         ("unavailable", "cleanup_failed", False))
+        shaped = gpu.collect_gpu(lambda: gpu.run_query(popen=popen, proc_root=root))
+        self.assertEqual((shaped["reason"], shaped["attempted"], shaped["devices"]),
+                         ("cleanup_failed", False, []))
+
+    def test_missing_proc_root_does_not_block_the_query(self):
+        self.assertFalse(gpu.stuck_nvidia_smi(os.path.join(tempfile.gettempdir(), "no-such-proc-root")))
+
+    def test_running_or_absent_nvidia_smi_proceeds_to_popen(self):
+        for entries in ({"12": "12 (nvidia-smi) R 1 1 1 0", "14": "14 (nvidia-smi) D 1) R 1 1"},
+                        {"13": None}, {}):
+            root = self._proc_tree(entries)
+            popen = unittest.mock.Mock(side_effect=FileNotFoundError)
+            result = gpu.run_query(popen=popen, proc_root=root)
+            popen.assert_called_once()
+            self.assertEqual(result["reason"], "unsupported")
 
     def test_stdout_close_does_not_bypass_deadline_and_cleanup_is_bounded(self):
         ticks = [0.0]
@@ -281,6 +323,20 @@ class GpuStoreTests(unittest.TestCase):
         ])
         self.assertEqual(store.db.execute("SELECT COUNT(*) FROM samples").fetchone()[0], len(measurements))
         self.assertEqual(store.db.execute("SELECT COUNT(*) FROM gpu_gauges").fetchone()[0], 3)
+
+    def test_cleanup_failed_event_validates_and_stores_without_an_attempt(self):
+        event, _ = self.sample(1000, gpu.unavailable_gpu("cleanup_failed", attempted=False))
+        self.assertEqual((event["gpu"]["reason"], event["gpu"]["attempted"]), ("cleanup_failed", False))
+        self.assertEqual(event["entities"][0]["gauges"]["memory_current_bytes"], 1024)
+        self.validate(event)
+        store = self.store()
+        store.rollup(1300)
+        store.commit()
+        row = store.db.execute("SELECT state,reason,attempted FROM gpu_batches").fetchone()
+        self.assertEqual(tuple(row), ("unavailable", "cleanup_failed", 0))
+        rolled = store.db.execute("SELECT status_count,attempt_count,unavailable_count "
+                                  "FROM gpu_status_rollups").fetchall()
+        self.assertEqual([tuple(r) for r in rolled], [(1, 0, 1)])
 
     def test_rollup_retention_restart_and_report_are_idempotent(self):
         for ts in (1000, 1060, 1120, 1180, 1240):
