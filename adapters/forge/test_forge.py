@@ -393,7 +393,15 @@ def test_probe_bad_cmd_is_a_json_failure(probe_env, tmp_path, cmd):
     assert not Path(probe_env["calls"]).exists()
 
 
-@pytest.mark.parametrize("val", ["nan", "inf", "-1", "0", "abc"])
+@pytest.mark.parametrize("val", ["nan", "inf"])
+def test_probe_nonfinite_timeout_still_bounds_a_hang(probe_env, tmp_path, val):
+    probe_env["FORGE_GPU_PROBE_TIMEOUT"] = val
+    probe_env["FORGE_GPU_PROBE_CMD"] = "sleep 600"
+    r = _run(probe_env, _blend_args(tmp_path))  # falls back to 5 s
+    assert r.returncode == 3 and not Path(probe_env["calls"]).exists()
+
+
+@pytest.mark.parametrize("val", ["-1", "0", "abc"])
 def test_probe_bad_timeout_falls_back(probe_env, tmp_path, val):
     probe_env["FORGE_GPU_PROBE_TIMEOUT"] = val
     _run(probe_env, _blend_args(tmp_path))
@@ -408,9 +416,10 @@ def test_probe_timeout_kills_killable_child(probe_env, tmp_path):
     pid = int(pidfile.read_text())
     for _ in range(40):
         try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        except FileNotFoundError:
             return
-        # a zombie child of an exited forge is reaped by init; allow a moment
+        if state in ("Z", "X"):  # dead, awaiting a reaper (none in some sandboxes)
+            return
         time.sleep(0.1)
     pytest.fail("probe child still alive after timeout")
