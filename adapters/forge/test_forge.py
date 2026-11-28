@@ -359,6 +359,16 @@ def test_probe_skipped_without_device_node(probe_env, tmp_path):
     assert Path(probe_env["calls"]).exists()
 
 
+def test_probe_device_treats_empty_as_default():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("forge_mod", Path(__file__).with_name("forge.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert m.probe_device({"FORGE_GPU_DEVICE": ""}) == "/dev/nvidiactl"
+    assert m.probe_device({}) == "/dev/nvidiactl"
+    assert m.probe_device({"FORGE_GPU_DEVICE": "/x/y"}) == "/x/y"
+
+
 def _png():
     ns: dict = {}
     exec(PNG_HELPER, ns)

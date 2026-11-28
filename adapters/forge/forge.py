@@ -158,6 +158,11 @@ def cmd_ref(a) -> int:
 
 # ---------------------------------------------------------------- blend
 
+def probe_device(environ) -> str:
+    """The node the probe opens. An empty FORGE_GPU_DEVICE means the default."""
+    return environ.get("FORGE_GPU_DEVICE") or "/dev/nvidiactl"
+
+
 def gpu_probe() -> None:
     """Fail fast when the GPU driver does not answer.
 
@@ -168,10 +173,10 @@ def gpu_probe() -> None:
     and never waited on again. FORGE_GPU_DEVICE names the node (a missing node
     skips the probe); FORGE_GPU_PROBE_CMD replaces the child argv (for tests).
     """
-    if not Path(os.environ.get("FORGE_GPU_DEVICE", "/dev/nvidiactl")).exists():
+    dev = probe_device(os.environ)
+    if not Path(dev).exists():
         return
     override = os.environ.get("FORGE_GPU_PROBE_CMD")
-    dev = os.environ.get("FORGE_GPU_DEVICE", "/dev/nvidiactl")
     try:
         argv = shlex.split(override) if override else [
             sys.executable, "-I", "-c", "import os,sys; os.close(os.open(sys.argv[1], os.O_RDWR))", dev]
