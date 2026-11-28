@@ -93,6 +93,14 @@ class FakeOrca:
             expr = args[args.index("--expression") + 1]
             if "walk" in expr:
                 return json.dumps({"ok": True, "result": {"result": json.dumps({"markdown": self.report})}})
+            if "getAttribute('aria-label')" in expr:  # DOM click by label
+                pat = json.loads(re.search(r"new RegExp\((\".*\")\)", expr).group(1))
+                self.dom_clicks = getattr(self, "dom_clicks", []) + [pat]
+                for role, name, r in dr.parse_snapshot(self._snapshot()):
+                    if role == "button" and re.search(pat, name):
+                        self._click(r)
+                        break
+                return json.dumps({"ok": True, "result": {"result": True}})
             url = "https://gemini.google.com/app"
             if self.phase in ("plan", "running", "done", "done_collapsed", "failed"):
                 url += "/abc123def"
@@ -240,18 +248,18 @@ def test_missing_ui_element_times_out_with_its_name(tmp_path):
         eng.start("q")
 
 
-def test_first_click_swallowed_by_a_fresh_tab_is_retried(tmp_path):
+def test_pointer_clicks_that_miss_fall_back_to_a_dom_click(tmp_path):
     class Swallow(FakeOrca):
-        dropped = False
-
         def _click(self, ref):
-            if not self.dropped:
-                self.dropped = True
-                return
-            super()._click(ref)
+            if getattr(self, "in_dom", False) or ref not in ("@e13", "@e36"):
+                return super()._click(ref)
+
+        def __call__(self, args):
+            self.in_dom = args[0] == "eval"
+            return super().__call__(args)
     _, fake, _ = run_it(tmp_path, runner=Swallow())
-    clicks = [c[2] for c in fake.calls if c[0] == "click"]
-    assert clicks == ["@e13", "@e13", "@e31", "@e36", "@e179"]
+    assert fake.dom_clicks and fake.dom_clicks[0].startswith("^(Upload")
+    assert fake.phase in ("done", "running")
 
 
 def test_deep_research_already_selected_is_not_toggled_off(tmp_path):

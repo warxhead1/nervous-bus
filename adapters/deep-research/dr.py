@@ -232,9 +232,13 @@ def report_card_ref(snapshot):
     return None
 
 
-def find_ref(snapshot, key, table=None):
+def _spec(key, table=None):
     spec = (table or UI)[key]
-    for role, pat in ([spec] if isinstance(spec, tuple) else spec):
+    return [spec] if isinstance(spec, tuple) else spec
+
+
+def find_ref(snapshot, key, table=None):
+    for role, pat in _spec(key, table):
         for r, name, ref in parse_snapshot(snapshot):
             if r == role and re.search(pat, name):
                 return ref
@@ -292,6 +296,14 @@ class OrcaBrowser:
     def fill(self, ref, value):
         self._json(["fill", "--element", ref, "--value", value] + self._p())
 
+    def click_by_name(self, pattern):
+        """DOM click on the first button whose label matches. Fallback for when the pointer click
+        that Orca sends does not reach the page (observed 2026-11-27 on a fresh Gemini tab)."""
+        js = ("(function(re){var b=Array.prototype.find.call(document.querySelectorAll('button,[role=button],[role=menuitem],[role=menuitemcheckbox]'),"
+              "function(x){return re.test(x.getAttribute('aria-label')||x.innerText||'');});"
+              "if(b)b.click();return !!b;})(new RegExp(%s))" % json.dumps(pattern))
+        return self.eval(js)
+
     def eval(self, expression):
         return self._json(["eval", "--expression", expression] + self._p()).get("result", "")
 
@@ -345,39 +357,33 @@ class GeminiWebEngine(Engine):
             return s if find_ref(s, key) else None
         return wait_for(probe, self.step_timeout, self.sleep, self.clock, what=what)
 
-    def _open_tools_menu(self, snap, attempts=3):
-        """Click the tools button until the menu shows. A fresh tab swallows its first click
-        (observed 2026-11-27), so a click with no menu is retried; a menu that opened is never re-clicked."""
-        for _ in range(attempts):
-            self.browser.click(find_ref(snap, "tools"))
+    def _click_until(self, snap, key, done, attempts=3):
+        """Click UI[key] until done(snapshot) holds. Orca's pointer click is sometimes ignored by a
+        fresh Gemini tab (observed 2026-11-27), so attempt 1 is the pointer click and the rest are
+        DOM clicks by label. A click that landed is never repeated: done() is polled for a few
+        seconds first. Returns the snapshot that satisfied done(), or None."""
+        for i in range(attempts):
+            if i == 0:
+                self.browser.click(find_ref(snap, key))
+            else:
+                self.browser.click_by_name(_spec(key)[0][1])
             end = self.clock() + min(self.step_timeout, 8.0)
             while True:
                 snap = self.browser.snapshot()
-                if find_ref(snap, "deep_research"):
+                if done(snap):
                     return snap
                 if self.clock() >= end:
                     break
                 self.sleep(1.0)
-        return self._until("deep_research", "the tools menu entry")
+        return None
 
-    def _send(self, snap, attempts=3):
-        """Click send until the page moves to a conversation URL. A click that Gemini swallowed leaves
-        the send button in place and is retried; once the URL changes the message is out."""
-        for _ in range(attempts):
-            self.browser.click(find_ref(snap, "send"))
-            end = self.clock() + min(self.step_timeout, 10.0)
-            while True:
-                cid = conversation_id(self.browser.url())
-                if cid:
-                    return cid
-                snap = self.browser.snapshot()
-                if not find_ref(snap, "send"):
-                    break  # the button is gone: the message went out, only the URL is late
-                if self.clock() >= end:
-                    break
-                self.sleep(1.0)
-            if not find_ref(snap, "send"):
-                break
+    def _open_tools_menu(self, snap):
+        return (self._click_until(snap, "tools", lambda s: find_ref(s, "deep_research"))
+                or self._until("deep_research", "the tools menu entry"))
+
+    def _send(self, snap):
+        """Click send until the page moves to a conversation URL (the send button stays, disabled)."""
+        self._click_until(snap, "send", lambda s: conversation_id(self.browser.url()))
         return wait_for(lambda: conversation_id(self.browser.url()), self.step_timeout, self.sleep,
                         self.clock, what="the conversation URL")
 
@@ -403,8 +409,8 @@ class GeminiWebEngine(Engine):
             pass  # Gemini kept the research mode selected from an earlier chat; toggling it would switch it off.
         else:
             snap = self._open_tools_menu(snap)
-            b.click(find_ref(snap, "deep_research"))
-            snap = self._until("deep_research_on", "the research-mode chip (mode not selected)")
+            snap = (self._click_until(snap, "deep_research", lambda s: find_ref(s, "deep_research_on"))
+                    or self._until("deep_research_on", "the research-mode chip (mode not selected)"))
         b.fill(find_ref(snap, "prompt"), question)
         snap = self._until("send", "the send button")
         cid = self._send(snap)
