@@ -340,3 +340,54 @@ def test_responded_requires_contract_fields() -> None:
         dropped = {k: val for k, val in base.items() if k != field}
         with pytest.raises(ValidationError, match=field):
             v.validate(dropped)
+
+
+def _ref(c: str) -> str:
+    return "hearth-media://" + c * 64
+
+
+def test_media_v2_objects_option_media_input_and_feedback() -> None:
+    """Decision media v2: typed media objects, per-option media, input modes and
+    the feedback an answer carries (Hearth docs/design/DECISION-MEDIA-V2.md)."""
+    req_v = _validator("bus.hearth.decision.requested")
+    base = REQUESTED_GOLDEN["choice"]
+    duel = {
+        **base,
+        "media": [_ref("0"), {"kind": "image", "src": _ref("9"), "label": "Brief"}],
+        "options": [
+            {"id": "a", "label": "Look A", "media": [{"kind": "model", "src": _ref("a"), "poster": _ref("1")}]},
+            {"id": "b", "label": "Look B", "media": [
+                {"kind": "sequence", "frames": [_ref("2"), _ref("3")], "fps": 8},
+                {"kind": "compare", "items": [{"src": _ref("4"), "label": "Reference"}, {"src": _ref("5")}]},
+            ]},
+        ],
+        "input": ["pins", "rank", "notes", "changes"],
+    }
+    req_v.validate(duel)
+    bad_entries = [
+        {"kind": "model", "src": _ref("a")},  # no poster
+        {"kind": "model", "src": "https://cdn.example/x.glb", "poster": _ref("1")},  # remote
+        {"kind": "sequence", "frames": [_ref("2")]},  # one frame
+        {"kind": "sequence", "frames": [_ref("2"), _ref("3")], "fps": 60},
+        {"kind": "compare", "items": [{"src": _ref("4")}]},
+        {"kind": "hologram", "src": _ref("4")},
+    ]
+    for entry in bad_entries:
+        with pytest.raises(ValidationError):
+            req_v.validate({**duel, "options": [{"id": "a", "label": "A", "media": [entry]}]})
+    with pytest.raises(ValidationError):
+        req_v.validate({**duel, "input": ["sketch"]})
+
+    resp_v = _validator("bus.hearth.decision.responded")
+    answered = {**RESPONDED_GOLDEN[sorted(RESPONDED_GOLDEN)[0]], "feedback": {
+        "rank": ["b", "a"],
+        "notes": {"a": "too glossy"},
+        "changes": "warmer rim light",
+        "pins": [
+            {"ref": _ref("4"), "option_id": "b", "x": 0.42, "y": 0.31, "comment": "seam shows"},
+            {"ref": _ref("a"), "option_id": "a", "pos": [0.1, 0.52, -0.2], "normal": [0, 1, 0], "comment": "thin"},
+        ],
+    }}
+    resp_v.validate(answered)
+    with pytest.raises(ValidationError):
+        resp_v.validate({**answered, "feedback": {"pins": [{"ref": _ref("4"), "x": 2, "y": 0, "comment": "c"}]}})
