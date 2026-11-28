@@ -4,11 +4,11 @@ Generated index of every channel schema in `schemas/*.json`, clustered by domain
 
 Discover from the CLI: `nervous schemas --cluster <name>` filters to one cluster, `nervous schemas --search <keyword>` does a substring match.
 
-**400 channels** across 5 clusters.
+**402 channels** across 5 clusters.
 
 | Cluster | Channels | Scope |
 | --- | --: | --- |
-| [Session Lifecycle](#session-lifecycle) | 25 | agent session lifecycle, heartbeats, thread/run start-stop |
+| [Session Lifecycle](#session-lifecycle) | 27 | agent session lifecycle, heartbeats, thread/run start-stop |
 | [Autobench](#autobench) | 54 | autobench.* evolution loop (case/judge/improver/budget/...) |
 | [Hearth](#hearth) | 55 | hearth-loom PR pipeline, bead lifecycle, loom executions |
 | [Tengine](#tengine) | 42 | tengine shadergen + silo session telemetry |
@@ -22,6 +22,7 @@ _agent session lifecycle, heartbeats, thread/run start-stop_
 | --- | --- |
 | `agent.attention.v1` | agent.attention v1 |
 | `agent.cli.correction.v1` | agent.cli.correction v1 |
+| `agent.lesson.v1` | agent.lesson v1 |
 | `agent.message.v1` | agent.message v1 |
 | `agent.opencode.session.v1` | agent.opencode.session v1 |
 | `agent.session.heartbeat.v1` | agent.session.heartbeat v1 |
@@ -29,6 +30,7 @@ _agent session lifecycle, heartbeats, thread/run start-stop_
 | `agent.session.snapshot.v1` | agent.session.snapshot v1 |
 | `agent.session.v1` | agent.session v1 |
 | `agent.steering.hit.v1` | agent.steering.hit v1 |
+| `agent.tool.span.v1` | agent.tool.span v1 |
 | `bus.agent.activity.v1` | bus.agent.activity v1 |
 | `bus.agent.heartbeat.v1` | bus.agent.heartbeat v1 |
 | `bus.agent.run.closed.v1` | bus.agent.run.closed v1 |

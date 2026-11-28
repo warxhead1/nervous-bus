@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nervous-bus/schemas/agent.lesson.v1.json",
+  "title": "agent.lesson v1",
+  "description": "One lesson learned, in one sentence, with the evidence for it and the rule or fix it produced. Recorded by adapters/lessons. A lesson is a durable finding, not a session log. A newer lesson that replaces an older one names it in supersedes.",
+  "type": "object",
+  "required": ["v", "ts", "lesson_id", "project", "area", "lesson", "evidence"],
+  "properties": {
+    "v": {"const": 1},
+    "ts": {"type": "string", "format": "date-time"},
+    "lesson_id": {"type": "string", "pattern": "^les_[0-9a-f]{12}$"},
+    "project": {"type": "string", "minLength": 1, "maxLength": 100},
+    "area": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$", "maxLength": 60, "description": "Subsystem or topic, lowercase, for filtering (for example ci, build, review)"},
+    "lesson": {"type": "string", "minLength": 1, "maxLength": 300, "description": "One sentence"},
+    "evidence": {"type": "string", "minLength": 1, "maxLength": 300, "description": "A measurement, a link or a commit"},
+    "rule": {"type": "string", "maxLength": 300, "description": "The rule, hook or fix the lesson produced; empty when none yet"},
+    "supersedes": {"type": "string", "pattern": "^les_[0-9a-f]{12}$", "description": "Id of the lesson this one replaces"},
+    "session_id": {"type": "string", "maxLength": 200}
+  },
+  "additionalProperties": false
+}

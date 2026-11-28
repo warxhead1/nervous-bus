@@ -1,0 +1,17 @@
+# Install:
+#   cp adapters/spans/systemd/spans.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now spans.timer
+#   journalctl --user -u spans.service -n 20
+
+[Unit]
+Description=nervous-bus spans scan, every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=spans.service
+
+[Install]
+WantedBy=timers.target
