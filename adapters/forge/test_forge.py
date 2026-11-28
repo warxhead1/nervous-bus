@@ -96,6 +96,7 @@ def env(tmp_path, monkeypatch):
     _exe(bindir / "blender", FAKE_BLENDER)
     e = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", FORGE_NETNS="off")
     e.pop("FORGE_MESH_GATE", None)
+    e["FORGE_GPU_PROBE_CMD"] = "true"  # unit tests never open a real driver
     return e
 
 
@@ -315,7 +316,7 @@ def test_probe_hang_fails_fast_without_blender(probe_env, tmp_path):
     t0 = time.monotonic()
     r = _run(probe_env, _blend_args(tmp_path))
     assert time.monotonic() - t0 < 3.0
-    assert r.returncode != 0
+    assert r.returncode == 3 and json.loads(r.stdout)["ok"] is False
     assert "GPU driver is not responding" in r.stderr
     assert not Path(probe_env["calls"]).exists()
 
@@ -328,7 +329,8 @@ def test_probe_hang_guards_compare(probe_env, tmp_path):
     refs.mkdir()
     (refs / "ref_01.png").write_bytes(_png())
     r = _run(probe_env, ("compare", png, refs))
-    assert r.returncode != 0 and "GPU driver is not responding" in r.stderr
+    assert r.returncode == 3 and json.loads(r.stdout)["ok"] is False
+    assert "GPU driver is not responding" in r.stderr
     assert not Path(probe_env["calls"]).exists()
 
 
@@ -340,7 +342,9 @@ def test_probe_hang_guards_gate(probe_env, tmp_path):
     glb = tmp_path / "m.glb"
     glb.write_text("x")
     r = _run(probe_env, ("gate", glb, "--profile", glb))
-    assert r.returncode != 0 and "GPU driver is not responding" in r.stderr
+    assert "mesh_gate" not in r.stderr
+    assert r.returncode == 3 and json.loads(r.stdout)["ok"] is False
+    assert "GPU driver is not responding" in r.stderr
 
 
 def test_probe_ok_lets_blender_launch(probe_env, tmp_path):
@@ -359,3 +363,54 @@ def _png():
     ns: dict = {}
     exec(PNG_HELPER, ns)
     return ns["png"]()
+
+
+def test_probe_default_opener_runs_against_device_file(probe_env, tmp_path):
+    del probe_env["FORGE_GPU_PROBE_CMD"]
+    _run(probe_env, _blend_args(tmp_path))
+    assert Path(probe_env["calls"]).exists()
+
+
+def test_probe_default_opener_failure_blocks_blender(probe_env, tmp_path):
+    del probe_env["FORGE_GPU_PROBE_CMD"]
+    probe_env["FORGE_GPU_DEVICE"] = str(tmp_path)  # a directory: O_RDWR open fails
+    r = _run(probe_env, _blend_args(tmp_path))
+    assert r.returncode == 3 and "GPU driver is not responding" in r.stderr
+    assert not Path(probe_env["calls"]).exists()
+
+
+def test_probe_nonzero_exit_blocks_blender(probe_env, tmp_path):
+    probe_env["FORGE_GPU_PROBE_CMD"] = "false"
+    r = _run(probe_env, _blend_args(tmp_path))
+    assert r.returncode == 3 and not Path(probe_env["calls"]).exists()
+
+
+@pytest.mark.parametrize("cmd", ["   ", "sh -c 'unclosed"])
+def test_probe_bad_cmd_is_a_json_failure(probe_env, tmp_path, cmd):
+    probe_env["FORGE_GPU_PROBE_CMD"] = cmd
+    r = _run(probe_env, _blend_args(tmp_path))
+    assert r.returncode == 2 and json.loads(r.stdout)["ok"] is False
+    assert not Path(probe_env["calls"]).exists()
+
+
+@pytest.mark.parametrize("val", ["nan", "inf", "-1", "0", "abc"])
+def test_probe_bad_timeout_falls_back(probe_env, tmp_path, val):
+    probe_env["FORGE_GPU_PROBE_TIMEOUT"] = val
+    _run(probe_env, _blend_args(tmp_path))
+    assert Path(probe_env["calls"]).exists()
+
+
+def test_probe_timeout_kills_killable_child(probe_env, tmp_path):
+    import time
+    pidfile = tmp_path / "probe.pid"
+    probe_env["FORGE_GPU_PROBE_CMD"] = f"sh -c 'echo $$ > {pidfile}; exec sleep 600'"
+    _run(probe_env, _blend_args(tmp_path))
+    pid = int(pidfile.read_text())
+    for _ in range(40):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        # a zombie child of an exited forge is reaped by init; allow a moment
+        time.sleep(0.1)
+    pytest.fail("probe child still alive after timeout")

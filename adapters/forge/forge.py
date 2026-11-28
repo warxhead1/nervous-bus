@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import shlex
 import shutil
@@ -171,11 +172,18 @@ def gpu_probe() -> None:
         return
     override = os.environ.get("FORGE_GPU_PROBE_CMD")
     dev = os.environ.get("FORGE_GPU_DEVICE", "/dev/nvidiactl")
-    argv = shlex.split(override) if override else [
-        sys.executable, "-I", "-c", "import os,sys; os.close(os.open(sys.argv[1], os.O_RDWR))", dev]
+    try:
+        argv = shlex.split(override) if override else [
+            sys.executable, "-I", "-c", "import os,sys; os.close(os.open(sys.argv[1], os.O_RDWR))", dev]
+    except ValueError as e:
+        raise Fail(f"FORGE_GPU_PROBE_CMD is not parseable: {e}", EXIT_USAGE)
+    if not argv:
+        raise Fail("FORGE_GPU_PROBE_CMD is empty", EXIT_USAGE)
     try:
         timeout = float(os.environ.get("FORGE_GPU_PROBE_TIMEOUT", "5"))
     except ValueError:
+        timeout = 5.0
+    if not math.isfinite(timeout) or timeout <= 0:
         timeout = 5.0
     try:
         p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -185,8 +193,12 @@ def gpu_probe() -> None:
     deadline = time.monotonic() + timeout
     while p.poll() is None:
         if time.monotonic() >= deadline:
-            raise Fail(f"the GPU driver is not responding (probe did not finish in {timeout:g}s); "
-                       "blender not started", EXIT_UNREACHABLE)
+            try:
+                os.killpg(p.pid, signal.SIGKILL)  # no-op on an unkillable D-state child; never waited on
+            except OSError:
+                pass
+            raise Fail(f"the GPU driver is not responding (probe did not finish in {timeout:g}s)",
+                       EXIT_UNREACHABLE)
         time.sleep(0.05)
     if p.returncode != 0:
         raise Fail(f"the GPU driver is not responding (probe exited {p.returncode})", EXIT_UNREACHABLE)
