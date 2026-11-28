@@ -33,14 +33,14 @@ import re
 diff_path = re.search(r"full diff: (\S+)", prompt).group(1)
 size = os.path.getsize(diff_path)
 body = {
- "pass": "Reviewed %d bytes of diff.\n## Spec rows\n- row one: landed (a.py)\nVERDICT: PASS\n",
+ "pass": "Reviewed %d bytes of diff.\n## Spec rows\n- row one: landed (a.py)\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
  "fail": ("Reviewed %d bytes of diff.\n"
           "BLOCKER spans.py:248 drops the done set at offset zero. Fix: use `same`; test offset zero.\n"
           "- HIGH `lib/x.go:10-12` leaks a path\n  into a label. Fix: slug it.\n"
           "MEDIUM none.py:3 bad exit code.\n"
           "## Spec rows\n- row one: not landed\n- row two: landed differently (b.py)\nVERDICT: FAIL\n"),
  "unparsed": "Reviewed %d bytes of diff.\nLooks fine to me.\n",
- "passwithhigh": "Reviewed %d bytes.\nHIGH a.py:1 real bug. Fix: do it.\nVERDICT: PASS\n",
+ "passwithhigh": "Reviewed %d bytes.\nHIGH a.py:1 real bug. Fix: do it.\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
  "crash": "half a review\\n",
  "headings": "Reviewed %d bytes.\n### BLOCKER\n- a.py:5 first. Fix: one.\n- b.py:6 second. Fix: two.\n### NIT\n- c.py:7 style.\nVERDICT: FAIL\n",
 }[mode]
@@ -360,7 +360,7 @@ def test_findings_after_spec_rows_still_count_and_placeholders_do_not():
         "### BLOCKER\n- None.\n### HIGH\nHIGH: none\n"
         "## Spec rows\n- a: landed (x.py)\n"
         "HIGH foo.py:3 late finding. Fix: do bug-fix-2 now.\n"
-        "VERDICT: PASS\n"
+        "COUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n"
     )
     got = neon_review.parse_findings(text)
     assert [(f["severity"], f["where"], f["fix"]) for f in got] == [("HIGH", "foo.py:3", "do bug-fix-2 now")]
@@ -406,6 +406,7 @@ def test_spec_rows_are_not_findings_and_status_follows_the_separator():
         "## Spec rows\n"
         "- BLOCKER override flips PASS to FAIL: landed (neon_review.py:372)\n"
         "- Add CLI wiring: not landed (helper landed in bar.py)\n"
+        "COUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\n"
         "VERDICT: PASS\n"
     )
     assert neon_review.parse_findings(text) == []
@@ -463,7 +464,7 @@ def test_findings_after_a_spec_section_heading_survive_status_words():
     sys.path.insert(0, str(ADAPTER_DIR))
     import neon_review
 
-    text = "## Spec rows\n- a: landed (x.py)\n### BLOCKER\n- y.py:2 broke it, not landed. Fix: redo.\nVERDICT: PASS\n"
+    text = "## Spec rows\n- a: landed (x.py)\n### BLOCKER\n- y.py:2 broke it, not landed. Fix: redo.\nCOUNTS: BLOCKER=1 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n"
     assert [f["severity"] for f in neon_review.parse_findings(text)] == ["BLOCKER"]
     assert neon_review.classify(text)["verdict"] == "FAIL"
     rows = neon_review.parse_spec_rows("## Spec rows\n- Add wiring: **not landed** (helper landed in bar.py)\nVERDICT: FAIL\n")
@@ -507,9 +508,9 @@ def test_dotfile_where_and_head_only_closes_spec_rows():
 
 
 @pytest.mark.parametrize("text", [
-    "BLOCKER:\n- foo.py:10 drops cursor. Fix: keep it.\nVERDICT: PASS\n",
-    "### BLOCKER\n  - foo.py:10 drops cursor. Fix: keep it.\nVERDICT: PASS\n",
-    "HIGH\nsomething odd happened in foo.py\nVERDICT: PASS\n",
+    "BLOCKER:\n- foo.py:10 drops cursor. Fix: keep it.\nCOUNTS: BLOCKER=1 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
+    "### BLOCKER\n  - foo.py:10 drops cursor. Fix: keep it.\nCOUNTS: BLOCKER=1 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
+    "HIGH\nsomething odd happened in foo.py\nCOUNTS: BLOCKER=1 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
 ])
 def test_blocking_findings_in_any_layout_never_pass(text):
     sys.path.insert(0, str(ADAPTER_DIR))
@@ -520,7 +521,7 @@ def test_blocking_findings_in_any_layout_never_pass(text):
 
 
 @pytest.mark.parametrize("text", [
-    "No findings.\n### BLOCKER\n- None.\n### HIGH\nnone\n## Spec rows\n- BLOCKER flip: landed (a.py:3)\nVERDICT: PASS\n",
+    "No findings.\n### BLOCKER\n- None.\n### HIGH\nnone\n## Spec rows\n- BLOCKER flip: landed (a.py:3)\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
 ])
 def test_clean_pass_stays_a_pass(text):
     sys.path.insert(0, str(ADAPTER_DIR))
@@ -587,11 +588,11 @@ def test_preexisting_gate_output_is_left_alone_and_new_output_removed(env):
 
 
 @pytest.mark.parametrize("text", [
-    "### BLOCKER (0)\n- None.\nVERDICT: PASS\n",
-    "### HIGH findings\n- None.\nVERDICT: PASS\n",
-    "**BLOCKER**\n**HIGH**\n- None.\nVERDICT: PASS\n",
-    "BLOCKER:\nSpec rows\n- item: landed\nVERDICT: PASS\n",
-    "BLOCKER\nVERDICT: PASS\n",
+    "### BLOCKER (0)\n- None.\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
+    "### HIGH findings\n- None.\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
+    "**BLOCKER**\n**HIGH**\n- None.\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
+    "BLOCKER:\nSpec rows\n- item: landed\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
+    "BLOCKER\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
 ])
 def test_empty_severity_headings_do_not_flip_a_pass(text):
     sys.path.insert(0, str(ADAPTER_DIR))
@@ -615,15 +616,15 @@ def test_mixed_case_numbered_and_indented_layouts():
     sys.path.insert(0, str(ADAPTER_DIR))
     import neon_review
 
-    assert neon_review.classify("### High\nsomething is wrong in foo.py\nVERDICT: PASS\n")["verdict"] == "FAIL"
-    assert neon_review.classify("### BLOCKER\n1. None.\nVERDICT: PASS\n")["verdict"] == "PASS"
+    assert neon_review.classify("### High\nsomething is wrong in foo.py\nCOUNTS: BLOCKER=1 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n")["verdict"] == "FAIL"
+    assert neon_review.classify("### BLOCKER\n1. None.\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n")["verdict"] == "PASS"
     text = "### BLOCKER\n  BLOCKER foo.py:1 a. Fix: x.\n  - bar.py:2 b. Fix: y.\nVERDICT: FAIL\n"
     assert [f["where"] for f in neon_review.parse_findings(text)] == ["foo.py:1", "bar.py:2"]
 
 
 @pytest.mark.parametrize("text", [
-    "High-level summary: all checks pass.\n- High test coverage.\nVERDICT: PASS\n",
-    "### BLOCKER\n- None.\n**Questions**\n- is foo.py:10 intended?\nVERDICT: PASS\n",
+    "High-level summary: all checks pass.\n- High test coverage.\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
+    "### BLOCKER\n- None.\n**Questions**\n- is foo.py:10 intended?\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
 ])
 def test_prose_and_question_labels_do_not_flip_a_pass(text):
     sys.path.insert(0, str(ADAPTER_DIR))
@@ -641,8 +642,8 @@ def test_plain_paragraph_findings_under_a_heading_are_parsed():
 
 
 @pytest.mark.parametrize("text", [
-    "### MEDIUM\n- foo.py:10 minor thing. Fix: do x.\n### NIT\n- bar.py:2 style.\nVERDICT: PASS\n",
-    "### BLOCKER\n**Questions**\n- is foo.py:10 intended?\nVERDICT: PASS\n",
+    "### MEDIUM\n- foo.py:10 minor thing. Fix: do x.\n### NIT\n- bar.py:2 style.\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
+    "### BLOCKER\n**Questions**\n- is foo.py:10 intended?\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
 ])
 def test_non_blocking_sections_and_labels_keep_a_pass(text):
     sys.path.insert(0, str(ADAPTER_DIR))
@@ -669,8 +670,8 @@ def test_mutate_keeps_every_site_line_not_only_the_tail(env):
 
 
 @pytest.mark.parametrize("text", [
-    "### BLOCKER findings (0)\n- None.\nVERDICT: PASS\n",
-    "### BLOCKER\n- None.\n---\nSummary: all checks passed.\nVERDICT: PASS\n",
+    "### BLOCKER findings (0)\n- None.\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
+    "### BLOCKER\n- None.\n---\nSummary: all checks passed.\nCOUNTS: BLOCKER=0 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
 ])
 def test_count_headings_and_rules_keep_a_pass(text):
     sys.path.insert(0, str(ADAPTER_DIR))
@@ -683,5 +684,35 @@ def test_findings_label_after_spec_rows_ends_the_spec_section():
     sys.path.insert(0, str(ADAPTER_DIR))
     import neon_review
 
-    text = "## Spec rows\n- a: landed\n**Findings**\n- BLOCKER foo.py:10 auth check not landed. Fix: add check.\nVERDICT: PASS\n"
+    text = "## Spec rows\n- a: landed\n**Findings**\n- BLOCKER foo.py:10 auth check not landed. Fix: add check.\nCOUNTS: BLOCKER=1 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n"
     assert neon_review.classify(text)["verdict"] == "FAIL"
+
+
+def test_pass_without_counts_is_unparsed():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    assert neon_review.classify("All good.\nVERDICT: PASS\n")["verdict"] == "unparsed"
+
+
+@pytest.mark.parametrize("text", [
+    "### BLOCKER\n**foo.py:10 drops the cursor.**\nCOUNTS: BLOCKER=1 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
+    "- **BLOCKER**:\n  - foo.py:10 drops cursor. Fix: keep it.\nCOUNTS: BLOCKER=1 HIGH=0 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
+    "anything at all\nCOUNTS: BLOCKER=0 HIGH=2 MEDIUM=0 NIT=0\nVERDICT: PASS\n",
+])
+def test_reviewer_counts_fail_a_pass_whatever_the_layout(text):
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    result = neon_review.classify(text)
+    assert result["verdict"] == "FAIL"
+    assert "reviewer_counts" in result
+
+
+def test_counts_line_needs_all_four_severities_and_url_ports_are_not_locations():
+    sys.path.insert(0, str(ADAPTER_DIR))
+    import neon_review
+
+    assert neon_review.parse_counts("COUNTS: BLOCKER=0 HIGH=0\n") is None
+    got = neon_review.parse_findings("HIGH https://example.com:8080/api leaks token in auth.py:42. Fix: redact.\nVERDICT: FAIL\n")
+    assert got[0]["where"] == "auth.py:42"

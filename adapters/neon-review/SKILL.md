@@ -24,7 +24,8 @@ A branch in rapid development merges once this returns `"verdict": "PASS"`. It b
 
 | Field | Meaning |
 |---|---|
-| `verdict` | `PASS`, `FAIL`, `unparsed` (no final `VERDICT:` line), or `timeout` |
+| `verdict` | `PASS`, `FAIL`, `unparsed` (no final `VERDICT:` line, or PASS without a `COUNTS:` line), or `timeout` |
+| `reviewer_counts` | the reviewer's own `COUNTS:` tally, which fails a PASS that reports any BLOCKER or HIGH whatever the layout |
 | `findings[]` | `severity` (BLOCKER, HIGH, MEDIUM, NIT), `claim`, `where` (file:line), `fix` |
 | `spec_rows[]` | `row`, `status` (landed, not landed, landed differently), `detail` |
 | `raw_path` | the full review text, kept outside the checkout |
@@ -32,7 +33,7 @@ A branch in rapid development merges once this returns `"verdict": "PASS"`. It b
 
 Exit codes: `0` PASS, `1` FAIL, `unparsed` or `timeout`, `2` usage, `3` agy (or `ub-gate` at `ub` depth) unreachable.
 
-`unparsed` and `timeout` are never a pass. Read `raw_path`, then rerun. A reviewer PASS that lists any BLOCKER or HIGH finding is reported as FAIL with a `note`.
+`unparsed` and `timeout` are never a pass. Read `raw_path`, then rerun. A reviewer PASS that lists any BLOCKER or HIGH finding, or whose `COUNTS:` line reports one, is reported as FAIL with a `note`. `findings[]` comes from a layout parser and is best effort, so read `raw_path` when it looks short.
 
 ## The loop
 

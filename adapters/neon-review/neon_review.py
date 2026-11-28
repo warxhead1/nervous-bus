@@ -31,7 +31,7 @@ GATE_TIMEOUT_S = 600
 
 def _env_seconds(name: str, default: int) -> int:
     raw = os.environ.get(name, "")
-    return int(raw) if raw.isdigit() and int(raw) > 0 else default
+    return int(raw) if raw.isascii() and raw.isdigit() and int(raw) > 0 else default
 
 
 MUTATE_TIMEOUT_S = _env_seconds("NEON_REVIEW_MUTATE_TIMEOUT", 900)
@@ -51,7 +51,7 @@ _HEAD_ONLY_RE = re.compile(
 )
 _ITEM_RE = re.compile(r"^(?P<indent> *)(?:[-*+]\s+|\d+[.)]\s+)(?P<body>.*\S)")
 _WHERE_RES = (
-    re.compile(r"(?<![\w/.-])[\w./-]*[\w-]\.[A-Za-z0-9_]+:\d+(?:[-,]\d+)*"),
+    re.compile(r"(?<![\w/.:-])[\w./-]*[\w-]\.[A-Za-z0-9_]+:\d+(?:[-,]\d+)*(?![\w/])"),
     re.compile(r"(?<![\w/.-])\.[\w-][\w./-]*:\d+(?:[-,]\d+)*"),
     re.compile(r"(?<![\w/.-])[\w.-]+(?:/[\w.-]+)+:\d+(?:[-,]\d+)*"),
 )
@@ -236,7 +236,8 @@ def build_prompt(rubric: str, depth: str, base: str, files: dict[str, Path], rep
     lines += [
         "Output format: one finding per line, `SEVERITY file:line claim. Fix: fix and test.`,",
         "then a section headed `Spec rows` with one `- item: landed|not landed|landed differently (where)` per row,",
-        "then the single last line `VERDICT: PASS` or `VERDICT: FAIL`.",
+        "then the line `COUNTS: BLOCKER=<n> HIGH=<n> MEDIUM=<n> NIT=<n>` with your own tally of the findings above,",
+        "then the single last line `VERDICT: PASS` or `VERDICT: FAIL`. PASS requires BLOCKER=0 and HIGH=0.",
         "Do not edit, commit or reset anything on the branch. Remove build or gate output you create.",
     ]
     return "\n".join(lines) + "\n"
@@ -298,7 +299,7 @@ class _Collector:
             self.flush()
             self.in_spec, self.section = True, None
             return
-        if _VERDICT_RE.match(line):
+        if _VERDICT_RE.match(line) or _COUNTS_RE.match(line):
             self.flush()
             self.section = None
             return
@@ -442,47 +443,36 @@ def run_agy(cmd: list[str], repo: Path, timeout: int) -> tuple[str, int, str, bo
         return raw, -1, "", True
 
 
-_SEV_LINE_RE = re.compile(_PREFIX + r"(?:BLOCKER|HIGH)\b[*_`\])]*\s*(?:[:\-\u2013\u2014]|\.(?=\s))?\s*(.*)$")
+_COUNTS_RE = re.compile(r"^[\s*_`>#-]*COUNTS:\s*(.*?)[\s*_`]*$", re.I)
 
 
-def _next_content(lines: list[str], i: int) -> str:
-    """The first line after a bare severity heading, or "" when the next block starts."""
-    nxt = next((n.strip() for n in lines[i + 1:] if n.strip()), "")
-    if any(r.match(nxt) for r in (_VERDICT_RE, _ANY_HEADING_RE, _SPEC_HEAD_RE, _HEAD_ONLY_RE, _LABEL_RE)):
-        return ""
-    return re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", nxt)
-
-
-def hidden_blocking(raw: str) -> bool:
-    """True when a BLOCKER or HIGH line carries content the findings parser may have missed."""
-    lines, in_spec = raw.splitlines(), False
-    for i, line in enumerate(lines):
-        if _SPEC_HEAD_RE.match(line):
-            in_spec = True
-        elif _ANY_HEADING_RE.match(line) or _HEAD_ONLY_RE.match(line) or _LABEL_RE.match(line):
-            in_spec = False
-        m = _SEV_LINE_RE.match(line)
-        head = _HEAD_ONLY_RE.match(line)
-        if head and (head.group(1) or head.group(2)).upper() not in BLOCKING:
-            continue
-        if in_spec or not (m or head) or _VERDICT_RE.match(line):
-            continue
-        text = (_next_content(lines, i) if head else m.group(1)).strip(" \t*_`:.")
-        if text and not _NONE_RE.match(text):
-            return True
-    return False
+def parse_counts(raw: str) -> dict[str, int] | None:
+    """The reviewer's own tally from its last COUNTS line, which does not depend on layout."""
+    for line in reversed(raw.splitlines()):
+        m = _COUNTS_RE.match(line)
+        if m:
+            found = {k.upper(): int(v) for k, v in re.findall(r"(BLOCKER|HIGH|MEDIUM|NIT)\s*=\s*(\d+)", m.group(1), re.I)}
+            return found if set(found) == set(SEVERITIES) else None
+    return None
 
 
 def classify(raw: str) -> dict[str, Any]:
+    """A PASS needs a COUNTS line with no BLOCKER or HIGH, and no parsed blocking finding."""
     verdict = parse_verdict(raw)
     findings = parse_findings(raw)
+    stated = parse_counts(raw)
     note = None
+    blocking = any(f["severity"] in BLOCKING for f in findings) or any(stated and stated[k] for k in BLOCKING)
     if verdict is None:
         verdict, note = "unparsed", "no final VERDICT line"
-    elif verdict == "PASS" and (any(f["severity"] in BLOCKING for f in findings) or hidden_blocking(raw)):
-        verdict, note = "FAIL", "reviewer said PASS but listed BLOCKER or HIGH findings"
+    elif verdict == "PASS" and stated is None:
+        verdict, note = "unparsed", "PASS without a COUNTS line"
+    elif verdict == "PASS" and blocking:
+        verdict, note = "FAIL", "reviewer said PASS but reported BLOCKER or HIGH findings"
     counts = {sev: sum(1 for f in findings if f["severity"] == sev) for sev in SEVERITIES}
     result: dict[str, Any] = {"verdict": verdict, "findings": findings, "spec_rows": parse_spec_rows(raw), "counts": counts}
+    if stated is not None:
+        result["reviewer_counts"] = stated
     if note:
         result["note"] = note
     return result
