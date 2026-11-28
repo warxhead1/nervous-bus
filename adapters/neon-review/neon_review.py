@@ -92,8 +92,9 @@ def run(argv: list[str], cwd: Path, timeout: float | None = None) -> subprocess.
             out, err = _drain(p)
             raise subprocess.TimeoutExpired(argv, timeout, output=out, stderr=err) from None
         except BaseException:
+            # Popen.__exit__ closes the pipes and reaps; draining here would
+            # only delay the exit when a detached grandchild holds them.
             _end_group(p)
-            _drain(p)
             raise
     return subprocess.CompletedProcess(argv, p.returncode, out, err)
 
@@ -612,5 +613,7 @@ def finish(args: argparse.Namespace, out_path: Path, work: Path, gates: dict[str
 
 if __name__ == "__main__":
     for _sig in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(_sig, _exit_on_signal)
+        # Keep an inherited SIG_IGN, so a run under nohup survives a hangup.
+        if signal.getsignal(_sig) is not signal.SIG_IGN:
+            signal.signal(_sig, _exit_on_signal)
     sys.exit(main())

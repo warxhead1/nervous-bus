@@ -277,16 +277,22 @@ def test_sigterm_to_neon_review_ends_its_child_group(env):
         pytest.fail(f"grandchild {kid} survived SIGTERM to neon-review")
 
 
-def test_run_returns_when_a_detached_grandchild_holds_the_pipes(monkeypatch):
+def test_run_returns_when_a_detached_grandchild_holds_the_pipes(monkeypatch, tmp_path):
     sys.path.insert(0, str(ADAPTER_DIR))
     import neon_review as nr
     monkeypatch.setattr(nr, "GROUP_GRACE_S", 0.2)
     monkeypatch.setattr(nr, "GROUP_DRAIN_S", 0.5)
-    script = "import subprocess,time; subprocess.Popen(['sleep','30'], start_new_session=True); time.sleep(30)"
+    pidfile = tmp_path / "detached.pid"
+    script = ("import subprocess,sys,time; k = subprocess.Popen(['sleep','30'], start_new_session=True); "
+              "open(sys.argv[1], 'w').write(str(k.pid)); time.sleep(30)")
     t0 = time.monotonic()
-    with pytest.raises(subprocess.TimeoutExpired):
-        nr.run([sys.executable, "-c", script], Path.cwd(), timeout=0.5)
-    assert time.monotonic() - t0 < 5
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            nr.run([sys.executable, "-c", script, str(pidfile)], Path.cwd(), timeout=0.5)
+        assert time.monotonic() - t0 < 5
+    finally:
+        if pidfile.exists() and pidfile.read_text().strip():
+            _reap(int(pidfile.read_text()))
 
 
 def test_agy_dead_without_output_is_exit_3(env):
