@@ -56,8 +56,8 @@ What is the CloudEvents spec's required attribute set? Cite the spec. - Google G
                         - LineBreak "\n"
                   - generic
                     - group
-                      - button "Open mode picker, currently Neon" [expanded=false, ref=e18]
-                        - StaticText "Neon"
+                      - button "Open mode picker, currently Fast" [expanded=false, ref=e18]
+                        - StaticText "Fast"
                     - generic
                       - button "Dictate (^⇧D)" [ref=e24]
                   - button "Sources, Google Search selected" [expanded=false, ref=e37]

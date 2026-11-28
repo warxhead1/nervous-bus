@@ -11,14 +11,14 @@ Google Gemini — https://gemini.google.com/app
               - StaticText "Where should we start?"
             - group "Suggested prompts"
               - generic
-                - button "Retail options strategy pockets" [ref=e20]
-                  - StaticText "Retail options strategy pockets"
+                - button "Plan a weekend trip" [ref=e20]
+                  - StaticText "Plan a weekend trip"
               - generic
-                - button "Find the subject that I'm best at" [ref=e21]
-                  - StaticText "Find the subject that I'm best at"
+                - button "Explain a topic simply" [ref=e21]
+                  - StaticText "Explain a topic simply"
               - generic
-                - button "Brainstorm consulting names" [ref=e22]
-                  - StaticText "Brainstorm consulting names"
+                - button "Write a short poem" [ref=e22]
+                  - StaticText "Write a short poem"
           - generic
             - status
             - generic
@@ -35,12 +35,10 @@ Google Gemini — https://gemini.google.com/app
                         - LineBreak "\n"
                   - generic
                     - group
-                      - button "Open mode picker, currently Neon" [expanded=false, ref=e18]
-                        - StaticText "Neon"
+                      - button "Open mode picker, currently Fast" [expanded=false, ref=e18]
+                        - StaticText "Fast"
                     - generic
                       - button "Dictate (^⇧D)" [ref=e24]
-                  - button "Sources, Google Search selected" [expanded=false, ref=e37]
-                    - StaticText "Sources"
                   - button "Files" [ref=e39]
                     - StaticText "Files"
             - paragraph

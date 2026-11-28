@@ -94,11 +94,13 @@ class FakeOrca:
             if "walk" in expr:
                 return json.dumps({"ok": True, "result": {"result": json.dumps({"markdown": self.report})}})
             if "getAttribute('aria-label')" in expr:  # DOM click by label
-                pat = json.loads(re.search(r"new RegExp\((\".*\")\)", expr).group(1))
-                self.dom_clicks = getattr(self, "dom_clicks", []) + [pat]
-                for role, name, r in dr.parse_snapshot(self._snapshot()):
-                    if role == "button" and re.search(pat, name):
-                        self._click(r)
+                pats = json.loads(re.search(r"\}\)\((\[.*\])\)$", expr).group(1))
+                self.dom_clicks = getattr(self, "dom_clicks", []) + [pats]
+                for pat in pats:
+                    hit = next((r for role, name, r in dr.parse_snapshot(self._snapshot())
+                                if role in ("button", "menuitem", "menuitemcheckbox") and re.search(pat, name.strip())), None)
+                    if hit:
+                        self._click(hit)
                         break
                 return json.dumps({"ok": True, "result": {"result": True}})
             url = "https://gemini.google.com/app"
@@ -251,14 +253,15 @@ def test_missing_ui_element_times_out_with_its_name(tmp_path):
 def test_pointer_clicks_that_miss_fall_back_to_a_dom_click(tmp_path):
     class Swallow(FakeOrca):
         def _click(self, ref):
-            if getattr(self, "in_dom", False) or ref not in ("@e13", "@e36"):
+            if getattr(self, "in_dom", False) or ref not in ("@e13", "@e31", "@e36", "@e179"):
                 return super()._click(ref)
 
         def __call__(self, args):
             self.in_dom = args[0] == "eval"
             return super().__call__(args)
     _, fake, _ = run_it(tmp_path, runner=Swallow())
-    assert fake.dom_clicks and fake.dom_clicks[0].startswith("^(Upload")
+    flat = [p for pats in fake.dom_clicks for p in pats]
+    assert any(p.startswith("^(Upload") for p in flat)
     assert fake.phase in ("done", "running")
 
 
@@ -303,7 +306,56 @@ def test_drifted_2026_11_27_ui_is_found_by_role_and_name():
 
 
 def test_pre_drift_chip_is_still_recognised():
-    assert dr.find_ref(snap("legacy_composer_dr"), "deep_research_on")
+    legacy = snap("legacy_composer_dr")
+    assert "Sources" not in legacy
+    ref = dr.find_ref(legacy, "deep_research_on")
+    assert ref == "@e38" and "Deselect" in next(n for _, n, r in dr.parse_snapshot(legacy) if r == ref)
+
+
+def test_tools_button_matches_both_labels():
+    for label in ("Upload & tools", "Tools"):
+        s = f'- button "{label}" [expanded=false, ref=e1]'
+        assert dr.find_ref(s, "tools") == "@e1"
+
+
+def test_fixtures_carry_no_personal_data():
+    banned = re.compile(r"Google Account|/home/|Neon|Retail options|Find the subject|Brainstorm consulting"
+                        r"|[\w.+-]+@[\w-]+\.[a-z]{2,}", re.I)
+    for f in FIX.iterdir():
+        if f.suffix == ".json":
+            continue  # report text is public document content
+        assert not banned.search(f.read_text()), f.name
+
+
+def test_menu_item_already_checked_is_not_clicked(tmp_path):
+    class Checked(FakeOrca):
+        def _snapshot(self):
+            s = super()._snapshot()
+            return s.replace('"Deep research" [checked=false', '"Deep research" [checked=true') \
+                if self.phase == "tools_menu" else s
+    assert dr.is_checked(Checked()._snapshot().replace('"Deep research" [checked=false', '"Deep research" [checked=true')
+                         if False else snap("tools_menu").replace('"Deep research" [checked=false',
+                                                                   '"Deep research" [checked=true'), "deep_research")
+    assert not dr.is_checked(snap("tools_menu"), "deep_research")
+    _, fake, _ = run_it(tmp_path, runner=Checked())
+    clicks = [c[2] for c in fake.calls if c[0] == "click"]
+    assert "@e31" not in clicks and "@e36" in clicks and fake.filled
+
+
+def test_slow_conversation_url_never_sends_twice(tmp_path):
+    class SlowUrl(FakeOrca):
+        urls = 0
+
+        def __call__(self, args):
+            if args[0] == "eval" and "location.href" in args[args.index("--expression") + 1]:
+                self.urls += 1
+                if self.urls < 25:  # the URL lags the click past the 8 s window
+                    return json.dumps({"ok": True, "result": {"result": "https://gemini.google.com/app"}})
+            return super().__call__(args)
+    _, fake, _ = run_it(tmp_path, cfg=dict(CFG, step_timeout=120.0), runner=SlowUrl())
+    sends = [c for c in fake.calls if c[0] == "click" and c[2] == "@e36"]
+    sends += [c for c in fake.calls if c[0] == "eval" and "Send message" in " ".join(c)]
+    assert len(sends) == 1
 
 
 def test_tab_is_made_active_after_open(tmp_path):
