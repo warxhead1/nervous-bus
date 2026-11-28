@@ -2,50 +2,50 @@ page: PAGE
 Google Gemini — https://gemini.google.com/app
 - generic
   - main
-    - link "Gemini - new chat" [ref=e2]
-      - StaticText "Gemini"
+    - region "Side Navigation" [ref=e1]
+      - generic
+        - navigation "Main actions menu" [ref=e2]
+          - link "New chat" [ref=e7]
+        - navigation "Additional actions menu" [ref=e3]
+          - link "Search chats" [ref=e8]
+          - link "Library" [ref=e9]
+          - link "Images" [ref=e10]
+          - link "Scheduled" [ref=e11]
+          - link "Daily brief" [ref=e12]
+      - group
+        - button "Settings" [expanded=false, ref=e6]
     - generic
       - generic
+        - heading "Where should we start?" [level=1, ref=e16]
+          - StaticText "Where should we start?"
+        - group "Suggested prompts"
+          - generic
+            - button "Plan a date night I'd actually love" [ref=e17]
+              - StaticText "Plan a date night I'd actually love"
+          - generic
+            - button "Suggest fun icebreaker questions" [ref=e18]
+              - StaticText "Suggest fun icebreaker questions"
+          - generic
+            - button "Write a letter to my future self" [ref=e19]
+              - StaticText "Write a letter to my future self"
       - generic
+        - status
         - generic
           - generic
             - generic
-              - heading "Where should we start?" [level=1, ref=e137]
-                - StaticText "Where should we start?"
-              - group "Suggested prompts"
-                - generic
-                  - button "Troubleshooting my bidet install" [ref=e138]
-                    - StaticText "Troubleshooting my bidet install"
-                - generic
-                  - button "Modeling market shock diffusion" [ref=e139]
-                    - StaticText "Modeling market shock diffusion"
-                - generic
-                  - button "Design a poster based on my taste" [ref=e140]
-                    - StaticText "Design a poster based on my taste"
-          - generic
-            - status
-            - generic
+              - button "Upload & tools" [expanded=false, ref=e13]
               - generic
-                - generic
-                  - button "Upload & tools" [expanded=false, ref=e132]
-                  - generic
-                    - textbox "Enter a prompt for Gemini" [ref=e141]: 
+                - textbox "Enter a prompt for Gemini" [ref=e20]: 
 
-                      - StaticText "Type @ for connectors, skills and more"
-                      - paragraph
-                        - LineBreak "\n"
-                  - generic
-                    - group
-                      - button "Open mode picker, currently Neon" [expanded=false, ref=e135]
-                        - StaticText "Neon"
-                    - generic
-                      - button "Dictate (^⇧D)" [ref=e142]
-              - group
-                - generic
-                  - button "Chat" [ref=e133]
-                    - StaticText "Chat"
-                  - button "Task" [ref=e134]
-                    - StaticText "Task"
-            - paragraph
-              - LineBreak "\n"
-    - button "Turn on temporary chat" [ref=e7]
+                  - StaticText "Ask Gemini"
+                  - paragraph
+                    - LineBreak "\n"
+              - generic
+                - button "Dictate (^⇧D)" [ref=e21]
+          - group
+            - generic
+              - button "Chat" [ref=e14]
+                - StaticText "Chat"
+              - button "Task" [ref=e15]
+                - StaticText "Task"
+    - button "Turn on temporary chat" [ref=e5]

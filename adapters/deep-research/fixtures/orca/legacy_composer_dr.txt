@@ -1,0 +1,46 @@
+page: PAGE
+Google Gemini — https://gemini.google.com/app
+- generic
+  - main
+    - generic
+      - generic
+      - generic
+        - generic
+          - generic
+            - heading "Where should we start?" [level=1, ref=e19]
+              - StaticText "Where should we start?"
+            - group "Suggested prompts"
+              - generic
+                - button "Plan a weekend trip" [ref=e20]
+                  - StaticText "Plan a weekend trip"
+              - generic
+                - button "Explain a topic simply" [ref=e21]
+                  - StaticText "Explain a topic simply"
+              - generic
+                - button "Write a short poem" [ref=e22]
+                  - StaticText "Write a short poem"
+          - generic
+            - status
+            - generic
+              - generic
+                - generic
+                  - button "Upload & tools" [expanded=false, ref=e15]
+                  - button "Deselect Deep research" [ref=e38]
+                    - StaticText "Deep research"
+                  - generic
+                    - textbox "Enter a prompt for Gemini" [ref=e23]: 
+
+                      - StaticText "What do you want to research?"
+                      - paragraph
+                        - LineBreak "\n"
+                  - generic
+                    - group
+                      - button "Open mode picker, currently Fast" [expanded=false, ref=e18]
+                        - StaticText "Fast"
+                    - generic
+                      - button "Dictate (^⇧D)" [ref=e24]
+                  - button "Files" [ref=e39]
+                    - StaticText "Files"
+            - paragraph
+              - LineBreak "\n"
+    - button "Turn on temporary chat" [ref=e5]

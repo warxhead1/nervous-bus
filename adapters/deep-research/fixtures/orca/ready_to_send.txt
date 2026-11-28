@@ -2,48 +2,54 @@ page: PAGE
 Google Gemini — https://gemini.google.com/app
 - generic
   - main
+    - region "Side Navigation" [ref=e1]
+      - generic
+        - navigation "Main actions menu" [ref=e2]
+          - link "New chat" [ref=e7]
+        - navigation "Additional actions menu" [ref=e3]
+          - link "Search chats" [ref=e8]
+          - link "Library" [ref=e9]
+          - link "Images" [ref=e10]
+          - link "Scheduled" [ref=e11]
+          - link "Daily brief" [ref=e12]
+      - group
+        - button "Settings" [expanded=false, ref=e6]
     - generic
       - generic
+        - heading "Where should we start?" [level=1, ref=e16]
+          - StaticText "Where should we start?"
+        - group "Suggested prompts"
+          - generic
+            - button "Plan a date night I'd actually love" [ref=e17]
+              - StaticText "Plan a date night I'd actually love"
+          - generic
+            - button "Suggest fun icebreaker questions" [ref=e18]
+              - StaticText "Suggest fun icebreaker questions"
+          - generic
+            - button "Write a letter to my future self" [ref=e19]
+              - StaticText "Write a letter to my future self"
       - generic
+        - status
         - generic
           - generic
-            - heading "Where should we start?" [level=1, ref=e19]
-              - StaticText "Where should we start?"
-            - group "Suggested prompts"
-              - generic
-                - button "Retail options strategy pockets" [ref=e20]
-                  - StaticText "Retail options strategy pockets"
-              - generic
-                - button "Find the subject that I'm best at" [ref=e21]
-                  - StaticText "Find the subject that I'm best at"
-                - button "Dismiss suggestion" [ref=e41]
-              - generic
-                - button "Brainstorm consulting names" [ref=e22]
-                  - StaticText "Brainstorm consulting names"
-          - generic
-            - status
             - generic
+              - button "Upload & tools" [expanded=false, ref=e13]
+              - generic
+                - textbox "Enter a prompt for Gemini" [ref=e20]: What is the boiling point of water at 2,000 m altitude? Cite sources.
+                  - paragraph
+                    - StaticText "What is the boiling point of water at 2,000 m altitude? Cite sources."
               - generic
                 - generic
-                  - button "Upload & tools" [expanded=false, ref=e15]
-                  - button "Deselect Deep research" [ref=e38]
-                    - StaticText "Deep research"
-                  - generic
-                    - textbox "Enter a prompt for Gemini" [ref=e23]: probe draft text
-                      - paragraph
-                        - StaticText "probe draft text"
-                  - generic
-                    - group
-                      - button "Open mode picker, currently Neon" [expanded=false, ref=e18]
-                        - StaticText "Neon"
-                    - generic
-                      - generic
-                        - button "Dictate (^⇧D)" [ref=e24]
-                      - button "Send message" [ref=e40]
-                  - button "Sources, Google Search selected" [expanded=false, ref=e37]
-                    - StaticText "Sources"
-                  - button "Files" [ref=e39]
-                    - StaticText "Files"
-            - paragraph
-              - LineBreak "\n"
+                  - button "Dictate (^⇧D)" [ref=e21]
+                - button "Send message" [ref=e36]
+              - button "Sources, Google Search selected" [expanded=false, ref=e34]
+                - StaticText "Sources"
+              - button "Files" [ref=e35]
+                - StaticText "Files"
+          - group
+            - generic
+              - button "Chat" [ref=e14]
+                - StaticText "Chat"
+              - button "Task" [ref=e15]
+                - StaticText "Task"
     - button "Turn on temporary chat" [ref=e5]

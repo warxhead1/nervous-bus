@@ -120,10 +120,11 @@ UI = {
     "signed_out": ("button", r"^Sign in( to |$)"),
     "prompt": ("textbox", r"^Enter a prompt"),
     # opens a menu whose items include the Deep research checkbox.
-    "tools": ("button", r"^Upload & tools"),
+    "tools": ("button", r"^(Upload & tools|Tools)\b"),
     "deep_research": ("menuitemcheckbox", r"^Deep research"),
-    # chip that appears in the composer once Deep research is selected.
-    "deep_research_on": ("button", r"^Deselect Deep research"),
+    # Deep research selected. Since 2026-11-27 Gemini shows no "Deselect Deep research" chip;
+    # the composer gains a "Sources, ..." button instead (absent in plain chat). The chip is the fallback.
+    "deep_research_on": [("button", r"^Sources\b"), ("button", r"^Deselect Deep research")],
     "send": ("button", r"^Send message"),
     # the plan card shown before the research starts.
     "start_research": ("button", r"^Start research$"),
@@ -230,11 +231,35 @@ def report_card_ref(snapshot):
     return None
 
 
+def _spec(key, table=None):
+    spec = (table or UI)[key]
+    return [spec] if isinstance(spec, tuple) else spec
+
+
+def is_checked(snapshot, key, table=None):
+    """True when the first node matching UI[key] carries [checked=true] (a menu checkbox)."""
+    for role, pat in _spec(key, table):
+        for line in snapshot.splitlines():
+            m = SNAP_LINE.match(line)
+            if m and m.group("role") == role and re.search(pat, (m.group("name") or "")):
+                return "checked=true" in (m.group("rest") or "")
+    return False
+
+
+def prompt_text(snapshot):
+    """Text currently in the prompt box ('' when empty or absent)."""
+    for line in snapshot.splitlines():
+        m = SNAP_LINE.match(line)
+        if m and m.group("role") == "textbox" and re.search(UI["prompt"][1], m.group("name") or ""):
+            return (m.group("rest") or "").split("]:", 1)[-1].strip() if "]:" in (m.group("rest") or "") else ""
+    return ""
+
+
 def find_ref(snapshot, key, table=None):
-    role, pat = (table or UI)[key]
-    for r, name, ref in parse_snapshot(snapshot):
-        if r == role and re.search(pat, name):
-            return ref
+    for role, pat in _spec(key, table):
+        for r, name, ref in parse_snapshot(snapshot):
+            if r == role and re.search(pat, name):
+                return ref
     return None
 
 
@@ -273,6 +298,8 @@ class OrcaBrowser:
     def open(self, url):
         args = ["tab", "create", "--url", url] + (["--profile", self.profile] if self.profile else [])
         self.page = self._json(args)["browserPageId"]
+        # A background tab does not draw, and Gemini's menu ignores clicks until it is active.
+        self._json(["tab", "switch"] + self._p())
         return self.page
 
     def goto(self, url):
@@ -286,6 +313,18 @@ class OrcaBrowser:
 
     def fill(self, ref, value):
         self._json(["fill", "--element", ref, "--value", value] + self._p())
+
+    def click_by_name(self, patterns):
+        """DOM click on the first button or menu item whose label matches one of `patterns` (tried in
+        order). Fallback for when the pointer click that Orca sends does not reach the page
+        (observed 2026-11-27 on a fresh Gemini tab). Disabled and aria-disabled targets are skipped."""
+        js = ("(function(res){var all=Array.prototype.slice.call(document.querySelectorAll("
+              "'button,[role=button],[role=menuitem],[role=menuitemcheckbox]'));"
+              "for(var i=0;i<res.length;i++){var re=new RegExp(res[i]);"
+              "var b=all.find(function(x){return !x.disabled&&x.getAttribute('aria-disabled')!=='true'&&"
+              "re.test((x.getAttribute('aria-label')||x.innerText||'').trim());});"
+              "if(b){b.click();return true;}}return false;})(%s)" % json.dumps(list(patterns)))
+        return self.eval(js)
 
     def eval(self, expression):
         return self._json(["eval", "--expression", expression] + self._p()).get("result", "")
@@ -340,6 +379,45 @@ class GeminiWebEngine(Engine):
             return s if find_ref(s, key) else None
         return wait_for(probe, self.step_timeout, self.sleep, self.clock, what=what)
 
+    def _click_until(self, snap, key, done, attempts=3, landed=None):
+        """Click UI[key] until done(snapshot) holds. Orca's pointer click is sometimes ignored by a
+        fresh Gemini tab (observed 2026-11-27), so attempt 1 is the pointer click and the rest are
+        DOM clicks by label. A click that landed is never repeated: done() is polled for a few
+        seconds first. `landed(snapshot)` is checked before every retry: when it holds the click went
+        through (even if done() has not caught up) and nothing is clicked again, so a send cannot
+        fire twice. Returns the snapshot that satisfied done(), or None."""
+        for i in range(attempts):
+            if i == 0:
+                self.browser.click(find_ref(snap, key))
+            else:
+                snap = self.browser.snapshot()
+                if done(snap) or (landed and landed(snap)):
+                    return snap
+                self.browser.click_by_name([p for _, p in _spec(key)])
+            end = self.clock() + min(self.step_timeout, 8.0)
+            while True:
+                snap = self.browser.snapshot()
+                if done(snap):
+                    return snap
+                if landed and landed(snap):
+                    return snap
+                if self.clock() >= end:
+                    break
+                self.sleep(1.0)
+        return None
+
+    def _open_tools_menu(self, snap):
+        return (self._click_until(snap, "tools", lambda s: find_ref(s, "deep_research"))
+                or self._until("deep_research", "the tools menu entry"))
+
+    def _send(self, snap):
+        """Click send until the page moves to a conversation URL (the send button stays, disabled)."""
+        def landed(s):  # the message is out: stop button, emptied composer, or a conversation URL
+            return bool(find_ref(s, "running") or not prompt_text(s) or conversation_id(self.browser.url()))
+        self._click_until(snap, "send", lambda s: conversation_id(self.browser.url()), landed=landed)
+        return wait_for(lambda: conversation_id(self.browser.url()), self.step_timeout, self.sleep,
+                        self.clock, what="the conversation URL")
+
     def attach(self, ident):
         """Resume polling a conversation that was already submitted (crash recovery)."""
         return ident
@@ -358,17 +436,23 @@ class GeminiWebEngine(Engine):
         if find_ref(snap, "signed_out"):
             raise DrError("Orca's browser is not signed in to Google: sign in at gemini.google.com "
                           "in Orca's default browser profile, then retry", EXIT_LOGIN)
-        b.click(find_ref(snap, "tools"))
-        snap = self._until("deep_research", "the tools menu entry")
-        b.click(find_ref(snap, "deep_research"))
-        snap = self._until("deep_research_on", "the research-mode chip (mode not selected)")
+        if find_ref(snap, "deep_research_on"):
+            pass  # Gemini kept the research mode selected from an earlier chat; toggling it would switch it off.
+        else:
+            snap = self._open_tools_menu(snap)
+            if is_checked(snap, "deep_research"):
+                # Already selected (its chip has not rendered yet): clicking would switch it off.
+                snap = (self._click_until(snap, "tools", lambda s: not find_ref(s, "deep_research")) or snap)
+            else:
+                snap = (self._click_until(snap, "deep_research", lambda s: find_ref(s, "deep_research_on"))
+                        or self._until("deep_research_on", "the research-mode chip (mode not selected)"))
         b.fill(find_ref(snap, "prompt"), question)
         snap = self._until("send", "the send button")
-        b.click(find_ref(snap, "send"))
-        cid = wait_for(lambda: conversation_id(b.url()), self.step_timeout, self.sleep, self.clock,
-                       what="the conversation URL")
+        cid = self._send(snap)
         snap = self._until("start_research", "the research plan")
-        b.click(find_ref(snap, "start_research"))
+        if not self._click_until(snap, "start_research",
+                                 lambda s: not find_ref(s, "start_research") or find_ref(s, "running")):
+            raise DrError("timed out waiting for research to start (the click did not take)", EXIT_API)
         return cid
 
     def poll(self, ident):

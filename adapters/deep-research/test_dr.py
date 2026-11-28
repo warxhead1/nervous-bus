@@ -73,6 +73,9 @@ class FakeOrca:
         if cmd == "tab" and args[1] == "create":
             self.tabs_open += 1
             return json.dumps({"ok": True, "result": {"browserPageId": PAGE}})
+        if cmd == "tab" and args[1] == "switch":
+            self.switched = args[args.index("--page") + 1]
+            return json.dumps({"ok": True, "result": {}})
         if cmd == "tab" and args[1] == "close":
             self.tabs_open -= 1
             return json.dumps({"ok": True, "result": {}})
@@ -90,6 +93,16 @@ class FakeOrca:
             expr = args[args.index("--expression") + 1]
             if "walk" in expr:
                 return json.dumps({"ok": True, "result": {"result": json.dumps({"markdown": self.report})}})
+            if "getAttribute('aria-label')" in expr:  # DOM click by label
+                pats = json.loads(re.search(r"\}\)\((\[.*\])\)$", expr).group(1))
+                self.dom_clicks = getattr(self, "dom_clicks", []) + [pats]
+                for pat in pats:
+                    hit = next((r for role, name, r in dr.parse_snapshot(self._snapshot())
+                                if role in ("button", "menuitem", "menuitemcheckbox") and re.search(pat, name.strip())), None)
+                    if hit:
+                        self._click(hit)
+                        break
+                return json.dumps({"ok": True, "result": {"result": True}})
             url = "https://gemini.google.com/app"
             if self.phase in ("plan", "running", "done", "done_collapsed", "failed"):
                 url += "/abc123def"
@@ -176,7 +189,7 @@ def test_no_card_click_while_research_runs():
 def test_start_follows_the_ui_order(tmp_path):
     _, fake, _ = run_it(tmp_path)
     clicks = [c for c in fake.calls if c[0] == "click"]
-    assert [c[2] for c in clicks] == ["@e132", "@e152", "@e40", "@e179"]  # tools, deep research, send, start
+    assert [c[2] for c in clicks] == ["@e13", "@e31", "@e36", "@e179"]  # tools, deep research, send, start
     assert fake.calls[0][:3] == ["tab", "create", "--url"] and fake.calls[0][3].startswith("https://gemini.google.com")
 
 
@@ -237,6 +250,27 @@ def test_missing_ui_element_times_out_with_its_name(tmp_path):
         eng.start("q")
 
 
+def test_pointer_clicks_that_miss_fall_back_to_a_dom_click(tmp_path):
+    class Swallow(FakeOrca):
+        def _click(self, ref):
+            if getattr(self, "in_dom", False) or ref not in ("@e13", "@e31", "@e36", "@e179"):
+                return super()._click(ref)
+
+        def __call__(self, args):
+            self.in_dom = args[0] == "eval"
+            return super().__call__(args)
+    _, fake, _ = run_it(tmp_path, runner=Swallow())
+    flat = [p for pats in fake.dom_clicks for p in pats]
+    assert any(p.startswith("^(Upload") for p in flat)
+    assert fake.phase in ("done", "running")
+
+
+def test_deep_research_already_selected_is_not_toggled_off(tmp_path):
+    _, fake, _ = run_it(tmp_path, runner=FakeOrca(first="composer_dr"))
+    clicks = [c[2] for c in fake.calls if c[0] == "click"]
+    assert "@e13" not in clicks and "@e31" not in clicks
+
+
 def test_orca_missing_binary_message():
     with pytest.raises(dr.DrError, match="not found"):
         dr.orca_runner("/nonexistent/orca-xyz")(["status"])
@@ -257,6 +291,94 @@ def test_signed_in_captures_map_to_every_ui_key():
     assert has("plan", "start_research") and not has("plan", "running")
     assert has("running", "running") and not has("running", "report_done")
     assert has("done", "report_done") and has("done", "share_export") and not has("done", "running")
+
+
+def test_drifted_2026_11_27_ui_is_found_by_role_and_name():
+    """Captured 2026-11-27: no Deselect chip; Deep research mode shows a Sources button."""
+    comp, menu = snap("composer"), snap("tools_menu")
+    assert dr.find_ref(comp, "tools") == "@e13"
+    assert dr.find_ref(comp, "prompt") == "@e20"
+    assert dr.find_ref(menu, "deep_research") == "@e31"
+    assert dr.find_ref(comp, "deep_research_on") is None
+    assert dr.find_ref(snap("composer_dr"), "deep_research_on") == "@e34"
+    assert dr.find_ref(snap("ready_to_send"), "send") == "@e36"
+    assert dr.find_ref(snap("ready_to_send"), "deep_research_on") == "@e34"
+
+
+def test_pre_drift_chip_is_still_recognised():
+    legacy = snap("legacy_composer_dr")
+    assert "Sources" not in legacy
+    ref = dr.find_ref(legacy, "deep_research_on")
+    assert ref == "@e38" and "Deselect" in next(n for _, n, r in dr.parse_snapshot(legacy) if r == ref)
+
+
+def test_tools_button_matches_both_labels():
+    for label in ("Upload & tools", "Tools"):
+        s = f'- button "{label}" [expanded=false, ref=e1]'
+        assert dr.find_ref(s, "tools") == "@e1"
+
+
+def test_fixtures_carry_no_personal_data():
+    banned = re.compile(r"Google Account|/home/|Neon|Retail options|Find the subject|Brainstorm consulting"
+                        r"|[\w.+-]+@[\w-]+\.[a-z]{2,}", re.I)
+    for f in FIX.iterdir():
+        if f.suffix == ".json":
+            continue  # report text is public document content
+        assert not banned.search(f.read_text()), f.name
+
+
+def test_menu_item_already_checked_is_not_clicked(tmp_path):
+    class Checked(FakeOrca):
+        def _snapshot(self):
+            s = super()._snapshot()
+            return s.replace('"Deep research" [checked=false', '"Deep research" [checked=true') \
+                if self.phase == "tools_menu" else s
+    assert dr.is_checked(snap("tools_menu").replace('"Deep research" [checked=false',
+                                                    '"Deep research" [checked=true'), "deep_research")
+    assert not dr.is_checked(snap("tools_menu"), "deep_research")
+    _, fake, _ = run_it(tmp_path, runner=Checked())
+    clicks = [c[2] for c in fake.calls if c[0] == "click"]
+    assert "@e31" not in clicks and "@e36" in clicks and fake.filled
+
+
+def test_start_research_click_that_never_lands_raises(tmp_path):
+    class Dead(FakeOrca):
+        def _click(self, ref):
+            if ref != "@e179":
+                super()._click(ref)
+
+        def __call__(self, args):
+            if args[0] == "eval" and "getAttribute('aria-label')" in args[args.index("--expression") + 1] \
+                    and "Start research" in args[args.index("--expression") + 1]:
+                return json.dumps({"ok": True, "result": {"result": True}})
+            return super().__call__(args)
+    clk = Clock()
+    eng = dr.GeminiWebEngine(CFG, runner=Dead(), sleep=clk.sleep, clock=clk.now)
+    with pytest.raises(dr.DrError, match="research to start"):
+        eng.start("q")
+
+
+def test_slow_conversation_url_never_sends_twice(tmp_path):
+    class SlowUrl(FakeOrca):
+        urls = 0
+
+        def __call__(self, args):
+            if args[0] == "eval" and "location.href" in args[args.index("--expression") + 1]:
+                self.urls += 1
+                if self.urls < 25:  # the URL lags the click past the 8 s window
+                    return json.dumps({"ok": True, "result": {"result": "https://gemini.google.com/app"}})
+            return super().__call__(args)
+    _, fake, _ = run_it(tmp_path, cfg=dict(CFG, step_timeout=120.0), runner=SlowUrl())
+    sends = [c for c in fake.calls if c[0] == "click" and c[2] == "@e36"]
+    sends += [c for c in fake.calls if c[0] == "eval" and "Send message" in " ".join(c)]
+    assert len(sends) == 1
+
+
+def test_tab_is_made_active_after_open(tmp_path):
+    f = FakeOrca()
+    b = dr.OrcaBrowser(f)
+    b.open("https://gemini.google.com/app")
+    assert f.switched == PAGE
 
 
 def test_real_report_capture_runs_end_to_end(tmp_path):
@@ -783,6 +905,8 @@ class FakeNotebook:
         if cmd == "tab" and args[1] == "create":
             self.tabs += 1
             return json.dumps({"ok": True, "result": {"browserPageId": PAGE}})
+        if cmd == "tab" and args[1] == "switch":
+            return json.dumps({"ok": True, "result": {}})
         if cmd == "tab":
             self.tabs -= 1
             return json.dumps({"ok": True, "result": {}})

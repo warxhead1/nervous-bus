@@ -72,8 +72,8 @@ CloudEvents Required Attribute Set - Google Gemini — https://gemini.google.com
                         - LineBreak "\n"
                   - generic
                     - group
-                      - button "Open mode picker, currently Neon" [expanded=false, ref=e18]
-                        - StaticText "Neon"
+                      - button "Open mode picker, currently Fast" [expanded=false, ref=e18]
+                        - StaticText "Fast"
                     - generic
                       - button "Dictate (^⇧D)" [ref=e24]
                   - generic

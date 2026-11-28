@@ -35,8 +35,8 @@ Google Gemini — https://gemini.google.com/notebook/00000000-0000-0000-0000-000
                       - LineBreak "\n"
                 - generic
                   - group
-                    - button "Open mode picker, currently Neon" [expanded=false, ref=e143]
-                      - StaticText "Neon"
+                    - button "Open mode picker, currently Fast" [expanded=false, ref=e143]
+                      - StaticText "Fast"
                   - generic
                     - button "Dictate (^⇧D)" [ref=e147]
             - paragraph
