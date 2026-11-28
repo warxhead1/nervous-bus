@@ -104,8 +104,10 @@ def channel_allowed(channel: str) -> bool:
             import tomllib
             try:
                 patterns = tomllib.loads(toml.read_text()).get("channels", [])
-            except (tomllib.TOMLDecodeError, OSError) as exc:
+            except (tomllib.TOMLDecodeError, UnicodeDecodeError, OSError) as exc:
                 raise UsageError(f"cannot read the allowlist {toml}: {exc}") from exc
+            if not isinstance(patterns, list) or not all(isinstance(x, str) for x in patterns):
+                raise UsageError(f"the allowlist {toml}: channels must be a list of strings")
             return not patterns or any(fnmatch(channel, p) for p in patterns)
     return True
 

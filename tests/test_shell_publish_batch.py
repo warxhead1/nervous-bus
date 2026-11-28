@@ -236,7 +236,8 @@ def test_a_second_positional_argument_exits_two(box):
 
 
 def test_max_bytes_zero_disables_the_limit_and_the_exact_limit_passes(box):
-    assert box.run([span(1, label="x" * 200)], "--max-bytes", "0").returncode == 0 and len(box.events()) == 1
+    assert box.run([span(1)], "--max-bytes", "0", env={"NERVOUS_MAX_PAYLOAD_BYTES": "100"}).returncode == 0
+    assert len(box.events()) == 1
     probe = box.run([span(2)], "--max-bytes", "10", env={"NERVOUS_OVERSIZE_POLICY": "warn"})
     size = int(re.search(r"payload is (\d+) bytes", probe.stderr).group(1))
     assert box.run([span(3)], "--max-bytes", str(size)).returncode == 0
@@ -260,3 +261,25 @@ def test_a_broken_allowlist_exits_two_with_a_message(box):
 def test_oversize_policy_warn_publishes_and_warns(box):
     r = box.run([span(1)], "--max-bytes", "100", env={"NERVOUS_OVERSIZE_POLICY": "warn"})
     assert r.returncode == 0 and len(box.events()) == 1 and "over the 100 byte limit" in r.stderr
+
+
+@pytest.mark.parametrize("content", [b"\xff\xfe\x00", b"channels = 42\n", b'channels = "agent.*"\n'])
+def test_an_unusable_allowlist_exits_two(box, content):
+    (box.tmp / "nervous.toml").write_bytes(content)
+    r = box.run([span(1)])
+    assert r.returncode == 2 and "allowlist" in r.stderr and box.events() == []
+
+
+def test_a_short_redis_cli_reply_count_is_a_failed_delivery(box, redis_server):
+    client, url = redis_server
+    fake = box.tmp / "fakebin"
+    fake.mkdir()
+    cli = fake / "redis-cli"
+    cli.write_text("#!/bin/sh\ncat >/dev/null\necho 'errors: 0, replies: 0'\n")
+    cli.chmod(cli.stat().st_mode | stat.S_IXUSR)
+    blocker = box.tmp / "blocker"
+    blocker.mkdir()
+    (blocker / "redis.py").write_text("raise ImportError('blocked for the test')\n")
+    r = box.run([span(1), span(2)], env={"NERVOUS_NO_REDIS": "0", "NERVOUS_REDIS_URL": url, "PYTHONPATH": str(blocker),
+                                         "PATH": f"{fake}:{box.env['PATH']}"})
+    assert r.returncode == 0 and json.loads(r.stdout)["delivery"] == "file-only"
